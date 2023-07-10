@@ -665,14 +665,10 @@ pub fn expr_to_expr2<'a>(
             ident,
         } => canonicalize_lookup(env, scope, module_name, ident, region),
 
+        ParensAround(sub_expr) => expr_to_expr2(env, scope, sub_expr, region),
+
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        bad_expr @ ParensAround(_) => {
-            panic!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
-            );
-        }
         bad_expr @ SpaceBefore(_, _) => {
             panic!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",

@@ -13875,4 +13875,44 @@ In roc, functions are always written as a lambda, like{}
     Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
     "###
     );
+
+    test_report!(
+        pizza_parens_right,
+        indoc!(
+            r#"
+            2 |> (Num.sub 3)
+            "#
+        ),
+        @r###"
+    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `sub` function expects 2 arguments, but it got only 1:
+    
+    4│      2 |> (Num.sub 3)
+                  ^^^^^^^
+    
+    Roc does not allow functions to be partially applied. Use a closure to
+    make partial application explicit.
+    "###
+    );
+
+    test_report!(
+        pizza_parens_middle,
+        indoc!(
+            r#"
+            2 |> (Num.sub 3) |> Num.sub 3
+            "#
+        ),
+        @r###"
+    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `sub` function expects 2 arguments, but it got only 1:
+    
+    4│      2 |> (Num.sub 3) |> Num.sub 3
+                  ^^^^^^^
+    
+    Roc does not allow functions to be partially applied. Use a closure to
+    make partial application explicit.
+    "###
+    );
 }
