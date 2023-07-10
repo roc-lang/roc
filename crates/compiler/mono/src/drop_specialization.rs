@@ -86,17 +86,12 @@ fn specialize_drops_stmt<'a, 'i>(
                 }};
             }
 
-            let Call {
-                call_type,
-                arguments,
-            } = call;
-
-            match call_type.clone().replace_lowlevel_wrapper() {
+            match call.call_type.clone().replace_lowlevel_wrapper() {
                 CallType::LowLevel {
                     op: LowLevel::ListGetUnsafe,
                     ..
                 } => {
-                    let [structure, index] = match arguments {
+                    let [structure, index] = match call.arguments {
                         [structure, index] => [structure, index],
                         _ => unreachable!("List get should have two arguments"),
                     };
