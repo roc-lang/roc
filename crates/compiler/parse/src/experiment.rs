@@ -1,5 +1,6 @@
 use crate::bitmask::{Bitmask, Chunk};
 
+#[derive(Default)]
 pub struct Env {
     in_progress: InProgress,
     /// The number of trailing '"' characters at the end of the previous chunk
@@ -36,7 +37,7 @@ pub struct Env {
 // we might end up concluding it's an empty string. However, we don't have enough info yet to conclude that;
 // it might turn out to be the beginning of a (triple-quoted) multiline string.
 
-// 1 bits for each even index, or each odd index.
+// 1 for each even index, or each odd index.
 // See Fig. 3 in "Parsing Gigabytes of JSON per Second" https://arxiv.org/pdf/1902.08318.pdf
 const EVENS: Bitmask =
     Bitmask::new(0b1010101010101010101010101010101010101010101010101010101010101010);
@@ -50,6 +51,12 @@ enum InProgress {
     MultiLineStr = 1,  // must be odd (for is_str)
     SingleLineStr = 3, // must be odd (for is_str), and must be the second-highest number (for is_comment_or_single_line_str)
     Comment = 4, // must be even (for is_str), and must be the highest number (for is_comment_or_single_line_str)
+}
+
+impl Default for InProgress {
+    fn default() -> Self {
+        Self::Nothing
+    }
 }
 
 impl InProgress {
@@ -68,6 +75,7 @@ impl InProgress {
 pub trait Listener {
     fn single_line_str(&mut self, start_offset: usize, end_offset: usize);
     fn multi_line_str(&mut self, start_offset: usize, end_offset: usize);
+    fn single_quote_char(&mut self, start_offset: usize, end_offset: usize);
     fn comment(&mut self, start_offset: usize, end_offset: usize);
 }
 
