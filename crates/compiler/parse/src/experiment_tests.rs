@@ -65,12 +65,28 @@ gen_test!(one_string_only {
     comments: vec![]
 });
 
+gen_test!(two_strings {
+    input: &[r#"   "blah"                                               ""      "#],
+    single_line_strings: vec![(3, 8), (56, 57)],
+    multi_line_strings: vec![],
+    single_quote_chars: vec![],
+    comments: vec![]
+});
+
 gen_test!(one_comment_only {
-    input: &[r#"                                                         #blah  "#],
+    input: &[r#"                                                       #blah  ¶ "#],
     single_line_strings: vec![],
     multi_line_strings: vec![],
     single_quote_chars: vec![],
-    comments: vec![(56, 7)]
+    comments: vec![(55, 62)]
+});
+
+gen_test!(two_comments {
+    input: &[r#"   #foo¶                                               #blah  ¶ "#],
+    single_line_strings: vec![],
+    multi_line_strings: vec![],
+    single_quote_chars: vec![],
+    comments: vec![(3, 7), (55, 62)]
 });
 
 gen_test!(one_escaped_quote_no_strings {
@@ -83,7 +99,7 @@ gen_test!(one_escaped_quote_no_strings {
 
 gen_test!(string_with_one_escaped_quote {
     input: &[r#"  "  \"                "                                        "#],
-    single_line_strings: vec![(2, 20)],
+    single_line_strings: vec![(2, 23)],
     multi_line_strings: vec![],
     single_quote_chars: vec![],
     comments: vec![]

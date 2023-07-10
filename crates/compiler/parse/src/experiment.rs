@@ -48,28 +48,21 @@ const ODDS: Bitmask =
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InProgress {
     Nothing = 0,
-    MultiLineStr = 1,  // must be odd (for is_str)
-    SingleLineStr = 3, // must be odd (for is_str), and must be the second-highest number (for is_comment_or_single_line_str)
-    Comment = 4, // must be even (for is_str), and must be the highest number (for is_comment_or_single_line_str)
+    Comment = 1,
+    // The strings must have the highest numeric values, for `is_str` to work
+    MultiLineStr = 2, // This must have the lowest numeric value of the strings, for `is_str` to work
+    SingleLineStr = 3,
+}
+
+impl InProgress {
+    pub fn is_str(self) -> bool {
+        self as u8 >= Self::MultiLineStr as u8
+    }
 }
 
 impl Default for InProgress {
     fn default() -> Self {
         Self::Nothing
-    }
-}
-
-impl InProgress {
-    /// Branchlessly returns true iff this is either SingleLineStr or Comment
-    fn is_comment_or_single_line_str(&self) -> bool {
-        *self as u8 >= Self::SingleLineStr as u8
-    }
-
-    #[allow(unused)] // This was used before, and might be used again.
-    /// Branchlessly returns true iff this is either SingleLineStr or MultiLineStr
-    fn is_str(&self) -> bool {
-        // MutliLineStr and SingleLineStr are both odd, so just return whether this is odd
-        (*self as u8) & 1 != 0
     }
 }
 
@@ -273,6 +266,7 @@ impl Env {
             let byte = unsafe { *chunk.get_unchecked(index as usize) };
             let prev_in_progress = in_progress;
             let byte_is_quote = byte == b'"';
+            let byte_is_pound = byte == b'#';
 
             // Start with triple quote checks, so that later on when we go to branchlessly update in_progress,
             // if we've already set in_progress to MultiLineStr, we won't accidentally overwrite it with the
@@ -310,16 +304,20 @@ impl Env {
 
             // Branchlessly update in_progress
             {
-                in_progress = if branchless_and(byte_is_quote, in_progress == Nothing) {
-                    // We had nothing going on, but now we've hit a quote; we're working on a single-line string now.
-                    SingleLineStr
+                // This is both a convenience and a way to avoid consecutive conditionals triggering incorrectly.
+                // (We must compare to nothing_in_progress after potentially setting in_progress to Nothing!)
+                let nothing_in_progress = in_progress == Nothing;
+
+                in_progress = if branchless_and(byte_is_quote, in_progress == SingleLineStr) {
+                    // We hit a closing quote
+                    Nothing
                 } else {
                     in_progress
                 };
 
-                in_progress = if branchless_and(byte == b'#', in_progress == Nothing) {
-                    // We had nothing going on, but now we've hit a pound; we're working on a comment now.
-                    Comment
+                in_progress = if branchless_and(byte_is_quote, nothing_in_progress) {
+                    // We had nothing going on, but now we've hit a quote; we're working on a single-line string now.
+                    SingleLineStr
                 } else {
                     in_progress
                 };
@@ -327,12 +325,21 @@ impl Env {
                 // We were working on a comment or single-line str and encountered a newline; either way, it's done.
                 // (Single-line strings can't contain newlines; if they do, it's both done and Erroneous. We want
                 // stop now for graceful error handling, so we don't mark the rest of the document as a string.)
-                in_progress =
-                    if branchless_and(byte == b'\n', in_progress.is_comment_or_single_line_str()) {
-                        Nothing
-                    } else {
-                        in_progress
-                    };
+                in_progress = if branchless_and(
+                    byte == b'\n',
+                    branchless_or(in_progress == SingleLineStr, in_progress == Comment),
+                ) {
+                    Nothing
+                } else {
+                    in_progress
+                };
+
+                in_progress = if branchless_and(byte_is_pound, nothing_in_progress) {
+                    // We had nothing going on, but now we've hit a pound; we're working on a comment now.
+                    Comment
+                } else {
+                    in_progress
+                };
 
                 // If none of these conditions applied, then we keep going. This covers cases like (for example):
                 // - Encountering a '#' while we're working on a string
@@ -340,20 +347,16 @@ impl Env {
                 // - Encountering a '\n' while we're working on a multiline string
             }
 
-            // If we had nothing in progress, but now do, then we just started something.
-            span_start_offset =
-                if branchless_and(prev_in_progress == Nothing, in_progress != Nothing) {
-                    offset
-                } else {
-                    span_start_offset
-                };
-
             // Apply masks and notify listener if we just finished a string or comment.
-            // One branch is necessary because we either do or don't run the listener,
+            //
+            // A branch is necessary here because we might or might not need to invoke the listener,
             // but all the logic inside this block can be branchless.
             if branchless_and(
-                prev_in_progress.is_comment_or_single_line_str(),
                 in_progress == Nothing,
+                branchless_or(
+                    prev_in_progress == SingleLineStr,
+                    prev_in_progress == Comment,
+                ),
             ) {
                 // Convert the start offset to a start index for this part, even though
                 // offset is what we want to store later. (Working in terms of offset over
@@ -392,6 +395,14 @@ impl Env {
                 };
 
                 listener.emit(token, span_start_offset, chunk_offset + index as usize);
+            } else {
+                // If we had nothing in progress, but now do, then we just started something.
+                span_start_offset =
+                    if branchless_and(prev_in_progress == Nothing, in_progress != Nothing) {
+                        offset
+                    } else {
+                        span_start_offset
+                    };
             }
         }
 
