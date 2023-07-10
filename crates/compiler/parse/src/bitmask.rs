@@ -1,6 +1,7 @@
+use std::fmt::Debug;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, Not, Shl, Shr};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Bitmask(u64);
 
 pub type Chunk = [u8; 64];
@@ -232,5 +233,18 @@ impl BitAndAssign for Bitmask {
 impl BitOrAssign for Bitmask {
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+impl Debug for Bitmask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Show exactly 64 digits, each either a 1 or a 0. Inserts leading zeroes if necessary.
+        let mut bin_str = format!("{:b}", self.0);
+
+        while bin_str.len() < 64 {
+            bin_str.insert(0, '0');
+        }
+
+        write!(f, "{}", bin_str)
     }
 }
