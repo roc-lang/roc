@@ -52,6 +52,10 @@ impl Bitmask {
         self.0 == 0
     }
 
+    pub const fn is_nonzero(self) -> bool {
+        self.0 != 0
+    }
+
     #[inline(always)]
     pub fn find(needle: u8, chunk: Chunk) -> Self {
         // TODO use ~1 simd instruction for this. Just trying to prove out the architecture right now!

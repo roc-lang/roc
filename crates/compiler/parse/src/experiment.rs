@@ -12,7 +12,6 @@ pub struct Env {
     /// byte of the chunk, for example if the previous chunk ended in quotes, which
     /// turned out to be the beginning of a multiline string.
     span_start_offset: usize,
-    prev_chunk_last_byte: u8,
 }
 
 // Edge cases in quotes ending on chunk boundaries:
@@ -52,6 +51,7 @@ enum InProgress {
     // The strings must have the highest numeric values, for `is_str` to work
     MultiLineStr = 2, // This must have the lowest numeric value of the strings, for `is_str` to work
     SingleLineStr = 3,
+    SingleQuoteChar = 4, // We consider this a "string"
 }
 
 impl InProgress {
@@ -69,10 +69,28 @@ impl Default for InProgress {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Token {
-    SingleLineStr,
-    MultiLineStr,
-    SingleQuoteChar,
-    Comment,
+    // These numbers must all be the same as the corresponding numbers on InProgress
+    Comment = 1,
+    MultiLineStr = 2,
+    SingleLineStr = 3,
+    SingleQuoteChar = 4,
+}
+
+impl Token {
+    unsafe fn from_non_nothing_in_progress(in_progress: InProgress) -> Self {
+        debug_assert_eq!(
+            match in_progress {
+                InProgress::Nothing => unreachable!(),
+                InProgress::Comment => Token::Comment as u8,
+                InProgress::MultiLineStr => Token::MultiLineStr as u8,
+                InProgress::SingleLineStr => Token::SingleLineStr as u8,
+                InProgress::SingleQuoteChar => Token::SingleLineStr as u8,
+            },
+            in_progress as u8
+        );
+
+        std::mem::transmute::<InProgress, Token>(in_progress)
+    }
 }
 
 pub trait Listener {
@@ -175,7 +193,7 @@ impl Env {
         chunk: Chunk,
         listener: &mut impl Listener,
     ) {
-        use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr};
+        use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr, SingleQuoteChar};
 
         let chunk_offset = self.chunk_offset;
         let mut span_start_offset = self.span_start_offset;
@@ -250,7 +268,8 @@ impl Env {
             }
         };
 
-        let mask_contains_triple_quotes = !triple_quotes.is_zero();
+        let mask_contains_single_or_triple_quotes =
+            branchless_or(single_quotes.is_nonzero(), triple_quotes.is_nonzero());
         let pounds = Bitmask::for_byte(chunk, b'#');
         let newlines = Bitmask::for_byte(chunk, b'\n');
         let mut quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
@@ -268,46 +287,54 @@ impl Env {
             let byte_is_quote = byte == b'"';
             let byte_is_pound = byte == b'#';
 
-            // Start with triple quote checks, so that later on when we go to branchlessly update in_progress,
-            // if we've already set in_progress to MultiLineStr, we won't accidentally overwrite it with the
+            // This is both a convenience and a way to avoid consecutive conditionals triggering incorrectly
+            // when updating in_progress.
+            // (We must compare to nothing_in_progress after potentially setting in_progress to Nothing!)
+            let nothing_in_progress = in_progress == Nothing;
+
+            // Start with single and triple quote checks, so that later on when we go to branchlessly update in_progress,
+            // if we've already e.g. set in_progress to MultiLineStr, won't accidentally overwrite it with the
             // normal quote check.
             //
-            // Put triple quote checks behind a branch, because most chunks won't contain any multiline strings.
-            // (If there is a triple quote in the mask, this will probably get mispredicted once and then never again.)
-            if mask_contains_triple_quotes {
+            // Put these checks behind a branch, because most chunks won't contain any single quotes or triple quotes.
+            // (If there is one of these in the mask, this will probably get mispredicted once and then never again.)
+            if mask_contains_single_or_triple_quotes {
                 // If the triple_quotes mask has a 1 here, then there's a triple quote here.
-                if !(triple_quotes & (1 << index).into()).is_zero() {
-                    match in_progress {
-                        Nothing => {
-                            // Nothing was in progress; begin a MultiLineStr
-                            span_start_offset = index as usize + chunk_offset;
-                            in_progress = MultiLineStr;
-                        }
-                        MultiLineStr => {
-                            // Record the MultiLineStr.
-                            listener.emit(
-                                Token::MultiLineStr,
-                                span_start_offset,
-                                chunk_offset + index as usize + 2,
-                            );
-                            in_progress = Nothing;
-                        }
-                        Comment => {
-                            // We encountered triple quotes inside a comment; do nothing.
-                        }
-                        SingleLineStr => {
-                            unreachable!("It should not be possible to encounter a triple quote when SingleLineStr is in progress. Something went wrong with the masks or something!");
-                        }
-                    }
-                }
+                let byte_is_triple_quote = (triple_quotes & (1 << index).into()).is_nonzero();
+                let byte_is_single_quote = byte == b'\'';
+
+                in_progress =
+                    if branchless_and(byte_is_single_quote, in_progress == SingleQuoteChar) {
+                        // We hit a closing single quote
+                        Nothing
+                    } else {
+                        in_progress
+                    };
+
+                in_progress = if branchless_and(byte_is_single_quote, nothing_in_progress) {
+                    // We had nothing going on, but now we've hit a single quote; we're working on a single-quote char now.
+                    SingleQuoteChar
+                } else {
+                    in_progress
+                };
+
+                in_progress = if branchless_and(byte_is_triple_quote, in_progress == MultiLineStr) {
+                    // We hit a closing triple quote
+                    Nothing
+                } else {
+                    in_progress
+                };
+
+                in_progress = if branchless_and(byte_is_triple_quote, nothing_in_progress) {
+                    // We had nothing going on, but now we've hit a triple quote; we're working on a multi-line string now.
+                    MultiLineStr
+                } else {
+                    in_progress
+                };
             }
 
-            // Branchlessly update in_progress
+            // Branchlessly update in_progress for single-line strings and comments.
             {
-                // This is both a convenience and a way to avoid consecutive conditionals triggering incorrectly.
-                // (We must compare to nothing_in_progress after potentially setting in_progress to Nothing!)
-                let nothing_in_progress = in_progress == Nothing;
-
                 in_progress = if branchless_and(byte_is_quote, in_progress == SingleLineStr) {
                     // We hit a closing quote
                     Nothing
@@ -347,17 +374,10 @@ impl Env {
                 // - Encountering a '\n' while we're working on a multiline string
             }
 
-            // Apply masks and notify listener if we just finished a string or comment.
-            //
+            // Apply masks and notify listener if we just finished something.
             // A branch is necessary here because we might or might not need to invoke the listener,
             // but all the logic inside this block can be branchless.
-            if branchless_and(
-                in_progress == Nothing,
-                branchless_or(
-                    prev_in_progress == SingleLineStr,
-                    prev_in_progress == Comment,
-                ),
-            ) {
+            if branchless_and(in_progress == Nothing, prev_in_progress != Nothing) {
                 // Convert the start offset to a start index for this part, even though
                 // offset is what we want to store later. (Working in terms of offset over
                 // index is the better default, because it works with triple quotes that happen
@@ -372,7 +392,7 @@ impl Env {
 
                 // If we had a string in progress, but no longer do, then we just ended a string.
                 // Branchlessly apply it to our main bitmask.
-                strings |= if branchless_and(prev_in_progress.is_str(), in_progress == Nothing) {
+                strings |= if prev_in_progress.is_str() {
                     Bitmask::from(span_mask_ones) // 1s only where the string we just made was; 0s elsewhere.
                 } else {
                     Bitmask::ZERO // no-op with `|=`
@@ -380,21 +400,28 @@ impl Env {
 
                 // If we had a comment in progress, but no longer do, then we just ended a comment.
                 // Branchlessly zero out its span in our main bitmask.
-                strings &= if branchless_and(prev_in_progress == Comment, in_progress == Nothing) {
+                strings &= if prev_in_progress == Comment {
                     Bitmask::from(span_mask_zeroes)
                 } else {
                     Bitmask::from(!0u64) // all 1s; if this is AND'd with the existing bitmask, it will be a no-op.
                 };
 
-                let token = if prev_in_progress == SingleLineStr {
-                    Token::SingleLineStr
-                } else {
-                    debug_assert_eq!(prev_in_progress, Comment);
+                let end_offset = {
+                    // Branchlessly add 2 to the ending offset if this is a multiline string.
+                    // (Otherwise it will end on the first of the 3 closing quotes.)
+                    let end_offset_extra = if prev_in_progress == MultiLineStr {
+                        2
+                    } else {
+                        0
+                    };
 
-                    Token::Comment
+                    chunk_offset + index as usize + end_offset_extra
                 };
 
-                listener.emit(token, span_start_offset, chunk_offset + index as usize);
+                // Safety: we're inside a conditional that checked prev_in_progress != Nothing
+                let token = unsafe { Token::from_non_nothing_in_progress(prev_in_progress) };
+
+                listener.emit(token, span_start_offset, end_offset);
             } else {
                 // If we had nothing in progress, but now do, then we just started something.
                 span_start_offset =
@@ -408,7 +435,6 @@ impl Env {
 
         self.span_start_offset = span_start_offset;
         self.in_progress = in_progress;
-        self.prev_chunk_last_byte = chunk[63];
     }
 }
 
