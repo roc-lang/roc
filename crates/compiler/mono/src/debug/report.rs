@@ -62,7 +62,7 @@ where
         .pretty(80)
         .to_string();
 
-    eprintln!("Full source: {}", src);
+    eprintln!("Full source: {src}");
 
     let interpolated_docs = stack(
         f,

@@ -1403,14 +1403,13 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
+        &ast::Expr::ParensAround(sub_expr) => {
+            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+
+            (loc_expr.value, output)
+        }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        bad_expr @ ast::Expr::ParensAround(_) => {
-            internal_error!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
-            );
-        }
         bad_expr @ ast::Expr::SpaceBefore(_, _) => {
             internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",

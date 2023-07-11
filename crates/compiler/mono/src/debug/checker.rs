@@ -464,23 +464,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 // TODO don't know what the element layout is
                 None
             }
-            &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
-                let inner = layout;
-                Some(
-                    ctx.interner
-                        .insert_direct_no_semantic(LayoutRepr::Boxed(inner)),
-                )
-            }),
-            &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
-                let layout = ctx.resolve(layout);
-                match ctx.interner.get_repr(layout) {
-                    LayoutRepr::Boxed(inner) => Some(inner),
-                    _ => {
-                        ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
-                        None
-                    }
-                }
-            }),
             &Expr::Reset {
                 symbol,
                 update_mode: _,

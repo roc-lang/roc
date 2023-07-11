@@ -69,7 +69,8 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   echo 'Building tutorial.html from tutorial.md...'
   mkdir www/build/tutorial
 
-  cargo run --release --bin roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+  cargo build --release --bin roc
+  roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
   
@@ -81,18 +82,20 @@ else
   ls | grep "roc_nightly.*tar.gz" | xargs rm
   # simplify dir name
   mv roc_nightly* roc_nightly
+  roc='./roc_nightly/roc'
 
   echo 'Building tutorial.html from tutorial.md...'
   mkdir www/build/tutorial
-
-  ./roc_nightly/roc version
-  ./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
-
-  # cleanup
-  rm -rf roc_nightly roc_releases.json
 fi
 
+$roc version
+$roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
+
+# for new wip site
+mkdir www/build/wip
+$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
+cp -r www/wip_new_website/static/site.css www/build/wip
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
@@ -112,11 +115,12 @@ rm -rf ./downloaded-basic-cli
 
 BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
 mkdir -p $BASIC_CLI_PACKAGE_DIR
-rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
+mv generated-docs/index.html $BASIC_CLI_PACKAGE_DIR
+rm generated-docs/*.* # we already copied over the *.js and *.css files earlier for the builtins, so just drop these.
 mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
 # set up docs for basic-cli 0.3.2
-BASIC_CLI_DIR_0_3_2=$BASIC_CLI_PACKAGE_DIR/0-3-2
+BASIC_CLI_DIR_0_3_2=$BASIC_CLI_PACKAGE_DIR/0.3.2
 mkdir -p $BASIC_CLI_DIR_0_3_2
 curl -fL --output $BASIC_CLI_DIR_0_3_2/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/0.3.2/docs.tar.gz
 tar -xf $BASIC_CLI_DIR_0_3_2/docs.tar.gz -C $BASIC_CLI_DIR_0_3_2/

@@ -144,13 +144,13 @@ procedure Test.6 (Test.27, Test.28):
     ret Test.37;
 
 procedure Test.76 (Test.77):
-    let Test.78 : {{}, []} = Unbox Test.77;
+    let Test.78 : {{}, []} = UnionAtIndex (Id 0) (Index 0) Test.77;
     dec Test.77;
     let Test.79 : {} = StructAtIndex 0 Test.78;
     ret Test.79;
 
 procedure Test.80 (Test.81):
-    let Test.82 : {{}, []} = Unbox Test.81;
+    let Test.82 : {{}, []} = UnionAtIndex (Id 0) (Index 0) Test.81;
     dec Test.81;
     let Test.83 : [] = StructAtIndex 1 Test.82;
     ret Test.83;

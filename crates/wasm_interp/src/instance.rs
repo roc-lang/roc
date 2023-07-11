@@ -2,7 +2,7 @@ use bumpalo::{collections::Vec, Bump};
 use std::fmt::{self, Write};
 use std::iter::{self, once, Iterator};
 
-use roc_wasm_module::opcodes::OpCode;
+use roc_wasm_module::opcodes::{MemoryInstruction, OpCode};
 use roc_wasm_module::parse::{Parse, SkipBytes};
 use roc_wasm_module::sections::{ImportDesc, MemorySection, SignatureParamsIter};
 use roc_wasm_module::{ExportType, WasmModule};
@@ -105,7 +105,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         is_debug_mode: bool,
     ) -> Result<Self, std::string::String> {
         let module =
-            WasmModule::preload(arena, module_bytes, false).map_err(|e| format!("{:?}", e))?;
+            WasmModule::preload(arena, module_bytes, false).map_err(|e| format!("{e:?}"))?;
         Self::for_module(arena, arena.alloc(module), import_dispatcher, is_debug_mode)
     }
 
@@ -178,8 +178,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             let actual_type = ValueType::from(value);
             if actual_type != expected_type {
                 return Err(format!(
-                    "Type mismatch on argument {} of {}. Expected {:?} but got {:?}",
-                    i, fn_name, expected_type, value
+                    "Type mismatch on argument {i} of {fn_name}. Expected {expected_type:?} but got {value:?}"
                 ));
             }
             self.value_store.push(value);
@@ -261,10 +260,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     )
                 })
                 .ok_or_else(|| {
-                    format!(
-                        "I couldn't find a function '{}' in this WebAssembly module",
-                        fn_name
-                    )
+                    format!("I couldn't find a function '{fn_name}' in this WebAssembly module")
                 })? as usize
         };
 
@@ -348,7 +344,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
         let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
         if let Some(debug_string) = self.debug_string.as_mut() {
-            write!(debug_string, "{} ", x).unwrap();
+            write!(debug_string, "{x} ").unwrap();
         }
         x
     }
@@ -426,7 +422,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
     fn write_debug<T: fmt::Debug>(&mut self, value: T) {
         if let Some(debug_string) = self.debug_string.as_mut() {
-            std::write!(debug_string, "{:?} ", value).unwrap();
+            std::write!(debug_string, "{value:?} ").unwrap();
         }
     }
 
@@ -512,8 +508,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         if let Some(expected) = expected_signature {
             assert_eq!(
                 expected, signature_index,
-                "Indirect function call failed. Expected signature {} but found {}",
-                expected, signature_index,
+                "Indirect function call failed. Expected signature {expected} but found {signature_index}",
             );
         }
 
@@ -599,9 +594,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 } else {
                     write!(debug_string, ", ").unwrap();
                 }
-                write!(debug_string, "{:x?}", arg).unwrap();
+                write!(debug_string, "{arg:x?}").unwrap();
             }
-            writeln!(debug_string, "] return_type={:?}", return_type).unwrap();
+            writeln!(debug_string, "] return_type={return_type:?}").unwrap();
         }
     }
 
@@ -747,15 +742,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 // So far, all compilers seem to be emitting MVP-compatible code. (Rust, Zig, Roc...)
                 assert_eq!(
                     table_index, 0,
-                    "Table index {} not supported at file offset {:#x}. This interpreter only supports Wasm MVP.",
-                    table_index, file_offset
+                    "Table index {table_index} not supported at file offset {file_offset:#x}. This interpreter only supports Wasm MVP."
                 );
 
                 // Dereference the function pointer (look up the element index in the function table)
                 let fn_index = module.element.lookup(element_index).unwrap_or_else(|| {
                     panic!(
-                        "Indirect function call failed. There is no function with element index {}",
-                        element_index
+                        "Indirect function call failed. There is no function with element index {element_index}"
                     )
                 });
 
@@ -975,6 +968,38 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 } else {
                     self.value_store.push(Value::I32(-1));
                 }
+            }
+            MEMORY => {
+                // the first argument determines exactly which memory operation we have
+                match MemoryInstruction::try_from(module.code.bytes[self.program_counter]) {
+                    Ok(op) => match op {
+                        MemoryInstruction::MemoryInit => todo!("WASM instruction: memory.init"),
+                        MemoryInstruction::DataDrop => todo!("WASM instruction: data.drop"),
+                        MemoryInstruction::MemoryCopy => {
+                            let size = self.value_store.pop_u32()? as usize;
+                            let source = self.value_store.pop_u32()? as usize;
+                            let destination = self.value_store.pop_u32()? as usize;
+
+                            // skip the op byte and an extra two zero bytes.
+                            // in future versions of WebAssembly this byte may be used to index additional memories
+                            self.program_counter += 1 + 2;
+
+                            self.memory.copy_within(source..source + size, destination)
+                        }
+                        MemoryInstruction::MemoryFill => {
+                            let size = self.value_store.pop_u32()? as usize;
+                            let byte_value = self.value_store.pop_u32()? as u8;
+                            let destination = self.value_store.pop_u32()? as usize;
+
+                            // skip the op byte and an extra zero byte.
+                            // in future versions of WebAssembly this byte may be used to index additional memories
+                            self.program_counter += 1 + 1;
+
+                            self.memory[destination..][..size].fill(byte_value);
+                        }
+                    },
+                    Err(other) => unreachable!("invalid memory instruction {other:?}"),
+                };
             }
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
@@ -1581,28 +1606,28 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             I32TRUNCSF32 => {
                 let arg = self.value_store.pop_f32()?;
                 if arg < i32::MIN as f32 || arg > i32::MAX as f32 {
-                    panic!("Cannot truncate {} from F32 to I32", arg);
+                    panic!("Cannot truncate {arg} from F32 to I32");
                 }
                 self.value_store.push(Value::I32(arg as i32));
             }
             I32TRUNCUF32 => {
                 let arg = self.value_store.pop_f32()?;
                 if arg < u32::MIN as f32 || arg > u32::MAX as f32 {
-                    panic!("Cannot truncate {} from F32 to unsigned I32", arg);
+                    panic!("Cannot truncate {arg} from F32 to unsigned I32");
                 }
                 self.value_store.push(Value::from(arg as u32));
             }
             I32TRUNCSF64 => {
                 let arg = self.value_store.pop_f64()?;
                 if arg < i32::MIN as f64 || arg > i32::MAX as f64 {
-                    panic!("Cannot truncate {} from F64 to I32", arg);
+                    panic!("Cannot truncate {arg} from F64 to I32");
                 }
                 self.value_store.push(Value::I32(arg as i32));
             }
             I32TRUNCUF64 => {
                 let arg = self.value_store.pop_f64()?;
                 if arg < u32::MIN as f64 || arg > u32::MAX as f64 {
-                    panic!("Cannot truncate {} from F64 to unsigned I32", arg);
+                    panic!("Cannot truncate {arg} from F64 to unsigned I32");
                 }
                 self.value_store.push(Value::from(arg as u32));
             }
@@ -1617,28 +1642,28 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             I64TRUNCSF32 => {
                 let arg = self.value_store.pop_f32()?;
                 if arg < i64::MIN as f32 || arg > i64::MAX as f32 {
-                    panic!("Cannot truncate {} from F32 to I64", arg);
+                    panic!("Cannot truncate {arg} from F32 to I64");
                 }
                 self.value_store.push(Value::I64(arg as i64));
             }
             I64TRUNCUF32 => {
                 let arg = self.value_store.pop_f32()?;
                 if arg < u64::MIN as f32 || arg > u64::MAX as f32 {
-                    panic!("Cannot truncate {} from F32 to unsigned I64", arg);
+                    panic!("Cannot truncate {arg} from F32 to unsigned I64");
                 }
                 self.value_store.push(Value::from(arg as u64));
             }
             I64TRUNCSF64 => {
                 let arg = self.value_store.pop_f64()?;
                 if arg < i64::MIN as f64 || arg > i64::MAX as f64 {
-                    panic!("Cannot truncate {} from F64 to I64", arg);
+                    panic!("Cannot truncate {arg} from F64 to I64");
                 }
                 self.value_store.push(Value::I64(arg as i64));
             }
             I64TRUNCUF64 => {
                 let arg = self.value_store.pop_f64()?;
                 if arg < u64::MIN as f64 || arg > u64::MAX as f64 {
-                    panic!("Cannot truncate {} from F64 to unsigned I64", arg);
+                    panic!("Cannot truncate {arg} from F64 to unsigned I64");
                 }
                 self.value_store.push(Value::from(arg as u64));
             }
@@ -1707,12 +1732,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
         if let Some(debug_string) = &self.debug_string {
             if matches!(op_code, CALL | CALLINDIRECT) {
-                eprintln!("\n{:06x} {}", file_offset, debug_string);
+                eprintln!("\n{file_offset:06x} {debug_string}");
             } else {
                 // For calls, we print special debug stuff in do_call
                 let base = self.current_frame.locals_start + self.current_frame.locals_count;
                 let slice = self.value_store.get_slice(base);
-                eprintln!("{:06x} {:17} {:x?}", file_offset, debug_string, slice);
+                eprintln!("{file_offset:06x} {debug_string:17} {slice:x?}");
             }
             let is_return = op_code == RETURN || (op_code == END && implicit_return);
             let is_program_end = self.program_counter == 0;
@@ -1730,7 +1755,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
     #[allow(dead_code)]
     fn debug_values_and_blocks(&self, label: &str) {
-        eprintln!("\n========== {} ==========", label);
+        eprintln!("\n========== {label} ==========");
 
         let mut block_str = String::new();
         let mut block_iter = self.blocks.iter().enumerate();
@@ -1742,17 +1767,17 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 if *vstack > i {
                     break;
                 }
-                write!(block_str, "{}:{:?} ", b, ty).unwrap();
+                write!(block_str, "{b}:{ty:?} ").unwrap();
                 block = block_iter.next();
             }
             if !block_str.is_empty() {
-                eprintln!("--------------- {}", block_str);
+                eprintln!("--------------- {block_str}");
             }
         };
 
         for (i, v) in self.value_store.iter().enumerate() {
             print_blocks(i);
-            eprintln!("{:3} {:x?}", i, v);
+            eprintln!("{i:3} {v:x?}");
         }
         print_blocks(self.value_store.depth());
 
@@ -1769,7 +1794,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     /// --------------
     fn debug_stack_trace(&self, buffer: &mut String) -> fmt::Result {
         let divider = "-------------------";
-        writeln!(buffer, "{}", divider)?;
+        writeln!(buffer, "{divider}")?;
 
         let frames = self.previous_frames.iter().chain(once(&self.current_frame));
         let next_frames = frames.clone().skip(1);
@@ -1818,7 +1843,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 .unwrap_or("");
 
             // Function and address match wasm-objdump formatting, for easy copy & find
-            writeln!(buffer, "func[{}]  {}", fn_index, fn_name)?;
+            writeln!(buffer, "func[{fn_index}]  {fn_name}")?;
             writeln!(buffer, "  address  {:06x}", execution_addrs.next().unwrap())?;
 
             write!(buffer, "  args     ")?;
@@ -1829,7 +1854,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 } else if local_index != 0 {
                     write!(buffer, ", ")?;
                 }
-                write!(buffer, "{}: {:?}", local_index, value)?;
+                write!(buffer, "{local_index}: {value:?}")?;
             }
 
             write!(buffer, "\n  stack    [")?;
@@ -1842,10 +1867,10 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 if i != stack_start {
                     write!(buffer, ", ")?;
                 }
-                write!(buffer, "{:?}", value)?;
+                write!(buffer, "{value:?}")?;
             }
             writeln!(buffer, "]")?;
-            writeln!(buffer, "{}", divider)?;
+            writeln!(buffer, "{divider}")?;
         }
 
         Ok(())

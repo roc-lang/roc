@@ -422,7 +422,7 @@ mod test_can {
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 2);
-        println!("{:#?}", problems);
+        println!("{problems:#?}");
         assert!(problems.iter().any(|problem| matches!(
             problem,
             Problem::RuntimeError(RuntimeError::Shadowing { .. })

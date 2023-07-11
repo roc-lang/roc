@@ -264,7 +264,7 @@ fn mono_module_to_dylib<'a>(
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
-        internal_error!("Main function {} failed LLVM verification in build. Uncomment things nearby to see more details.", main_fn_name);
+        internal_error!("Main function {main_fn_name} failed LLVM verification in build. Uncomment things nearby to see more details.", );
     }
 
     module_pass.run_on(env.module);

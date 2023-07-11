@@ -538,20 +538,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             unreachable!("Ptr will never be visible to users")
         }
         LayoutRepr::LambdaSet(_) => OPAQUE_FUNCTION,
-        LayoutRepr::Boxed(_) => {
-            let size = env.layout_cache.interner.stack_size(layout);
-
-            app.call_function_dynamic_size(main_fn_name, size as usize, |mem: &A::Memory, addr| {
-                addr_to_ast(
-                    env,
-                    mem,
-                    addr,
-                    env.layout_cache.get_repr(layout),
-                    WhenRecursive::Unreachable,
-                    env.subs.get_root_key_without_compacting(raw_var),
-                )
-            })
-        }
     };
 
     apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
@@ -776,6 +762,34 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 when_recursive,
             )
         }
+        (
+            Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)),
+            LayoutRepr::Union(UnionLayout::NonNullableUnwrapped([inner_layout])),
+        ) => {
+            debug_assert_eq!(args.len(), 1);
+
+            let inner_var_index = args.into_iter().next().unwrap();
+            let inner_var = env.subs[inner_var_index];
+
+            let addr_of_inner = mem.deref_usize(addr);
+            let inner_expr = addr_to_ast(
+                env,
+                mem,
+                addr_of_inner,
+                env.layout_cache.get_repr(*inner_layout),
+                WhenRecursive::Unreachable,
+                inner_var,
+            );
+
+            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
+                module_name: "Box",
+                ident: "box",
+            }));
+            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
+            let box_box_args = env.arena.alloc([box_box_arg]);
+
+            Expr::Apply(box_box, box_box_args, CalledVia::Space)
+        }
         (_, LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
@@ -889,37 +903,6 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                     when_recursive,
                 )
             }
-        }
-        (
-            Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)),
-            LayoutRepr::Boxed(inner_layout),
-        ) => {
-            debug_assert_eq!(args.len(), 1);
-
-            let inner_var_index = args.into_iter().next().unwrap();
-            let inner_var = env.subs[inner_var_index];
-
-            let addr_of_inner = mem.deref_usize(addr);
-            let inner_expr = addr_to_ast(
-                env,
-                mem,
-                addr_of_inner,
-                env.layout_cache.get_repr(inner_layout),
-                WhenRecursive::Unreachable,
-                inner_var,
-            );
-
-            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
-                module_name: "Box",
-                ident: "box",
-            }));
-            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
-            let box_box_args = env.arena.alloc([box_box_arg]);
-
-            Expr::Apply(box_box, box_box_args, CalledVia::Space)
-        }
-        (_, LayoutRepr::Boxed(_)) => {
-            unreachable!("Box layouts can only be behind a `Box.Box` application")
         }
         (_, LayoutRepr::Ptr(_)) => {
             unreachable!("Ptr layouts are never available in user code")
@@ -1474,6 +1457,6 @@ fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_>
     use std::fmt::Write;
 
     let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
-    write!(string, "{}", num).unwrap();
+    write!(string, "{num}").unwrap();
     Expr::Num(string.into_bump_str())
 }

@@ -220,7 +220,7 @@ mod glue_cli_run {
             );
         }
 
-        assert!(glue_out.status.success(), "bad status {:?}", glue_out);
+        assert!(glue_out.status.success(), "bad status {glue_out:?}");
 
         glue_out
     }
@@ -243,7 +243,7 @@ mod glue_cli_run {
             );
         }
 
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        assert!(compile_out.status.success(), "bad status {compile_out:?}");
 
         compile_out
     }

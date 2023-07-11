@@ -179,7 +179,7 @@ fn build_eq<'a, 'ctx>(
             rhs_val,
         ),
 
-        LayoutRepr::Ptr(inner_layout) | LayoutRepr::Boxed(inner_layout) => build_box_eq(
+        LayoutRepr::Ptr(inner_layout) => build_box_eq(
             env,
             layout_interner,
             layout_ids,
@@ -329,8 +329,7 @@ fn build_neq<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     if lhs_layout != rhs_layout {
         panic!(
-            "Inequality of different layouts; did you have a type mismatch?\n{:?} != {:?}",
-            lhs_layout, rhs_layout
+            "Inequality of different layouts; did you have a type mismatch?\n{lhs_layout:?} != {rhs_layout:?}"
         );
     }
 
@@ -379,7 +378,7 @@ fn build_neq<'a, 'ctx>(
             result.into()
         }
 
-        LayoutRepr::Ptr(inner_layout) | LayoutRepr::Boxed(inner_layout) => {
+        LayoutRepr::Ptr(inner_layout) => {
             let is_equal = build_box_eq(
                 env,
                 layout_interner,
@@ -789,7 +788,7 @@ fn build_struct_eq_help<'a, 'ctx>(
             .into_int_value()
         };
 
-        current = ctx.append_basic_block(parent, &format!("eq_step_{}", index));
+        current = ctx.append_basic_block(parent, &format!("eq_step_{index}"));
 
         env.builder
             .build_conditional_branch(are_equal, current, return_false);

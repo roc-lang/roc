@@ -665,37 +665,25 @@ pub fn expr_to_expr2<'a>(
             ident,
         } => canonicalize_lookup(env, scope, module_name, ident, region),
 
+        ParensAround(sub_expr) => expr_to_expr2(env, scope, sub_expr, region),
+
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        bad_expr @ ParensAround(_) => {
-            panic!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
-            );
-        }
         bad_expr @ SpaceBefore(_, _) => {
             panic!(
-                "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
+                "A SpaceBefore did not get removed during operator desugaring somehow: {bad_expr:#?}"
             );
         }
         bad_expr @ SpaceAfter(_, _) => {
             panic!(
-                "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
+                "A SpaceAfter did not get removed during operator desugaring somehow: {bad_expr:#?}"
             );
         }
         bad_expr @ BinOps { .. } => {
-            panic!(
-                "A binary operator chain did not get desugared somehow: {:#?}",
-                bad_expr
-            );
+            panic!("A binary operator chain did not get desugared somehow: {bad_expr:#?}");
         }
         bad_expr @ UnaryOp(_, _) => {
-            panic!(
-                "A unary operator did not get desugared somehow: {:#?}",
-                bad_expr
-            );
+            panic!("A unary operator did not get desugared somehow: {bad_expr:#?}");
         }
 
         rest => todo!("not yet implemented {:?}", rest),

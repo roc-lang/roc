@@ -999,7 +999,7 @@ pub struct {name} {{
                     | RocType::RocResult(_, _)
                     | RocType::RecursivePointer { .. } => {
                         owned_ret_type = type_name(*payload_id, types);
-                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        borrowed_ret_type = format!("&{owned_ret_type}");
                         owned_ret = "payload".to_string();
                         borrowed_ret = format!("&{owned_ret}");
                         payload_args = format!("arg: {owned_ret_type}");
@@ -1119,7 +1119,7 @@ pub struct {name} {{
 
                         // TODO revise these - they're all copy/pasted from somewhere else
                         owned_ret_type = type_name(*payload_id, types);
-                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        borrowed_ret_type = format!("&{owned_ret_type}");
                         owned_ret = "payload".to_string();
                         borrowed_ret = format!("&{owned_ret}");
                         payload_args = format!("arg: {owned_ret_type}");
@@ -1658,7 +1658,7 @@ pub struct {name} {{
                 }},"#
                         )
                     } else {
-                        format!("{},", hash_tag)
+                        format!("{hash_tag},")
                     }
                 },
             );
@@ -2255,7 +2255,7 @@ pub struct {name} {{
             | RocType::TagUnion(_)
             | RocType::RecursivePointer { .. } => {
                 owned_ret_type = type_name(non_null_payload, types);
-                borrowed_ret_type = format!("&{}", owned_ret_type);
+                borrowed_ret_type = format!("&{owned_ret_type}");
                 payload_args = format!("arg: {owned_ret_type}");
                 args_to_payload = "arg".to_string();
                 owned_ret = "payload".to_string();
@@ -2631,7 +2631,7 @@ fn tag_union_struct_help(
         let label = if is_tag_union_payload {
             // Tag union payload fields need "f" prefix
             // because they're numbers
-            format!("f{}", label)
+            format!("f{label}")
         } else {
             escape_kw(label.to_string())
         };
@@ -2671,12 +2671,9 @@ fn tag_union_struct_help(
 
         if cannot_derive_copy(types.get_type(payload_id), types) {
             format!(
-        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",prefixed_fields)
+        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{prefixed_fields}\n{INDENT}{INDENT}{INDENT}{INDENT}}})")
         } else {
-            format!(
-                "{payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}}",
-                prefixed_fields
-            )
+            format!("{payload_type_name} {{\n{prefixed_fields}\n{INDENT}{INDENT}{INDENT}{INDENT}}}")
         }
     } else {
         "core::mem::ManuallyDrop::new(arg0)".to_string()

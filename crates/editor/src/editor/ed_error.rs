@@ -278,7 +278,7 @@ pub enum EdError {
 pub type EdResult<T, E = EdError> = std::result::Result<T, E>;
 
 pub fn print_err(err: &EdError) {
-    eprintln!("{}", format!("{}", err).truecolor(255, 0, 0));
+    eprintln!("{}", format!("{err}").truecolor(255, 0, 0));
 
     if let Some(backtrace) = ErrorCompat::backtrace(err) {
         eprintln!("{}", color_backtrace(backtrace));
@@ -286,7 +286,7 @@ pub fn print_err(err: &EdError) {
 }
 
 fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
-    let backtrace_str = format!("{}", backtrace);
+    let backtrace_str = format!("{backtrace}");
     let backtrace_split = backtrace_str.split('\n');
     let irrelevant_src = vec![".cargo", "registry", ".rustup", "rustc"];
 
@@ -301,10 +301,10 @@ fn color_backtrace(backtrace: &snafu::Backtrace) -> String {
                 }
                 format!("{}\n", line.truecolor(255, 100, 100))
             } else {
-                format!("{}\n", line)
+                format!("{line}\n")
             }
         } else {
-            format!("{}\n", line)
+            format!("{line}\n")
         };
 
         if let Some(prev_line) = prev_line_opt {
@@ -328,7 +328,7 @@ fn contains_one_of(main_str: &str, contain_slice: &[&str]) -> bool {
 
 impl From<EdError> for String {
     fn from(ed_error: EdError) -> Self {
-        format!("{}", ed_error)
+        format!("{ed_error}")
     }
 }
 

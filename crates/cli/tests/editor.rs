@@ -30,7 +30,7 @@ mod editor_launch_test {
 
         // The editor expects to be run from the root of the repo, so it can find the cli-platform to init a new project folder.
         env::set_current_dir(&root_dir)
-            .unwrap_or_else(|_| panic!("Failed to set current dir to {:?}", root_dir));
+            .unwrap_or_else(|_| panic!("Failed to set current dir to {root_dir:?}"));
 
         let roc_binary_path = build_roc_bin(&["--features", "editor"]);
 

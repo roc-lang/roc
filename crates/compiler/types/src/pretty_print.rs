@@ -820,7 +820,7 @@ fn write_content<'a>(
                     "".to_string()
                 };
                 if env.home == symbol.module_id() {
-                    format!("{}{}", ident_str, disambiguation,)
+                    format!("{ident_str}{disambiguation}",)
                 } else {
                     format!(
                         "{}.{}{}",

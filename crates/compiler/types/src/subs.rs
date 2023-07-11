@@ -774,11 +774,11 @@ impl fmt::Debug for Subs {
             let root = self.get_root_key_without_compacting(var);
 
             if var == root {
-                write!(f, "{} => ", i)?;
+                write!(f, "{i} => ")?;
 
                 subs_fmt_desc(&desc, self, f)?;
             } else {
-                write!(f, "{} => <{:?}>", i, root)?;
+                write!(f, "{i} => <{root:?}>")?;
             }
 
             writeln!(f)?;
@@ -811,7 +811,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                 Some(index) => subs[*index].as_str(),
                 None => "_",
             };
-            write!(f, "Flex({})", name)
+            write!(f, "Flex({name})")
         }
         Content::FlexAbleVar(name, symbols) => {
             let name = match name {
@@ -827,7 +827,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         Content::RecursionVar {
             structure,
             opt_name,
-        } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
+        } => write!(f, "Recursion({structure:?}, {opt_name:?})"),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
         Content::Alias(name, arguments, actual, kind) => {
             let slice = subs.get_subs_slice(arguments.all_variables());
@@ -855,7 +855,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             write!(f, "LambdaSet([")?;
 
             for (name, slice) in solved.iter_from_subs(subs) {
-                write!(f, "{:?} ", name)?;
+                write!(f, "{name:?} ")?;
                 for var in slice {
                     write!(
                         f,
@@ -869,7 +869,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
 
             write!(f, "]")?;
             if let Some(rec_var) = recursion_var.into_variable() {
-                write!(f, " as <{:?}>", rec_var)?;
+                write!(f, " as <{rec_var:?}>")?;
             }
             for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
                 write!(
@@ -881,10 +881,10 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                     region
                 )?;
             }
-            write!(f, ", ^<{:?}>)", ambient_function_var)
+            write!(f, ", ^<{ambient_function_var:?}>)")
         }
         Content::RangedNumber(range) => {
-            write!(f, "RangedNumber( {:?})", range)
+            write!(f, "RangedNumber( {range:?})")
         }
         Content::Error => write!(f, "Error"),
     }
@@ -903,7 +903,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         FlatType::Apply(name, arguments) => {
             let slice = subs.get_subs_slice(*arguments);
 
-            write!(f, "Apply({:?}, {:?})", name, slice)
+            write!(f, "Apply({name:?}, {slice:?})")
         }
         FlatType::Func(arguments, lambda_set, result) => {
             let slice = subs.get_subs_slice(*arguments);
@@ -948,7 +948,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 )?;
             }
 
-            write!(f, "}}<{:?}>", new_ext)
+            write!(f, "}}<{new_ext:?}>")
         }
         FlatType::Tuple(elems, ext) => {
             write!(f, "( ")?;
@@ -962,14 +962,14 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 )?;
             }
 
-            write!(f, ")<{:?}>", new_ext)
+            write!(f, ")<{new_ext:?}>")
         }
         FlatType::TagUnion(tags, ext) => {
             write!(f, "[")?;
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
-                write!(f, "{:?} ", name)?;
+                write!(f, "{name:?} ")?;
                 for var in slice {
                     write!(
                         f,
@@ -981,26 +981,22 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 write!(f, ", ")?;
             }
 
-            write!(f, "]<{:?}>", new_ext)
+            write!(f, "]<{new_ext:?}>")
         }
         FlatType::FunctionOrTagUnion(tagnames, symbol, ext) => {
             let tagnames: &[TagName] = subs.get_subs_slice(*tagnames);
 
-            write!(
-                f,
-                "FunctionOrTagUnion({:?}, {:?}, {:?})",
-                tagnames, symbol, ext
-            )
+            write!(f, "FunctionOrTagUnion({tagnames:?}, {symbol:?}, {ext:?})")
         }
         FlatType::RecursiveTagUnion(rec, tags, ext) => {
             write!(f, "[")?;
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
-                write!(f, "{:?} {:?}, ", name, slice)?;
+                write!(f, "{name:?} {slice:?}, ")?;
             }
 
-            write!(f, "]<{:?}> as <{:?}>", new_ext, rec)
+            write!(f, "]<{new_ext:?}> as <{rec:?}>")
         }
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
         FlatType::EmptyTuple => write!(f, "EmptyTuple"),
@@ -1016,7 +1012,7 @@ impl std::fmt::Debug for DebugUtable<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("UnificationTable {\n")?;
         for v in 0..self.0.utable.len() {
-            f.write_fmt(format_args!("  {} => ", v))?;
+            f.write_fmt(format_args!("  {v} => "))?;
             let var = unsafe { Variable::from_index(v as u32) };
             let root = self.0.utable.root_key_without_compacting(var);
             if root == var {
@@ -2820,9 +2816,7 @@ where
         debug_assert_eq!(
             labels.len(),
             variables.len(),
-            "tag name len != variables len: {:?} {:?}",
-            labels,
-            variables,
+            "tag name len != variables len: {labels:?} {variables:?}",
         );
 
         Self {
@@ -4025,7 +4019,7 @@ where
     } else {
         // TODO is this the proper use of index here, or should we be
         // doing something else like turning it into an ASCII letter?
-        Lowercase::from(format!("{}{}", given_name, index))
+        Lowercase::from(format!("{given_name}{index}"))
     };
 
     match taken_names.get(&indexed_name) {
@@ -4335,7 +4329,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::Record(err_fields, TypeExt::Closed),
 
                 other =>
-                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4367,7 +4361,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::Tuple(err_elems, TypeExt::Closed),
 
                 other =>
-                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4393,7 +4387,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
-                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4423,7 +4417,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
-                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4455,7 +4449,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::Closed, pol),
 
                 other =>
-                    panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {other:?}")
             }
         }
     }

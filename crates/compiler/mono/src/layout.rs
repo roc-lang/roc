@@ -165,8 +165,7 @@ impl<'a> LayoutCache<'a> {
         let Cacheable(value, criteria) = Layout::from_var(&mut env, var);
         debug_assert!(
             criteria.is_cacheable(),
-            "{:?} not cacheable as top-level",
-            value
+            "{value:?} not cacheable as top-level"
         );
         value
     }
@@ -192,8 +191,7 @@ impl<'a> LayoutCache<'a> {
         let Cacheable(value, criteria) = RawFunctionLayout::from_var(&mut env, var);
         debug_assert!(
             criteria.is_cacheable(),
-            "{:?} not cacheable as top-level",
-            value
+            "{value:?} not cacheable as top-level"
         );
         value
     }
@@ -674,8 +672,6 @@ pub(crate) enum LayoutWrapper<'a> {
 pub enum LayoutRepr<'a> {
     Builtin(Builtin<'a>),
     Struct(&'a [InLayout<'a>]),
-    // A (heap allocated) reference-counted value
-    Boxed(InLayout<'a>),
     // A pointer (heap or stack) without any reference counting
     // Ptr is not user-facing. The compiler author must make sure that invariants are upheld
     Ptr(InLayout<'a>),
@@ -1487,9 +1483,7 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(
             self.contains(function_symbol),
-            "function symbol {:?} not in set {:?}",
-            function_symbol,
-            self
+            "function symbol {function_symbol:?} not in set {self:?}"
         );
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[InLayout<'a>]| {
@@ -2534,7 +2528,7 @@ impl<'a> LayoutRepr<'a> {
     pub const F64: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64));
     pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
     pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
-    pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
+    pub const OPAQUE_PTR: Self = LayoutRepr::Ptr(Layout::VOID);
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct(field_layouts)
@@ -2576,7 +2570,7 @@ impl<'a> LayoutRepr<'a> {
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .safe_to_memcpy(interner),
-            Boxed(_) | Ptr(_) | RecursivePointer(_) => {
+            Ptr(_) | RecursivePointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -2666,7 +2660,6 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner),
             RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Boxed(_) => interner.target_info().ptr_width() as u32,
             Ptr(_) => interner.target_info().ptr_width() as u32,
         }
     }
@@ -2720,7 +2713,6 @@ impl<'a> LayoutRepr<'a> {
                 .alignment_bytes(interner),
             Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
             RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Boxed(_) => interner.target_info().ptr_width() as u32,
             Ptr(_) => interner.target_info().ptr_width() as u32,
         }
     }
@@ -2742,10 +2734,6 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) => {
                 unreachable!("should be looked up to get an actual layout")
             }
-            Boxed(inner) => Ord::max(
-                ptr_width,
-                interner.get_repr(*inner).alignment_bytes(interner),
-            ),
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
         }
     }
@@ -2815,7 +2803,6 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .contains_refcounted(interner),
             RecursivePointer(_) => true,
-            Boxed(_) => true,
             Ptr(_) => {
                 // we never consider pointers for refcounting. Ptr is not user-facing. The compiler
                 // author must make sure that invariants are upheld
@@ -2876,7 +2863,7 @@ impl<'a> LayoutRepr<'a> {
                     }
                 },
                 LambdaSet(_) => return true,
-                Boxed(_) | Ptr(_) => {
+                Ptr(_) => {
                     // If there's any layer of indirection (behind a pointer), then it doesn't vary!
                 }
                 RecursivePointer(_) => {
@@ -3206,18 +3193,20 @@ fn layout_from_flat_type<'a>(
                     let inner_var = args[0];
                     let inner_layout =
                         cached!(Layout::from_var(env, inner_var), criteria, env.subs);
+
+                    let repr = LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(
+                        arena.alloc([inner_layout]),
+                    ));
+
                     let boxed_layout = env.cache.put_in(Layout {
-                        repr: LayoutRepr::Boxed(inner_layout).direct(),
+                        repr: repr.direct(),
                         semantic: SemanticRepr::NONE,
                     });
 
                     Cacheable(Ok(boxed_layout), criteria)
                 }
                 _ => {
-                    panic!(
-                        "TODO layout_from_flat_type for Apply({:?}, {:?})",
-                        symbol, args
-                    );
+                    panic!("TODO layout_from_flat_type for Apply({symbol:?}, {args:?})");
                 }
             }
         }
@@ -3668,7 +3657,7 @@ pub fn union_sorted_tags<'a>(
 
                 Error => return Err(LayoutProblem::Erroneous),
 
-                other => panic!("invalid content in tag union variable: {:?}", other),
+                other => panic!("invalid content in tag union variable: {other:?}"),
             }
         }
     };
@@ -4391,7 +4380,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, tag_ext: TagExt) -> bool {
                 }
                 // So that we can continue compiling in the presence of errors
                 Error => ext_fields.is_empty(),
-                _ => panic!("invalid content in ext_var: {:?}", content),
+                _ => panic!("invalid content in ext_var: {content:?}"),
             }
         }
     }
@@ -4446,17 +4435,14 @@ fn layout_from_num_content<'a>(
             Symbol::NUM_DEC => Ok(Layout::DEC),
 
             _ => {
-                panic!(
-                    "Invalid Num.Num type application: Apply({:?}, {:?})",
-                    symbol, args
-                );
+                panic!("Invalid Num.Num type application: Apply({symbol:?}, {args:?})");
             }
         },
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
         Structure(_) | RangedNumber(..) | LambdaSet(_) => {
-            panic!("Invalid Num.Num type application: {:?}", content);
+            panic!("Invalid Num.Num type application: {content:?}");
         }
         Error => Err(LayoutProblem::Erroneous),
     };

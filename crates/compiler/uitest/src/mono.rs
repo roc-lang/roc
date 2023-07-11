@@ -60,10 +60,10 @@ pub fn write_compiled_ir<'a>(
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
         ))) => {
-            println!("{}", report);
+            println!("{report}");
             panic!();
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     };
 
     use roc_load::MonomorphizedModule;
@@ -146,9 +146,9 @@ fn write_procedures<'a>(
     let mut procs = procs_strings.iter().peekable();
     while let Some(proc) = procs.next() {
         if procs.peek().is_some() {
-            writeln!(writer, "{}", proc)?;
+            writeln!(writer, "{proc}")?;
         } else {
-            write!(writer, "{}", proc)?;
+            write!(writer, "{proc}")?;
         }
     }
 

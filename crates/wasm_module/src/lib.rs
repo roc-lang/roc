@@ -183,10 +183,7 @@ impl<'a> WasmModule<'a> {
                     module_errors,
                 )
             } else {
-                format!(
-                    "I wasn't able to understand this WebAssembly file.\n{}",
-                    module_errors,
-                )
+                format!("I wasn't able to understand this WebAssembly file.\n{module_errors}",)
             };
             return Err(ParseError { offset: 0, message });
         }

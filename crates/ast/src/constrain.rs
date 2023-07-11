@@ -2065,7 +2065,7 @@ pub mod test_constrain {
 
                 assert_eq!(actual_str, expected_str);
             }
-            Err(e) => panic!("syntax error {:?}", e),
+            Err(e) => panic!("syntax error {e:?}"),
         }
     }
 

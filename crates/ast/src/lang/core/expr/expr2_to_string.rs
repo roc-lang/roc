@@ -130,7 +130,7 @@ fn expr2_to_string_helper(
             );
         }
         Expr2::Call { .. } => {
-            let _ = write!(out_string, "Call({:?})", expr2);
+            let _ = write!(out_string, "Call({expr2:?})");
         }
         Expr2::Closure { args, .. } => {
             out_string.push_str("Closure:\n");
@@ -148,7 +148,7 @@ fn expr2_to_string_helper(
             }
         }
         &Expr2::Var { .. } => {
-            let _ = write!(out_string, "{:?}", expr2);
+            let _ = write!(out_string, "{expr2:?}");
         }
         Expr2::RuntimeError { .. } => {
             out_string.push_str("RuntimeError\n");
