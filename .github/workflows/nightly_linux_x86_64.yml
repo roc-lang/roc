@@ -7,7 +7,7 @@ name: Nightly Release Linux x86_64
     
 jobs:
   build:
-    name: Rust tests, build and package nightly release
+    name: build and package nightly release
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
     steps:
