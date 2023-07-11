@@ -1,6 +1,7 @@
 use crate::bitmask::{Bitmask, Chunk};
 use crate::token::{MaybeToken, Region, Token, TokenMap};
 
+/// This is pretty big on the stack because of TokenMap; callers should consider using a Box<Env>.
 #[derive(Default)]
 pub struct Env {
     in_progress: InProgress,
@@ -105,21 +106,24 @@ impl Env {
         let preceded_by_escape = {
             // Start of each contiguous sequence of backslashes
             //
-            //   input: 0001110000000000000000111100000000000000001000000000000111110000
-            // shifted: 0000111000000000000000011110000000000000000100000000000011111000
-            // negated: 1111000111111111111111100001111111111111111011111111111100000111
-            //   anded: 0001000000000000000000100000000000000000001000000000000100000000
+            //  input str: ___\\\________________\\\\________________\____________\\\\\____
+            // input bits: 0001110000000000000000111100000000000000001000000000000111110000
+            //    shifted: 0000111000000000000000011110000000000000000100000000000011111000
+            //    negated: 1111000111111111111111100001111111111111111011111111111100000111
+            //      anded: 0001000000000000000000100000000000000000001000000000000100000000
+            //  input str: ___\\\________________\\\\________________\____________\\\\\____
             //
             // Note: Fig. 3 of the paper uses `<<` instead of `>>` here, but that produces
             // a different output (the last backslash in the sequence rather than the first)
             // than what the figure shows. Presumably `>>` was intended.
             let backslash_starts = backslashes & !(backslashes >> 1);
 
-            // I don't understand this part of the paper, but apparently it works.
+            // I don't understand this part of the paper, but evidently it works.
             let starts_on_even = backslash_starts & EVENS;
             let starts_on_odd = backslash_starts & ODDS;
-            let evens_carries = backslashes.wrapping_add(starts_on_even) & !backslashes;
-            let odds_carries = backslashes.wrapping_add(starts_on_odd) & !backslashes;
+            let non_backslashes = !backslashes;
+            let evens_carries = backslashes.wrapping_add(starts_on_even) & non_backslashes;
+            let odds_carries = backslashes.wrapping_add(starts_on_odd) & non_backslashes;
 
             // The character following each backslash sequence whose length is odd.
             // If this is a quote, then it's an escaped quote!
@@ -166,11 +170,12 @@ impl Env {
             // by a minimum of 3. This will skip over the redundant two 1s and take us to
             // the next group of 3, which is right where we want to be.
             //
-            //   input: 0001110111001111110000111100000011000000001010110000000111111100
-            // shift 1: 0011101110011111100001111000000110000000010101100000001111111000
-            // shift 2: 0111011100111111000011110000001100000000101011000000011111110000
-            //   anded: 0001000100001111000000110000000000000000000000000000000111110000
-            // shift 2: 0000010001000011110000001100000000000000000000000000000001111100
+            //   input str: ___"""_"""__""""""____""""______""________"_"_""_______"""""""__
+            //  input bits: 0001110111001111110000111100000011000000001010110000000111111100
+            //     shift 1: 0011101110011111100001111000000110000000010101100000001111111000
+            //     shift 2: 0111011100111111000011110000001100000000101011000000011111110000
+            //       anded: 0001000100001111000000110000000000000000000000000000000111110000
+            //   input str: ___"""_"""__""""""____""""______""________"_"_""_______"""""""__
             //
             // This algorithm was adapted from the backslash-escaping algorithm from the paper.
             // Thanks, Daniel Lemire and Geoff Langdale!
@@ -307,7 +312,7 @@ impl Env {
 
             if byte == b'\\' {
                 if in_progress.is_str() {
-                    todo!("interpolation or escape!");
+                    todo!("interpolation or escape! (Remember, could be an escaped backslash)");
                 } else {
                     // If we encounter a backslash outside a string, it's a lambda.
                     self.token_map.insert(
