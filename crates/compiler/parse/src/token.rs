@@ -1,6 +1,6 @@
 use crate::bitmask::Bitmask;
 
-#[derive(Default, Copy, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Region {
     pub start_offset: u32,
     pub end_offset: u32,
@@ -35,8 +35,40 @@ impl TokenMap {
         }
     }
 
+    pub const fn has_token_at(&self, index: u8) -> bool {
+        debug_assert!(index < 64);
+
+        let bit = (self.bitmask.into_inner() >> index) & 1;
+
+        bit == 1
+    }
+
+    pub fn get(&self, index: u8) -> Option<(Token, Region)> {
+        debug_assert!(index < 64);
+
+        let bit = (self.bitmask.into_inner() >> index) & 1;
+
+        if bit == 1 {
+            Some(unsafe {
+                (
+                    std::mem::transmute(*self.tokens.get_unchecked(index as usize)),
+                    *self.regions.get_unchecked(index as usize),
+                )
+            })
+        } else {
+            None
+        }
+    }
+
     pub fn set(&mut self, index: u8, maybe_token: MaybeToken, region: Region) {
         debug_assert!(index < 64);
+        debug_assert!(
+            !self.has_token_at(index),
+            "Tried to overwrite an existing token of {:?} at index {} with {:?}",
+            self.get(index).unwrap(),
+            index,
+            maybe_token
+        );
 
         let cleared = self.bitmask & !(Bitmask::from(1) << index);
         let mask = Bitmask::from((maybe_token.is_some() as u64) << index);
@@ -51,6 +83,7 @@ impl TokenMap {
 
     pub fn insert(&mut self, index: u8, token: Token, region: Region) {
         debug_assert!(index < 64);
+        debug_assert!(!self.has_token_at(index)); // We should never overwrite an existing token!
 
         self.bitmask.set_to_1(index);
 
@@ -115,6 +148,14 @@ pub union MaybeToken {
     token: Token,
 }
 
+impl std::fmt::Debug for MaybeToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let option: Option<Token> = (*self).into();
+
+        option.fmt(f)
+    }
+}
+
 impl PartialEq for MaybeToken {
     fn eq(&self, other: &Self) -> bool {
         unsafe { self.raw == other.raw }
@@ -148,7 +189,11 @@ impl MaybeToken {
         Self { token }
     }
 
-    fn is_some(self) -> bool {
+    pub fn is_none(self) -> bool {
+        self == Self::NONE
+    }
+
+    pub fn is_some(self) -> bool {
         self != Self::NONE
     }
 }

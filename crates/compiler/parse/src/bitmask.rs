@@ -129,7 +129,7 @@ impl Bitmask {
     }
 
     #[inline(always)]
-    pub fn into_inner(self) -> u64 {
+    pub const fn into_inner(self) -> u64 {
         self.0
     }
 }

@@ -1,6 +1,8 @@
 #[cfg(test)]
-use crate::experiment::{Env, Listener};
-use crate::token::Token;
+use crate::{
+    experiment::{Env, Listener},
+    token::Token,
+};
 
 #[cfg(test)]
 #[derive(Debug, Eq, PartialEq, Default)]

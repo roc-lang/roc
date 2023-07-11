@@ -25,7 +25,6 @@ impl From<InProgress> for MaybeToken {
             match in_progress {
                 InProgress::Nothing => 0,
                 InProgress::Comment => Token::Comment as u8,
-                InProgress::Lambda => Token::Lambda as u8,
                 InProgress::MultiLineStr => Token::MultiLineStr as u8,
                 InProgress::SingleLineStr => Token::SingleLineStr as u8,
                 InProgress::SingleQuoteChar => Token::SingleLineStr as u8,
@@ -71,7 +70,6 @@ const ODDS: Bitmask =
 enum InProgress {
     Nothing = 0,
     Comment = 1,
-    Lambda = 2,
     // The strings must have the highest numeric values, for `is_str` to work
     MultiLineStr = 7, // This must have the lowest numeric value of the strings, for `is_str` to work
     SingleLineStr = 8,
@@ -323,6 +321,10 @@ impl Env {
                             end_offset: offset,
                         },
                     );
+
+                    // TODO if we end up wanting to continue in the other branch too,
+                    // maybe put everything else in `else` instead?
+                    continue;
                 }
             }
 
