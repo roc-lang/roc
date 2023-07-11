@@ -112,12 +112,11 @@ fn check_command_available(command_name: &str) -> bool {
 
         cmd.args([command_name]);
 
-        let cmd_str = format!("{:?}", cmd);
+        let cmd_str = format!("{cmd:?}");
 
         let cmd_out = cmd.output().unwrap_or_else(|err| {
             panic!(
-                "Failed to execute `{}` to check if {} is available:\n    {}",
-                cmd_str, command_name, err
+                "Failed to execute `{cmd_str}` to check if {command_name} is available:\n    {err}"
             )
         });
 

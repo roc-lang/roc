@@ -18,6 +18,7 @@ const v2u64 = @Vector(2, u64);
 // Export it as weak incase it is already linked in by something else.
 comptime {
     @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+    @export(__lshrti3, .{ .name = "__lshrti3", .linkage = .Weak });
     if (want_windows_v2u64_abi) {
         @export(__divti3_windows_x86_64, .{ .name = "__divti3", .linkage = .Weak });
         @export(__modti3_windows_x86_64, .{ .name = "__modti3", .linkage = .Weak });
@@ -438,5 +439,49 @@ pub inline fn floatFractionalBits(comptime T: type) comptime_int {
         80 => 63,
         128 => 112,
         else => @compileError("unknown floating point type " ++ @typeName(T)),
+    };
+}
+
+pub fn __lshrti3(a: i128, b: i32) callconv(.C) i128 {
+    return lshrXi3(i128, a, b);
+}
+
+// Logical shift right: shift in 0 from left to right
+// Precondition: 0 <= b < T.bit_count
+inline fn lshrXi3(comptime T: type, a: T, b: i32) T {
+    const word_t = HalveInt(T, false);
+    const S = std.math.Log2Int(word_t.HalfT);
+
+    const input = word_t{ .all = a };
+    var output: word_t = undefined;
+
+    if (b >= word_t.bits) {
+        output.s.high = 0;
+        output.s.low = input.s.high >> @intCast(S, b - word_t.bits);
+    } else if (b == 0) {
+        return a;
+    } else {
+        output.s.high = input.s.high >> @intCast(S, b);
+        output.s.low = input.s.high << @intCast(S, word_t.bits - b);
+        output.s.low |= input.s.low >> @intCast(S, b);
+    }
+
+    return output.all;
+}
+
+/// Allows to access underlying bits as two equally sized lower and higher
+/// signed or unsigned integers.
+fn HalveInt(comptime T: type, comptime signed_half: bool) type {
+    return extern union {
+        pub const bits = @divExact(@typeInfo(T).Int.bits, 2);
+        pub const HalfTU = std.meta.Int(.unsigned, bits);
+        pub const HalfTS = std.meta.Int(.signed, bits);
+        pub const HalfT = if (signed_half) HalfTS else HalfTU;
+
+        all: T,
+        s: if (native_endian == .Little)
+            extern struct { low: HalfT, high: HalfT }
+        else
+            extern struct { high: HalfT, low: HalfT },
     };
 }

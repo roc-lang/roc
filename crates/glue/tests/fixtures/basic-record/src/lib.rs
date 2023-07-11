@@ -1,11 +1,11 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let record = test_glue::mainForHost();
+    let record = roc_app::mainForHost();
 
     // Verify that the record has all the expected traits.
 

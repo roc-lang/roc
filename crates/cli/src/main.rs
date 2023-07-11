@@ -201,12 +201,12 @@ fn main() -> io::Result<()> {
                 }
 
                 Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{}", report);
+                    print!("{report}");
 
                     Ok(1)
                 }
                 Err(other) => {
-                    panic!("build_file failed with error:\n{:?}", other);
+                    panic!("build_file failed with error:\n{other:?}");
                 }
             }
         }
@@ -273,7 +273,7 @@ fn main() -> io::Result<()> {
             let format_exit_code = match format(roc_files, format_mode) {
                 Ok(_) => 0,
                 Err(message) => {
-                    eprintln!("{}", message);
+                    eprintln!("{message}");
                     1
                 }
             };

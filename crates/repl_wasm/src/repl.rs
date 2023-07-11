@@ -233,7 +233,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
-        None => return Ok(format!("<function> : {}", expr_type_str)),
+        None => return Ok(format!("<function> : {expr_type_str}")),
     };
 
     let app_module_bytes = {
@@ -280,7 +280,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     // Send the compiled binary out to JS and create an executable instance from it
     js_create_app(&app_module_bytes)
         .await
-        .map_err(|js| format!("{:?}", js))?;
+        .map_err(|js| format!("{js:?}"))?;
 
     let mut app = WasmReplApp { arena };
 

@@ -1776,14 +1776,14 @@ fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec2: Vec<i64> = (0..num_elems2)
         .map(|i| 54321 % (i + num_elems1 + num_elems2 + 1))
         .collect();
-    let slice_str1 = format!("{:?}", vec1);
-    let slice_str2 = format!("{:?}", vec2);
+    let slice_str1 = format!("{vec1:?}");
+    let slice_str2 = format!("{vec2:?}");
     let mut expected = vec1;
 
     expected.extend(vec2);
 
     assert_evals_to!(
-        &format!("List.concat {} {}", slice_str1, slice_str2),
+        &format!("List.concat {slice_str1} {slice_str2}"),
         RocList::from_slice(&expected),
         RocList<i64>
     );

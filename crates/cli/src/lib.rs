@@ -414,12 +414,10 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         match matches.value_source(ROC_FILE) {
             Some(ValueSource::DefaultValue) => {
                 eprintln!(
-                    "\nThe current directory ({}) does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                    current_dir_string,
-                    DEFAULT_ROC_FILENAME
+                    "\nThe current directory ({current_dir_string}) does not contain a {DEFAULT_ROC_FILENAME} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"
                 )
             }
-            _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", expected_file_path_string),
+            _ => eprintln!("\nThis file was not found: {expected_file_path_string}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"),
         }
 
         process::exit(1);
@@ -563,16 +561,13 @@ pub fn build(
             match matches.value_source(ROC_FILE) {
                 Some(ValueSource::DefaultValue) => {
                     eprintln!(
-                        "\nThe current directory ({}) does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                        current_dir_string,
-                        DEFAULT_ROC_FILENAME
+                        "\nThe current directory ({current_dir_string}) does not contain a {DEFAULT_ROC_FILENAME} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"
                     )
                 }
                 _ => {
                     let mut error_lines = Vec::new();
                     error_lines.push(format!(
-                        "This file was not found: {}",
-                        expected_file_path_string
+                        "This file was not found: {expected_file_path_string}"
                     ));
                     // Add some additional hints if run as `roc [FILENAME]`.
                     if matches.subcommand().is_none() {
@@ -582,8 +577,7 @@ pub fn build(
                                     nearest_match(possible_typo, subcommands)
                                 {
                                     error_lines.push(format!(
-                                        "Did you mean to use the {} subcommand?",
-                                        nearest_command
+                                        "Did you mean to use the {nearest_command} subcommand?"
                                     ));
                                 }
                             }
@@ -1142,7 +1136,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
         );
     }
 
-    let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+    let path = PathBuf::from(format!("/proc/self/fd/{fd}"));
 
     std::fs::write(&path, binary_bytes)?;
 

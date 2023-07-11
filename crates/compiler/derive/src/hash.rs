@@ -298,7 +298,7 @@ fn hash_tag_union(
                     Expr::Int(
                         discr_num_var,
                         discr_precision_var,
-                        format!("{}", discr_n).into_boxed_str(),
+                        format!("{discr_n}").into_boxed_str(),
                         IntValue::I128((discr_n as i128).to_ne_bytes()),
                         IntBound::Exact(discr_width),
                     ),

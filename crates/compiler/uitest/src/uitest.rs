@@ -337,7 +337,7 @@ fn assemble_query_output(
 
     for (module, source) in other_modules.iter() {
         writeln!(writer, "## module {module}")?;
-        writeln!(writer, "{}\n", source)?;
+        writeln!(writer, "{source}\n")?;
     }
 
     if !other_modules.is_empty() {

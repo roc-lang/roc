@@ -126,7 +126,7 @@ fn check_parse_res<T, E: std::fmt::Debug>(parse_res: Result<T, E>) -> EdResult<T
     match parse_res {
         Ok(some_type) => Ok(some_type),
         Err(parse_err) => StringParseSnafu {
-            msg: format!("{:?}", parse_err),
+            msg: format!("{parse_err:?}"),
         }
         .fail(),
     }

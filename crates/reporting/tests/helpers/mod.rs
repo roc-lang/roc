@@ -15,7 +15,8 @@ use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds};
 use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
-use roc_solve::solve::{self, Aliases};
+use roc_solve::module::SolveConfig;
+use roc_solve::{solve, Aliases};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
 use roc_types::types::Types;
@@ -33,26 +34,24 @@ pub fn infer_expr(
     problems: &mut Vec<TypeError>,
     types: Types,
     constraints: &Constraints,
-    constraint: &Constraint,
+    constraint: Constraint,
     pending_derives: PendingDerives,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
     derived_module: SharedDerivedModule,
     expr_var: Variable,
 ) -> (Content, Subs) {
-    let (solved, _) = solve::run(
-        ModuleId::ATTR,
+    let config = SolveConfig {
         types,
         constraints,
-        problems,
-        subs,
-        aliases,
-        constraint,
+        root_constraint: constraint,
+        home: ModuleId::ATTR,
         pending_derives,
-        abilities_store,
-        &Default::default(),
+        exposed_by_module: &Default::default(),
         derived_module,
-    );
+    };
+
+    let (solved, _) = solve::run(config, problems, subs, aliases, abilities_store);
 
     let content = *solved.inner().get_content_without_compacting(expr_var);
 

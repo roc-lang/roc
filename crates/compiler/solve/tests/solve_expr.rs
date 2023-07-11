@@ -49,7 +49,7 @@ mod solve_expr {
 
         exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
 
-        debug_assert!(exposed_to_host.len() == 1, "{:?}", exposed_to_host);
+        debug_assert!(exposed_to_host.len() == 1, "{exposed_to_host:?}");
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
         let actual_str = name_and_print_var(variable, subs, home, &interns, DebugPrint::NOTHING);
 
@@ -61,8 +61,7 @@ mod solve_expr {
 
         assert!(
             can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
+            "Canonicalization problems: {can_problems}"
         );
 
         assert_eq!(actual, expected.to_string());
@@ -73,17 +72,13 @@ mod solve_expr {
 
         assert!(
             can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
+            "Canonicalization problems: {can_problems}"
         );
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!(
-                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{}",
-                expected, actual, type_problems,
-            );
+            panic!("expected:\n{expected:?}\ninferred:\n{actual:?}\nproblems:\n{type_problems}",);
         }
         assert_eq!(actual, expected.to_string());
     }

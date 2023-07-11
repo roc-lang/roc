@@ -613,11 +613,10 @@ impl RuntimeError {
         match self {
             DegenerateBranch(region) => {
                 format!(
-                    "Hit a branch pattern that does not bind all symbols its body needs, at {:?}",
-                    region
+                    "Hit a branch pattern that does not bind all symbols its body needs, at {region:?}"
                 )
             }
-            err => format!("{:?}", err),
+            err => format!("{err:?}"),
         }
     }
 }

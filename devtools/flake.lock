@@ -115,8 +115,8 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1682761608,
-        "narHash": "sha256-+6tHbEK8GYDSCLasgawufSLegyJ0cqHV2nfmJICwzrk=",
+        "lastModified": 1682784625,
+        "narHash": "sha256-QUncKiwgpmHajo601NNHOjeUG2/vrGp1oMgxnPhq900=",
         "path": "/home/username/gitrepos/roc9/roc",
         "type": "path"
       },

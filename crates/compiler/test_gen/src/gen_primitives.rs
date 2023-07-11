@@ -2211,9 +2211,10 @@ fn nullable_eval_cfold() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_switch() {
-    // exposed bug with passing the right symbol/layout down into switch branch generation
-    // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
-    assert_evals_to!(
+    crate::helpers::with_larger_debug_stack(||
+        // exposed bug with passing the right symbol/layout down into switch branch generation
+        // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
+        assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2249,7 +2250,7 @@ fn nested_switch() {
         ),
         12,
         i64
-    );
+    ));
 }
 
 #[test]
@@ -4496,6 +4497,39 @@ fn pass_lambda_set_to_function() {
             "#
         ),
         3 * 3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn linked_list_trmc() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            LinkedList a : [Nil, Cons a (LinkedList a)]
+
+            repeat : a, Nat -> LinkedList a
+            repeat = \value, n ->
+                when n is
+                    0 -> Nil
+                    _ -> Cons value (repeat value (n - 1))
+
+            length : LinkedList a -> I64
+            length = \list ->
+                when list is
+                    Nil -> 0
+                    Cons _ rest -> 1 + length rest
+
+            main : I64
+            main =
+                repeat "foo" 5
+                    |> length
+            "#
+        ),
+        5,
         i64
     );
 }

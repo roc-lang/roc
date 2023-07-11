@@ -34,10 +34,7 @@ pub fn call_bitcode_fn<'ctx>(
         .try_as_basic_value()
         .left()
         .unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Did not get return value from bitcode function {:?}",
-                fn_name
-            )
+            panic!("LLVM error: Did not get return value from bitcode function {fn_name:?}")
         })
 }
 
@@ -49,7 +46,7 @@ pub fn call_void_bitcode_fn<'ctx>(
     call_bitcode_fn_help(env, args, fn_name)
         .try_as_basic_value()
         .right()
-        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {:?}", fn_name))
+        .unwrap_or_else(|| panic!("LLVM error: Tried to call void bitcode function, but got return value from bitcode function, {fn_name:?}"))
 }
 
 fn call_bitcode_fn_help<'ctx>(
@@ -63,7 +60,7 @@ fn call_bitcode_fn_help<'ctx>(
     let fn_val = env
         .module
         .get_function(fn_name)
-        .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
+        .unwrap_or_else(|| panic!("Unrecognized builtin function: {fn_name:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md"));
 
     let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
 
@@ -225,7 +222,7 @@ fn build_transform_caller_help<'a, 'ctx>(
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
-    let attr = env.context.create_enum_attribute(kind_id, 1);
+    let attr = env.context.create_enum_attribute(kind_id, 0);
     function_value.add_attribute(AttributeLoc::Function, attr);
 
     let entry = env.context.append_basic_block(function_value, "entry");
@@ -378,9 +375,9 @@ fn build_rc_wrapper<'a, 'ctx>(
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
-        Mode::IncN => format!("{}_inc_n", fn_name),
-        Mode::Inc => format!("{}_inc", fn_name),
-        Mode::Dec => format!("{}_dec", fn_name),
+        Mode::IncN => format!("{fn_name}_inc_n"),
+        Mode::Inc => format!("{fn_name}_inc"),
+        Mode::Dec => format!("{fn_name}_dec"),
     };
 
     let function_value = match env.module.get_function(fn_name.as_str()) {
@@ -408,7 +405,7 @@ fn build_rc_wrapper<'a, 'ctx>(
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
@@ -497,7 +494,7 @@ pub fn build_eq_wrapper<'a, 'ctx>(
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
@@ -598,7 +595,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
 
             let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
             debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
+            let attr = env.context.create_enum_attribute(kind_id, 0);
             function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");

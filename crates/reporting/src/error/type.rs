@@ -1047,7 +1047,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.reflow("This list contains elements with different types:"),
-                    alloc.string(format!("Its {} element is", ith)),
+                    alloc.string(format!("Its {ith} element is")),
                     alloc.reflow(prev_elems_msg),
                     Some(alloc.reflow("Every element in a list must have the same type!")),
                 )
@@ -1180,7 +1180,7 @@ fn to_expr_report<'b>(
                                     if arity == 1 {
                                         "1 argument".into()
                                     } else {
-                                        format!("{} arguments", arity)
+                                        format!("{arity} arguments")
                                     }
                                 )),
                             ]),
@@ -1227,7 +1227,7 @@ fn to_expr_report<'b>(
                                     if n == 1 {
                                         "1 argument".into()
                                     } else {
-                                        format!("{} arguments", n)
+                                        format!("{n} arguments")
                                     },
                                     arity
                                 )),
@@ -1251,7 +1251,7 @@ fn to_expr_report<'b>(
                                     if n == 1 {
                                         "1 argument".into()
                                     } else {
-                                        format!("{} arguments", n)
+                                        format!("{n} arguments")
                                     },
                                     arity
                                 )),
@@ -1865,10 +1865,7 @@ fn format_category<'b>(
         ),
         CallResult(None, _) => (this_is, alloc.text(":")),
         LowLevelOpResult(op) => {
-            panic!(
-                "Compiler bug: invalid return type from low-level op {:?}",
-                op
-            );
+            panic!("Compiler bug: invalid return type from low-level op {op:?}");
         }
         ForeignCall => {
             panic!("Compiler bug: invalid return type from foreign call",);
@@ -4372,8 +4369,8 @@ fn type_problem_to_pretty<'b>(
             match suggestions.get(0) {
                 None => alloc.nil(),
                 Some(nearest) => {
-                    let typo_str = format!("{}", typo);
-                    let nearest_str = format!("{}", nearest);
+                    let typo_str = format!("{typo}");
+                    let nearest_str = format!("{nearest}");
 
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
@@ -4424,7 +4421,7 @@ fn type_problem_to_pretty<'b>(
             match suggestions.get(0) {
                 None => alloc.nil(),
                 Some(nearest) => {
-                    let nearest_str = format!("{}", nearest);
+                    let nearest_str = format!("{nearest}");
 
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);

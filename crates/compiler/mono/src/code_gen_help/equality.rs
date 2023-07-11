@@ -37,7 +37,7 @@ pub fn eq_generic<'a>(
         Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
         Struct(field_layouts) => eq_struct(root, ident_ids, ctx, layout_interner, field_layouts),
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
-        Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
+        Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),
         RecursivePointer(_) => {
             unreachable!(
@@ -138,7 +138,7 @@ fn eq_struct<'a>(
 ) -> Stmt<'a> {
     let mut else_stmt = Stmt::Ret(Symbol::BOOL_TRUE);
     for (i, layout) in field_layouts.iter().enumerate().rev() {
-        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}", i));
+        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{i}"));
         let field1_expr = Expr::StructAtIndex {
             index: i as u64,
             field_layouts,
@@ -146,7 +146,7 @@ fn eq_struct<'a>(
         };
         let field1_stmt = |next| Stmt::Let(field1_sym, field1_expr, *layout, next);
 
-        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}", i));
+        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{i}"));
         let field2_expr = Expr::StructAtIndex {
             index: i as u64,
             field_layouts,
@@ -164,7 +164,7 @@ fn eq_struct<'a>(
             )
             .unwrap();
 
-        let eq_call_name = format!("eq_call_{}", i);
+        let eq_call_name = format!("eq_call_{i}");
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
         let eq_call_stmt = |next| Stmt::Let(eq_call_sym, eq_call_expr, LAYOUT_BOOL, next);
 
@@ -488,8 +488,8 @@ fn eq_tag_fields<'a>(
         Some(i) => {
             // Implement tail recursion on this RecursivePointer,
             // in the innermost `else` clause after all other fields have been checked
-            let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
-            let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}_{}", tag_id, i));
+            let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{tag_id}_{i}"));
+            let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{tag_id}_{i}"));
 
             let field1_expr = Expr::UnionAtIndex {
                 union_layout,
@@ -533,8 +533,8 @@ fn eq_tag_fields<'a>(
             continue; // the tail-recursive field is handled elsewhere
         }
 
-        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
-        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}_{}", tag_id, i));
+        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{tag_id}_{i}"));
+        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{tag_id}_{i}"));
 
         let field1_expr = Expr::UnionAtIndex {
             union_layout,
@@ -560,7 +560,7 @@ fn eq_tag_fields<'a>(
             )
             .unwrap();
 
-        let eq_call_name = format!("eq_call_{}", i);
+        let eq_call_name = format!("eq_call_{i}");
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
 
         stmt = Stmt::Let(
@@ -608,8 +608,8 @@ fn eq_boxed<'a>(
     let b = root.create_symbol(ident_ids, "b");
     let result = root.create_symbol(ident_ids, "result");
 
-    let a_expr = Expr::ExprUnbox { symbol: ARG_1 };
-    let b_expr = Expr::ExprUnbox { symbol: ARG_2 };
+    let a_expr = Expr::ptr_load(&ARG_1);
+    let b_expr = Expr::ptr_load(&ARG_2);
     let eq_call_expr = root
         .call_specialized_op(
             ident_ids,
@@ -648,8 +648,8 @@ fn eq_boxed<'a>(
 /// TODO, ListGetUnsafe no longer increments the refcount, so we can use it here.
 /// We can't use `ListGetUnsafe` because it increments the refcount, and we don't want that.
 /// Another way to dereference a heap pointer is to use `Expr::UnionAtIndex`.
-/// To achieve this we use `PtrCast` to cast the element pointer to a "Box" layout.
-/// Then we can increment the Box pointer in a loop, dereferencing it each time.
+/// To achieve this we use `PtrCast` to cast the element pointer to a "Ptr" layout.
+/// Then we can increment the pointer in a loop, dereferencing it each time.
 /// (An alternative approach would be to create a new lowlevel like ListPeekUnsafe.)
 fn eq_list<'a>(
     root: &mut CodeGenHelp<'a>,
@@ -662,8 +662,8 @@ fn eq_list<'a>(
     let layout_isize = root.layout_isize;
     let arena = root.arena;
 
-    // A "Box" layout (heap pointer to a single list element)
-    let box_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Boxed(elem_layout));
+    // A pointer layout (heap pointer to a single list element)
+    let ptr_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(elem_layout));
 
     // Compare lengths
 
@@ -682,16 +682,16 @@ fn eq_list<'a>(
     let elements_2 = root.create_symbol(ident_ids, "elements_2");
     let elements_1_expr = Expr::StructAtIndex {
         index: 0,
-        field_layouts: root.arena.alloc([box_layout, layout_isize]),
+        field_layouts: root.arena.alloc([ptr_layout, layout_isize]),
         structure: ARG_1,
     };
     let elements_2_expr = Expr::StructAtIndex {
         index: 0,
-        field_layouts: root.arena.alloc([box_layout, layout_isize]),
+        field_layouts: root.arena.alloc([ptr_layout, layout_isize]),
         structure: ARG_2,
     };
-    let elements_1_stmt = |next| Stmt::Let(elements_1, elements_1_expr, box_layout, next);
-    let elements_2_stmt = |next| Stmt::Let(elements_2, elements_2_expr, box_layout, next);
+    let elements_1_stmt = |next| Stmt::Let(elements_1, elements_1_expr, ptr_layout, next);
+    let elements_2_stmt = |next| Stmt::Let(elements_2, elements_2_expr, ptr_layout, next);
 
     // Cast to integers
     let start_1 = root.create_symbol(ident_ids, "start_1");
@@ -757,17 +757,17 @@ fn eq_list<'a>(
     // if we haven't reached the end yet...
     //
 
-    // Cast integers to box pointers
-    let box1 = root.create_symbol(ident_ids, "box1");
-    let box2 = root.create_symbol(ident_ids, "box2");
-    let box1_stmt = |next| let_lowlevel(arena, box_layout, box1, PtrCast, &[addr1], next);
-    let box2_stmt = |next| let_lowlevel(arena, box_layout, box2, PtrCast, &[addr2], next);
+    // Cast integers to pointers
+    let ptr1 = root.create_symbol(ident_ids, "ptr1");
+    let ptr2 = root.create_symbol(ident_ids, "ptr2");
+    let ptr1_stmt = |next| let_lowlevel(arena, ptr_layout, ptr1, PtrCast, &[addr1], next);
+    let ptr2_stmt = |next| let_lowlevel(arena, ptr_layout, ptr2, PtrCast, &[addr2], next);
 
-    // Dereference the box pointers to get the current elements
+    // Dereference the pointers to get the current elements
     let elem1 = root.create_symbol(ident_ids, "elem1");
     let elem2 = root.create_symbol(ident_ids, "elem2");
-    let elem1_expr = Expr::ExprUnbox { symbol: box1 };
-    let elem2_expr = Expr::ExprUnbox { symbol: box2 };
+    let elem1_expr = Expr::ptr_load(arena.alloc(ptr1));
+    let elem2_expr = Expr::ptr_load(arena.alloc(ptr2));
     let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, elem_layout, next);
     let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, elem_layout, next);
 
@@ -818,9 +818,9 @@ fn eq_list<'a>(
         Stmt::Ret(Symbol::BOOL_TRUE),
         root.arena.alloc(
             //
-            box1_stmt(root.arena.alloc(
+            ptr1_stmt(root.arena.alloc(
                 //
-                box2_stmt(root.arena.alloc(
+                ptr2_stmt(root.arena.alloc(
                     //
                     elem1_stmt(root.arena.alloc(
                         //

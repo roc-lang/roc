@@ -202,7 +202,7 @@ impl<'a> Surgeries<'a> {
             println!();
             println!("Text Sections");
             for sec in text_sections.iter() {
-                println!("{:+x?}", sec);
+                println!("{sec:+x?}");
             }
         }
 
@@ -285,8 +285,7 @@ impl<'a> Surgeries<'a> {
                         let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
                         if verbose {
                             println!(
-                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
-                                op_size, offset,
+                                "\tNeed to surgically replace {op_size} bytes at file offset {offset:+x}",
                             );
                             println!(
                                 "\tIts current value is {:+x?}",
@@ -373,13 +372,13 @@ pub(crate) fn preprocess_elf(
         other.sort_by_key(|t| t.1);
 
         for (name, vaddr) in other.iter() {
-            println!("\t{:#08x}: {}", vaddr, name);
+            println!("\t{vaddr:#08x}: {name}");
         }
 
         println!("Of which {} are builtins", builtins.len(),);
 
         for (name, vaddr) in builtins.iter() {
-            println!("\t{:#08x}: {}", vaddr, name);
+            println!("\t{vaddr:#08x}: {name}");
         }
     }
 
@@ -410,8 +409,8 @@ pub(crate) fn preprocess_elf(
         }
     };
     if verbose {
-        println!("PLT Address: {:+x}", plt_address);
-        println!("PLT File Offset: {:+x}", plt_offset);
+        println!("PLT Address: {plt_address:+x}");
+        println!("PLT File Offset: {plt_offset:+x}");
     }
 
     let app_syms: Vec<_> = exec_obj
@@ -467,7 +466,7 @@ pub(crate) fn preprocess_elf(
         }
 
         println!();
-        println!("App Function Address Map: {:+x?}", app_func_addresses);
+        println!("App Function Address Map: {app_func_addresses:+x?}");
     }
     let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed();
 
@@ -526,7 +525,7 @@ pub(crate) fn preprocess_elf(
 
     if verbose {
         println!();
-        println!("{:+x?}", md);
+        println!("{md:+x?}");
     }
 
     let saving_metadata_start = Instant::now();
@@ -593,12 +592,12 @@ fn gen_elf_le(
 
     if verbose {
         println!();
-        println!("PH Offset: {:+x}", ph_offset);
-        println!("PH Entry Size: {}", ph_ent_size);
-        println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: {:+x}", sh_offset);
-        println!("SH Entry Size: {}", sh_ent_size);
-        println!("SH Entry Count: {}", sh_num);
+        println!("PH Offset: {ph_offset:+x}");
+        println!("PH Entry Size: {ph_ent_size}");
+        println!("PH Entry Count: {ph_num}");
+        println!("SH Offset: {sh_offset:+x}");
+        println!("SH Entry Size: {sh_ent_size}");
+        println!("SH Entry Count: {sh_num}");
     }
 
     // Copy header and shift everything to enable more program sections.
@@ -633,10 +632,7 @@ fn gen_elf_le(
         user_error!("Executable does not load any data at 0x00000000\nProbably input the wrong file as the executable");
     }
     if verbose {
-        println!(
-            "Shifting all data after: {:+x}({:+x})",
-            physical_shift_start, virtual_shift_start
-        );
+        println!("Shifting all data after: {physical_shift_start:+x}({virtual_shift_start:+x})");
     }
 
     // Shift all of the program headers.
@@ -998,7 +994,7 @@ fn scan_elf_dynamic_deps(
     let dynstr_data = match dynstr_sec.uncompressed_data() {
         Ok(data) => data,
         Err(err) => {
-            panic!("Failed to load dynstr section: {}", err);
+            panic!("Failed to load dynstr section: {err}");
         }
     };
 
@@ -1023,15 +1019,12 @@ fn scan_elf_dynamic_deps(
                 )
                 .unwrap(),
             ) as usize;
-            let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
+            let c_buf = dynstr_data[dynstr_off..].as_ptr() as *const c_char;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
             if Path::new(c_str).file_name() == shared_lib_filename {
                 shared_lib_index = Some(dyn_lib_index);
                 if verbose {
-                    println!(
-                        "Found shared lib in dynamic table at index: {}",
-                        dyn_lib_index
-                    );
+                    println!("Found shared lib in dynamic table at index: {dyn_lib_index}");
                 }
             }
         }
@@ -1260,14 +1253,14 @@ fn surgery_elf_help(
 
     if verbose {
         println!();
-        println!("Is Elf64: {}", elf64);
-        println!("Is Little Endian: {}", litte_endian);
-        println!("PH Offset: {:+x}", ph_offset);
-        println!("PH Entry Size: {}", ph_ent_size);
-        println!("PH Entry Count: {}", ph_num);
-        println!("SH Offset: {:+x}", sh_offset);
-        println!("SH Entry Size: {}", sh_ent_size);
-        println!("SH Entry Count: {}", sh_num);
+        println!("Is Elf64: {elf64}");
+        println!("Is Little Endian: {litte_endian}");
+        println!("PH Offset: {ph_offset:+x}");
+        println!("PH Entry Size: {ph_ent_size}");
+        println!("PH Entry Count: {ph_num}");
+        println!("SH Offset: {sh_offset:+x}");
+        println!("SH Entry Size: {sh_ent_size}");
+        println!("SH Entry Count: {sh_num}");
     }
 
     // Backup section header table.
@@ -1360,8 +1353,8 @@ fn surgery_elf_help(
         }
     }
     if verbose {
-        println!("Data Relocation Offsets: {:+x?}", symbol_vaddr_map);
-        println!("Found App Function Symbols: {:+x?}", app_func_vaddr_map);
+        println!("Data Relocation Offsets: {symbol_vaddr_map:+x?}");
+        println!("Found App Function Symbols: {app_func_vaddr_map:+x?}");
     }
 
     let (new_text_section_offset, new_text_section_vaddr) = text_sections
@@ -1427,22 +1420,18 @@ fn surgery_elf_help(
         if verbose {
             println!();
             println!(
-                "Processing Relocations for Section: 0x{:+x?} @ {:+x} (virt: {:+x})",
-                sec, section_offset, section_virtual_offset
+                "Processing Relocations for Section: 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
             );
         }
         for rel in sec.relocations() {
             if verbose {
-                println!("\tFound Relocation: {:+x?}", rel);
+                println!("\tFound Relocation: {rel:+x?}");
             }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
                     let target_offset = if let Some(target_offset) = symbol_vaddr_map.get(&index) {
                         if verbose {
-                            println!(
-                                "\t\tRelocation targets symbol in app at: {:+x}",
-                                target_offset
-                            );
+                            println!("\t\tRelocation targets symbol in app at: {target_offset:+x}");
                         }
                         Some(*target_offset as i64)
                     } else {
@@ -1455,8 +1444,7 @@ fn surgery_elf_help(
                                     let vaddr = (*address + md.added_byte_count) as i64;
                                     if verbose {
                                         println!(
-                                            "\t\tRelocation targets symbol in host: {} @ {:+x}",
-                                            name, vaddr
+                                            "\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}"
                                         );
                                     }
                                     vaddr
@@ -1660,7 +1648,7 @@ fn surgery_elf_help(
 
         for s in md.surgeries.get(func_name).unwrap_or(&vec![]) {
             if verbose {
-                println!("\tPerforming surgery: {:+x?}", s);
+                println!("\tPerforming surgery: {s:+x?}");
             }
             let surgery_virt_offset = match s.virtual_offset {
                 VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
@@ -1670,7 +1658,7 @@ fn surgery_elf_help(
                 4 => {
                     let target = (func_virt_offset as i64 - surgery_virt_offset) as i32;
                     if verbose {
-                        println!("\tTarget Jump: {:+x}", target);
+                        println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..4]
@@ -1679,7 +1667,7 @@ fn surgery_elf_help(
                 8 => {
                     let target = func_virt_offset as i64 - surgery_virt_offset;
                     if verbose {
-                        println!("\tTarget Jump: {:+x}", target);
+                        println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize..][..8]
@@ -1700,8 +1688,8 @@ fn surgery_elf_help(
             let target =
                 (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
             if verbose {
-                println!("\tPLT: {:+x}, {:+x}", plt_off, plt_vaddr);
-                println!("\tTarget Jump: {:+x}", target);
+                println!("\tPLT: {plt_off:+x}, {plt_vaddr:+x}");
+                println!("\tTarget Jump: {target:+x}");
             }
             let data = target.to_le_bytes();
             exec_mmap[plt_off] = 0xE9;

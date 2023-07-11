@@ -1,4 +1,6 @@
 use inkwell::{
+    attributes::{Attribute, AttributeLoc},
+    module::Linkage,
     types::{BasicType, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
@@ -28,8 +30,8 @@ use crate::llvm::{
     },
     build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
-        function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
-        BuilderExt, RocReturn,
+        entry_block_alloca_zerofill, function_value_by_func_spec, load_roc_value,
+        roc_function_call, tag_pointer_clear_tag_id, BuilderExt, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
@@ -56,7 +58,7 @@ use crate::llvm::{
 
 use super::{build::Env, convert::zig_dec_type};
 use super::{
-    build::{throw_internal_exception, use_roc_value},
+    build::{throw_internal_exception, use_roc_value, FAST_CALL_CONV},
     convert::zig_with_overflow_roc_dec,
     scope::Scope,
 };
@@ -1304,8 +1306,42 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .into()
         }
 
-        PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
-        | RefCountDecDataPtr => {
+        PtrStore => {
+            arguments!(ptr, value);
+
+            env.builder.build_store(ptr.into_pointer_value(), value);
+
+            // ptr
+            env.context.struct_type(&[], false).const_zero().into()
+        }
+
+        PtrLoad => {
+            arguments!(ptr);
+
+            let ret_repr = layout_interner.get_repr(layout);
+            let element_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+            env.builder
+                .new_build_load(element_type, ptr.into_pointer_value(), "ptr_load")
+        }
+
+        PtrClearTagId => {
+            arguments!(ptr);
+
+            tag_pointer_clear_tag_id(env, ptr.into_pointer_value()).into()
+        }
+
+        Alloca => {
+            arguments!(initial_value);
+
+            let ptr = entry_block_alloca_zerofill(env, initial_value.get_type(), "stack_value");
+
+            env.builder.build_store(ptr, initial_value);
+
+            ptr.into()
+        }
+
+        RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 
@@ -1788,12 +1824,66 @@ fn throw_on_overflow<'ctx>(
 
     bd.position_at_end(throw_block);
 
-    throw_internal_exception(env, parent, message);
+    throw_because_overflow(env, message);
 
     bd.position_at_end(then_block);
 
     bd.build_extract_value(result, 0, "operation_result")
         .unwrap()
+}
+
+fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let function_name = "throw_on_overflow";
+    let function = match env.module.get_function(function_name) {
+        Some(function_value) => function_value,
+        None => {
+            let function_type = env.context.void_type().fn_type(&[], false);
+            let function_value =
+                env.module
+                    .add_function(function_name, function_type, Some(Linkage::Internal));
+
+            function_value.set_call_conventions(FAST_CALL_CONV);
+
+            // prevent inlining of this function
+            let kind_id = Attribute::get_named_enum_kind_id("noinline");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // calling this function is unlikely
+            let kind_id = Attribute::get_named_enum_kind_id("cold");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // this function never returns
+            let kind_id = Attribute::get_named_enum_kind_id("noreturn");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // Add a basic block for the entry point
+            let entry = env.context.append_basic_block(function_value, "entry");
+
+            env.builder.position_at_end(entry);
+
+            // ends in unreachable, so no return is needed
+            throw_internal_exception(env, function_value, message);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+
+    let call = env.builder.build_call(function, &[], "overflow");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    env.builder.build_unreachable();
 }
 
 fn dec_split_into_words<'ctx>(
@@ -2802,6 +2892,6 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
     let (ptr, layout) = scope.load_symbol_and_layout(symbol);
     match layout_interner.get_repr(layout) {
         LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
-        other => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
+        other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
 }

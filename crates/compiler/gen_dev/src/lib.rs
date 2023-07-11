@@ -17,7 +17,7 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-    Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
+    Literal, ModifyRc, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, LambdaName, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
@@ -138,16 +138,16 @@ impl<'a> LastSeenMap<'a> {
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
-                    Expr::Tag { arguments, .. } => {
+                    Expr::Tag {
+                        arguments, reuse, ..
+                    } => {
+                        if let Some(ru) = reuse {
+                            self.set_last_seen(ru.symbol, stmt);
+                        }
+
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }
-                    }
-                    Expr::ExprBox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::ExprUnbox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
                     }
                     Expr::Struct(syms) => {
                         for sym in *syms {
@@ -163,19 +163,14 @@ impl<'a> LastSeenMap<'a> {
                     Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
+                    Expr::UnionFieldPtrAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
                                 self.set_last_seen(*sym, stmt);
                             }
-                        }
-                    }
-                    Expr::Reuse {
-                        symbol, arguments, ..
-                    } => {
-                        self.set_last_seen(*symbol, stmt);
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
                         }
                     }
                     Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
@@ -356,7 +351,7 @@ trait Backend<'a> {
         // the functions from the generates #help module (refcounting, equality) is always suffixed
         // with 1. That is fine, they are always unique anyway.
         if ident_string.contains("#help") {
-            format!("{}_{}_1", module_string, ident_string)
+            format!("{module_string}_{ident_string}_1")
         } else {
             format!("{}_{}_{}", module_string, ident_string, state.finish())
         }
@@ -393,7 +388,7 @@ trait Backend<'a> {
     fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
@@ -413,7 +408,7 @@ trait Backend<'a> {
     fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
@@ -521,6 +516,29 @@ trait Backend<'a> {
                 self.load_literal_symbols(&[*sym]);
                 self.return_symbol(sym, ret_layout);
                 self.free_symbols(stmt);
+            }
+            Stmt::Refcounting(ModifyRc::Free(symbol), following) => {
+                let dst = Symbol::DEV_TMP;
+
+                let layout = *self.layout_map().get(symbol).unwrap();
+                let alignment_bytes = self.interner().allocation_alignment_bytes(layout);
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, alignment_bytes as i32);
+
+                // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+                self.build_fn_call(
+                    &dst,
+                    bitcode::UTILS_FREE_DATA_PTR.to_string(),
+                    &[*symbol, alignment],
+                    &[Layout::I64, Layout::I32],
+                    &Layout::UNIT,
+                );
+
+                self.free_symbol(&dst);
+                self.free_symbol(&alignment);
+
+                self.build_stmt(layout_ids, following, ret_layout)
             }
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
@@ -794,6 +812,14 @@ trait Backend<'a> {
             } => {
                 self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
             }
+            Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                self.load_union_field_ptr_at_index(sym, structure, *tag_id, *index, union_layout);
+            }
             Expr::GetTagId {
                 structure,
                 union_layout,
@@ -804,38 +830,14 @@ trait Backend<'a> {
                 tag_layout,
                 tag_id,
                 arguments,
-                ..
+                reuse,
             } => {
                 self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, None);
-            }
-            Expr::ExprBox { symbol: value } => {
-                let element_layout = match self.interner().get_repr(*layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
-                    _ => unreachable!("{:?}", self.interner().dbg(*layout)),
-                };
-
-                self.load_literal_symbols([*value].as_slice());
-                self.expr_box(*sym, *value, element_layout, None)
-            }
-            Expr::ExprUnbox { symbol: ptr } => {
-                let element_layout = *layout;
-
-                self.load_literal_symbols([*ptr].as_slice());
-                self.expr_unbox(*sym, *ptr, element_layout)
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.tag(sym, arguments, tag_layout, *tag_id, reuse);
             }
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
-            }
-            Expr::Reuse {
-                tag_layout,
-                tag_id,
-                symbol: reused,
-                arguments,
-                ..
-            } => {
-                self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, Some(*reused));
             }
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();
@@ -1581,14 +1583,26 @@ trait Backend<'a> {
 
                 self.build_ptr_cast(sym, &args[0])
             }
-            LowLevel::PtrWrite => {
-                let element_layout = match self.interner().get_repr(*ret_layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
+            LowLevel::PtrStore => {
+                let element_layout = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Ptr(inner) => inner,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
-                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+                self.build_ptr_store(*sym, args[0], args[1], element_layout);
             }
+            LowLevel::PtrLoad => {
+                self.build_ptr_load(*sym, args[0], *ret_layout);
+            }
+
+            LowLevel::PtrClearTagId => {
+                self.build_ptr_clear_tag_id(*sym, args[0]);
+            }
+
+            LowLevel::Alloca => {
+                self.build_alloca(*sym, args[0], arg_layouts[0]);
+            }
+
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF_RC_PTR.to_string(),
@@ -2217,13 +2231,19 @@ trait Backend<'a> {
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
-    fn build_ptr_write(
+    fn build_ptr_store(
         &mut self,
         sym: Symbol,
         ptr: Symbol,
         value: Symbol,
         element_layout: InLayout<'a>,
     );
+
+    fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
+
+    fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol);
+
+    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;
@@ -2294,6 +2314,16 @@ trait Backend<'a> {
 
     /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
     fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    );
+
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_field_ptr_at_index(
         &mut self,
         sym: &Symbol,
         structure: &Symbol,
