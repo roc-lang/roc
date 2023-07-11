@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, Not, Shl, Shr};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct Bitmask(u64);
 
 pub type Chunk = [u8; 64];
@@ -71,6 +71,16 @@ impl Bitmask {
         }
 
         Self(bitmask)
+    }
+
+    #[inline(always)]
+    pub fn set_to_1(&mut self, index: impl Into<u64>) {
+        self.0 |= (1 as u64) << index.into()
+    }
+
+    #[inline(always)]
+    pub fn set_to_0(&mut self, index: impl Into<u64>) {
+        self.0 &= (0 as u64) << index.into()
     }
 
     #[inline(always)]

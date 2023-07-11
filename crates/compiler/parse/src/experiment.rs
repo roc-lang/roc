@@ -1,17 +1,39 @@
 use crate::bitmask::{Bitmask, Chunk};
+use crate::token::{MaybeToken, Region, Token, TokenMap};
 
 #[derive(Default)]
 pub struct Env {
     in_progress: InProgress,
     /// The number of trailing '"' characters at the end of the previous chunk
     trailing_quote_chars: u8,
-    chunk_offset: usize, // The current chunk's offset relative to the start of the src.
+    /// The current chunk's offset relative to the start of the src.
     /// This must be specified in terms of the chunk's offset (that is,
     /// its offset from the beginning of the source) rather than the index into
     /// the chunk. This is because sometimes it can start earlier than the first
     /// byte of the chunk, for example if the previous chunk ended in quotes, which
     /// turned out to be the beginning of a multiline string.
-    span_start_offset: usize,
+    chunk_offset: u32,
+    span_start_offset: u32,
+    token_map: TokenMap,
+}
+
+impl From<InProgress> for MaybeToken {
+    #[inline(always)]
+    fn from(in_progress: InProgress) -> Self {
+        debug_assert_eq!(
+            match in_progress {
+                InProgress::Nothing => 0,
+                InProgress::Comment => Token::Comment as u8,
+                InProgress::Lambda => Token::Lambda as u8,
+                InProgress::MultiLineStr => Token::MultiLineStr as u8,
+                InProgress::SingleLineStr => Token::SingleLineStr as u8,
+                InProgress::SingleQuoteChar => Token::SingleLineStr as u8,
+            },
+            in_progress as u8
+        );
+
+        unsafe { std::mem::transmute::<InProgress, MaybeToken>(in_progress) }
+    }
 }
 
 // Edge cases in quotes ending on chunk boundaries:
@@ -48,10 +70,11 @@ const ODDS: Bitmask =
 enum InProgress {
     Nothing = 0,
     Comment = 1,
+    Lambda = 2,
     // The strings must have the highest numeric values, for `is_str` to work
-    MultiLineStr = 2, // This must have the lowest numeric value of the strings, for `is_str` to work
-    SingleLineStr = 3,
-    SingleQuoteChar = 4, // We consider this a "string"
+    MultiLineStr = 7, // This must have the lowest numeric value of the strings, for `is_str` to work
+    SingleLineStr = 8,
+    SingleQuoteChar = 9, // We consider this a "string"
 }
 
 impl InProgress {
@@ -66,35 +89,8 @@ impl Default for InProgress {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-#[repr(u8)]
-pub enum Token {
-    // These numbers must all be the same as the corresponding numbers on InProgress
-    Comment = 1,
-    MultiLineStr = 2,
-    SingleLineStr = 3,
-    SingleQuoteChar = 4,
-}
-
-impl Token {
-    unsafe fn from_non_nothing_in_progress(in_progress: InProgress) -> Self {
-        debug_assert_eq!(
-            match in_progress {
-                InProgress::Nothing => unreachable!(),
-                InProgress::Comment => Token::Comment as u8,
-                InProgress::MultiLineStr => Token::MultiLineStr as u8,
-                InProgress::SingleLineStr => Token::SingleLineStr as u8,
-                InProgress::SingleQuoteChar => Token::SingleLineStr as u8,
-            },
-            in_progress as u8
-        );
-
-        std::mem::transmute::<InProgress, Token>(in_progress)
-    }
-}
-
 pub trait Listener {
-    fn emit(&mut self, token: Token, start_offset: usize, end_offset: usize);
+    fn emit(&mut self, token: Token, start_offset: u32, end_offset: u32);
 }
 
 impl Env {
@@ -180,13 +176,21 @@ impl Env {
             // Thanks, Daniel Lemire and Geoff Langdale!
             quotes & (quotes << 1) & (quotes << 2);
 
-        self.strings_comments_indents(quotes, single_quotes, triple_quotes, chunk, listener);
+        self.strings_comments_indents(
+            backslashes,
+            quotes,
+            single_quotes,
+            triple_quotes,
+            chunk,
+            listener,
+        );
     }
 
     /// Given the masks for the locations of quotes, single quotes, and triple quotes (which have already
     /// had backslash-escaped versions of themselves removed), compute the ranges for strings, comments, and indents/outdents.
     fn strings_comments_indents(
         &mut self,
+        backslashes: Bitmask,
         quotes: Bitmask,
         single_quotes: Bitmask,
         triple_quotes: Bitmask,
@@ -194,6 +198,9 @@ impl Env {
         listener: &mut impl Listener,
     ) {
         use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr, SingleQuoteChar};
+
+        let open_parens = Bitmask::for_byte(chunk, b'(');
+        let close_parens = Bitmask::for_byte(chunk, b')');
 
         let chunk_offset = self.chunk_offset;
         let mut span_start_offset = self.span_start_offset;
@@ -204,19 +211,13 @@ impl Env {
                 span_start_offset = chunk_offset - 1;
 
                 // 1 trailing quote means we need to figure out if we're working on
-                // a single-line string vs a multiline string.
-                let first_is_nonquote = chunk[0] != b'"';
-                let second_is_nonquote = chunk[0] != b'"';
-
-                in_progress = if branchless_or(first_is_nonquote, second_is_nonquote) {
-                    // The most likely scenario: this is not a triple quote,
-                    // so we have a single-line string in progress.
-
-                    SingleLineStr
-                } else {
-                    // Improbably, the preceding chunk ended on a quote and this chunk
-                    // began on two quotes. Therefore, we are processing a multiline string.
+                // a single-line string vs a multiline string. That in turn depends
+                // on whether our first two bytes are both quotes. If either isn't,
+                // this must not be a triple quote!
+                in_progress = if branchless_and(chunk[0] == b'"', chunk[1] == b'"') {
                     MultiLineStr
+                } else {
+                    SingleLineStr
                 };
             }
             2 => {
@@ -236,7 +237,14 @@ impl Env {
                         debug_assert_eq!(self.in_progress, MultiLineStr, "Previous chunk ended in 2 quotes, yet its in_progress was neither MutliLineStr nor Nothing. This should never happen!");
 
                         // Record the MultiLineStr, between the start offset and the offset of the final quote.
-                        listener.emit(Token::MultiLineStr, span_start_offset, chunk_offset + 1);
+                        self.token_map.insert(
+                            0,
+                            Token::MultiLineStr,
+                            Region {
+                                start_offset: span_start_offset,
+                                end_offset: chunk_offset + 1,
+                            },
+                        );
 
                         Nothing
                     };
@@ -250,7 +258,14 @@ impl Env {
                 } else {
                     // 2 trailing quotes followed by a non-quote means
                     // we had an empty string at the end.
-                    listener.emit(Token::SingleLineStr, chunk_offset, chunk_offset + 1);
+                    self.token_map.insert(
+                        0,
+                        Token::SingleLineStr,
+                        Region {
+                            start_offset: chunk_offset,
+                            end_offset: chunk_offset + 1,
+                        },
+                    );
 
                     in_progress = Nothing;
                 }
@@ -272,20 +287,39 @@ impl Env {
             branchless_or(single_quotes.is_nonzero(), triple_quotes.is_nonzero());
         let pounds = Bitmask::for_byte(chunk, b'#');
         let newlines = Bitmask::for_byte(chunk, b'\n');
-        let mut quote_pound_newline = Bitmask::from(quotes | pounds | newlines);
+        // Note: this includes multiline strings, single-line strings, AND single-quoted chars!
         let mut strings = Bitmask::from(0);
+        // This excludes parens at first, but may end up having close-parens injected when handling string interpolation,
+        // to mark the end of the interpolation.
+        let mut loop_mask = Bitmask::from(backslashes | quotes | pounds | newlines);
 
-        while !quote_pound_newline.is_zero() {
-            let index = quote_pound_newline.trailing_zeros();
-            let offset = index as usize + chunk_offset;
+        while !loop_mask.is_zero() {
+            let index = loop_mask.trailing_zeros() as u8;
+            let offset = index as u32 + chunk_offset;
 
-            quote_pound_newline &= quote_pound_newline.wrapping_sub(1); // clear the bit we just encountered
+            loop_mask &= loop_mask.wrapping_sub(1); // clear the bit we just encountered
 
             // This is safe because this index is from a u64 bitmask, and Chunk has length 64
             let byte = unsafe { *chunk.get_unchecked(index as usize) };
             let prev_in_progress = in_progress;
             let byte_is_quote = byte == b'"';
             let byte_is_pound = byte == b'#';
+
+            if byte == b'\\' {
+                if in_progress.is_str() {
+                    todo!("interpolation or escape!");
+                } else {
+                    // If we encounter a backslash outside a string, it's a lambda.
+                    self.token_map.insert(
+                        index,
+                        Token::Lambda,
+                        Region {
+                            start_offset: offset,
+                            end_offset: offset,
+                        },
+                    );
+                }
+            }
 
             // This is both a convenience and a way to avoid consecutive conditionals triggering incorrectly
             // when updating in_progress.
@@ -374,16 +408,16 @@ impl Env {
                 // - Encountering a '\n' while we're working on a multiline string
             }
 
-            // Apply masks and notify listener if we just finished something.
+            // Apply masks and update token_map with whatever we just finished (if anything).
             // A branch is necessary here because we might or might not need to invoke the listener,
             // but all the logic inside this block can be branchless.
-            if branchless_and(in_progress == Nothing, prev_in_progress != Nothing) {
+            {
                 // Convert the start offset to a start index for this part, even though
                 // offset is what we want to store later. (Working in terms of offset over
                 // index is the better default, because it works with triple quotes that happen
                 // to cross chunk boundaries, but in this particular case we're doing masking,
                 // so we want to work in terms of index.)
-                let start_index = span_start_offset.saturating_sub(chunk_offset) as u32;
+                let start_index = span_start_offset.saturating_sub(chunk_offset) as u8;
                 let span_len_in_mask = index.wrapping_sub(start_index);
 
                 // A mask for the span between start_index and index
@@ -415,14 +449,27 @@ impl Env {
                         0
                     };
 
-                    chunk_offset + index as usize + end_offset_extra
+                    chunk_offset + index as u32 + end_offset_extra
                 };
 
-                // Safety: we're inside a conditional that checked prev_in_progress != Nothing
-                let token = unsafe { Token::from_non_nothing_in_progress(prev_in_progress) };
+                let maybe_token =
+                    if branchless_and(in_progress == Nothing, prev_in_progress != Nothing) {
+                        // This is branchless because in a release build, this is just a mem::transmute()
+                        prev_in_progress.into()
+                    } else {
+                        MaybeToken::NONE
+                    };
 
-                listener.emit(token, span_start_offset, end_offset);
-            } else {
+                // Update the token map.
+                self.token_map.set(
+                    index,
+                    maybe_token,
+                    Region {
+                        start_offset: span_start_offset,
+                        end_offset,
+                    },
+                );
+
                 // If we had nothing in progress, but now do, then we just started something.
                 span_start_offset =
                     if branchless_and(prev_in_progress == Nothing, in_progress != Nothing) {
@@ -435,6 +482,10 @@ impl Env {
 
         self.span_start_offset = span_start_offset;
         self.in_progress = in_progress;
+
+        for (token, region) in self.token_map.iter() {
+            listener.emit(token, region.start_offset, region.end_offset);
+        }
     }
 }
 
@@ -556,7 +607,7 @@ fn _stage2(structural_chars: &[Bitmask], src: &[u8]) {
                             // Otherwise, we do nothing, and just let the structural char join the mutliline string.
                             //
                             // In terms of structural characters, this means that we store a bunch of unnecessary
-                            // indices inside mutliline strings, thinking they're structurally relevent when
+                            // indices inside mutliline strings, thinking they're structurally relevant when
                             // actually they're part of the string. So we iterate over them needlessly.
                             // Not ideal but not the end of the world either.
                         }

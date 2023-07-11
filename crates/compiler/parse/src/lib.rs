@@ -23,4 +23,5 @@ pub mod problems;
 pub mod state;
 pub mod string_literal;
 pub mod test_helpers;
+pub mod token;
 pub mod type_annotation;

@@ -1,23 +1,29 @@
 #[cfg(test)]
-use crate::experiment::{Env, Listener, Token};
+use crate::experiment::{Env, Listener};
+use crate::token::Token;
 
 #[cfg(test)]
 #[derive(Debug, Eq, PartialEq, Default)]
 struct TestOutput {
-    single_line_strings: Vec<(usize, usize)>,
-    multi_line_strings: Vec<(usize, usize)>,
-    single_quote_chars: Vec<(usize, usize)>,
-    comments: Vec<(usize, usize)>,
+    single_line_strings: Vec<(u32, u32)>,
+    multi_line_strings: Vec<(u32, u32)>,
+    single_quote_chars: Vec<(u32, u32)>,
+    comments: Vec<(u32, u32)>,
 }
 
 #[cfg(test)]
 impl Listener for TestOutput {
-    fn emit(&mut self, token: Token, start_offset: usize, end_offset: usize) {
+    fn emit(&mut self, token: Token, start_offset: u32, end_offset: u32) {
         match token {
             Token::SingleLineStr => self.single_line_strings.push((start_offset, end_offset)),
             Token::MultiLineStr => self.multi_line_strings.push((start_offset, end_offset)),
             Token::SingleQuoteChar => self.single_quote_chars.push((start_offset, end_offset)),
             Token::Comment => self.comments.push((start_offset, end_offset)),
+            Token::Lambda => todo!(),
+            Token::Indent => todo!(),
+            Token::Outdent => todo!(),
+            Token::InterpolationStart => todo!(),
+            Token::InterpolationEnd => todo!(),
         }
     }
 }
