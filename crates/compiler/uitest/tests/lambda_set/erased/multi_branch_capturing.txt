@@ -65,33 +65,27 @@ procedure Test.0 ():
         let Test.10 : Int1 = lowlevel Eq Test.9 Test.11;
         dec Test.11;
         dec Test.9;
-        switch Test.10:
-            case 0:
-                let Test.12 : FunPtr(({}) -> Str) = ErasedLoad Test.7 .Callee;
-                let Test.13 : Str = CallByPtr Test.12 Test.6;
-                jump Test.8 Test.13;
-        
-            default:
-                inc Test.7;
-                let Test.14 : FunPtr(({}, ?Erased) -> Str) = ErasedLoad Test.7 .Callee;
-                let Test.15 : Str = CallByPtr Test.14 Test.6 Test.7;
-                jump Test.8 Test.15;
-        
+        if Test.10 then
+            let Test.12 : FunPtr(({}) -> Str) = ErasedLoad Test.7 .Callee;
+            let Test.13 : Str = CallByPtr Test.12 Test.6;
+            jump Test.8 Test.13;
+        else
+            inc Test.7;
+            let Test.14 : FunPtr(({}, ?Erased) -> Str) = ErasedLoad Test.7 .Callee;
+            let Test.15 : Str = CallByPtr Test.14 Test.6 Test.7;
+            jump Test.8 Test.15;
     in
     let Test.19 : Boxed([]) = ErasedLoad Test.17 .Value;
     let Test.21 : Boxed([]) = NullPointer;
     let Test.20 : Int1 = lowlevel Eq Test.19 Test.21;
     dec Test.21;
     dec Test.19;
-    switch Test.20:
-        case 0:
-            let Test.22 : FunPtr((Str) -> ?Erased) = ErasedLoad Test.17 .Callee;
-            let Test.23 : ?Erased = CallByPtr Test.22 Test.16;
-            jump Test.18 Test.23;
-    
-        default:
-            inc Test.17;
-            let Test.24 : FunPtr((Str, ?Erased) -> ?Erased) = ErasedLoad Test.17 .Callee;
-            let Test.25 : ?Erased = CallByPtr Test.24 Test.16 Test.17;
-            jump Test.18 Test.25;
-    
+    if Test.20 then
+        let Test.22 : FunPtr((Str) -> ?Erased) = ErasedLoad Test.17 .Callee;
+        let Test.23 : ?Erased = CallByPtr Test.22 Test.16;
+        jump Test.18 Test.23;
+    else
+        inc Test.17;
+        let Test.24 : FunPtr((Str, ?Erased) -> ?Erased) = ErasedLoad Test.17 .Callee;
+        let Test.25 : ?Erased = CallByPtr Test.24 Test.16 Test.17;
+        jump Test.18 Test.25;

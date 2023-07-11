@@ -219,7 +219,7 @@ pub fn call_erased_function<'a>(
             cond_symbol: value_is_null,
             cond_layout: Layout::BOOL,
             // value == null
-            branches: arena.alloc([(0, BranchInfo::None, build_closure_data_branch(env, false))]),
+            branches: arena.alloc([(1, BranchInfo::None, build_closure_data_branch(env, false))]),
             // value != null
             default_branch: (
                 BranchInfo::None,
