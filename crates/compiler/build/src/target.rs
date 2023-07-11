@@ -149,13 +149,20 @@ pub fn target_machine(
 
     init_arch(target);
 
+    // workaround for issue:
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+    let code_model = CodeModel::Large;
+
+    #[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
+    let code_model = CodeModel::Default;
+
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
         "generic",
         "",
         opt,
         reloc,
-        CodeModel::Default,
+        code_model,
     )
 }
 
