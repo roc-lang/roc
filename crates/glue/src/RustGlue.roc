@@ -1,6 +1,17 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
-    imports [pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId }]
+    imports [
+        pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId },
+        "../static/Cargo.toml" as rocAppCargoToml : Str,
+        "../../roc_std/Cargo.toml" as rocStdCargoToml : Str,
+        "../../roc_std/src/lib.rs" as rocStdLib : Str,
+        "../../roc_std/src/roc_box.rs" as rocStdBox : Str,
+        "../../roc_std/src/roc_list.rs" as rocStdList : Str,
+        "../../roc_std/src/roc_dict.rs" as rocStdDict : Str,
+        "../../roc_std/src/roc_set.rs" as rocStdSet : Str,
+        "../../roc_std/src/roc_str.rs" as rocStdStr : Str,
+        "../../roc_std/src/storage.rs" as rocStdStorage : Str,
+    ]
     provides [makeGlue] to pf
 
 makeGlue : List Types -> Result (List File) Str
@@ -22,8 +33,24 @@ makeGlue = \typesByArch ->
 
     typesByArch
     |> List.map convertTypesToFile
-    |> List.append { name: "mod.rs", content: modFileContent }
+    |> List.append { name: "roc_app/src/lib.rs", content: modFileContent }
+    |> List.concat staticFiles
     |> Ok
+
+## These are always included, and don't depend on the specifics of the app.
+staticFiles : List File
+staticFiles =
+    [
+        { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
+        { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
+        { name: "roc_std/src/lib.rs", content: rocStdLib },
+        { name: "roc_std/src/roc_box.rs", content: rocStdBox },
+        { name: "roc_std/src/roc_list.rs", content: rocStdList },
+        { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
+        { name: "roc_std/src/roc_set.rs", content: rocStdSet },
+        { name: "roc_std/src/roc_str.rs", content: rocStdStr },
+        { name: "roc_std/src/storage.rs", content: rocStdStorage },
+    ]
 
 convertTypesToFile : Types -> File
 convertTypesToFile = \types ->
@@ -94,7 +121,7 @@ convertTypesToFile = \types ->
     archStr = archName arch
 
     {
-        name: "\(archStr).rs",
+        name: "roc_app/src/\(archStr).rs",
         content: content |> generateEntryPoints types,
     }
 
@@ -1288,7 +1315,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             FirstTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                enum discriminant_\(name) {
+                pub enum discriminant_\(name) {
                     \(nullTag) = 0,
                     \(nonNullTag) = 1,
                 }
@@ -1297,7 +1324,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
             SecondTagIsNull ->
                 """
                 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                enum discriminant_\(name) {
+                pub enum discriminant_\(name) {
                     \(nonNullTag) = 0,
                     \(nullTag) = 1,
                 }

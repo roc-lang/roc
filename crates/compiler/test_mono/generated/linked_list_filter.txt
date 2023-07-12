@@ -1,0 +1,56 @@
+procedure Num.31 (Num.234):
+    let Num.293 : I64 = 2i64;
+    let Num.292 : Int1 = CallByName Num.86 Num.234 Num.293;
+    ret Num.292;
+
+procedure Num.86 (#Attr.2, #Attr.3):
+    let Num.294 : Int1 = lowlevel NumIsMultipleOf #Attr.2 #Attr.3;
+    ret Num.294;
+
+procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
+    let #Derived_gen.3 : [<rnu><null>, C I64 *self] = NullPointer;
+    let #Derived_gen.2 : Ptr([<rnu><null>, C I64 *self]) = lowlevel Alloca #Derived_gen.3;
+    joinpoint #Derived_gen.4 Test.4 Test.5 #Derived_gen.5 #Derived_gen.6:
+        let Test.22 : U8 = 1i64;
+        let Test.23 : U8 = GetTagId Test.4;
+        let Test.24 : Int1 = lowlevel Eq Test.22 Test.23;
+        if Test.24 then
+            let Test.17 : [<rnu><null>, C I64 *self] = TagId(1) ;
+            let #Derived_gen.8 : {} = lowlevel PtrStore #Derived_gen.5 Test.17;
+            let #Derived_gen.7 : [<rnu><null>, C I64 *self] = lowlevel PtrLoad #Derived_gen.6;
+            ret #Derived_gen.7;
+        else
+            let Test.7 : I64 = UnionAtIndex (Id 0) (Index 0) Test.4;
+            let Test.8 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.4;
+            joinpoint #Derived_gen.12 #Derived_gen.14:
+                let Test.19 : Int1 = CallByName Num.31 Test.7;
+                if Test.19 then
+                    let #Derived_gen.9 : [<rnu><null>, C I64 *self] = NullPointer;
+                    let Test.20 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.7 #Derived_gen.9;
+                    let #Derived_gen.10 : Ptr([<rnu><null>, C I64 *self]) = UnionFieldPtrAtIndex (Id 0) (Index 1) Test.20;
+                    let #Derived_gen.11 : {} = lowlevel PtrStore #Derived_gen.5 Test.20;
+                    jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.10 #Derived_gen.6;
+                else
+                    decref #Derived_gen.14;
+                    jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.5 #Derived_gen.6;
+            in
+            let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique Test.4;
+            if #Derived_gen.13 then
+                jump #Derived_gen.12 Test.4;
+            else
+                inc Test.8;
+                decref Test.4;
+                let #Derived_gen.15 : [<rnu><null>, C I64 *self] = NullPointer;
+                jump #Derived_gen.12 #Derived_gen.15;
+    in
+    jump #Derived_gen.4 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.2;
+
+procedure Test.0 ():
+    let Test.25 : I64 = 1i64;
+    let Test.27 : I64 = 2i64;
+    let Test.28 : [<rnu><null>, C I64 *self] = TagId(1) ;
+    let Test.26 : [<rnu><null>, C I64 *self] = TagId(0) Test.27 Test.28;
+    let Test.14 : [<rnu><null>, C I64 *self] = TagId(0) Test.25 Test.26;
+    let Test.15 : {} = Struct {};
+    let Test.13 : [<rnu><null>, C I64 *self] = CallByName Test.2 Test.14 Test.15;
+    ret Test.13;

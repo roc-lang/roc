@@ -464,7 +464,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_layout = backend
         .interner_mut()
-        .insert_direct_no_semantic(roc_mono::layout::LayoutRepr::Boxed(proc.ret_layout));
+        .insert_direct_no_semantic(roc_mono::layout::LayoutRepr::Ptr(proc.ret_layout));
 
     let mut args = bumpalo::collections::Vec::new_in(arena);
     args.extend(proc.args);
@@ -485,7 +485,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_write = Call {
         call_type: roc_mono::ir::CallType::LowLevel {
-            op: roc_module::low_level::LowLevel::PtrWrite,
+            op: roc_module::low_level::LowLevel::PtrStore,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([arg_generic, s1]),
@@ -605,7 +605,7 @@ fn build_proc<'a, B: Backend<'a>>(
         let elfreloc = match reloc {
             Relocation::LocalData { offset, data } => {
                 let data_symbol = write::Symbol {
-                    name: format!("{}.data{}", fn_name, local_data_index)
+                    name: format!("{fn_name}.data{local_data_index}")
                         .as_bytes()
                         .to_vec(),
                     value: 0,

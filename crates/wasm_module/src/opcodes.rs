@@ -50,6 +50,7 @@ pub enum OpCode {
     I64STORE32 = 0x3e,
     CURRENTMEMORY = 0x3f,
     GROWMEMORY = 0x40,
+    MEMORY = 0xFC,
     I32CONST = 0x41,
     I64CONST = 0x42,
     F32CONST = 0x43,
@@ -191,6 +192,29 @@ impl From<u8> for OpCode {
     }
 }
 
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemoryInstruction {
+    MemoryInit = 8,
+    DataDrop = 9,
+    MemoryCopy = 10,
+    MemoryFill = 11,
+}
+
+impl TryFrom<u8> for MemoryInstruction {
+    type Error = u8;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            8 => Ok(Self::MemoryInit),
+            9 => Ok(Self::DataDrop),
+            10 => Ok(Self::MemoryCopy),
+            11 => Ok(Self::MemoryFill),
+            _ => Err(value),
+        }
+    }
+}
+
 /// The format of the *immediate* operands of an operator
 /// Immediates appear directly in the byte stream after the opcode,
 /// rather than being popped off the value stack. These are the possible forms.
@@ -204,6 +228,7 @@ enum OpImmediates {
     Leb64x1,
     Leb32x2,
     BrTable,
+    Memory,
 }
 
 fn immediates_for(op: OpCode) -> Result<OpImmediates, String> {
@@ -232,6 +257,7 @@ fn immediates_for(op: OpCode) -> Result<OpImmediates, String> {
         | I64STORE32 => Leb32x2,
 
         CURRENTMEMORY | GROWMEMORY => Byte1,
+        MEMORY => Memory,
 
         I32CONST => Leb32x1,
         I64CONST => Leb64x1,
@@ -310,6 +336,29 @@ impl SkipBytes for OpCode {
                 let n_labels = 1 + u32::parse((), bytes, cursor)?;
                 for _ in 0..n_labels {
                     u32::skip_bytes(bytes, cursor)?;
+                }
+            }
+            Memory => {
+                match MemoryInstruction::try_from(bytes[*cursor + 1]) {
+                    Ok(op) => match op {
+                        MemoryInstruction::MemoryInit => {
+                            // memory.init
+                            todo!("WASM instruction: memory.init")
+                        }
+                        MemoryInstruction::DataDrop => {
+                            // data.drop x
+                            todo!("WASM instruction: data.drop")
+                        }
+                        MemoryInstruction::MemoryCopy => {
+                            // memory.copy
+                            *cursor += 1 + 1 + 2;
+                        }
+                        MemoryInstruction::MemoryFill => {
+                            // memory.fill
+                            *cursor += 1 + 1 + 1;
+                        }
+                    },
+                    Err(other) => unreachable!("invalid memory instruction {other:?}"),
                 }
             }
         }

@@ -151,10 +151,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
             );
 
         fs::write(build_dir.join("index.html"), rendered_package).unwrap_or_else(|error| {
-            panic!(
-                "Attempted to write index.html but failed with this error: {}",
-                error
-            )
+            panic!("Attempted to write index.html but failed with this error: {error}")
         });
     }
 
@@ -470,10 +467,10 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     ) {
         Ok(loaded) => loaded,
         Err(LoadingProblem::FormattedReport(report)) => {
-            eprintln!("{}", report);
+            eprintln!("{report}");
             std::process::exit(1);
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     }
 }
 
@@ -796,8 +793,7 @@ fn doc_url<'a>(
             Err(_) => {
                 // TODO return Err here
                 panic!(
-                    "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
-                    ident
+                    "Tried to generate an automatic link in docs for symbol `{ident}`, but that symbol was not in scope in this module."
                 );
             }
         }
@@ -819,8 +815,7 @@ fn doc_url<'a>(
                 else if !all_exposed_symbols.contains(&symbol) {
                     // TODO return Err here
                     panic!(
-                            "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
-                            module_name, ident, module_name, ident);
+                            "Tried to generate an automatic link in docs for `{module_name}.{ident}`, but `{module_name}` does not expose `{ident}`.");
                 }
 
                 // This is a valid symbol for this dependency,
@@ -831,7 +826,7 @@ fn doc_url<'a>(
             }
             None => {
                 // TODO return Err here
-                panic!("Tried to generate a doc link for `{}.{}` but the `{}` module was not imported!", module_name, ident, module_name);
+                panic!("Tried to generate a doc link for `{module_name}.{ident}` but the `{module_name}` module was not imported!");
             }
         }
     }
@@ -847,7 +842,7 @@ fn doc_url<'a>(
 
     DocUrl {
         url,
-        title: format!("Docs for {}.{}", module_name, ident),
+        title: format!("Docs for {module_name}.{ident}"),
     }
 }
 
@@ -935,8 +930,7 @@ fn markdown_to_html(
     for event in parser {
         match event {
             Event::Code(code_str) => {
-                let inline_code =
-                    pulldown_cmark::CowStr::from(format!("<code>{}</code>", code_str));
+                let inline_code = pulldown_cmark::CowStr::from(format!("<code>{code_str}</code>"));
                 docs_parser.push(pulldown_cmark::Event::Html(inline_code));
             }
             Event::End(Link(LinkType::ShortcutUnknown, ref _url, ref _title)) => {

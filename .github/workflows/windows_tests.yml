@@ -36,8 +36,8 @@ jobs:
       - name: zig version
         run: zig version
 
-      - name: install rust nightly 1.66
-        run: rustup install nightly-2022-10-30
+      - name: install rust nightly 1.67
+        run: rustup install nightly-2022-12-09
 
       - name: set up llvm 13
         run: |

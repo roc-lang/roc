@@ -90,7 +90,7 @@ mod cli_run {
 
         // e.g. "1 error and 0 warnings found in 123 ms."
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
-        let err = format!("{}found in <ignored for test> ms.", before_first_digit);
+        let err = format!("{before_first_digit}found in <ignored for test> ms.");
 
         // make paths consistent
         let err = err.replace('\\', "/");
@@ -230,7 +230,7 @@ mod cli_run {
                                         what: _,
                                         xwhat,
                                     } = error;
-                                    println!("Valgrind Error: {}\n", kind);
+                                    println!("Valgrind Error: {kind}\n");
 
                                     if let Some(ValgrindErrorXWhat {
                                         text,
@@ -238,14 +238,14 @@ mod cli_run {
                                         leakedblocks: _,
                                     }) = xwhat
                                     {
-                                        println!("    {}", text);
+                                        println!("    {text}");
                                     }
                                 }
                                 panic!("Valgrind reported memory errors");
                             }
                         } else {
                             let exit_code = match valgrind_out.status.code() {
-                                Some(code) => format!("exit code {}", code),
+                                Some(code) => format!("exit code {code}"),
                                 None => "no exit code".to_string(),
                             };
 
@@ -301,7 +301,7 @@ mod cli_run {
             // e.g. "1 failed and 0 passed in 123 ms."
             if let Some(split) = actual.rfind("passed in ") {
                 let (before_first_digit, _) = actual.split_at(split);
-                actual = format!("{}passed in <ignored for test> ms.", before_first_digit);
+                actual = format!("{before_first_digit}passed in <ignored for test> ms.");
             }
 
             let self_path = file.display().to_string();
@@ -397,8 +397,7 @@ mod cli_run {
             "swiftui" | "rocLovesSwift" => {
                 if cfg!(not(target_os = "macos")) {
                     eprintln!(
-                        "WARNING: skipping testing example {} because it only works on MacOS.",
-                        roc_filename
+                        "WARNING: skipping testing example {roc_filename} because it only works on MacOS."
                     );
                     return;
                 } else {
@@ -409,8 +408,7 @@ mod cli_run {
             "rocLovesWebAssembly" => {
                 // this is a web assembly example, but we don't test with JS at the moment
                 eprintln!(
-                    "WARNING: skipping testing example {} because it only works in a browser!",
-                    roc_filename
+                    "WARNING: skipping testing example {roc_filename} because it only works in a browser!"
                 );
                 return;
             }
@@ -965,16 +963,14 @@ mod cli_run {
             match roc_filename {
                 "QuicksortApp.roc" => {
                     eprintln!(
-                    "WARNING: skipping testing benchmark {} because the test is broken right now!",
-                    roc_filename
+                    "WARNING: skipping testing benchmark {roc_filename} because the test is broken right now!"
                 );
                     return;
                 }
                 "TestAStar.roc" => {
                     if cfg!(feature = "wasm32-cli-run") {
                         eprintln!(
-                        "WARNING: skipping testing benchmark {} because it currently does not work on wasm32 due to dictionaries.",
-                        roc_filename
+                        "WARNING: skipping testing benchmark {roc_filename} because it currently does not work on wasm32 due to dictionaries."
                     );
                         return;
                     }

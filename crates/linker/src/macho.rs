@@ -11,7 +11,7 @@ use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use serde::{Deserialize, Serialize};
 use std::{
-    ffi::CStr,
+    ffi::{c_char, CStr},
     io::{BufReader, BufWriter},
     mem,
     path::Path,
@@ -192,7 +192,7 @@ impl<'a> Surgeries<'a> {
             println!();
             println!("Text Sections");
             for sec in text_sections.iter() {
-                println!("{:+x?}", sec);
+                println!("{sec:+x?}");
             }
         }
 
@@ -275,8 +275,7 @@ impl<'a> Surgeries<'a> {
                         let offset = inst.next_ip() - op_size as u64 - sec.address() + file_offset;
                         if verbose {
                             println!(
-                                "\tNeed to surgically replace {} bytes at file offset {:+x}",
-                                op_size, offset,
+                                "\tNeed to surgically replace {op_size} bytes at file offset {offset:+x}",
                             );
                             println!(
                                 "\tIts current value is {:+x?}",
@@ -382,8 +381,8 @@ pub(crate) fn preprocess_macho(
         }
     };
     if verbose {
-        println!("PLT Address: {:+x}", plt_address);
-        println!("PLT File Offset: {:+x}", plt_offset);
+        println!("PLT Address: {plt_address:+x}");
+        println!("PLT File Offset: {plt_offset:+x}");
     }
 
     let app_syms: Vec<_> = exec_obj.symbols().filter(is_roc_undefined).collect();
@@ -499,7 +498,7 @@ pub(crate) fn preprocess_macho(
                         // std::ffi::CStr is actually not a char* under
                         // the hood (!) but rather an array, so to strip
                         // the trailing null bytes we have to use from_ptr.
-                        let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const i8) };
+                        let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const c_char) };
 
                         Path::new(c_str.to_str().unwrap())
                     } else {
@@ -532,7 +531,7 @@ pub(crate) fn preprocess_macho(
         }
 
         println!();
-        println!("App Function Address Map: {:+x?}", app_func_addresses);
+        println!("App Function Address Map: {app_func_addresses:+x?}");
     }
     let symbol_and_plt_processing_duration = symbol_and_plt_processing_start.elapsed();
 
@@ -603,7 +602,7 @@ pub(crate) fn preprocess_macho(
 
     if verbose {
         println!();
-        println!("{:+x?}", md);
+        println!("{md:+x?}");
     }
 
     let saving_metadata_start = Instant::now();
@@ -1101,8 +1100,7 @@ fn gen_macho_le(
             }
             cmd => {
                 eprintln!(
-                    "- - - Unrecognized Mach-O command during linker preprocessing: 0x{:x?}",
-                    cmd
+                    "- - - Unrecognized Mach-O command during linker preprocessing: 0x{cmd:x?}"
                 );
                 // panic!(
                 //     "Unrecognized Mach-O command during linker preprocessing: 0x{:x?}",
@@ -1237,10 +1235,7 @@ fn surgery_macho_help(
     let new_rodata_section_vaddr = virt_offset;
     if verbose {
         println!();
-        println!(
-            "New Virtual Rodata Section Address: {:+x?}",
-            new_rodata_section_vaddr
-        );
+        println!("New Virtual Rodata Section Address: {new_rodata_section_vaddr:+x?}");
     }
 
     // First decide on sections locations and then recode every exact symbol locations.
@@ -1320,8 +1315,8 @@ fn surgery_macho_help(
         }
     }
     if verbose {
-        println!("Data Relocation Offsets: {:+x?}", symbol_vaddr_map);
-        println!("Found App Function Symbols: {:+x?}", app_func_vaddr_map);
+        println!("Data Relocation Offsets: {symbol_vaddr_map:+x?}");
+        println!("Found App Function Symbols: {app_func_vaddr_map:+x?}");
     }
 
     // let (new_text_section_offset, new_text_section_vaddr) = text_sections
@@ -1356,22 +1351,18 @@ fn surgery_macho_help(
         if verbose {
             println!();
             println!(
-                "Processing Relocations for Section: 0x{:+x?} @ {:+x} (virt: {:+x})",
-                sec, section_offset, section_virtual_offset
+                "Processing Relocations for Section: 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
             );
         }
         for rel in sec.relocations() {
             if verbose {
-                println!("\tFound Relocation: {:+x?}", rel);
+                println!("\tFound Relocation: {rel:+x?}");
             }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
                     let target_offset = if let Some(target_offset) = symbol_vaddr_map.get(&index) {
                         if verbose {
-                            println!(
-                                "\t\tRelocation targets symbol in app at: {:+x}",
-                                target_offset
-                            );
+                            println!("\t\tRelocation targets symbol in app at: {target_offset:+x}");
                         }
                         Some(*target_offset as i64)
                     } else {
@@ -1384,8 +1375,7 @@ fn surgery_macho_help(
                                     let vaddr = (*address + md.added_byte_count) as i64;
                                     if verbose {
                                         println!(
-                                            "\t\tRelocation targets symbol in host: {} @ {:+x}",
-                                            name, vaddr
+                                            "\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}"
                                         );
                                     }
                                     vaddr
@@ -1406,10 +1396,9 @@ fn surgery_macho_help(
                         };
                         if verbose {
                             println!(
-                                "\t\tRelocation base location: {:+x} (virt: {:+x})",
-                                base, virt_base
+                                "\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})"
                             );
-                            println!("\t\tFinal relocation target offset: {:+x}", target);
+                            println!("\t\tFinal relocation target offset: {target:+x}");
                         }
                         match rel.1.size() {
                             32 => {
@@ -1560,7 +1549,7 @@ fn surgery_macho_help(
 
         for s in md.surgeries.get(func_name).unwrap_or(&vec![]) {
             if verbose {
-                println!("\tPerforming surgery: {:+x?}", s);
+                println!("\tPerforming surgery: {s:+x?}");
             }
             let surgery_virt_offset = match s.virtual_offset {
                 VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
@@ -1570,7 +1559,7 @@ fn surgery_macho_help(
                 4 => {
                     let target = (func_virt_offset as i64 - surgery_virt_offset) as i32;
                     if verbose {
-                        println!("\tTarget Jump: {:+x}", target);
+                        println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize
@@ -1580,7 +1569,7 @@ fn surgery_macho_help(
                 8 => {
                     let target = func_virt_offset as i64 - surgery_virt_offset;
                     if verbose {
-                        println!("\tTarget Jump: {:+x}", target);
+                        println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
                     exec_mmap[(s.file_offset + md.added_byte_count) as usize
@@ -1602,8 +1591,8 @@ fn surgery_macho_help(
             let target =
                 (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
             if verbose {
-                println!("\tPLT: {:+x}, {:+x}", plt_off, plt_vaddr);
-                println!("\tTarget Jump: {:+x}", target);
+                println!("\tPLT: {plt_off:+x}, {plt_vaddr:+x}");
+                println!("\tTarget Jump: {target:+x}");
             }
             let data = target.to_le_bytes();
             exec_mmap[plt_off] = 0xE9;

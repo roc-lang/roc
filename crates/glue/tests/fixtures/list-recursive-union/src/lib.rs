@@ -1,25 +1,14 @@
-mod test_glue;
+use roc_app;
 
 use indoc::indoc;
-use test_glue::Rbt;
-
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Rbt);
-}
+use roc_app::Rbt;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = unsafe {
-        let mut ret: core::mem::MaybeUninit<Rbt> = core::mem::MaybeUninit::uninit();
-
-        roc_main(ret.as_mut_ptr());
-
-        ret.assume_init()
-    };
+    let tag_union = roc_app::mainForHost();
 
     // Verify that it has all the expected traits.
 

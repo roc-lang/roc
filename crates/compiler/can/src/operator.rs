@@ -288,7 +288,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
 
                             break builder_arg.closure;
                         }
-                        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+                        SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
                             current = *expr;
                         }
                         _ => break loc_arg,
@@ -382,7 +382,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+        SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
             // Since we've already begun canonicalization, spaces and parens
             // are no longer needed and should be dropped.
             desugar_expr(
@@ -392,6 +392,20 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     region: loc_expr.region,
                 }),
             )
+        }
+        ParensAround(expr) => {
+            let desugared = desugar_expr(
+                arena,
+                arena.alloc(Loc {
+                    value: **expr,
+                    region: loc_expr.region,
+                }),
+            );
+
+            arena.alloc(Loc {
+                value: ParensAround(&desugared.value),
+                region: loc_expr.region,
+            })
         }
         If(if_thens, final_else_branch) => {
             // If does not get desugared into `when` so we can give more targeted error messages during type checking.

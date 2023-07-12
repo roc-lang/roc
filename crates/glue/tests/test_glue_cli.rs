@@ -173,7 +173,7 @@ mod glue_cli_run {
         args: I,
     ) -> Out {
         let platform_module_path = platform_dir.join("platform.roc");
-        let glue_dir = platform_dir.join("src").join("test_glue");
+        let glue_dir = platform_dir.join("test_glue");
         let fixture_templates_dir = platform_dir
             .parent()
             .unwrap()
@@ -220,7 +220,7 @@ mod glue_cli_run {
             );
         }
 
-        assert!(glue_out.status.success(), "bad status {:?}", glue_out);
+        assert!(glue_out.status.success(), "bad status {glue_out:?}");
 
         glue_out
     }
@@ -243,7 +243,7 @@ mod glue_cli_run {
             );
         }
 
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        assert!(compile_out.status.success(), "bad status {compile_out:?}");
 
         compile_out
     }

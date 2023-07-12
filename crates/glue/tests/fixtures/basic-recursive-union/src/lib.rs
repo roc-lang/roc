@@ -1,19 +1,12 @@
-mod test_glue;
-
 use indoc::indoc;
-use test_glue::Expr;
-
-extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: *mut Expr);
-}
+use roc_app::{self, Expr};
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = test_glue::mainForHost(());
+    let tag_union = roc_app::mainForHost(());
 
     // Verify that it has all the expected traits.
 

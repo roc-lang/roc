@@ -680,7 +680,8 @@ impl<'a> BorrowInfState<'a> {
                 // the function must take it as an owned parameter
                 self.own_args_if_param(&xs);
             }
-            Tag { arguments: xs, .. } | Struct(xs) => {
+
+            Struct(xs) => {
                 self.own_var(z);
 
                 // if the used symbol is an argument to the current function,
@@ -688,35 +689,25 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_if_param(xs);
             }
 
-            ExprBox { symbol: x } => {
+            Tag {
+                arguments: xs,
+                reuse,
+                ..
+            } => {
+                debug_assert!(reuse.is_none());
+
                 self.own_var(z);
 
                 // if the used symbol is an argument to the current function,
                 // the function must take it as an owned parameter
-                self.own_args_if_param(&[*x]);
-            }
-
-            ExprUnbox { symbol: x } => {
-                // if the boxed value is owned, the box is
-                self.if_is_owned_then_own(*x, z);
-
-                // if the extracted value is owned, the structure must be too
-                self.if_is_owned_then_own(z, *x);
+                self.own_args_if_param(xs);
             }
 
             Reset { symbol: x, .. } | ResetRef { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);
             }
-            Reuse {
-                symbol: x,
-                arguments: ys,
-                ..
-            } => {
-                self.own_var(z);
-                self.own_var(*x);
-                self.own_args_if_param(ys);
-            }
+
             EmptyArray => {
                 self.own_var(z);
             }
@@ -734,6 +725,14 @@ impl<'a> BorrowInfState<'a> {
             }
 
             UnionAtIndex { structure: x, .. } => {
+                // if the structure (record/tag/array) is owned, the extracted value is
+                self.if_is_owned_then_own(*x, z);
+
+                // if the extracted value is owned, the structure must be too
+                self.if_is_owned_then_own(z, *x);
+            }
+
+            UnionFieldPtrAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
                 self.if_is_owned_then_own(*x, z);
 
@@ -1035,7 +1034,11 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }
 
-        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        PtrStore => arena.alloc_slice_copy(&[owned, owned]),
+        PtrLoad => arena.alloc_slice_copy(&[owned]),
+        Alloca => arena.alloc_slice_copy(&[owned]),
+
+        PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }

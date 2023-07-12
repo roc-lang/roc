@@ -783,7 +783,11 @@ impl<
                         let reg = self.load_to_float_reg(buf, sym);
                         ASM::mov_base32_freg64(buf, to_offset, reg);
                     }
-                    FloatWidth::F32 => todo!(),
+                    FloatWidth::F32 => {
+                        debug_assert_eq!(to_offset % 4, 0);
+                        let reg = self.load_to_float_reg(buf, sym);
+                        ASM::mov_base32_freg64(buf, to_offset, reg);
+                    }
                 },
                 Builtin::Bool => {
                     // same as 8-bit integer, but we special-case true/false because these symbols
@@ -826,7 +830,7 @@ impl<
 
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
-            LayoutRepr::RecursivePointer(_) | LayoutRepr::Boxed(_) | LayoutRepr::Union(_) => {
+            pointer_layouts!() => {
                 // like a 64-bit integer
                 debug_assert_eq!(to_offset % 8, 0);
                 let reg = self.load_to_general_reg(buf, sym);

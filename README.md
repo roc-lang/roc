@@ -4,16 +4,20 @@ Roc is not ready for a 0.1 release yet, but we do have:
 
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://roc-lang.org/tutorial)
-- [**docs** for the standard library](https://www.roc-lang.org/builtins/Str)
+- [**docs** for the standard library](https://www.roc-lang.org/builtins)
 - [**examples**](https://github.com/roc-lang/examples/tree/main/examples)
-- [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
-- [Group chat](https://roc.zulipchat.com) for help, questions and discussions
+- [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
+- [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
 If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
+You can 💜 **sponsor** 💜 Roc on:
+- [GitHub](https://github.com/sponsors/roc-lang)
+- [Liberapay](https://liberapay.com/roc_lang)
+
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;

@@ -3669,6 +3669,7 @@ dependencies = [
 name = "roc_mono"
 version = "0.0.1"
 dependencies = [
+ "arrayvec 0.7.2",
  "bitvec",
  "bumpalo",
  "hashbrown 0.13.2",
@@ -3758,6 +3759,7 @@ dependencies = [
  "roc_build",
  "roc_builtins",
  "roc_collections",
+ "roc_error_macros",
  "roc_gen_llvm",
  "roc_load",
  "roc_module",

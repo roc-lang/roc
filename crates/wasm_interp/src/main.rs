@@ -90,7 +90,7 @@ fn main() -> io::Result<()> {
     let dispatcher = DefaultImportDispatcher::new(&wasi_argv);
     let mut inst =
         Instance::for_module(&arena, &module, dispatcher, is_debug_mode).unwrap_or_else(|e| {
-            eprintln!("{}", e);
+            eprintln!("{e}");
             process::exit(2);
         });
 
@@ -103,14 +103,14 @@ fn main() -> io::Result<()> {
     match result {
         Ok(Some(val)) => {
             if is_hex_format {
-                println!("{:#x?}", val)
+                println!("{val:#x?}")
             } else {
-                println!("{:?}", val)
+                println!("{val:?}")
             }
         }
         Ok(None) => {}
         Err(e) => {
-            eprintln!("{}", e);
+            eprintln!("{e}");
             process::exit(3);
         }
     }

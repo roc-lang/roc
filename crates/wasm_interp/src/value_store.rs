@@ -158,6 +158,6 @@ mod tests {
             stack.push(val);
         }
 
-        assert_eq!(format!("{:?}", VALUES), format!("{:?}", stack));
+        assert_eq!(format!("{VALUES:?}"), format!("{stack:?}"));
     }
 }
