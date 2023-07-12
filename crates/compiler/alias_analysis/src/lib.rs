@@ -181,6 +181,7 @@ where
 
         let mut type_definitions = MutSet::default();
         let mut host_exposed_functions = Vec::new();
+        let mut erased_functions = Vec::new();
 
         // all other functions
         for proc in procs {
@@ -237,6 +238,11 @@ where
 
             let (spec, type_names) = proc_spec(arena, interner, proc)?;
 
+            if proc.is_erased {
+                let args = &*arena.alloc_slice_fill_iter(proc.args.iter().map(|(lay, _)| *lay));
+                erased_functions.push((bytes, args));
+            }
+
             type_definitions.extend(type_names);
 
             m.add_func(func_name, spec)?;
@@ -264,6 +270,7 @@ where
                     entry_point_layout,
                     Some(roc_main),
                     &host_exposed_functions,
+                    &erased_functions,
                 )?;
 
                 type_definitions.extend(env.type_names);
@@ -290,8 +297,14 @@ where
                     .collect();
 
                 let mut env = Env::new();
-                let entry_point_function =
-                    build_entry_point(&mut env, interner, layout, None, &host_exposed)?;
+                let entry_point_function = build_entry_point(
+                    &mut env,
+                    interner,
+                    layout,
+                    None,
+                    &host_exposed,
+                    &erased_functions,
+                )?;
 
                 type_definitions.extend(env.type_names);
 
@@ -375,6 +388,7 @@ fn build_entry_point<'a>(
     layout: roc_mono::ir::ProcLayout<'a>,
     entry_point_function: Option<FuncName>,
     host_exposed_functions: &[([u8; SIZE], &'a [InLayout<'a>])],
+    erased_functions: &[([u8; SIZE], &'a [InLayout<'a>])],
 ) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
     let outer_block = builder.add_block();
@@ -405,7 +419,7 @@ fn build_entry_point<'a>(
     }
 
     // add fake calls to host-exposed functions so they are specialized
-    for (name_bytes, layouts) in host_exposed_functions {
+    for (name_bytes, layouts) in host_exposed_functions.iter().chain(erased_functions) {
         let host_exposed_func_name = FuncName(name_bytes);
 
         if Some(host_exposed_func_name) == entry_point_function {
