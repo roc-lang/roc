@@ -740,8 +740,9 @@ pub fn standard_load_config(
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
     };
 
+    // UNSTABLE(lambda-erasure)
     let function_kind = if cfg!(debug_assertions) {
-        if std::env::var("ROC_ERASE").is_ok() {
+        if std::env::var("EXPERIMENTAL_ROC_ERASE").is_ok() {
             FunctionKind::Erased
         } else {
             FunctionKind::LambdaSet
