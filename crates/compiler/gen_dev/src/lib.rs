@@ -149,12 +149,6 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::ExprBox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::ExprUnbox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
                     Expr::ErasedMake { value, callee } => {
                         value.map(|v| self.set_last_seen(v, stmt));
                         self.set_last_seen(*callee, stmt);

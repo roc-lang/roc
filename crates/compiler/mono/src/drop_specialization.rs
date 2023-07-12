@@ -238,7 +238,7 @@ fn specialize_drops_stmt<'a, 'i>(
                             ErasedField::Value => {
                                 environment.add_struct_child(*symbol, *binding, 0);
                             }
-                            ErasedField::Callee => {
+                            ErasedField::Callee | ErasedField::ValuePtr => {
                                 // nothing to own
                             }
                         }

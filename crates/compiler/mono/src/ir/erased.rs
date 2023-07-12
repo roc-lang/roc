@@ -8,6 +8,7 @@ use crate::{
 };
 
 use super::{
+    boxed::{self, expr_unbox},
     with_hole, BranchInfo, Call, CallType, CapturedSymbols, Env, ErasedField, Expr, JoinPointId,
     Param, Procs, Stmt, UpdateModeId,
 };
@@ -164,13 +165,8 @@ pub fn call_erased_function<'a>(
 
     // f_value = ErasedLoad(f, .value)
     let f_value = env.unique_symbol();
-    let let_f_value = index_erased_function(
-        arena,
-        f_value,
-        f,
-        ErasedField::ValuePtr,
-        Layout::OPAQUE_STACK_PTR,
-    );
+    let let_f_value =
+        index_erased_function(arena, f_value, f, ErasedField::ValuePtr, Layout::OPAQUE_PTR);
 
     let mut build_closure_data_branch = |env: &mut Env, pass_closure| {
         // f_callee = Cast(f_callee, (..params) -> ret);
@@ -216,7 +212,7 @@ pub fn call_erased_function<'a>(
     };
 
     let value_is_null = env.unique_symbol();
-    let let_value_is_null = is_null(env, arena, value_is_null, f_value, Layout::OPAQUE_STACK_PTR);
+    let let_value_is_null = is_null(env, arena, value_is_null, f_value, Layout::OPAQUE_PTR);
 
     let call_and_jump_on_value = let_value_is_null(
         //
@@ -348,15 +344,14 @@ pub fn build_erased_function<'a>(
             let stack_captures = env.unique_symbol();
             let stack_captures_layout =
                 layout_cache.put_in_direct_no_semantic(LayoutRepr::Struct(layouts));
+            let stack_captures_layout = env.arena.alloc(stack_captures_layout);
 
-            let boxed_captures_layout =
-                layout_cache.put_in_direct_no_semantic(LayoutRepr::Boxed(stack_captures_layout));
+            let boxed_captures_layout = layout_cache
+                .put_in_direct_no_semantic(LayoutRepr::boxed_erased_value(stack_captures_layout));
 
             let result = Stmt::Let(
                 value.unwrap(),
-                Expr::ExprBox {
-                    symbol: stack_captures,
-                },
+                boxed::expr_box(env.arena.alloc(stack_captures), stack_captures_layout),
                 boxed_captures_layout,
                 env.arena.alloc(result),
             );
@@ -364,7 +359,7 @@ pub fn build_erased_function<'a>(
             let result = Stmt::Let(
                 stack_captures,
                 Expr::Struct(symbols),
-                stack_captures_layout,
+                *stack_captures_layout,
                 env.arena.alloc(result),
             );
 
@@ -469,8 +464,9 @@ pub fn unpack_closure_data<'a>(
 
     let stack_captures_layout =
         layout_cache.put_in_direct_no_semantic(LayoutRepr::Struct(captures_layouts));
-    let heap_captures_layout =
-        layout_cache.put_in_direct_no_semantic(LayoutRepr::Boxed(stack_captures_layout));
+    let stack_captures_layout = env.arena.alloc(stack_captures_layout);
+    let heap_captures_layout = layout_cache
+        .put_in_direct_no_semantic(LayoutRepr::boxed_erased_value(stack_captures_layout));
 
     for (i, ((capture, _capture_var), &capture_layout)) in
         captures.iter().zip(captures_layouts).enumerate().rev()
@@ -489,10 +485,8 @@ pub fn unpack_closure_data<'a>(
 
     hole = Stmt::Let(
         stack_captures,
-        Expr::ExprUnbox {
-            symbol: heap_captures,
-        },
-        stack_captures_layout,
+        expr_unbox(heap_captures, stack_captures_layout),
+        *stack_captures_layout,
         env.arena.alloc(hole),
     );
 

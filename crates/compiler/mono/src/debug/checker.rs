@@ -488,23 +488,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 // TODO don't know what the element layout is
                 None
             }
-            &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
-                let inner = layout;
-                Some(
-                    ctx.interner
-                        .insert_direct_no_semantic(LayoutRepr::Boxed(inner)),
-                )
-            }),
-            &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
-                let layout = ctx.resolve(layout);
-                match ctx.interner.get_repr(layout) {
-                    LayoutRepr::Boxed(inner) => Some(inner),
-                    _ => {
-                        ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
-                        None
-                    }
-                }
-            }),
             &Expr::ErasedMake { value, callee } => Some(self.check_erased_make(value, callee)),
             &Expr::ErasedLoad { symbol, field } => {
                 Some(self.check_erased_load(symbol, field, target_layout))
@@ -797,7 +780,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
         if let Some(value) = value {
             self.with_sym_layout(value, |this, def_line, layout| {
                 let repr = this.interner.get_repr(layout);
-                if !matches!(repr, LayoutRepr::Boxed(_)) {
+                if !matches!(
+                    repr,
+                    LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+                ) {
                     this.problem(ProblemKind::ErasedMakeValueNotBoxed {
                         symbol: value,
                         def_layout: layout,
@@ -835,7 +821,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
         match field {
             ErasedField::Value => {
                 let repr = self.interner.get_repr(target_layout);
-                if !matches!(repr, LayoutRepr::Boxed(_)) {
+                if !matches!(
+                    repr,
+                    LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+                ) {
                     self.problem(ProblemKind::ErasedLoadValueNotBoxed {
                         symbol,
                         target_layout,

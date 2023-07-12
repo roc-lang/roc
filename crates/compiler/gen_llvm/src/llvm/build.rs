@@ -1106,42 +1106,6 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             )
         }
 
-        ExprBox { symbol } => {
-            let (value, layout) = scope.load_symbol_and_layout(symbol);
-            let basic_type =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-            let allocation = reserve_with_refcount_help(
-                env,
-                basic_type,
-                layout_interner.stack_size(layout),
-                layout_interner.alignment_bytes(layout),
-            );
-
-            store_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(layout),
-                allocation,
-                value,
-            );
-
-            allocation.into()
-        }
-
-        ExprUnbox { symbol } => {
-            let value = scope.load_symbol(symbol);
-
-            debug_assert!(value.is_pointer_value());
-
-            load_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(layout),
-                value.into_pointer_value(),
-                "load_boxed_value",
-            )
-        }
-
         FunctionPointer { lambda_name } => {
             let alloca = fn_ptr::build(env, *lambda_name);
             alloca.into()

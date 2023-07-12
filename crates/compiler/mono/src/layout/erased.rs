@@ -1,5 +1,7 @@
 use roc_target::TargetInfo;
 
+use super::{InLayout, LayoutRepr};
+
 /// The layout of an erasure.
 ///
 /// A type-erased value consists of three fields at runtime:
@@ -51,5 +53,14 @@ impl Erased {
         A: Clone,
     {
         alloc.text("?Erased")
+    }
+}
+
+impl<'a> LayoutRepr<'a> {
+    pub fn boxed_erased_value(value: &'a InLayout<'a>) -> Self {
+        Self::Union(super::UnionLayout::NullableUnwrapped {
+            nullable_id: true,
+            other_fields: std::slice::from_ref(value),
+        })
     }
 }

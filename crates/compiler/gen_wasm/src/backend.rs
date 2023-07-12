@@ -1136,10 +1136,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 storage,
             ),
 
-            Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
-
-            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
-
             Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
             Expr::ErasedMake { .. } => todo_lambda_erasure!(),
             Expr::ErasedLoad { .. } => todo_lambda_erasure!(),

@@ -44,6 +44,7 @@ use pattern::{from_can_pattern, store_pattern, Pattern};
 
 pub use literal::{ListLiteralElement, Literal};
 
+mod boxed;
 mod decision_tree;
 mod erased;
 mod literal;
@@ -1897,14 +1898,6 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
-    ExprBox {
-        symbol: Symbol,
-    },
-
-    ExprUnbox {
-        symbol: Symbol,
-    },
-
     /// Creates a type-erased value.
     ErasedMake {
         /// The erased value. If this is an erased function, the value are the function captures,
@@ -2108,14 +2101,6 @@ impl<'a> Expr<'a> {
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            ExprBox { symbol, .. } => alloc
-                .text("Box ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
-
-            ExprUnbox { symbol, .. } => alloc
-                .text("Unbox ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
-
             ErasedMake { value, callee } => {
                 let value = match value {
                     Some(v) => symbol_to_doc(alloc, *v, pretty),
@@ -2190,24 +2175,6 @@ impl<'a> Expr<'a> {
             },
             arguments: std::slice::from_ref(symbol),
         })
-    }
-
-    pub(crate) fn expr_box(symbol: &'a Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
-        Expr::Tag {
-            tag_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
-            tag_id: 0,
-            arguments: std::slice::from_ref(symbol),
-            reuse: None,
-        }
-    }
-
-    pub(crate) fn expr_unbox(symbol: Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
-        Expr::UnionAtIndex {
-            structure: symbol,
-            tag_id: 0,
-            union_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
-            index: 0,
-        }
     }
 }
 
@@ -5816,7 +5783,7 @@ pub fn with_hole<'a>(
                         _ => unreachable!("invalid layout for a box expression"),
                     };
 
-                    let expr = Expr::expr_box(arena.alloc(x), element_layout);
+                    let expr = boxed::expr_box(arena.alloc(x), element_layout);
 
                     Stmt::Let(assigned, expr, layout, hole)
                 }
@@ -5824,7 +5791,7 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    let expr = Expr::expr_unbox(x, arena.alloc(layout));
+                    let expr = boxed::expr_unbox(x, arena.alloc(layout));
 
                     Stmt::Let(assigned, expr, layout, hole)
                 }
@@ -7865,14 +7832,6 @@ fn substitute_in_expr<'a>(
             } else {
                 None
             }
-        }
-
-        ExprBox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
-        }
-
-        ExprUnbox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
         }
 
         ErasedMake { value, callee } => {
@@ -10325,7 +10284,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned_unboxed_struct_layout));
+        let unbox_expr = boxed::expr_unbox(argument, arena.alloc(interned_unboxed_struct_layout));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10427,7 +10386,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned));
+        let unbox_expr = boxed::expr_unbox(argument, arena.alloc(interned));
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 
         let proc = Proc {
