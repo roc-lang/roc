@@ -30,7 +30,7 @@ fn refcounter_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
 ///     refcounter_dec: (void* -> void) *,
 /// }
 /// ```
-pub fn basic_type<'a, 'ctx>(env: &Env<'a, 'ctx, '_>) -> StructType<'ctx> {
+pub fn basic_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
     let opaque_ptr_ty = opaque_ptr_type(env);
     let refcounter_ptr_ty = refcounter_type(env);
 
@@ -58,8 +58,8 @@ fn bitcast_to_opaque_ptr<'ctx>(
         .into_pointer_value()
 }
 
-pub fn build<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
+pub fn build<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: Option<PointerValue<'ctx>>,
     callee: PointerValue<'ctx>,
 ) -> StructValue<'ctx> {

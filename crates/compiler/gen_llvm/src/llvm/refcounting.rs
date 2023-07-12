@@ -428,8 +428,8 @@ fn modify_refcount_erased<'a, 'ctx>(
     function
 }
 
-fn modify_refcount_erased_help<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
+fn modify_refcount_erased_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     mode: Mode,
     fn_val: FunctionValue<'ctx>,
 ) {

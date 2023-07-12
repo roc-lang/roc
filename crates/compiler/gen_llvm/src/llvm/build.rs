@@ -5620,8 +5620,8 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
-pub(crate) fn function_value_by_func_spec<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
+pub(crate) fn function_value_by_func_spec<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     func_spec: FuncBorrowSpec,
     symbol: Symbol,
 ) -> FunctionValue<'ctx> {
@@ -5631,8 +5631,8 @@ pub(crate) fn function_value_by_func_spec<'a, 'ctx>(
     function_value_by_name_help(env, symbol, fn_name)
 }
 
-fn function_value_by_name_help<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
+fn function_value_by_name_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     symbol: Symbol,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
