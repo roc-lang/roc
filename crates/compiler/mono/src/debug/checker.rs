@@ -842,6 +842,15 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     });
                 }
             }
+            ErasedField::ValuePtr => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::Ptr(_)) {
+                    self.problem(ProblemKind::ErasedLoadValueNotBoxed {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
             ErasedField::Callee => {
                 let repr = self.interner.get_repr(target_layout);
                 if !matches!(repr, LayoutRepr::FunctionPointer(_)) {

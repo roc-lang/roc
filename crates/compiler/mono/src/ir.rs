@@ -1844,7 +1844,10 @@ pub struct ReuseToken {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErasedField {
+    /// Load a dereferenceable pointer to the value.
     Value,
+    /// Load a non-dereferenceable pointer to the value.
+    ValuePtr,
     Callee,
 }
 
@@ -2130,6 +2133,7 @@ impl<'a> Expr<'a> {
             ErasedLoad { symbol, field } => {
                 let field = match field {
                     ErasedField::Value => ".Value",
+                    ErasedField::ValuePtr => ".ValuePtr",
                     ErasedField::Callee => ".Callee",
                 };
 

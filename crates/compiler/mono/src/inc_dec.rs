@@ -903,7 +903,7 @@ fn insert_refcount_operations_binding<'a>(
 
             match field {
                 ErasedField::Value => inc_owned!([*symbol], new_let),
-                ErasedField::Callee => new_let,
+                ErasedField::Callee | ErasedField::ValuePtr => new_let,
             }
         }
 

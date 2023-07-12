@@ -131,7 +131,7 @@ fn build_function_pointer<'a>(
 /// f = compile(f)
 /// joinpoint join result:
 ///    <hole>
-/// f_value: Box<[]> = ErasedLoad(f, .value)
+/// f_value: Ptr<[]> = ErasedLoad(f, .value_ptr)
 /// f_callee: Ptr<[]> = ErasedLoad(f, .callee)
 /// if (f_value != nullptr) {
 ///    f_callee = Cast(f_callee, (..params, Erased) -> ret);
@@ -164,8 +164,13 @@ pub fn call_erased_function<'a>(
 
     // f_value = ErasedLoad(f, .value)
     let f_value = env.unique_symbol();
-    let let_f_value =
-        index_erased_function(arena, f_value, f, ErasedField::Value, Layout::OPAQUE_PTR);
+    let let_f_value = index_erased_function(
+        arena,
+        f_value,
+        f,
+        ErasedField::ValuePtr,
+        Layout::OPAQUE_STACK_PTR,
+    );
 
     let mut build_closure_data_branch = |env: &mut Env, pass_closure| {
         // f_callee = Cast(f_callee, (..params) -> ret);
@@ -211,7 +216,7 @@ pub fn call_erased_function<'a>(
     };
 
     let value_is_null = env.unique_symbol();
-    let let_value_is_null = is_null(env, arena, value_is_null, f_value, Layout::OPAQUE_PTR);
+    let let_value_is_null = is_null(env, arena, value_is_null, f_value, Layout::OPAQUE_STACK_PTR);
 
     let call_and_jump_on_value = let_value_is_null(
         //

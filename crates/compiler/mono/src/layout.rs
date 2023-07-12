@@ -2624,20 +2624,8 @@ impl<'a> LayoutRepr<'a> {
     pub const F64: Self = LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64));
     pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
     pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
-<<<<<<< HEAD
     pub const OPAQUE_PTR: Self = LayoutRepr::Ptr(Layout::VOID);
-    pub const ERASED: Self = Self::struct_(&[
-        // .value
-        Layout::OPAQUE_PTR,
-        // .callee
-        Layout::OPAQUE_PTR,
-        // .refcounter
-        Layout::OPAQUE_PTR,
-    ]);
-=======
-    pub const OPAQUE_PTR: Self = LayoutRepr::Boxed(Layout::VOID);
     pub const ERASED: Self = LayoutRepr::Erased(Erased);
->>>>>>> 0ff7ccbb9 (Add Layout::Erased)
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct(field_layouts)
@@ -2867,6 +2855,8 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) => true,
 
             Builtin(List(_)) | Builtin(Str) => true,
+
+            Erased(_) => true,
 
             _ => false,
         }

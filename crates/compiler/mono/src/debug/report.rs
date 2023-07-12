@@ -508,6 +508,7 @@ fn format_use_kind(use_kind: UseKind) -> &'static str {
         UseKind::ExpectLookup => "lookup for an expect",
         UseKind::ErasedMake(kind) => match kind {
             ErasedField::Value => "erased value field",
+            ErasedField::ValuePtr => "erased value pointer",
             ErasedField::Callee => "erased callee field",
         },
         UseKind::Erased => "erasure",
