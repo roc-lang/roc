@@ -152,127 +152,98 @@ fn specialize_drops_stmt<'a, 'i>(
 
             let mut stmt = stmt;
 
-            let final_continuation = loop {
-                match stmt {
-                    Stmt::Let(binding, expr, layout, continuation) => {
-                        environment.add_symbol_layout(*binding, *layout);
+            while let Stmt::Let(binding, expr, layout, continuation) = stmt {
+                environment.add_symbol_layout(*binding, *layout);
 
-                        // update the environment based on the expr
-                        match expr {
-                            Call(_) => {
-                                // Expr::Call is tricky and we are lazy and handle it elsewhere. it
-                                // ends a chain of eligible Let statements.
-                                break stmt;
-                            }
-                            Literal(crate::ir::Literal::Int(i)) => {
-                                environment
-                                    .symbol_index
-                                    .insert(*binding, i128::from_ne_bytes(*i) as u64);
-                            }
-                            Literal(_) => { /* do nothing */ }
-                            Tag {
-                                tag_id,
-                                arguments: children,
-                                ..
-                            } => {
-                                environment.symbol_tag.insert(*binding, *tag_id);
+                // update the environment based on the expr
+                match expr {
+                    Call(_) => {
+                        // Expr::Call is tricky and we are lazy and handle it elsewhere. it
+                        // ends a chain of eligible Let statements.
+                        break;
+                    }
+                    Literal(crate::ir::Literal::Int(i)) => {
+                        environment
+                            .symbol_index
+                            .insert(*binding, i128::from_ne_bytes(*i) as u64);
+                    }
+                    Literal(_) => { /* do nothing */ }
+                    Tag {
+                        tag_id,
+                        arguments: children,
+                        ..
+                    } => {
+                        environment.symbol_tag.insert(*binding, *tag_id);
 
-                                for (index, child) in children.iter().enumerate() {
-                                    environment.add_union_child(
-                                        *binding,
-                                        *child,
-                                        *tag_id,
-                                        index as u64,
-                                    );
-                                }
-                            }
-                            Struct(children) => {
-                                for (index, child) in children.iter().enumerate() {
-                                    environment.add_struct_child(*binding, *child, index as u64);
-                                }
-                            }
-                            StructAtIndex {
-                                index, structure, ..
-                            } => {
-                                environment.add_struct_child(*structure, *binding, *index);
-                                // alloc_let_with_continuation!(environment)
-
-                                // TODO do we need to remove the indexed value to prevent it from being dropped sooner?
-                                // It will only be dropped sooner if the reference count is 1. Which can only happen if there is no increment before.
-                                // So we should be fine.
-                            }
-                            UnionAtIndex {
-                                structure,
-                                tag_id,
-                                index,
-                                ..
-                            } => {
-                                // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
-                                environment.add_union_child(*structure, *binding, *tag_id, *index);
-                                // Generated code might know the tag of the union without switching on it.
-                                // So if we UnionAtIndex, we must know the tag and we can use it to specialize the drop.
-                                environment.symbol_tag.insert(*structure, *tag_id);
-                            }
-                            UnionFieldPtrAtIndex {
-                                structure, tag_id, ..
-                            } => {
-                                // Generated code might know the tag of the union without switching on it.
-                                // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
-                                environment.symbol_tag.insert(*structure, *tag_id);
-                            }
-                            Array {
-                                elems: children, ..
-                            } => {
-                                let it =
-                                    children.iter().enumerate().filter_map(|(index, child)| {
-                                        match child {
-                                            ListLiteralElement::Literal(_) => None,
-                                            ListLiteralElement::Symbol(s) => Some((index, s)),
-                                        }
-                                    });
-
-                                for (index, child) in it {
-                                    environment.add_list_child(*binding, *child, index as u64);
-                                }
-                            }
-                            Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
-                            RuntimeErrorFunction(_)
-                            | GetTagId { .. }
-                            | EmptyArray
-                            | NullPointer => { /* do nothing */ }
+                        for (index, child) in children.iter().enumerate() {
+                            environment.add_union_child(*binding, *child, *tag_id, index as u64);
                         }
-
-                        // now store the let binding for later
-                        stack.push((*binding, expr.clone(), *layout));
-
-                        // and "recurse" down the statement chain
-                        stmt = continuation;
                     }
-                    _ => {
-                        // the chain of eligeble `Let`s stops at any non-let statement
-                        break stmt;
+                    Struct(children) => {
+                        for (index, child) in children.iter().enumerate() {
+                            environment.add_struct_child(*binding, *child, index as u64);
+                        }
                     }
-                };
-            };
+                    StructAtIndex {
+                        index, structure, ..
+                    } => {
+                        environment.add_struct_child(*structure, *binding, *index);
 
-            let mut final_continuation = specialize_drops_stmt(
-                arena,
-                layout_interner,
-                ident_ids,
-                environment,
-                final_continuation,
-            );
+                        // TODO do we need to remove the indexed value to prevent it from being dropped sooner?
+                        // It will only be dropped sooner if the reference count is 1. Which can only happen if there is no increment before.
+                        // So we should be fine.
+                    }
+                    UnionAtIndex {
+                        structure,
+                        tag_id,
+                        index,
+                        ..
+                    } => {
+                        // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
+                        environment.add_union_child(*structure, *binding, *tag_id, *index);
+                        // Generated code might know the tag of the union without switching on it.
+                        // So if we UnionAtIndex, we must know the tag and we can use it to specialize the drop.
+                        environment.symbol_tag.insert(*structure, *tag_id);
+                    }
+                    UnionFieldPtrAtIndex {
+                        structure, tag_id, ..
+                    } => {
+                        // Generated code might know the tag of the union without switching on it.
+                        // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
+                        environment.symbol_tag.insert(*structure, *tag_id);
+                    }
+                    Array {
+                        elems: children, ..
+                    } => {
+                        let it =
+                            children
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, child)| match child {
+                                    ListLiteralElement::Literal(_) => None,
+                                    ListLiteralElement::Symbol(s) => Some((index, s)),
+                                });
 
-            for (binding, expr, layout) in stack.into_iter().rev() {
-                final_continuation = arena.alloc(Stmt::Let(
-                    binding,
-                    expr,
-                    layout,
-                    arena.alloc(final_continuation),
-                ));
+                        for (index, child) in it {
+                            environment.add_list_child(*binding, *child, index as u64);
+                        }
+                    }
+                    Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
+                    RuntimeErrorFunction(_) | GetTagId { .. } | EmptyArray | NullPointer => { /* do nothing */
+                    }
+                }
+
+                // now store the let binding for later
+                stack.push((*binding, expr.clone(), *layout));
+
+                // and "recurse" down the statement chain
+                stmt = continuation;
             }
 
-            final_continuation
+            stack.into_iter().rev().fold(
+                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, stmt),
+                |acc, (binding, expr, layout)| arena.alloc(Stmt::Let(binding, expr, layout, acc)),
+            )
         }
         Stmt::Switch {
             cond_symbol,
