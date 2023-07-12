@@ -6,7 +6,7 @@ use super::{InLayout, LayoutRepr, UnionLayout};
 ///
 /// A type-erased value consists of three fields at runtime:
 ///
-/// ```
+/// ```text
 /// {
 ///   // the material value being erased.
 ///   // if the erasure is a function, this is the captured environment, or null.

@@ -121,13 +121,13 @@ fn build_function_pointer<'a>(
 
 /// Given
 ///
-/// ```
+/// ```text
 /// Call(f, args)
 /// ```
 ///
 /// We generate
 ///
-/// ```
+/// ```text
 /// f = compile(f)
 /// joinpoint join result:
 ///    <hole>
@@ -264,13 +264,13 @@ pub fn call_erased_function<'a>(
 
 /// Given
 ///
-/// ```
+/// ```text
 /// f = \{} -> s
 /// ```
 ///
 /// We generate
 ///
-/// ```
+/// ```text
 /// value = Expr::Box({s})
 /// callee = Expr::FunctionPointer(f)
 /// f = Expr::ErasedMake({ value, callee })
@@ -278,13 +278,13 @@ pub fn call_erased_function<'a>(
 ///
 /// Given
 ///
-/// ```
+/// ```text
 /// f = \{} -> {}
 /// ```
 ///
 /// We generate
 ///
-/// ```
+/// ```text
 /// callee = Expr::FunctionPointer(f)
 /// f = Expr::ErasedMake({ value: nullptr, callee })
 /// ```
@@ -429,14 +429,14 @@ impl<'a> ResolvedErasedLambda<'a> {
 
 /// Given
 ///
-/// ```
+/// ```text
 /// proc f(...args, captures_symbol: Erased):
 ///     # captures = { a: A, b: B }
 /// ```
 ///
 /// We generate
 ///
-/// ```
+/// ```text
 /// loaded_captures: Ptr<[]> = ErasedLoad(captures_symbol, .value)
 /// heap_captures: Box<{ A, B }> = Expr::Call(Lowlevel { Cast, captures_symbol })
 /// stack_captures = Expr::Unbox(heap_captures)

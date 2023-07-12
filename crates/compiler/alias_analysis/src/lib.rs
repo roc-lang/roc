@@ -1777,7 +1777,7 @@ const ERASURE_VALUE_INDEX: u32 = 1;
 
 /// Erasure type modeled as
 ///
-/// ```
+/// ```text
 /// Tuple(callee: FnPtr, value: HeapCell)
 /// ```
 fn erasure_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
@@ -1809,7 +1809,7 @@ fn box_erasure_value_unknown_nullptr(
 
 /// Erasure value modeled as
 ///
-/// ```
+/// ```text
 /// callee = make_tuple(&[])
 /// value = unknown(make_tuple(...captures))
 ///
