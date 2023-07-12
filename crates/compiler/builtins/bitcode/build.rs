@@ -66,7 +66,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
     let src_obj_path = bitcode_path.join(object_file_name);
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
 
-    println!("Compiling zig object `{}` to: {}", zig_object, src_obj);
+    println!("Compiling zig object `{zig_object}` to: {src_obj}");
 
     if !DEBUG {
         let mut zig_cmd = zig();
@@ -77,7 +77,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
 
         run_command(zig_cmd, 0);
 
-        println!("Moving zig object `{}` to: {}", zig_object, dest_obj);
+        println!("Moving zig object `{zig_object}` to: {dest_obj}");
 
         // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
         fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
@@ -167,7 +167,7 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
             false => {
                 let error_str = match str::from_utf8(&output.stderr) {
                     Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command_str),
+                    Err(_) => format!("Failed to run \"{command_str}\""),
                 };
 
                 // Flaky test errors that only occur sometimes on MacOS ci server.

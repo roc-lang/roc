@@ -169,11 +169,6 @@ fn specialize_drops_stmt<'a, 'i>(
 
                     alloc_let_with_continuation!(environment)
                 }
-                Expr::ExprBox { symbol: child } => {
-                    environment.add_box_child(*binding, *child);
-
-                    alloc_let_with_continuation!(environment)
-                }
                 Expr::Array {
                     elems: children, ..
                 } => {
@@ -224,10 +219,6 @@ fn specialize_drops_stmt<'a, 'i>(
                     // Generated code might know the tag of the union without switching on it.
                     // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
                     environment.symbol_tag.insert(*structure, *tag_id);
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::ExprUnbox { symbol } => {
-                    environment.add_box_child(*symbol, *binding);
                     alloc_let_with_continuation!(environment)
                 }
 
@@ -535,15 +526,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             &mut incremented_children,
                             continuation,
                         ),
-                        LayoutRepr::Boxed(_layout) => specialize_boxed(
-                            arena,
-                            layout_interner,
-                            ident_ids,
-                            environment,
-                            &mut incremented_children,
-                            symbol,
-                            continuation,
-                        ),
                         LayoutRepr::Builtin(Builtin::List(layout)) => specialize_list(
                             arena,
                             layout_interner,
@@ -824,7 +806,7 @@ fn specialize_struct<'a, 'i>(
                         // This value has not been index before, create a new symbol.
                         None => {
                             let field_symbol =
-                                environment.create_symbol(ident_ids, &format!("field_val_{}", i));
+                                environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
                             let field_val_expr = Expr::StructAtIndex {
                                 index: i as u64,
@@ -963,7 +945,7 @@ fn specialize_union<'a, 'i>(
                                         Some(rc) => {
                                             let field_symbol = environment.create_symbol(
                                                 ident_ids,
-                                                &format!("field_val_{}", i),
+                                                &format!("field_val_{i}"),
                                             );
 
                                             let field_val_expr = Expr::UnionAtIndex {
@@ -1068,65 +1050,6 @@ fn specialize_union<'a, 'i>(
     }
 }
 
-fn specialize_boxed<'a, 'i>(
-    arena: &'a Bump,
-    layout_interner: &'i mut STLayoutInterner<'a>,
-    ident_ids: &'i mut IdentIds,
-    environment: &mut DropSpecializationEnvironment<'a>,
-    incremented_children: &mut CountingMap<Child>,
-    symbol: &Symbol,
-    continuation: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let removed = match incremented_children.map.iter().next() {
-        Some((s, _)) => {
-            let s = *s;
-            incremented_children.pop(&s);
-            Some(s)
-        }
-        None => None,
-    };
-
-    let new_continuation =
-        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
-
-    match removed {
-        Some(s) => {
-            branch_uniqueness(
-                arena,
-                ident_ids,
-                layout_interner,
-                environment,
-                *symbol,
-                // If the symbol is unique:
-                // - free the box
-                |_, _, continuation| {
-                    arena.alloc(Stmt::Refcounting(
-                        // we know for sure that the allocation is unique at
-                        // this point. Therefore we can free (or maybe reuse)
-                        // without checking the refcount again.
-                        ModifyRc::Free(*symbol),
-                        continuation,
-                    ))
-                },
-                // If the symbol is not unique:
-                // - increment the child
-                // - decref the box
-                |_, _, continuation| {
-                    arena.alloc(Stmt::Refcounting(
-                        ModifyRc::Inc(s, 1),
-                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation)),
-                    ))
-                },
-                new_continuation,
-            )
-        }
-        None => {
-            // No known children, keep decrementing the symbol.
-            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
-        }
-    }
-}
-
 fn specialize_list<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
@@ -1211,11 +1134,11 @@ fn specialize_list<'a, 'i>(
                             // If the symbol is unknown, we have to get the value from the list.
                             // Should only happen when list elements are discarded.
                             None => {
-                                let field_symbol = environment
-                                    .create_symbol(ident_ids, &format!("field_val_{}", i));
+                                let field_symbol =
+                                    environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
-                                let index_symbol = environment
-                                    .create_symbol(ident_ids, &format!("index_val_{}", i));
+                                let index_symbol =
+                                    environment.create_symbol(ident_ids, &format!("index_val_{i}"));
 
                                 let dec = arena.alloc(Stmt::Refcounting(
                                     ModifyRc::Dec(field_symbol),
@@ -1504,7 +1427,7 @@ impl<'a> DropSpecializationEnvironment<'a> {
         }
     }
 
-    fn create_symbol<'i>(&self, ident_ids: &'i mut IdentIds, debug_name: &str) -> Symbol {
+    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
         let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }
@@ -1531,13 +1454,6 @@ impl<'a> DropSpecializationEnvironment<'a> {
             .entry(parent)
             .or_insert_with(|| Vec::new_in(self.arena))
             .push((child, tag, index));
-    }
-
-    fn add_box_child(&mut self, parent: Parent, child: Child) {
-        self.box_children
-            .entry(parent)
-            .or_insert_with(|| Vec::new_in(self.arena))
-            .push(child);
     }
 
     fn add_list_child(&mut self, parent: Parent, child: Child, index: u64) {

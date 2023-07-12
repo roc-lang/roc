@@ -64,6 +64,6 @@ pub type UIResult<T, E = UIError> = std::result::Result<T, E>;
 
 impl From<UIError> for String {
     fn from(ui_error: UIError) -> Self {
-        format!("{}", ui_error)
+        format!("{ui_error}")
     }
 }

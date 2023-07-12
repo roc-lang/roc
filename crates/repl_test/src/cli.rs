@@ -75,13 +75,12 @@ pub fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS);
+    let expected_instructions = format!("{WELCOME_MESSAGE}{SHORT_INSTRUCTIONS}");
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
         stdout.starts_with(&expected_instructions),
-        "Unexpected repl output: {}",
-        stdout
+        "Unexpected repl output: {stdout}"
     );
 
     let (_, answer) = stdout.split_at(expected_instructions.len());
@@ -101,8 +100,7 @@ pub fn repl_eval(input: &str) -> Out {
 
         assert!(
             answer.ends_with(&expected_after_answer),
-            "Unexpected repl output after answer: {}",
-            answer
+            "Unexpected repl output after answer: {answer}"
         );
 
         // Use [1..] to trim the leading '\n'

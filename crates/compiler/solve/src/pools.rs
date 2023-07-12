@@ -27,14 +27,14 @@ impl Pools {
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
         match self.0.get_mut(rank.into_usize()) {
             Some(reference) => reference,
-            None => panic!("Compiler bug: could not find pool at rank {}", rank),
+            None => panic!("Compiler bug: could not find pool at rank {rank}"),
         }
     }
 
     pub fn get(&self, rank: Rank) -> &Vec<Variable> {
         match self.0.get(rank.into_usize()) {
             Some(reference) => reference,
-            None => panic!("Compiler bug: could not find pool at rank {}", rank),
+            None => panic!("Compiler bug: could not find pool at rank {rank}"),
         }
     }
 

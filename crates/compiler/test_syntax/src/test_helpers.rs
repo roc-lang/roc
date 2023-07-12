@@ -96,10 +96,10 @@ impl<'a> Output<'a> {
 
     pub fn debug_format_inner(&self) -> String {
         match self {
-            Output::Header(header) => format!("{:#?}\n", header),
-            Output::ModuleDefs(defs) => format!("{:#?}\n", defs),
-            Output::Expr(expr) => format!("{:#?}\n", expr),
-            Output::Full { .. } => format!("{:#?}\n", self),
+            Output::Header(header) => format!("{header:#?}\n"),
+            Output::ModuleDefs(defs) => format!("{defs:#?}\n"),
+            Output::Expr(expr) => format!("{expr:#?}\n"),
+            Output::Full { .. } => format!("{self:#?}\n"),
         }
     }
 }
@@ -224,7 +224,7 @@ impl<'a> Input<'a> {
         // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
         // I don't have the patience to debug this right now, so let's leave it for another day...
         // TODO: fix PartialEq impl on ast types
-        if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+        if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
             panic!(
                 "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
                 * * * Source code before formatting:\n{}\n\n\

@@ -28,17 +28,14 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
         match self.symbols.get(symbol) {
             Some((_, ptr)) => *ptr,
 
-            None => panic!(
-                "There was no entry for {:?} {} in scope {:?}",
-                symbol, symbol, self
-            ),
+            None => panic!("There was no entry for {symbol:?} {symbol} in scope {self:?}"),
         }
     }
 
     pub fn load_symbol_and_layout(&self, symbol: &Symbol) -> (BasicValueEnum<'ctx>, InLayout<'a>) {
         match self.symbols.get(symbol) {
             Some((layout, ptr)) => (*ptr, *layout),
-            None => panic!("There was no entry for {:?} in scope {:?}", symbol, self),
+            None => panic!("There was no entry for {symbol:?} in scope {self:?}"),
         }
     }
 

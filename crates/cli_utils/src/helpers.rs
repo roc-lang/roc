@@ -216,7 +216,7 @@ pub fn build_roc_bin(extra_args: &[&str]) -> PathBuf {
 
     cargo_cmd.current_dir(root_project_dir).args(&args);
 
-    let cargo_cmd_str = format!("{:?}", cargo_cmd);
+    let cargo_cmd_str = format!("{cargo_cmd:?}");
 
     let cargo_output = cargo_cmd.output().unwrap();
 
@@ -255,7 +255,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| panic!("failed to execute cmd `{cmd_name}` in CLI test"));
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -269,7 +269,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
 
     let output = child
         .wait_with_output()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| panic!("failed to execute cmd `{cmd_name}` in CLI test"));
 
     Out {
         cmd_str,

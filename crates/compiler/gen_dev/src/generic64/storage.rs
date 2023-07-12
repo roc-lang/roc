@@ -783,7 +783,11 @@ impl<
                         let reg = self.load_to_float_reg(buf, sym);
                         ASM::mov_base32_freg64(buf, to_offset, reg);
                     }
-                    FloatWidth::F32 => todo!(),
+                    FloatWidth::F32 => {
+                        debug_assert_eq!(to_offset % 4, 0);
+                        let reg = self.load_to_float_reg(buf, sym);
+                        ASM::mov_base32_freg64(buf, to_offset, reg);
+                    }
                 },
                 Builtin::Bool => {
                     // same as 8-bit integer, but we special-case true/false because these symbols

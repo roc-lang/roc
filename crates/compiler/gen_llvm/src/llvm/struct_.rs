@@ -126,7 +126,7 @@ fn index_struct_value<'a, 'ctx>(
         argument,
         index as _,
         env.arena
-            .alloc(format!("struct_field_access_record_{}", index)),
+            .alloc(format!("struct_field_access_record_{index}")),
     );
 
     let field_layout = field_layouts[index as usize];
@@ -153,7 +153,7 @@ fn index_struct_ptr<'a, 'ctx>(
     let field_layout = field_layouts[index as usize];
     let field_repr = layout_interner.get_repr(field_layout);
 
-    let name = format!("struct_field_access_record_{}", index);
+    let name = format!("struct_field_access_record_{index}");
     let field_value = env
         .builder
         .new_build_struct_gep(struct_type, ptr, index as u32, &name)

@@ -160,23 +160,23 @@ impl std::fmt::Display for Error {
 
         if let Some(mod_) = &self.mod_ {
             loc_prefix(f)?;
-            write!(f, "module {:?}", mod_)?;
+            write!(f, "module {mod_:?}")?;
         }
 
         if let Some(def) = &self.def {
             loc_prefix(f)?;
             match def {
                 DefName::Type(name) => {
-                    write!(f, "named type definition {:?}", name)?;
+                    write!(f, "named type definition {name:?}")?;
                 }
                 DefName::Func(name) => {
-                    write!(f, "function definition {:?}", name)?;
+                    write!(f, "function definition {name:?}")?;
                 }
                 DefName::Const(name) => {
-                    write!(f, "constant definition {:?}", name)?;
+                    write!(f, "constant definition {name:?}")?;
                 }
                 DefName::EntryPoint(name) => {
-                    write!(f, "entry point definition {:?}", name)?;
+                    write!(f, "entry point definition {name:?}")?;
                 }
             }
         }
@@ -185,13 +185,13 @@ impl std::fmt::Display for Error {
             loc_prefix(f)?;
             match binding {
                 BindingLocation::Type(id) => {
-                    write!(f, "definition of type binding {:?}", id)?;
+                    write!(f, "definition of type binding {id:?}")?;
                 }
                 BindingLocation::Value(id) => {
-                    write!(f, "definition of value binding {:?}", id)?;
+                    write!(f, "definition of value binding {id:?}")?;
                 }
                 BindingLocation::Continuation(id) => {
-                    write!(f, "definition of continuation binding {:?}", id)?;
+                    write!(f, "definition of continuation binding {id:?}")?;
                 }
             }
         }

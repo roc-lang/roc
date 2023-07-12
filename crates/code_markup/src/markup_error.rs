@@ -56,7 +56,7 @@ pub type MarkResult<T, E = MarkError> = std::result::Result<T, E>;
 
 impl From<UtilError> for MarkError {
     fn from(util_err: UtilError) -> Self {
-        let msg = format!("{}", util_err);
+        let msg = format!("{util_err}");
 
         // hack to handle MarkError derive
         let dummy_res: Result<(), NoneError> = Err(NoneError {});

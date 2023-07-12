@@ -327,7 +327,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
                 try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             if let Err((msg, _)) = result {
-                internal_error!("roc panic {}", msg);
+                internal_error!("roc panic {msg}");
             }
 
             if sequence.count_failures() > 0 {
@@ -386,7 +386,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
                             ExpectSequence::START_OFFSET,
                         )?;
                     }
-                    _ => println!("received signal {}", sig),
+                    _ => println!("received signal {sig}"),
                 }
             }
 
@@ -638,7 +638,7 @@ impl ExpectSequence {
                 0 => std::hint::spin_loop(),
                 1 => break ChildProcessMsg::Expect,
                 2 => break ChildProcessMsg::Dbg,
-                n => internal_error!("invalid atomic value set by the child: {:#x}", n),
+                n => internal_error!("invalid atomic value set by the child: {n:#x}"),
             }
         }
     }

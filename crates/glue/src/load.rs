@@ -138,7 +138,7 @@ pub fn generate(
                     let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> =
                         files.into();
                     let files = files.unwrap_or_else(|err| {
-                        eprintln!("Glue generation failed: {}", err);
+                        eprintln!("Glue generation failed: {err}");
 
                         process::exit(1);
                     });
@@ -358,7 +358,7 @@ pub fn load_types(
     )
     .unwrap_or_else(|problem| match problem {
         LoadingProblem::FormattedReport(report) => {
-            eprintln!("{}", report);
+            eprintln!("{report}");
 
             process::exit(1);
         }

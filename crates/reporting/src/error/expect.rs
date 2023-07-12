@@ -167,7 +167,7 @@ impl<'a> Renderer<'a> {
             &crate::report::DEFAULT_PALETTE,
         );
 
-        write!(writer, "{}", buf)
+        write!(writer, "{buf}")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -238,6 +238,6 @@ impl<'a> Renderer<'a> {
             &crate::report::DEFAULT_PALETTE,
         );
 
-        write!(writer, "{}", buf)
+        write!(writer, "{buf}")
     }
 }

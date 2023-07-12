@@ -335,7 +335,7 @@ fn assemble_derived_golden(
     specialization_lsets.sort_by_key(|(region, _)| *region);
     for (region, var) in specialization_lsets {
         let pretty_lset = print_var(var, false);
-        let _ = writeln!(pretty_buf, "#   @<{}>: {}", region, pretty_lset);
+        let _ = writeln!(pretty_buf, "#   @<{region}>: {pretty_lset}");
     }
 
     pretty_buf.push_str(derived_source);
@@ -476,10 +476,7 @@ fn check_derived_typechecks_and_golden(
             .render_raw(80, &mut roc_reporting::report::CiWrite::new(&mut buf))
             .unwrap();
 
-        panic!(
-            "Derived does not typecheck:\n{}\nDerived def:\n{}",
-            buf, derived_program
-        );
+        panic!("Derived does not typecheck:\n{buf}\nDerived def:\n{derived_program}");
     }
 
     let golden = assemble_derived_golden(

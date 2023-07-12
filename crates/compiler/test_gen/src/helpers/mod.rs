@@ -24,7 +24,7 @@ pub(crate) fn src_hash(src: &str) -> u64 {
 pub(crate) fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
     use std::path::Path;
 
-    let debug_dir_str = format!("/tmp/roc/gen_wasm/{:016x}", build_dir_hash);
+    let debug_dir_str = format!("/tmp/roc/gen_wasm/{build_dir_hash:016x}");
     let debug_dir_path = Path::new(&debug_dir_str);
     let final_wasm_file = debug_dir_path.join("final.wasm");
 

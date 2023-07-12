@@ -93,18 +93,18 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
         // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
         // I don't have the patience to debug this right now, so let's leave it for another day...
         // TODO: fix PartialEq impl on ast types
-        if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+        if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
             let mut fail_file = file.clone();
             fail_file.set_extension("roc-format-failed");
             std::fs::write(&fail_file, buf.as_str()).unwrap();
 
             let mut before_file = file.clone();
             before_file.set_extension("roc-format-failed-ast-before");
-            std::fs::write(&before_file, format!("{:#?}\n", ast_normalized)).unwrap();
+            std::fs::write(&before_file, format!("{ast_normalized:#?}\n")).unwrap();
 
             let mut after_file = file.clone();
             after_file.set_extension("roc-format-failed-ast-after");
-            std::fs::write(&after_file, format!("{:#?}\n", reparsed_ast_normalized)).unwrap();
+            std::fs::write(&after_file, format!("{reparsed_ast_normalized:#?}\n")).unwrap();
 
             internal_error!(
                 "Formatting bug; formatting didn't reparse as the same tree\n\n\

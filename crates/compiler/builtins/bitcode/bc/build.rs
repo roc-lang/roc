@@ -35,6 +35,7 @@ fn main() {
 
     generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
     generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
+    generate_bc_file(&bitcode_path, "ir-aarch64", "builtins-aarch64");
     generate_bc_file(
         &bitcode_path,
         "ir-windows-x86_64",
@@ -61,12 +62,12 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     ll_path.set_extension("ll");
     let dest_ir_host = ll_path.to_str().expect("Invalid dest ir path");
 
-    println!("Compiling host ir to: {}", dest_ir_host);
+    println!("Compiling host ir to: {dest_ir_host}");
 
     let mut bc_path = bitcode_path.join(file_name);
     bc_path.set_extension("bc");
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
-    println!("Compiling 64-bit bitcode to: {}", dest_bc_64bit);
+    println!("Compiling 64-bit bitcode to: {dest_bc_64bit}");
 
     // workaround for github.com/ziglang/zig/issues/9711
     #[cfg(target_os = "macos")]
@@ -104,7 +105,7 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
             false => {
                 let error_str = match str::from_utf8(&output.stderr) {
                     Ok(stderr) => stderr.to_string(),
-                    Err(_) => format!("Failed to run \"{}\"", command_str),
+                    Err(_) => format!("Failed to run \"{command_str}\""),
                 };
 
                 // Flaky test errors that only occur sometimes on MacOS ci server.

@@ -9,7 +9,7 @@ pub fn map_get<'a, K: ::std::fmt::Debug + std::hash::Hash + std::cmp::Eq, V>(
     key: &K,
 ) -> EdResult<&'a V> {
     let value = hash_map.get(key).context(KeyNotFoundSnafu {
-        key_str: format!("{:?}", key),
+        key_str: format!("{key:?}"),
     })?;
 
     Ok(value)
@@ -20,8 +20,8 @@ pub fn index_of<T: ::std::fmt::Debug + std::cmp::Eq>(elt: T, slice: &[T]) -> EdR
         .iter()
         .position(|slice_elt| *slice_elt == elt)
         .with_context(|| {
-            let elt_str = format!("{:?}", elt);
-            let collection_str = format!("{:?}", slice);
+            let elt_str = format!("{elt:?}");
+            let collection_str = format!("{slice:?}");
 
             IndexOfFailedSnafu {
                 elt_str,
@@ -56,8 +56,8 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
     if let (Some(first_index), Some(last_index)) = (first_index_opt, last_index_opt) {
         Ok((first_index, last_index))
     } else {
-        let elt_str = format!("{:?}", elt);
-        let collection_str = format!("{:?}", slice);
+        let elt_str = format!("{elt:?}");
+        let collection_str = format!("{slice:?}");
 
         IndexOfFailedSnafu {
             elt_str,

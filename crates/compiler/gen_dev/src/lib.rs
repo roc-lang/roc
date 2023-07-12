@@ -149,12 +149,6 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::ExprBox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
-                    Expr::ExprUnbox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
-                    }
                     Expr::Struct(syms) => {
                         for sym in *syms {
                             self.set_last_seen(*sym, stmt);
@@ -357,7 +351,7 @@ trait Backend<'a> {
         // the functions from the generates #help module (refcounting, equality) is always suffixed
         // with 1. That is fine, they are always unique anyway.
         if ident_string.contains("#help") {
-            format!("{}_{}_1", module_string, ident_string)
+            format!("{module_string}_{ident_string}_1")
         } else {
             format!("{}_{}_{}", module_string, ident_string, state.finish())
         }
@@ -394,7 +388,7 @@ trait Backend<'a> {
     fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
@@ -414,7 +408,7 @@ trait Backend<'a> {
     fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
@@ -841,21 +835,6 @@ trait Backend<'a> {
                 self.load_literal_symbols(arguments);
                 let reuse = reuse.map(|ru| ru.symbol);
                 self.tag(sym, arguments, tag_layout, *tag_id, reuse);
-            }
-            Expr::ExprBox { symbol: value } => {
-                let element_layout = match self.interner().get_repr(*layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
-                    _ => unreachable!("{:?}", self.interner().dbg(*layout)),
-                };
-
-                self.load_literal_symbols([*value].as_slice());
-                self.expr_box(*sym, *value, element_layout, None)
-            }
-            Expr::ExprUnbox { symbol: ptr } => {
-                let element_layout = *layout;
-
-                self.load_literal_symbols([*ptr].as_slice());
-                self.expr_unbox(*sym, *ptr, element_layout)
             }
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
@@ -1607,7 +1586,6 @@ trait Backend<'a> {
             LowLevel::PtrStore => {
                 let element_layout = match self.interner().get_repr(arg_layouts[0]) {
                     LayoutRepr::Ptr(inner) => inner,
-                    LayoutRepr::Boxed(inner) => inner,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 

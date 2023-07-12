@@ -122,10 +122,10 @@ fn valgrind_test_linux(source: &str) {
         Err(roc_build::program::BuildFileError::LoadingProblem(
             roc_load::LoadingProblem::FormattedReport(report),
         )) => {
-            eprintln!("{}", report);
+            eprintln!("{report}");
             panic!("");
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     }
 
     drop(temp_dir)
@@ -180,7 +180,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                     what: _,
                     xwhat,
                 } = error;
-                println!("Valgrind Error: {}\n", kind);
+                println!("Valgrind Error: {kind}\n");
 
                 if let Some(ValgrindErrorXWhat {
                     text,
@@ -188,14 +188,14 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                     leakedblocks: _,
                 }) = xwhat
                 {
-                    println!("    {}", text);
+                    println!("    {text}");
                 }
             }
             panic!("Valgrind found memory errors");
         }
     } else {
         let exit_code = match valgrind_out.status.code() {
-            Some(code) => format!("exit code {}", code),
+            Some(code) => format!("exit code {code}"),
             None => "no exit code".to_string(),
         };
 

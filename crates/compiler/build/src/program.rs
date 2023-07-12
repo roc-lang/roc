@@ -320,10 +320,10 @@ fn gen_from_mono_module_llvm<'a>(
         if !unrecognized.is_empty() {
             let out = unrecognized
                 .iter()
-                .map(|x| format!("{:?}", x))
+                .map(|x| format!("{x:?}"))
                 .collect::<Vec<String>>()
                 .join(", ");
-            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".", out);
+            eprintln!("Unrecognized sanitizer: {out}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".");
             eprintln!("Note: \"cargo-fuzz\" and \"afl.rs\" both enable sanitizer coverage for fuzzing. They just use different parameters to match the respective libraries.")
         }
 
@@ -340,7 +340,7 @@ fn gen_from_mono_module_llvm<'a>(
         }
         let opt = opt.output().unwrap();
 
-        assert!(opt.stderr.is_empty(), "{:#?}", opt);
+        assert!(opt.stderr.is_empty(), "{opt:#?}");
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
@@ -358,7 +358,7 @@ fn gen_from_mono_module_llvm<'a>(
             .output()
             .unwrap();
 
-        assert!(bc_to_object.status.success(), "{:#?}", bc_to_object);
+        assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
 
         MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
     } else if emit_debug_info {
@@ -414,7 +414,7 @@ fn gen_from_mono_module_llvm<'a>(
                     .output()
                     .unwrap();
 
-                assert!(ll_to_object.stderr.is_empty(), "{:#?}", ll_to_object);
+                assert!(ll_to_object.stderr.is_empty(), "{ll_to_object:#?}");
             }
             _ => unreachable!(),
         }
@@ -716,13 +716,13 @@ pub fn handle_error_module(
 pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
     match problem {
         LoadingProblem::FormattedReport(report) => {
-            print!("{}", report);
+            print!("{report}");
             Ok(1)
         }
         _ => {
             // TODO: tighten up the types here, we should always end up with a
             // formatted report from load.
-            print!("Failed with error: {:?}", problem);
+            print!("Failed with error: {problem:?}");
             Ok(1)
         }
     }
@@ -889,7 +889,7 @@ fn build_loaded_file<'a>(
         buf.push('\n');
 
         use std::fmt::Write;
-        write!(buf, "{}", module_timing).unwrap();
+        write!(buf, "{module_timing}").unwrap();
 
         if it.peek().is_some() {
             buf.push('\n');
@@ -914,10 +914,7 @@ fn build_loaded_file<'a>(
                 .expect("Failed to (re)build platform.");
 
             if emit_timings && !is_platform_prebuilt {
-                println!(
-                    "Finished rebuilding the platform in {} ms\n",
-                    rebuild_duration
-                );
+                println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
             }
 
             Some(HostRebuildTiming::BeforeApp(rebuild_duration))
@@ -957,8 +954,7 @@ fn build_loaded_file<'a>(
 
     if emit_timings {
         println!(
-            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
-            buf
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{buf}"
         );
 
         println!(
@@ -972,10 +968,7 @@ fn build_loaded_file<'a>(
         let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
 
         if emit_timings && !is_platform_prebuilt {
-            println!(
-                "Finished rebuilding the platform in {} ms\n",
-                rebuild_duration
-            );
+            println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
         }
     }
 
@@ -1007,7 +1000,7 @@ fn build_loaded_file<'a>(
             };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
-                .suffix(&format!(".{}", extension))
+                .suffix(&format!(".{extension}"))
                 .tempfile()
                 .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
             let app_o_file = app_o_file.path();
@@ -1257,8 +1250,7 @@ pub fn check_file<'a>(
 
     if emit_timings {
         println!(
-            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
-            buf
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{buf}"
         );
 
         println!("Finished checking in {} ms\n", compilation_end.as_millis(),);

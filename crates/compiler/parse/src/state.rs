@@ -136,7 +136,7 @@ impl<'a> fmt::Debug for State<'a> {
         write!(f, "State {{")?;
 
         match std::str::from_utf8(self.bytes()) {
-            Ok(string) => write!(f, "\n\tbytes: [utf8] {:?}", string)?,
+            Ok(string) => write!(f, "\n\tbytes: [utf8] {string:?}")?,
             Err(_) => write!(f, "\n\tbytes: [invalid utf8] {:?}", self.bytes())?,
         }
 
@@ -151,5 +151,5 @@ fn state_size() {
     // cache line.
     let state_size = std::mem::size_of::<State>();
     let maximum = std::mem::size_of::<usize>() * 8;
-    assert!(state_size <= maximum, "{:?} <= {:?}", state_size, maximum);
+    assert!(state_size <= maximum, "{state_size:?} <= {maximum:?}");
 }

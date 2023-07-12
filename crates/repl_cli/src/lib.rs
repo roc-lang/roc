@@ -32,7 +32,7 @@ pub fn main() -> i32 {
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
-    print!("{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS);
+    print!("{WELCOME_MESSAGE}{SHORT_INSTRUCTIONS}");
 
     let mut editor = Editor::<ReplState>::new();
     let repl_helper = ReplState::new();
@@ -51,7 +51,7 @@ pub fn main() -> i32 {
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
                         if !output.is_empty() {
-                            println!("{}", output);
+                            println!("{output}");
                         }
                     }
                     Err(exit_code) => return exit_code,
@@ -70,7 +70,7 @@ pub fn main() -> i32 {
                 return 1;
             }
             Err(err) => {
-                eprintln!("REPL error: {:?}", err);
+                eprintln!("REPL error: {err:?}");
                 return 1;
             }
         }
