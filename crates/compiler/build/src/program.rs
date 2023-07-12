@@ -740,9 +740,19 @@ pub fn standard_load_config(
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
     };
 
+    let function_kind = if cfg!(debug_assertions) {
+        if std::env::var("ROC_ERASE").is_ok() {
+            FunctionKind::Erased
+        } else {
+            FunctionKind::LambdaSet
+        }
+    } else {
+        FunctionKind::LambdaSet
+    };
+
     LoadConfig {
         target_info,
-        function_kind: FunctionKind::LambdaSet,
+        function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
