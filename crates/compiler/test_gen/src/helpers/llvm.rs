@@ -543,7 +543,11 @@ where
 #[cfg(feature = "gen-llvm-wasm")]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+        match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>(
+            $src,
+            $ignore_problems,
+            roc_load::FunctionKind::LambdaSet,
+        ) {
             Err(msg) => panic!("Wasm test failed: {}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected, "Wasm test failed")

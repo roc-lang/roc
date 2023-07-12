@@ -7,6 +7,7 @@ use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
+use roc_solve::FunctionKind;
 use roc_std::RocStr;
 use roc_wasm_interp::{wasi, ImportDispatcher, Instance, WasiDispatcher};
 use roc_wasm_module::{Export, ExportType, Value, WasmModule};
@@ -92,6 +93,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         palette: DEFAULT_PALETTE_HTML,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
+        function_kind: FunctionKind::LambdaSet,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,

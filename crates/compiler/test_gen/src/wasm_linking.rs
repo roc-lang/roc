@@ -117,6 +117,7 @@ fn build_app_mono<'a>(
         ret_layout: int_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        is_erased: false,
     };
 
     let proc_layout = ProcLayout {
