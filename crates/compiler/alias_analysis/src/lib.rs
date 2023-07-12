@@ -1820,7 +1820,7 @@ fn erasure_load(
 ) -> Result<ValueId> {
     match field {
         ErasedField::Callee => builder.add_get_tuple_field(block, value, ERASURE_CALEE_INDEX),
-        ErasedField::Value => {
+        ErasedField::Value | ErasedField::ValuePtr => {
             let unknown_heap_cell_value =
                 builder.add_get_tuple_field(block, value, ERASURE_VALUE_INDEX)?;
             // Cast the unknown cell to the wanted type

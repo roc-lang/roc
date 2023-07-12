@@ -96,12 +96,13 @@ pub fn load<'ctx>(
 ) -> PointerValue<'ctx> {
     let index = match field {
         ErasedField::Value => 0,
+        ErasedField::ValuePtr => 0,
         ErasedField::Callee => 1,
     };
 
     let value = env
         .builder
-        .build_extract_value(erasure, index, "extract_value")
+        .build_extract_value(erasure, index, "extract_erased_value")
         .unwrap()
         .into_pointer_value();
 
