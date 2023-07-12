@@ -19,6 +19,8 @@ pub struct TokenMap {
     // They're stored together in one allocation because they might as well be.
     tokens: [MaybeToken; 64],
     regions: [Region; 64],
+    leading_indent: Region, // Region::ZERO means no leading indent
+    leading_outdents: Vec<Region>,
 }
 
 impl TokenMap {
@@ -207,19 +209,24 @@ impl Default for MaybeToken {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum Token {
-    // NOTE: this must never have a value of zero!
+    // NOTE: this must never have a variant whose value is 0! MaybeToken uses that to represent NONE,
+    // and we want to be able to mem::transmute between Token and MaybeToken.
 
     // These numbers must all be the same as the corresponding numbers on InProgress
-    // (except of course for the variants which this enum has, but InProgress doesn't have)
+    // (except of course for the variants which this enum has, but InProgress doesn't have),
+    // so that we can tranmute from InProgress to Token.
     Comment = 1,
     Lambda = 2,
     Indent = 3,
     Outdent = 4,
     InterpolationStart = 5,
     InterpolationEnd = 6,
-    MultiLineStr = 7,
-    SingleLineStr = 8,
-    SingleQuoteChar = 9,
+    // Errors
+    ErrOutdentInMultilineStr = 7,
+    // Strings must have the highest numbers - see InProgress
+    MultiLineStr = 253,
+    SingleLineStr = 254,
+    SingleQuoteChar = 255,
 }
 
 pub struct TokensIter<'a> {

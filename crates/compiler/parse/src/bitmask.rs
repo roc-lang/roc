@@ -74,6 +74,16 @@ impl Bitmask {
     }
 
     #[inline(always)]
+    pub fn is_1_at(self, index: impl Into<u64>) -> bool {
+        self.0 & (1 << index.into()) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_0_at(self, index: impl Into<u64>) -> bool {
+        self.0 & (1 << index.into()) == 0
+    }
+
+    #[inline(always)]
     pub fn set_to_1(&mut self, index: impl Into<u64>) {
         self.0 |= (1 as u64) << index.into()
     }

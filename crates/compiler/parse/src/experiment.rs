@@ -5,8 +5,20 @@ use crate::token::{MaybeToken, Region, Token, TokenMap};
 #[derive(Default)]
 pub struct Env {
     in_progress: InProgress,
-    /// The number of trailing '"' characters at the end of the previous chunk
+    /// The byte at the end of the previous chunk
+    prev_byte: u8,
+    /// The number of trailing '"' characters at the end of the previous chunk, modulo 3.
+    /// (So, this number will always be 0, 1, or 2.) This is because we only care about these
+    /// for purposes of determining whether the current chunk begins with a triple quote or not.
     trailing_quote_chars: u8,
+    /// The number of trailing '\\' characters at the end of the previous chunk(s), modulo 2.
+    /// (So, this number will always be 0 or 1.) This is because double backslash always means
+    /// either an escaped backalash or an error, so we can handle those immediately.
+    trailing_backslash_chars: u8,
+    /// The number of trailing ' ' characters at the end of the previous chunk(s),
+    /// which are all preceded by a newline character. (So, the indentation is
+    /// crossing a chunk boundary.) Note that multiple entire chunks can be all spaces.
+    trailing_indent_spaces: u32,
     /// The current chunk's offset relative to the start of the src.
     /// This must be specified in terms of the chunk's offset (that is,
     /// its offset from the beginning of the source) rather than the index into
@@ -15,7 +27,10 @@ pub struct Env {
     /// turned out to be the beginning of a multiline string.
     chunk_offset: u32,
     span_start_offset: u32,
-    token_map: TokenMap,
+    current_indent: u32,
+    /// This is the fallback ("slow path") which we only use if we encounter an indent of 5+ spaces at once.
+    /// (If all indents are exactly 4 spaces, which `roc format` enforces, then we don't need to use this stack.)
+    indent_stack: Vec<u32>,
 }
 
 impl From<InProgress> for MaybeToken {
@@ -71,9 +86,9 @@ enum InProgress {
     Nothing = 0,
     Comment = 1,
     // The strings must have the highest numeric values, for `is_str` to work
-    MultiLineStr = 7, // This must have the lowest numeric value of the strings, for `is_str` to work
-    SingleLineStr = 8,
-    SingleQuoteChar = 9, // We consider this a "string"
+    MultiLineStr = 253, // This must have the lowest numeric value of the strings, for `is_str` to work
+    SingleLineStr = 254,
+    SingleQuoteChar = 255, // We consider single-quote character literals to be "strings"
 }
 
 impl InProgress {
@@ -88,14 +103,113 @@ impl Default for InProgress {
     }
 }
 
-pub trait Listener {
-    fn emit(&mut self, token: Token, start_offset: u32, end_offset: u32);
-}
-
 impl Env {
-    pub fn handle_chunk(&mut self, chunk: Chunk, listener: &mut impl Listener) {
-        let backslashes = Bitmask::for_byte(chunk, b'\\');
+    pub fn handle_chunk(&mut self, chunk: Chunk) -> TokenMap {
+        let spaces = Bitmask::for_byte(chunk, b' ');
+        let is_all_spaces = spaces == Bitmask::from(!0);
 
+        // These conditionals are written with the most likely branch first, to avoid mispredictions
+        if !is_all_spaces {
+            // TODO check for \t and give errors for them.
+            self.handle_nontrivial_chunk(chunk, spaces)
+        } else {
+            // We have encountered the extremely unlikely event that our entire chunk is all spaces,
+            // so we may need to extend the trailing_indent_spaces count from the previous chunk instead
+            // of resetting it like normal.
+            if self.trailing_indent_spaces > 0 {
+                // Continue the trailing_indent_spaces from the previous chunk.
+                self.trailing_indent_spaces += 64;
+            } else if self.prev_byte == b'\n' {
+                // This all-spaces chunk is immediately preceded by a newline, so it's all trailing_indent_spaces.
+                self.trailing_indent_spaces = 64;
+            }
+
+            // We're all spaces, so we definitely know what prev_byte is.
+            self.prev_byte = b' ';
+
+            // Spaces are only ever included in a TokenMap as indentations, and that
+            // possibility will be handled later by trailing_indent_spaces checks.
+            TokenMap::default()
+        }
+    }
+
+    #[inline(always)]
+    /// Handle a chunk that has already been verified to be nontrivial (e.g. it's not all spaces,
+    /// which is a special case we handled already with a branch.)
+    fn handle_nontrivial_chunk(&mut self, chunk: Chunk, mut spaces: Bitmask) -> TokenMap {
+        // In case someone is editing on Windows and has CRLF line endings, we treat
+        // carriage returns (\r) as ending a sequence of spaces (for purposes of indentation
+        // checking), just like we do for \n characters.
+        let carriage_returns = Bitmask::for_byte(chunk, b'\r');
+        let newlines = Bitmask::for_byte(chunk, b'\n');
+        let newlines_or_carriage_rets = newlines | carriage_returns;
+        // Add to the bitmask one space per sequence of spaces following a newline.
+        let spaces_after_newline = {
+            // Start of each contiguous sequence of spaces
+            //
+            //  input str: xxx   xxxxxxxxxxxxxxxx    xxxxxxxxxxxxxxxx xxxxxxxxxxxx     xxxx
+            // input bits: 0001110000000000000000111100000000000000001000000000000111110000
+            //    shifted: 0000111000000000000000011110000000000000000100000000000011111000
+            //    negated: 1111000111111111111111100001111111111111111011111111111100000111
+            //      anded: 0001000000000000000000100000000000000000001000000000000100000000
+            //  input str: xxx   xxxxxxxxxxxxxxxx    xxxxxxxxxxxxxxxx xxxxxxxxxxxx     xxxx
+            let starts = spaces & !(spaces >> 1);
+            let spaces_after_newline = starts & (newlines >> 1);
+
+            // If we have a sequence of spaces that follows a newline and also runs into the end of the chunk,
+            // we need to handle that in the next chunk instead of in this one - because there might be even
+            // more spaces in this sequence!
+            let spaces_after_newline = {
+                let trailing_spaces = spaces.trailing_ones();
+                let index_of_potential_newline = 63 - trailing_spaces;
+                let is_blank_line = newlines_or_carriage_rets.is_1_at(index_of_potential_newline);
+                let trailing_indent_spaces = if is_blank_line {
+                    // the spaces are on a blank line; disregard them!
+                    0
+                } else {
+                    trailing_spaces
+                };
+
+                // We already handled the case where this chunk is all spaces, so we definitely want to overwrite this here.
+                self.trailing_indent_spaces = trailing_indent_spaces;
+
+                let trailing_indent_spaces = trailing_indent_spaces as u8;
+
+                // Remove trailing spaces from `spaces` as well, so they aren't counted as indents later.
+                // (If this is a blank line, trailing_indent_spaces will be 0 and this will be a no-op.)
+                spaces = (spaces << trailing_indent_spaces) >> trailing_indent_spaces;
+
+                // Remove the trailing spaces from consideration in the `spaces_after_newline` mask,
+                // since they'll be handled with the next chunk rather than with this one.
+                (spaces_after_newline >> trailing_indent_spaces) << trailing_indent_spaces
+            };
+
+            // If the previous chunk ended in a newline, and this one starts with some spaces
+            // but doesn't end in a carriage return or newline (which would mean a blank line,
+            // which we disregard), then set the first bit in our spaces_after_newline bitmask,
+            // because there is a sequence of spaces there that we care about!
+            let leading_spaces = spaces.leading_ones();
+
+            debug_assert!(leading_spaces < 64);
+            // For leadings_spaces to be 64 or more, the chunk would have to be all spaces -
+            // and this function doesn't even get called in that special case, because
+            // we branched to handle it differently earlier.
+
+            // See if there's a newline or carriage return at index (1 + index of last space)
+            // in the bitmask. This will never overflow, because leading_spaces is always less than 64.
+            let is_blank_line = branchless_or(
+                newlines.is_1_at(leading_spaces),
+                carriage_returns.is_1_at(leading_spaces),
+            );
+            let begins_with_spaces = branchless_and(
+                self.prev_byte == b'\n',
+                branchless_and(!is_blank_line, leading_spaces != 0),
+            ) as u64;
+
+            spaces_after_newline | Bitmask::from(begins_with_spaces)
+        };
+
+        let backslashes = Bitmask::for_byte(chunk, b'\\');
         // A bitmask of all the characters that are immediately preceded by an escape
         // (so, an odd number of contiguous backslashes) - e.g. \\\" or \'
         // See Fig. 3 in "Parsing Gigabytes of JSON per Second" https://arxiv.org/pdf/1902.08318.pdf
@@ -128,12 +242,14 @@ impl Env {
             !((evens_carries & ODDS) | (odds_carries & EVENS))
         };
 
+        let all_single_quotes = Bitmask::for_byte(chunk, b'\'');
         // Bitmask of all the single quotes (`'`) in the chunk, excluding escaped ones (`\'`, `\\\'`, etc.).
-        let single_quotes = Bitmask::for_byte(chunk, b'\'') & preceded_by_escape;
+        let unescaped_single_quotes = all_single_quotes & preceded_by_escape;
 
+        let all_quotes = Bitmask::for_byte(chunk, b'"');
         // Bitmask of all the double quotes (`"`) in the chunk, excluding escaped ones (`\"`, `\\\"`, etc.).
-        let quotes = {
-            let quotes = Bitmask::for_byte(chunk, b'"') & preceded_by_escape;
+        let unescaped_quotes = {
+            let quotes = all_quotes & preceded_by_escape;
 
             // Trailing quotes caculation, based on the ending bit pattern of `quotes`:
             //
@@ -159,7 +275,7 @@ impl Env {
         };
 
         // Bitmask for triple quotes (used in multiline strings). Note that we already removed \" from `quotes`.
-        let triple_quotes =
+        let unescaped_triple_quotes =
             // Start of each contiguous sequence of 3+ double quotes. These can overlap
             // (e.g. `"""` becomes 100 and `""""` becomes 1100), which in this case is
             // desirable because it means a sequence like `""""""` can become 111100,
@@ -177,46 +293,57 @@ impl Env {
             //
             // This algorithm was adapted from the backslash-escaping algorithm from the paper.
             // Thanks, Daniel Lemire and Geoff Langdale!
-            quotes & (quotes << 1) & (quotes << 2);
+            unescaped_quotes & (unescaped_quotes << 1) & (unescaped_quotes << 2);
 
         self.strings_comments_indents(
-            backslashes,
-            quotes,
-            single_quotes,
-            triple_quotes,
             chunk,
-            listener,
-        );
+            spaces,
+            newlines,
+            newlines_or_carriage_rets,
+            backslashes,
+            unescaped_quotes,
+            unescaped_single_quotes,
+            unescaped_triple_quotes,
+            spaces_after_newline,
+        )
     }
 
+    #[inline(always)]
     /// Given the masks for the locations of quotes, single quotes, and triple quotes (which have already
     /// had backslash-escaped versions of themselves removed), compute the ranges for strings, comments, and indents/outdents.
     fn strings_comments_indents(
         &mut self,
-        backslashes: Bitmask,
-        quotes: Bitmask,
-        single_quotes: Bitmask,
-        triple_quotes: Bitmask,
         chunk: Chunk,
-        listener: &mut impl Listener,
-    ) {
+        spaces: Bitmask,
+        newlines: Bitmask,
+        newlines_or_carriage_rets: Bitmask,
+        backslashes: Bitmask,
+        unescaped_quotes: Bitmask,
+        unescaped_single_quotes: Bitmask,
+        unescaped_triple_quotes: Bitmask,
+        spaces_after_newline: Bitmask,
+    ) -> TokenMap {
         use InProgress::{Comment, MultiLineStr, Nothing, SingleLineStr, SingleQuoteChar};
-
         let open_parens = Bitmask::for_byte(chunk, b'(');
         let close_parens = Bitmask::for_byte(chunk, b')');
 
         let chunk_offset = self.chunk_offset;
+        let mut token_map = TokenMap::default();
         let mut span_start_offset = self.span_start_offset;
         let mut in_progress;
 
+        // We do a lot of signed arithmetic on this, so store it as i32 for the duration of this function.
+        let mut current_indent = self.current_indent as i32;
+
+        // TODO make this whole `match` branchless. It's definitely doable!
         match self.trailing_quote_chars {
             1 => {
                 span_start_offset = chunk_offset - 1;
 
                 // 1 trailing quote means we need to figure out if we're working on
                 // a single-line string vs a multiline string. That in turn depends
-                // on whether our first two bytes are both quotes. If either isn't,
-                // this must not be a triple quote!
+                // on whether our first two bytes are both quotes. If they both are,
+                // this must be a triple quote!
                 in_progress = if branchless_and(chunk[0] == b'"', chunk[1] == b'"') {
                     MultiLineStr
                 } else {
@@ -227,9 +354,9 @@ impl Env {
                 if chunk[0] == b'"' {
                     // 2 trailing quotes plus this one starting with a quote means
                     // we encountered a triple quote.
-                    let will_be_multiline_str = self.in_progress == Nothing;
+                    let starting_multiline_str = self.in_progress == Nothing;
 
-                    in_progress = if will_be_multiline_str {
+                    in_progress = if starting_multiline_str {
                         MultiLineStr
                     } else {
                         // Since in_progress wasn't Nothing, it must have been MultiLineStr
@@ -239,34 +366,42 @@ impl Env {
                         // this must be a closing triple-quote. That means we end the MultiLineStr.
                         debug_assert_eq!(self.in_progress, MultiLineStr, "Previous chunk ended in 2 quotes, yet its in_progress was neither MutliLineStr nor Nothing. This should never happen!");
 
-                        // Record the MultiLineStr, between the start offset and the offset of the final quote.
-                        self.token_map.insert(
-                            0,
-                            Token::MultiLineStr,
-                            Region {
-                                start_offset: span_start_offset,
-                                end_offset: chunk_offset + 1,
-                            },
-                        );
-
                         Nothing
                     };
+
+                    // If we just finished a MultiLineStr, then we should insert a token for it.
+                    // (We are either starting a new one or finishing the previous one.)
+                    let maybe_token = if starting_multiline_str {
+                        MaybeToken::none()
+                    } else {
+                        MaybeToken::some(Token::MultiLineStr)
+                    };
+
+                    // Record the MultiLineStr (or Nothing), between the start offset and the offset of the final quote.
+                    token_map.set(
+                        0,
+                        maybe_token,
+                        Region {
+                            start_offset: span_start_offset,
+                            end_offset: chunk_offset + 1,
+                        },
+                    );
 
                     // If we will be starting a multiline string, it should start 2 bytes
                     // before the beginning of this chunk. (This is all done branchlessly.)
                     //
                     // Importantly, this must be set *after* updating in_progress, because
                     // the in_progress update logic may need to use the old span_start_offset.
-                    span_start_offset = chunk_offset - if will_be_multiline_str { 2 } else { 0 };
+                    span_start_offset = chunk_offset - if starting_multiline_str { 2 } else { 0 };
                 } else {
                     // 2 trailing quotes followed by a non-quote means
-                    // we had an empty string at the end.
-                    self.token_map.insert(
+                    // we had an empty string at the end of the previous chunk.
+                    token_map.insert(
                         0,
                         Token::SingleLineStr,
                         Region {
-                            start_offset: chunk_offset,
-                            end_offset: chunk_offset + 1,
+                            start_offset: chunk_offset.wrapping_sub(2),
+                            end_offset: chunk_offset.wrapping_sub(1),
                         },
                     );
 
@@ -286,15 +421,18 @@ impl Env {
             }
         };
 
-        let mask_contains_single_or_triple_quotes =
-            branchless_or(single_quotes.is_nonzero(), triple_quotes.is_nonzero());
+        let mask_contains_single_or_triple_quotes = branchless_or(
+            unescaped_single_quotes.is_nonzero(),
+            unescaped_triple_quotes.is_nonzero(),
+        );
         let pounds = Bitmask::for_byte(chunk, b'#');
-        let newlines = Bitmask::for_byte(chunk, b'\n');
         // Note: this includes multiline strings, single-line strings, AND single-quoted chars!
         let mut strings = Bitmask::from(0);
         // This excludes parens at first, but may end up having close-parens injected when handling string interpolation,
         // to mark the end of the interpolation.
-        let mut loop_mask = Bitmask::from(backslashes | quotes | pounds | newlines);
+        let mut loop_mask = Bitmask::from(
+            backslashes | unescaped_quotes | pounds | newlines | spaces_after_newline,
+        );
 
         while !loop_mask.is_zero() {
             let index = loop_mask.trailing_zeros() as u8;
@@ -304,16 +442,13 @@ impl Env {
 
             // This is safe because this index is from a u64 bitmask, and Chunk has length 64
             let byte = unsafe { *chunk.get_unchecked(index as usize) };
-            let prev_in_progress = in_progress;
-            let byte_is_quote = byte == b'"';
-            let byte_is_pound = byte == b'#';
 
             if byte == b'\\' {
                 if in_progress.is_str() {
                     todo!("interpolation or escape! (Remember, could be an escaped backslash)");
                 } else {
                     // If we encounter a backslash outside a string, it's a lambda.
-                    self.token_map.insert(
+                    token_map.insert(
                         index,
                         Token::Lambda,
                         Region {
@@ -328,6 +463,10 @@ impl Env {
                 }
             }
 
+            let prev_in_progress = in_progress;
+            let byte_is_quote = byte == b'"';
+            let byte_is_pound = byte == b'#';
+
             // This is both a convenience and a way to avoid consecutive conditionals triggering incorrectly
             // when updating in_progress.
             // (We must compare to nothing_in_progress after potentially setting in_progress to Nothing!)
@@ -341,7 +480,8 @@ impl Env {
             // (If there is one of these in the mask, this will probably get mispredicted once and then never again.)
             if mask_contains_single_or_triple_quotes {
                 // If the triple_quotes mask has a 1 here, then there's a triple quote here.
-                let byte_is_triple_quote = (triple_quotes & (1 << index).into()).is_nonzero();
+                let byte_is_triple_quote =
+                    (unescaped_triple_quotes & (1 << index).into()).is_nonzero();
                 let byte_is_single_quote = byte == b'\'';
 
                 in_progress =
@@ -467,8 +607,110 @@ impl Env {
                         MaybeToken::NONE
                     };
 
-                // Update the token map.
-                self.token_map.set(
+                // This may be an indent or outdent if our indentation level changed.
+                // None of this affects in_progress.
+                let token_if_is_space = {
+                    // However many spaces we encounter here (which will include the current byte, if it's a space)
+                    // represents the new indentation level of this line (unless this is a blank line).
+                    // This is because if there are any spaces here at all (e.g. byte == ' '),
+                    // they must have been immediately following a newline, because
+                    // the mask we're looping over includes `spaces_after_newline` but not `spaces`.
+                    let indent_spaces = (spaces << index).leading_ones();
+
+                    // Check for a newline or carriage return at (index + 1) where index
+                    // is the last index of a space in this sequence. This will never overflow,
+                    // because if the spaces run into the end of the chunk, then they would already
+                    // have been moved to `trailing_spaces` and removed from `spaces`.
+                    let is_blank_line = newlines_or_carriage_rets.is_1_at(indent_spaces);
+
+                    let indent_delta = indent_spaces as i32 - current_indent;
+                    let mut indent_delta = if is_blank_line { 0 } else { indent_delta };
+
+                    // if indent_stack is empty, we're on the fast path; that means
+                    // all indentations have been single indents that are multiples of 4.
+                    // To continue on the fast path, this must be either an indent of exactly 4 spaces,
+                    // or else an outdent that's a multiple of 4.
+                    let is_4_space_indent = indent_delta == 4;
+                    let is_outdent_multiple_of_4 =
+                        branchless_and(indent_delta < 0, indent_delta % 4 == 0);
+                    let is_fast_path_eligible = branchless_and(
+                        self.indent_stack.is_empty(),
+                        branchless_or(is_4_space_indent, is_outdent_multiple_of_4),
+                    );
+
+                    // It should normally be the case that we're on the fast path,
+                    // because `roc format` puts us on that path every time.
+                    if is_fast_path_eligible {
+                        // For multiline strings, any amount of outdent is an error. We only want
+                        // to record one error per outdent!
+                        let needs_another_outdent =
+                            branchless_and(indent_delta < -4, in_progress != MultiLineStr);
+                        let next_outdent_index = index + 4;
+
+                        // If we need another outdent, this bitmask has a 1 at the next outdent's location.
+                        let next_outdent_mask =
+                            Bitmask::from((needs_another_outdent as u64) << next_outdent_index);
+
+                        // Do some extra assertions in debug builds
+                        #[cfg(debug_assertions)]
+                        if needs_another_outdent {
+                            // If we are on the fast path, we know the outdent is a multiple of 4, and also
+                            // that we detected it inside the current chunk. So there must be at least 4 more
+                            // slots available!
+                            debug_assert!(next_outdent_index < 64);
+
+                            // The next outdent should currently be a zero in loop_mask.
+                            debug_assert_eq!(loop_mask & next_outdent_mask, Bitmask::ZERO);
+
+                            // It should also be a space in the chunk.
+                            debug_assert_eq!(chunk[next_outdent_index as usize], b' ');
+                        }
+
+                        // Set a 1 for loop_mask at the location of the next outdent, so next time
+                        // we come through the loop, we process it too (and discover it's an oudent,
+                        // and possibly repeat this process if necessary. (next_outdent_mask will be 0
+                        // if we aren't outdenting, so this will become a no-op.)
+                        loop_mask |= next_outdent_mask;
+
+                        current_indent += if is_blank_line { 0 } else { indent_delta };
+                        debug_assert!(current_indent >= 0);
+
+                        // In multiline strings, an "indent" just means this particular
+                        // line of the string began with some spaces. Don't record a token for that.
+                        let maybe_indent_token = if in_progress == MultiLineStr {
+                            MaybeToken::none()
+                        } else {
+                            MaybeToken::some(Token::Indent)
+                        };
+
+                        // In multiline strings, an "outdent" is an error. Each line of a multiline string
+                        // must have the same indentation level as the opening quotes!
+                        let maybe_outdent_token = if in_progress == MultiLineStr {
+                            MaybeToken::some(Token::ErrOutdentInMultilineStr)
+                        } else {
+                            MaybeToken::some(Token::Outdent)
+                        };
+
+                        if is_4_space_indent {
+                            maybe_indent_token
+                        } else {
+                            // If we need multiple outdents, we've already handled that scenario.
+                            // The next time we come through the loop, we will repeat this path!
+                            maybe_outdent_token
+                        }
+                    } else {
+                        todo!("slow path with indent_stack, loop to emit multiple outdents")
+                    }
+                };
+
+                let maybe_token = if byte == b' ' {
+                    token_if_is_space
+                } else {
+                    maybe_token
+                };
+
+                // Write to the token map.
+                token_map.set(
                     index,
                     maybe_token,
                     Region {
@@ -489,10 +731,10 @@ impl Env {
 
         self.span_start_offset = span_start_offset;
         self.in_progress = in_progress;
+        self.prev_byte = chunk[63];
+        self.current_indent = current_indent as u32;
 
-        for (token, region) in self.token_map.iter() {
-            listener.emit(token, region.start_offset, region.end_offset);
-        }
+        token_map
     }
 }
 

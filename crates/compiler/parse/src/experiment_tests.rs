@@ -135,12 +135,23 @@ fn chunk_from_str(str: &str) -> Chunk {
     chunk
 }
 
+// TODO get rid of this; it's obsolete
+trait Listener {
+    fn emit(&mut self, token: Token, start_offset: u32, end_offset: u32);
+}
+
 #[cfg(test)]
 fn process_chunk(chunk: Chunk) -> TestOutput {
     let mut env = Env::default();
     let mut output = TestOutput::default();
 
-    env.handle_chunk(chunk, &mut output);
+    let token_map = env.handle_chunk(chunk);
+
+    for (token, region) in token_map.iter() {
+        output.emit(token, region.start_offset, region.end_offset);
+    }
+
+    todo!("Make a test where we allocate 128B on the heap, and try memcpying the slice into every combination (pad with newlines) of byte shifts of up to 64 to the right, and verify that they all get the exact same expected tokens. That tells us we're correctly handling things regardless of boundaries. In fact, in general we should probably try doing this - run tests where we pad source files with 0-64 newlines and make sure everything still works.");
 
     output
 }
