@@ -1,6 +1,6 @@
 use roc_target::TargetInfo;
 
-use super::{InLayout, LayoutRepr};
+use super::{InLayout, LayoutRepr, UnionLayout};
 
 /// The layout of an erasure.
 ///
@@ -56,11 +56,17 @@ impl Erased {
     }
 }
 
-impl<'a> LayoutRepr<'a> {
-    pub fn boxed_erased_value(value: &'a InLayout<'a>) -> Self {
-        Self::Union(super::UnionLayout::NullableUnwrapped {
+impl<'a> UnionLayout<'a> {
+    pub(crate) fn boxed_erased_value(value: &'a InLayout<'a>) -> Self {
+        UnionLayout::NullableUnwrapped {
             nullable_id: true,
             other_fields: std::slice::from_ref(value),
-        })
+        }
+    }
+}
+
+impl<'a> LayoutRepr<'a> {
+    pub(crate) fn boxed_erased_value(value: &'a InLayout<'a>) -> Self {
+        Self::Union(UnionLayout::boxed_erased_value(value))
     }
 }
