@@ -10,91 +10,107 @@
 let
   rustPlatform = pkgs.rustPlatform;
 
+  desiredRustVersion = (builtins.fromTOML (builtins.readFile (./rust-toolchain.toml))).toolchain.channel;
+  actualRustVersion = rustPlatform.rust.rustc;
+  rustVersionsMatch = pkgs.lib.strings.hasSuffix desiredRustVersion actualRustVersion;
+
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
   nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
 in
-rustPlatform.buildRustPackage {
-  pname = "roc";
-  version = "0.0.1";
 
-  src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
+  assert pkgs.lib.assertMsg rustVersionsMatch ''
+    The rust version changed in rust-toolchain.toml but the rev(commit) in nixpkgs.url in flake.nix was not updated.
+    1. clone the nixpkgs repo: `git clone --depth 60000 git@github.com:NixOS/nixpkgs.git`
+    2. `cd nixpkgs`
+    3. `git log --oneline | rg -A 1 "rustc: <RUST_VERSION_IN_RUST_TOOLCHAIN_TOML>"`
+    4. Copy the short SHA from the line **after** the commit with the message of for example `rustc: 1.67.1 -> 1.68.0`
+    5. Find the long SHA by executing `git rev-parse <PASTE>`
+    6. Copy the long SHA
+    7. Paste it in place of the old SHA(rev) in flake.nix:inputs:nixpkgs.url
+  '';
 
-  cargoLock = {
-    lockFile = ./Cargo.lock;
-    outputHashes = {
-      "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
-      "inkwell-0.1.0" = "sha256-1kpvY3naS33B99nuu5ZYhb7mdddAyG+DkbUl/RG1Ptg=";
-      "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
-      "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
+  rustPlatform.buildRustPackage {
+    pname = "roc";
+    version = "0.0.1";
+
+    src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
+
+    cargoLock = {
+      lockFile = ./Cargo.lock;
+      outputHashes = {
+        "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
+        "inkwell-0.1.0" = "sha256-1kpvY3naS33B99nuu5ZYhb7mdddAyG+DkbUl/RG1Ptg=";
+        "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
+        "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
+      };
     };
-  };
 
-  LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+    LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
-  # required for zig
-  XDG_CACHE_HOME =
-    "xdg_cache"; # prevents zig AccessDenied error github.com/ziglang/zig/issues/6810
-  # want to see backtrace in case of failure
-  RUST_BACKTRACE = 1;
+    # required for zig
+    XDG_CACHE_HOME =
+      "xdg_cache"; # prevents zig AccessDenied error github.com/ziglang/zig/issues/6810
+    # want to see backtrace in case of failure
+    RUST_BACKTRACE = 1;
 
-  # skip running rust tests, problems:
-  # building of example platforms requires network: Could not resolve host
-  # zig AccessDenied error github.com/ziglang/zig/issues/6810
-  # Once instance has previously been poisoned ??
-  doCheck = false;
+    # skip running rust tests, problems:
+    # building of example platforms requires network: Could not resolve host
+    # zig AccessDenied error github.com/ziglang/zig/issues/6810
+    # Once instance has previously been poisoned ??
+    doCheck = false;
 
-  nativeBuildInputs = (with pkgs; [
-    cmake
-    git
-    pkg-config
-    python3
-    llvmPkgs.clang
-    llvmPkgs.llvm.dev
-    zig
-  ]);
-
-  buildInputs = (with pkgs;
-    [
-      libffi
-      libiconv
-      libxkbcommon
-      libxml2
-      ncurses
-      zlib
-      cargo
-      makeWrapper # necessary for postBuild wrapProgram
-    ] ++ lib.optionals pkgs.stdenv.isLinux [
-      valgrind
-      vulkan-headers
-      vulkan-loader
-      vulkan-tools
-      vulkan-validation-layers
-      xorg.libX11
-      xorg.libXcursor
-      xorg.libXi
-      xorg.libXrandr
-      xorg.libxcb
-    ] ++ lib.optionals pkgs.stdenv.isDarwin [
-      pkgs.darwin.apple_sdk.frameworks.AppKit
-      pkgs.darwin.apple_sdk.frameworks.CoreFoundation
-      pkgs.darwin.apple_sdk.frameworks.CoreServices
-      pkgs.darwin.apple_sdk.frameworks.CoreVideo
-      pkgs.darwin.apple_sdk.frameworks.Foundation
-      pkgs.darwin.apple_sdk.frameworks.Metal
-      pkgs.darwin.apple_sdk.frameworks.Security
+    nativeBuildInputs = (with pkgs; [
+      cmake
+      git
+      pkg-config
+      python3
+      llvmPkgs.clang
+      llvmPkgs.llvm.dev
+      zig_0_9
     ]);
 
-  # cp: to copy str.zig,list.zig...
-  # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
-  postInstall =
-    if pkgs.stdenv.isLinux then ''
-      wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
-        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-      }
-    '' else ''
-      wrapProgram $out/bin/roc --prefix PATH : ${
-        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-      }
-    '';
-}
+    buildInputs = (with pkgs;
+      [
+        libffi
+        libiconv
+        libxkbcommon
+        libxml2
+        ncurses
+        zlib
+        cargo
+        makeWrapper # necessary for postBuild wrapProgram
+      ] ++ lib.optionals pkgs.stdenv.isLinux [
+        valgrind
+        vulkan-headers
+        vulkan-loader
+        vulkan-tools
+        vulkan-validation-layers
+        xorg.libX11
+        xorg.libXcursor
+        xorg.libXi
+        xorg.libXrandr
+        xorg.libxcb
+      ] ++ lib.optionals pkgs.stdenv.isDarwin [
+        pkgs.darwin.apple_sdk.frameworks.AppKit
+        pkgs.darwin.apple_sdk.frameworks.CoreFoundation
+        pkgs.darwin.apple_sdk.frameworks.CoreServices
+        pkgs.darwin.apple_sdk.frameworks.CoreVideo
+        pkgs.darwin.apple_sdk.frameworks.Foundation
+        pkgs.darwin.apple_sdk.frameworks.Metal
+        pkgs.darwin.apple_sdk.frameworks.Security
+      ]);
+
+    # cp: to copy str.zig,list.zig...
+    # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
+    postInstall =
+      if pkgs.stdenv.isLinux then ''
+        wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
+          pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
+        }
+      '' else ''
+        wrapProgram $out/bin/roc --prefix PATH : ${
+          pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
+        }
+      '';
+  }

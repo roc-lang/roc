@@ -20,6 +20,7 @@ use roc_load::{ExpectMetadata, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
+use roc_target::Target;
 use std::env;
 use std::ffi::{CString, OsStr, OsString};
 use std::io;
@@ -28,11 +29,8 @@ use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::Instant;
-use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
-use target_lexicon::BinaryFormat;
-use target_lexicon::{
-    Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
-};
+use strum::IntoEnumIterator;
+use target_lexicon::{Architecture, Triple};
 #[cfg(not(target_os = "linux"))]
 use tempfile::TempDir;
 
@@ -416,12 +414,10 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         match matches.value_source(ROC_FILE) {
             Some(ValueSource::DefaultValue) => {
                 eprintln!(
-                    "\nThe current directory ({}) does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                    current_dir_string,
-                    DEFAULT_ROC_FILENAME
+                    "\nThe current directory ({current_dir_string}) does not contain a {DEFAULT_ROC_FILENAME} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"
                 )
             }
-            _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", expected_file_path_string),
+            _ => eprintln!("\nThis file was not found: {expected_file_path_string}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"),
         }
 
         process::exit(1);
@@ -565,16 +561,13 @@ pub fn build(
             match matches.value_source(ROC_FILE) {
                 Some(ValueSource::DefaultValue) => {
                     eprintln!(
-                        "\nThe current directory ({}) does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                        current_dir_string,
-                        DEFAULT_ROC_FILENAME
+                        "\nThe current directory ({current_dir_string}) does not contain a {DEFAULT_ROC_FILENAME} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n"
                     )
                 }
                 _ => {
                     let mut error_lines = Vec::new();
                     error_lines.push(format!(
-                        "This file was not found: {}",
-                        expected_file_path_string
+                        "This file was not found: {expected_file_path_string}"
                     ));
                     // Add some additional hints if run as `roc [FILENAME]`.
                     if matches.subcommand().is_none() {
@@ -584,8 +577,7 @@ pub fn build(
                                     nearest_match(possible_typo, subcommands)
                                 {
                                     error_lines.push(format!(
-                                        "Did you mean to use the {} subcommand?",
-                                        nearest_command
+                                        "Did you mean to use the {nearest_command} subcommand?"
                                     ));
                                 }
                             }
@@ -1144,7 +1136,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
         );
     }
 
-    let path = PathBuf::from(format!("/proc/self/fd/{}", fd));
+    let path = PathBuf::from(format!("/proc/self/fd/{fd}"));
 
     std::fs::write(&path, binary_bytes)?;
 
@@ -1274,84 +1266,4 @@ fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path::Path, 
 #[cfg(not(feature = "run-wasm32"))]
 fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path, _args: I) {
     println!("Running wasm files is not supported on this target.");
-}
-
-#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq, Default)]
-pub enum Target {
-    #[strum(serialize = "system")]
-    #[default]
-    System,
-    #[strum(serialize = "linux32")]
-    Linux32,
-    #[strum(serialize = "linux64")]
-    Linux64,
-    #[strum(serialize = "windows64")]
-    Windows64,
-    #[strum(serialize = "wasm32")]
-    Wasm32,
-}
-
-impl Target {
-    pub fn to_triple(self) -> Triple {
-        use Target::*;
-
-        match self {
-            System => Triple::host(),
-            Linux32 => Triple {
-                architecture: Architecture::X86_32(X86_32Architecture::I386),
-                vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Linux,
-                environment: Environment::Musl,
-                binary_format: BinaryFormat::Elf,
-            },
-            Linux64 => Triple {
-                architecture: Architecture::X86_64,
-                vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Linux,
-                environment: Environment::Musl,
-                binary_format: BinaryFormat::Elf,
-            },
-            Windows64 => Triple {
-                architecture: Architecture::X86_64,
-                vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Windows,
-                environment: Environment::Gnu,
-                binary_format: BinaryFormat::Coff,
-            },
-            Wasm32 => Triple {
-                architecture: Architecture::Wasm32,
-                vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Wasi,
-                environment: Environment::Unknown,
-                binary_format: BinaryFormat::Wasm,
-            },
-        }
-    }
-}
-
-impl From<&Target> for Triple {
-    fn from(target: &Target) -> Self {
-        target.to_triple()
-    }
-}
-
-impl std::fmt::Display for Target {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", Into::<&'static str>::into(self))
-    }
-}
-
-impl std::str::FromStr for Target {
-    type Err = String;
-
-    fn from_str(string: &str) -> Result<Self, Self::Err> {
-        match string {
-            "system" => Ok(Target::System),
-            "linux32" => Ok(Target::Linux32),
-            "linux64" => Ok(Target::Linux64),
-            "windows64" => Ok(Target::Windows64),
-            "wasm32" => Ok(Target::Wasm32),
-            _ => Err(format!("Roc does not know how to compile to {}", string)),
-        }
-    }
 }

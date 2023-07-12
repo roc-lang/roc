@@ -74,8 +74,8 @@ roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Stmt, 12 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 13 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 5 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
@@ -181,8 +181,7 @@ impl<'a> PartialProcs<'a> {
     pub fn insert(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) -> PartialProcId {
         debug_assert!(
             !self.contains_key(symbol),
-            "The {:?} is inserted as a partial proc twice: that's a bug!",
-            symbol,
+            "The {symbol:?} is inserted as a partial proc twice: that's a bug!",
         );
 
         let id = PartialProcId(self.symbols.len());
@@ -675,7 +674,7 @@ impl<'a> Specialized<'a> {
                 } else {
                     match in_progress {
                         InProgressProc::InProgress => {
-                            panic!("Function {:?} ({:?}) is not done specializing", s, l)
+                            panic!("Function {s:?} ({l:?}) is not done specializing")
                         }
                         InProgressProc::Done(proc) => Some((s, l, proc)),
                     }
@@ -838,11 +837,7 @@ impl<'a> SymbolSpecializations<'a> {
     /// Only those bound to number literals can be compiled polymorphically.
     fn mark_eligible(&mut self, symbol: Symbol) {
         let _old = self.0.insert(symbol, VecMap::with_capacity(1));
-        debug_assert!(
-            _old.is_none(),
-            "overwriting specializations for {:?}",
-            symbol
-        );
+        debug_assert!(_old.is_none(), "overwriting specializations for {symbol:?}");
     }
 
     /// Removes all specializations for a symbol, returning the type and symbol of each specialization.
@@ -945,8 +940,7 @@ impl<'a> Procs<'a> {
             .expect("specialization stack is empty");
         debug_assert_eq!(
             popped, specialization,
-            "incorrect popped specialization: passed {:?}, but was {:?}",
-            specialization, popped
+            "incorrect popped specialization: passed {specialization:?}, but was {popped:?}"
         );
     }
 
@@ -1026,7 +1020,7 @@ impl<'a> Procs<'a> {
     ) -> Result<ProcLayout<'a>, RuntimeError> {
         let raw_layout = layout_cache
             .raw_from_var(env.arena, annotation, env.subs)
-            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
         let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
@@ -1054,7 +1048,7 @@ impl<'a> Procs<'a> {
                 // if we've already specialized this one, no further work is needed.
                 if !already_specialized {
                     if self.is_module_thunk(name.name()) {
-                        debug_assert!(layout.arguments.is_empty(), "{:?}", name);
+                        debug_assert!(layout.arguments.is_empty(), "{name:?}");
                     }
 
                     let needs_suspended_specialization =
@@ -1145,7 +1139,7 @@ impl<'a> Procs<'a> {
                                     );
                                 }
                                 Err(error) => {
-                                    panic!("TODO generate a RuntimeError message for {:?}", error);
+                                    panic!("TODO generate a RuntimeError message for {error:?}");
                                 }
                             }
                         }
@@ -1234,7 +1228,7 @@ impl<'a> Procs<'a> {
                             .insert_specialized(proc_name.name(), proc_layout, proc);
                     }
                     Err(error) => {
-                        panic!("TODO generate a RuntimeError message for {:?}", error);
+                        panic!("TODO generate a RuntimeError message for {error:?}");
                     }
                 }
             }
@@ -1878,14 +1872,6 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
-    ExprBox {
-        symbol: Symbol,
-    },
-
-    ExprUnbox {
-        symbol: Symbol,
-    },
-
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -1926,13 +1912,13 @@ pub(crate) fn symbol_to_doc_string(symbol: Symbol, force_pretty: bool) -> String
     use roc_module::ident::ModuleName;
 
     if pretty_print_ir_symbols() || force_pretty {
-        format!("{:?}", symbol)
+        format!("{symbol:?}")
     } else {
-        let text = format!("{}", symbol);
+        let text = format!("{symbol}");
 
         if text.starts_with(ModuleName::APP) {
             let name: String = text.trim_start_matches(ModuleName::APP).into();
-            format!("Test{}", name)
+            format!("Test{name}")
         } else {
             text
         }
@@ -2024,7 +2010,7 @@ impl<'a> Expr<'a> {
                 .text("Reset { symbol: ")
                 .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(", id: ")
-                .append(format!("{:?}", update_mode))
+                .append(format!("{update_mode:?}"))
                 .append(" }"),
             ResetRef {
                 symbol,
@@ -2033,7 +2019,7 @@ impl<'a> Expr<'a> {
                 .text("ResetRef { symbol: ")
                 .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(", id: ")
-                .append(format!("{:?}", update_mode))
+                .append(format!("{update_mode:?}"))
                 .append(" }"),
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
@@ -2066,14 +2052,6 @@ impl<'a> Expr<'a> {
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
-
-            ExprBox { symbol, .. } => alloc
-                .text("Box ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
-
-            ExprUnbox { symbol, .. } => alloc
-                .text("Unbox ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
 
             UnionAtIndex {
                 tag_id,
@@ -2117,6 +2095,24 @@ impl<'a> Expr<'a> {
             },
             arguments: std::slice::from_ref(symbol),
         })
+    }
+
+    pub(crate) fn expr_box(symbol: &'a Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
+        Expr::Tag {
+            tag_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
+            tag_id: 0,
+            arguments: std::slice::from_ref(symbol),
+            reuse: None,
+        }
+    }
+
+    pub(crate) fn expr_unbox(symbol: Symbol, element_layout: &'a InLayout<'a>) -> Expr<'a> {
+        Expr::UnionAtIndex {
+            structure: symbol,
+            tag_id: 0,
+            union_layout: UnionLayout::NonNullableUnwrapped(std::slice::from_ref(element_layout)),
+            index: 0,
+        }
     }
 }
 
@@ -3034,7 +3030,7 @@ fn specialize_external_help<'a>(
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
         None => {
-            panic!("Cannot find a partial proc for {:?}", name);
+            panic!("Cannot find a partial proc for {name:?}");
         }
     };
 
@@ -3763,8 +3759,7 @@ fn build_specialized_proc<'a>(
             debug_assert_eq!(
                 pattern_layouts_len + 1,
                 pattern_symbols.len(),
-                "Tried to zip two vecs with different lengths in {:?}!",
-                proc_name,
+                "Tried to zip two vecs with different lengths in {proc_name:?}!",
             );
 
             let proc_args = proc_args.into_bump_slice();
@@ -3804,14 +3799,12 @@ fn build_specialized_proc<'a>(
                         // so far, the problem when hitting this branch was always somewhere else
                         // I think this branch should not be reachable in a bugfree compiler
                         panic!(
-                            "more arguments (according to the layout) than argument symbols for {:?}",
-                            proc_name
+                            "more arguments (according to the layout) than argument symbols for {proc_name:?}"
                         )
                     }
                 }
                 Ordering::Less => panic!(
-                    "more argument symbols than arguments (according to the layout) for {:?}",
-                    proc_name
+                    "more argument symbols than arguments (according to the layout) for {proc_name:?}"
                 ),
             }
         }
@@ -3843,14 +3836,12 @@ fn build_specialized_proc<'a>(
                         // so far, the problem when hitting this branch was always somewhere else
                         // I think this branch should not be reachable in a bugfree compiler
                         panic!(
-                            "more arguments (according to the layout) than argument symbols for {:?}",
-                            proc_name
+                            "more arguments (according to the layout) than argument symbols for {proc_name:?}"
                         )
                     }
                 }
                 Ordering::Less => panic!(
-                    "more argument symbols than arguments (according to the layout) for {:?}",
-                    proc_name
+                    "more argument symbols than arguments (according to the layout) for {proc_name:?}"
                 ),
             }
         }
@@ -3879,7 +3870,7 @@ fn specialize_variable<'a>(
     // TODO: can we get rid of raw entirely?
     let raw = layout_cache
         .raw_from_var(env.arena, fn_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {err:?}"));
 
     let raw = if procs.is_module_thunk(proc_name.name()) {
         match raw {
@@ -4041,7 +4032,7 @@ fn specialize_naked_symbol<'a>(
         return result;
     } else if env.is_imported_symbol(symbol) {
         match layout_cache.from_var(env.arena, variable, env.subs) {
-            Err(e) => panic!("invalid layout {:?}", e),
+            Err(e) => panic!("invalid layout {e:?}"),
             Ok(_) => {
                 // this is a 0-arity thunk
                 let result = call_by_name(
@@ -4571,7 +4562,7 @@ pub fn with_hole<'a>(
                         let layout = layout_cache
                             .from_var(env.arena, branch_var, env.subs)
                             .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                                panic!("TODO turn fn_var into a RuntimeError {err:?}")
                             });
 
                         let param = Param {
@@ -4637,7 +4628,7 @@ pub fn with_hole<'a>(
 
             let layout = layout_cache
                 .from_var(env.arena, expr_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             let param = Param {
                 symbol: assigned,
@@ -4690,7 +4681,7 @@ pub fn with_hole<'a>(
 
             let elem_layout = layout_cache
                 .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             for arg_expr in loc_elems.into_iter() {
                 if let Some(literal) =
@@ -5031,7 +5022,7 @@ pub fn with_hole<'a>(
 
             let record_layout = layout_cache
                 .from_var(env.arena, record_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             let field_layouts = match layout_cache.get_repr(record_layout) {
                 LayoutRepr::Struct(field_layouts) => field_layouts,
@@ -5179,7 +5170,7 @@ pub fn with_hole<'a>(
                     if let Err(e) = inserted {
                         return runtime_error(
                             env,
-                            env.arena.alloc(format!("RuntimeError: {:?}", e,)),
+                            env.arena.alloc(format!("RuntimeError: {e:?}",)),
                         );
                     } else {
                         drop(inserted);
@@ -5614,13 +5605,22 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprBox { symbol: x }, layout, hole)
+                    let element_layout = match layout_cache.interner.get_repr(layout) {
+                        LayoutRepr::Union(UnionLayout::NonNullableUnwrapped([l])) => l,
+                        _ => unreachable!("invalid layout for a box expression"),
+                    };
+
+                    let expr = Expr::expr_box(arena.alloc(x), element_layout);
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 UnboxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
+                    let expr = Expr::expr_unbox(x, arena.alloc(layout));
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 _ => {
                     let call = self::Call {
@@ -5743,7 +5743,7 @@ fn compile_struct_like_access<'a>(
 
             let layout = layout_cache
                 .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             Stmt::Let(assigned, expr, layout, hole)
         }
@@ -6186,7 +6186,7 @@ fn convert_tag_union<'a>(
             // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
             let layout = layout_cache
                 .from_var(env.arena, variant_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             // even though this was originally a Tag, we treat it as a Struct from now on
             let stmt = if let [only_field] = field_symbols {
@@ -6220,7 +6220,7 @@ fn convert_tag_union<'a>(
                 // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
                 let layout = layout_cache
                     .from_var(env.arena, variant_var, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
                 // even though this was originally a Tag, we treat it as a Struct from now on
                 let stmt = if let [only_field] = field_symbols {
@@ -6485,8 +6485,7 @@ fn tag_union_to_function<'a>(
         Err(e) => runtime_error(
             env,
             env.arena.alloc(format!(
-                "Could not produce tag function due to a runtime error: {:?}",
-                e,
+                "Could not produce tag function due to a runtime error: {e:?}",
             )),
         ),
     }
@@ -7652,14 +7651,6 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        ExprBox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
-        }
-
-        ExprUnbox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
-        }
-
         StructAtIndex {
             index,
             structure,
@@ -8281,17 +8272,13 @@ fn call_by_name<'a>(
     match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
-                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
-                var, proc_name, fn_var
+                "Hit an unresolved type variable {var:?} when creating a layout for {proc_name:?} (var {fn_var:?})"
             );
 
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Err(LayoutProblem::Erroneous) => {
-            let msg = format!(
-                "Hit an erroneous type when creating a layout for {:?}",
-                proc_name
-            );
+            let msg = format!("Hit an erroneous type when creating a layout for {proc_name:?}");
 
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
@@ -8443,9 +8430,7 @@ fn call_by_name_help<'a>(
         Some(name) => {
             debug_assert!(
                 iter_lambda_names.next().is_none(),
-                "Somehow, call by name for {:?} has multiple capture niches: {:?}",
-                proc_name,
-                lambda_set
+                "Somehow, call by name for {proc_name:?} has multiple capture niches: {lambda_set:?}"
             );
             name
         }
@@ -8484,8 +8469,7 @@ fn call_by_name_help<'a>(
         debug_assert_eq!(
             argument_layouts.len(),
             field_symbols.len(),
-            "see call_by_name for background (scroll down a bit), function is {:?}",
-            proc_name,
+            "see call_by_name for background (scroll down a bit), function is {proc_name:?}",
         );
         call_specialized_proc(
             env,
@@ -8536,8 +8520,7 @@ fn call_by_name_help<'a>(
             debug_assert_eq!(
                 argument_layouts.len(),
                 field_symbols.len(),
-                "see call_by_name for background (scroll down a bit), function is {:?}",
-                proc_name,
+                "see call_by_name for background (scroll down a bit), function is {proc_name:?}",
             );
 
             let field_symbols = field_symbols.into_bump_slice();
@@ -8589,8 +8572,7 @@ fn call_by_name_help<'a>(
                 debug_assert_eq!(
                     argument_layouts.len(),
                     field_symbols.len(),
-                    "see call_by_name for background (scroll down a bit), function is {:?}",
-                    proc_name,
+                    "see call_by_name for background (scroll down a bit), function is {proc_name:?}",
                 );
 
                 let field_symbols = field_symbols.into_bump_slice();
@@ -8781,8 +8763,7 @@ fn call_by_name_module_thunk<'a>(
                             Ok((proc, raw_layout)) => {
                                 debug_assert!(
                                     raw_layout.is_zero_argument_thunk(),
-                                    "but actually {:?}",
-                                    raw_layout
+                                    "but actually {raw_layout:?}"
                                 );
 
                                 let was_present = procs
@@ -9041,10 +9022,9 @@ where
             }
             None => {
                 eprintln!(
-                    "a function passed to `{:?}` LowLevel call has an empty lambda set!
+                    "a function passed to `{op:?}` LowLevel call has an empty lambda set!
                      The most likely reason is that some symbol you use is not in scope.
-                    ",
-                    op
+                    "
                 );
 
                 hole.clone()
@@ -9912,9 +9892,6 @@ where
                     stack.push(layout_interner.get(*in_layout));
                 }
             }
-            LayoutRepr::Boxed(boxed) => {
-                stack.push(layout_interner.get(boxed));
-            }
             LayoutRepr::Ptr(inner) => {
                 stack.push(layout_interner.get(inner));
             }
@@ -9985,8 +9962,9 @@ where
     I: LayoutInterner<'a>,
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout).direct());
+    let union_layout =
+        UnionLayout::NonNullableUnwrapped(arena.alloc([interned_unboxed_struct_layout]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10026,7 +10004,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned_unboxed_struct_layout));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10072,7 +10050,7 @@ fn unique_glue_symbol(
     use std::fmt::Write;
     let mut string = bumpalo::collections::String::with_capacity_in(32, arena);
 
-    let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
+    let _result = write!(&mut string, "roc__getter_{module_name}_{unique_id}");
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
     let bump_string = string.into_bump_str();
@@ -10097,7 +10075,8 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned).direct());
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([interned]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(box_union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10126,8 +10105,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
-
+        let unbox_expr = Expr::expr_unbox(argument, arena.alloc(interned));
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 
         let proc = Proc {

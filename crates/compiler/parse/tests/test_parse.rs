@@ -81,7 +81,7 @@ mod test_parse {
     #[test]
     fn string_with_escaped_char_at_end() {
         parses_with_escaped_char(
-            |esc| format!(r#""abcd{}""#, esc),
+            |esc| format!(r#""abcd{esc}""#),
             |esc, arena| bumpalo::vec![in arena;  Plaintext("abcd"), EscapedChar(esc)],
         );
     }
@@ -89,7 +89,7 @@ mod test_parse {
     #[test]
     fn string_with_escaped_char_in_front() {
         parses_with_escaped_char(
-            |esc| format!(r#""{}abcd""#, esc),
+            |esc| format!(r#""{esc}abcd""#),
             |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abcd")],
         );
     }
@@ -97,7 +97,7 @@ mod test_parse {
     #[test]
     fn string_with_escaped_char_in_middle() {
         parses_with_escaped_char(
-            |esc| format!(r#""ab{}cd""#, esc),
+            |esc| format!(r#""ab{esc}cd""#),
             |esc, arena| bumpalo::vec![in arena; Plaintext("ab"), EscapedChar(esc), Plaintext("cd")],
         );
     }
@@ -105,7 +105,7 @@ mod test_parse {
     #[test]
     fn string_with_multiple_escaped_chars() {
         parses_with_escaped_char(
-            |esc| format!(r#""{}abc{}de{}fghi{}""#, esc, esc, esc, esc),
+            |esc| format!(r#""{esc}abc{esc}de{esc}fghi{esc}""#),
             |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abc"), EscapedChar(esc), Plaintext("de"), EscapedChar(esc), Plaintext("fghi"), EscapedChar(esc)],
         );
     }
@@ -247,7 +247,7 @@ mod test_parse {
         // These can potentially be whole numbers. `Display` omits the decimal point for those,
         // causing them to no longer be parsed as fractional numbers by Roc.
         // Using `Debug` instead of `Display` ensures they always have a decimal point.
-        let float_string = format!("{:?}", num);
+        let float_string = format!("{num:?}");
 
         assert_parses_to(float_string.as_str(), Float(float_string.as_str()));
     }
@@ -284,7 +284,7 @@ mod test_parse {
 
         // It should occur twice in the debug output - once for the pattern,
         // and then again for the lookup.
-        let occurrences = format!("{:?}", actual).split("isTest").count() - 1;
+        let occurrences = format!("{actual:?}").split("isTest").count() - 1;
 
         assert_eq!(occurrences, 2);
     }

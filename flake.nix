@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=9f4346eac544cc0db5eb7d889e71eac0f9c8b9eb";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=d7887373fe0731719365831cd254c1e5948307d3";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -90,7 +90,7 @@
           llvmPkgs.clang
           libxkbcommon
           pkg-config
-          zig # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zig_0_9 # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
           # lib deps
           libffi

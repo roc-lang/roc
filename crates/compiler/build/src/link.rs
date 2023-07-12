@@ -161,7 +161,7 @@ pub fn build_zig_host_native(
 
     zig_cmd.args([
         zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
+        &format!("-femit-bin={emit_bin}"),
         "--pkg-begin",
         "glue",
         find_zig_glue_path().to_str().unwrap(),
@@ -399,7 +399,7 @@ pub fn build_swift_host_native(
 
     match arch {
         Architecture::Aarch64(_) => command.arg("-arm64"),
-        _ => command.arg(format!("-{}", arch)),
+        _ => command.arg(format!("-{arch}")),
     };
 
     command
@@ -530,7 +530,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2022-10-30", "cargo"]);
+            cmd.args(["run", "nightly-2022-12-09", "cargo"]);
 
             cmd
         } else {
@@ -928,7 +928,7 @@ fn link_linux(
                     .map(|segments| segments.join("/"))
                     .collect::<Vec<String>>()
                     .join("\n");
-                eprintln!("We looked in the following directories:\n{}", dirs);
+                eprintln!("We looked in the following directories:\n{dirs}");
                 process::exit(1);
             }
         };
@@ -1085,8 +1085,8 @@ fn link_macos(
 
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
-        ld_command.arg(format!("-L{}", sdk_path));
-        ld_command.arg(format!("-L{}/swift", sdk_path));
+        ld_command.arg(format!("-L{sdk_path}"));
+        ld_command.arg(format!("-L{sdk_path}/swift"));
     };
 
     let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
@@ -1288,9 +1288,7 @@ pub fn llvm_module_to_dylib(
 
     assert!(
         exit_status.success(),
-        "\n___________\nLinking command failed with status {:?}:\n\n  {:?}\n___________\n",
-        exit_status,
-        child
+        "\n___________\nLinking command failed with status {exit_status:?}:\n\n  {child:?}\n___________\n"
     );
 
     // Load the dylib

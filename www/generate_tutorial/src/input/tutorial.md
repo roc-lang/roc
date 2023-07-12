@@ -126,7 +126,7 @@ Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -427,11 +427,11 @@ Roc supports optional record fields using the `?` operator. This can be a useful
 In Roc you can write a function like:
 
 ```roc
-table = \{ 
-        height, 
-        width, 
-        title? "oak", 
-        description? "a wooden table" 
+table = \{
+        height,
+        width,
+        title? "oak",
+        description? "a wooden table"
     }
     ->
 ```
@@ -469,7 +469,7 @@ optional field, you'll get a compile error.
 This means it's never possible to end up with an *optional value* that exists
 outside a record field. Optionality is a concept that exists only in record
 fields, and it's intended for the use case of config records like this. The
-ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead. 
+ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead.
 
 ## [Tags](#tags) {#tags}
 
@@ -1114,10 +1114,10 @@ Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, b
 
 A type can be defined to be opaque to hide its internal structure. This is a lot more amazing than it may seem. It can make your code more modular, robust, and easier to read:
 - If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
-- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case. 
+- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case.
 - Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
 
-You can create an opaque type with the `:=` operator. Let's make one called `Username`:	
+You can create an opaque type with the `:=` operator. Let's make one called `Username`:
 
 ```roc
 Username := Str
@@ -1337,7 +1337,7 @@ So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
 
 Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
 
-- **Builtins** provide functions that are automatically imported into every module. 
+- **Builtins** provide functions that are automatically imported into every module.
 - **Applications** are combined with a platform and compiled into an executable.
 - **Interfaces** provide functions which can be imported into other modules.
 - **Packages** organise modules to share functionality across applications and platforms.
@@ -1371,7 +1371,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1383,7 +1383,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1422,11 +1422,11 @@ See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/p
 
 Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
 
-Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.  
+Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.
 
 You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
 
-How does the Roc cli import and download a package from a URL? 
+How does the Roc cli import and download a package from a URL?
 
 1. First it checks to see whether the relevant folder already exists in the local filesystem and if not, creates it. If there is a package already downloaded then there is no need to download or extract anything. Packages are cached in a directory, typically `~/.cache/roc` on UNIX, and `%APPDATA%\\Roc` on Windows.
 2. It then downloads the file at that URL and verifies that the hash of the file matches the hash at the end of the URL.
@@ -1438,7 +1438,7 @@ Including the hash solves a number of problems:
 
 1. The package at the URL can not suddenly change and cause different behavior.
 2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
-3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.   
+3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.
 
 ### [Interface Modules](#interface-modules) {#interface-modules}
 
@@ -1469,7 +1469,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1499,7 +1499,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1540,7 +1540,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
@@ -1960,7 +1960,7 @@ For this reason, any time you see a function that only runs a `when` on its only
 Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression                    |    Desugars To     |
-| ----------------------------- | ------------------ | 
+| ----------------------------- | ------------------ |
 | `a + b`                       |   `Num.add a b`    |
 | `a - b`                       |   `Num.sub a b`    |
 | `a * b`                       |   `Num.mul a b`    |

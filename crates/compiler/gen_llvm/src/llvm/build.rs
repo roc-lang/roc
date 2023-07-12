@@ -51,7 +51,7 @@ use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
 use std::convert::TryInto;
 use std::path::Path;
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::{Aarch64Architecture, Architecture, OperatingSystem, Triple};
 
 use super::convert::{struct_type_from_union_layout, RocUnion};
 use super::intrinsics::{
@@ -263,7 +263,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let fn_val = self
             .module
             .get_function(intrinsic_name)
-            .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
+            .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {intrinsic_name}"));
 
         let mut arg_vals: Vec<BasicMetadataValueEnum> =
             Vec::with_capacity_in(args.len(), self.arena);
@@ -289,10 +289,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let call = self.build_intrinsic_call(intrinsic_name, args);
 
         call.try_as_basic_value().left().unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Invalid call by name for intrinsic {}",
-                intrinsic_name
-            )
+            panic!("LLVM error: Invalid call by name for intrinsic {intrinsic_name}")
         })
     }
 
@@ -492,23 +489,27 @@ pub fn module_from_builtins<'ctx>(
                 include_bytes!("../../../builtins/bitcode/builtins-x86_64.bc")
             }
             Triple {
+                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
+                operating_system: OperatingSystem::Linux,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-aarch64.bc")
+            }
+            Triple {
                 architecture: Architecture::X86_64,
                 operating_system: OperatingSystem::Windows,
                 ..
             } => {
                 include_bytes!("../../../builtins/bitcode/builtins-windows-x86_64.bc")
             }
-            _ => panic!(
-                "The zig builtins are not currently built for this target: {:?}",
-                target
-            ),
+            _ => panic!("The zig builtins are not currently built for this target: {target:?}"),
         }
     };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
-        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
+        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {err:?}"));
 
     // Add LLVM intrinsics.
     add_intrinsics(ctx, &module);
@@ -766,7 +767,7 @@ pub fn build_exp_literal<'a, 'ctx>(
             LayoutRepr::Builtin(Builtin::Int(int_width)) => {
                 int_with_precision(env, i128::from_ne_bytes(*bytes), int_width).into()
             }
-            _ => panic!("Invalid layout for int literal = {:?}", layout),
+            _ => panic!("Invalid layout for int literal = {layout:?}"),
         },
 
         U128(bytes) => const_u128(env, u128::from_ne_bytes(*bytes)).into(),
@@ -775,7 +776,7 @@ pub fn build_exp_literal<'a, 'ctx>(
             LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                 float_with_precision(env, *float, float_width)
             }
-            _ => panic!("Invalid layout for float literal = {:?}", layout),
+            _ => panic!("Invalid layout for float literal = {layout:?}"),
         },
 
         Decimal(bytes) => {
@@ -1081,42 +1082,6 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 arguments,
                 reuse_ptr,
                 parent,
-            )
-        }
-
-        ExprBox { symbol } => {
-            let (value, layout) = scope.load_symbol_and_layout(symbol);
-            let basic_type =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-            let allocation = reserve_with_refcount_help(
-                env,
-                basic_type,
-                layout_interner.stack_size(layout),
-                layout_interner.alignment_bytes(layout),
-            );
-
-            store_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(layout),
-                allocation,
-                value,
-            );
-
-            allocation.into()
-        }
-
-        ExprUnbox { symbol } => {
-            let value = scope.load_symbol(symbol);
-
-            debug_assert!(value.is_pointer_value());
-
-            load_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(layout),
-                value.into_pointer_value(),
-                "load_boxed_value",
             )
         }
 
@@ -2092,7 +2057,7 @@ pub fn get_tag_id<'a, 'ctx>(
 
     match union_layout {
         UnionLayout::NonRecursive(_) => {
-            debug_assert!(argument.is_pointer_value(), "{:?}", argument);
+            debug_assert!(argument.is_pointer_value(), "{argument:?}");
 
             let argument_ptr = argument.into_pointer_value();
             get_tag_id_wrapped(env, layout_interner, *union_layout, argument_ptr)
@@ -3550,10 +3515,7 @@ fn build_switch_ir<'a, 'ctx>(
             layout_interner,
             layout_interner.get_repr(stored_layout)
         ),
-        "This switch matches on {:?}, but the matched-on symbol {:?} has layout {:?}",
-        cond_layout,
-        cond_symbol,
-        stored_layout
+        "This switch matches on {cond_layout:?}, but the matched-on symbol {cond_symbol:?} has layout {stored_layout:?}"
     );
 
     let cont_block = context.append_basic_block(parent, "cont");
@@ -3659,7 +3621,7 @@ fn build_switch_ir<'a, 'ctx>(
                 condition_int_type.const_int(*int, false)
             };
 
-            let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
+            let block = context.append_basic_block(parent, format!("branch{int}").as_str());
 
             cases.push((int_val, block));
         }
@@ -4068,7 +4030,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
         &[],
     );
 
-    let size_function_name: String = format!("roc__{}_size", ident_string);
+    let size_function_name: String = format!("roc__{ident_string}_size");
 
     let size_function = add_func(
         env.context,
@@ -4368,7 +4330,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
         roc_function,
         arguments,
         return_layout,
-        &format!("{}_generic", c_function_name),
+        &format!("{c_function_name}_generic"),
     );
 
     let c_function = expose_function_to_host_help_c_abi_v2(
@@ -4387,7 +4349,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
-    let size_function_name: String = format!("{}_size", c_function_name);
+    let size_function_name: String = format!("{c_function_name}_size");
 
     let size_function = add_func(
         env.context,
@@ -5034,7 +4996,7 @@ pub fn build_procedures_expose_expects<'a>(
         let mut it = func_solutions.specs();
         let func_spec = match it.next() {
             Some(spec) => spec,
-            None => panic!("no specialization for expect {}", symbol),
+            None => panic!("no specialization for expect {symbol}"),
         };
 
         debug_assert!(
@@ -5048,7 +5010,7 @@ pub fn build_procedures_expose_expects<'a>(
 
         let name = roc_main_fn.get_name().to_str().unwrap();
 
-        let expect_name = &format!("Expect_{}", name);
+        let expect_name = &format!("Expect_{name}");
         let expect_name = env.arena.alloc_str(expect_name);
         expect_names.push(&*expect_name);
 
@@ -5060,7 +5022,7 @@ pub fn build_procedures_expose_expects<'a>(
             roc_main_fn,
             top_level.arguments,
             top_level.result,
-            &format!("Expect_{}", name),
+            &format!("Expect_{name}"),
         );
     }
 
@@ -5087,7 +5049,7 @@ fn build_procedures_help<'a>(
         entry_point,
         it,
     ) {
-        Err(e) => panic!("Error in alias analysis: {}", e),
+        Err(e) => panic!("Error in alias analysis: {e}"),
         Ok(solutions) => solutions,
     };
 
@@ -5183,10 +5145,10 @@ fn func_spec_name<'a>(
 
     let ident_string = symbol.as_str(interns);
     let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
-    write!(buf, "{}_{}_", module_string, ident_string).unwrap();
+    write!(buf, "{module_string}_{ident_string}_").unwrap();
 
     for byte in func_spec.0.iter() {
-        write!(buf, "{:x?}", byte).unwrap();
+        write!(buf, "{byte:x?}").unwrap();
     }
 
     buf
@@ -5391,7 +5353,7 @@ fn build_closure_caller<'a, 'ctx>(
     // STEP 1: build function header
 
     // e.g. `roc__mainForHost_0_caller` (def_name is `mainForHost_0`)
-    let function_name = format!("roc__{}_caller", def_name);
+    let function_name = format!("roc__{def_name}_caller");
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
@@ -5503,9 +5465,9 @@ fn build_host_exposed_alias_size_help<'a, 'ctx>(
     let i64 = env.context.i64_type().as_basic_type_enum();
     let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
-        format!("roc__{}_{}_size", def_name, label)
+        format!("roc__{def_name}_{label}_size")
     } else {
-        format!("roc__{}_size", def_name,)
+        format!("roc__{def_name}_size",)
     };
 
     let size_function = add_func(
@@ -5640,10 +5602,7 @@ fn function_value_by_name_help<'a, 'ctx>(
             );
             eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
 
-            panic!(
-                "Unrecognized builtin function: {:?} (symbol: {:?})",
-                fn_name, symbol,
-            )
+            panic!("Unrecognized builtin function: {fn_name:?} (symbol: {symbol:?})",)
         } else {
             // Unrecognized non-builtin function:
             eprintln!(
@@ -5654,10 +5613,7 @@ fn function_value_by_name_help<'a, 'ctx>(
             );
             eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
 
-            panic!(
-                "Unrecognized non-builtin function: {:?} (symbol: {:?})",
-                fn_name, symbol,
-            )
+            panic!("Unrecognized non-builtin function: {fn_name:?} (symbol: {symbol:?})",)
         }
     })
 }
@@ -6318,7 +6274,7 @@ fn define_global_str_literal<'ctx>(
         message.hash(&mut hasher);
         let hash = hasher.finish();
 
-        format!("_str_literal_{}", hash)
+        format!("_str_literal_{hash}")
     };
 
     match module.get_global(&name) {
@@ -6419,7 +6375,7 @@ pub fn add_func<'ctx>(
 ) -> FunctionValue<'ctx> {
     if cfg!(debug_assertions) {
         if let Some(func) = module.get_function(name) {
-            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:#?}", name, func);
+            panic!("Attempting to redefine LLVM function {name}, which was already defined in this module as:\n\n{func:#?}");
         }
     }
 

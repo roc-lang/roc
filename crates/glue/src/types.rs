@@ -521,8 +521,7 @@ impl Types {
             } else {
                 // TODO report this gracefully!
                 panic!(
-                    "Duplicate name detected - {:?} could refer to either {:?} or {:?}",
-                    name, existing_type, typ
+                    "Duplicate name detected - {name:?} could refer to either {existing_type:?} or {typ:?}"
                 );
             }
         } else {
@@ -1213,8 +1212,7 @@ impl<'a> Env<'a> {
 
             debug_assert!(
                 matches!(types.get_type(type_id), RocType::RecursivePointer(TypeId::PENDING)),
-                "The TypeId {:?} was registered as a pending recursive pointer, but was not stored in Types as one.",
-                type_id
+                "The TypeId {type_id:?} was registered as a pending recursive pointer, but was not stored in Types as one."
             );
 
             // size and alignment shouldn't change; this is still
@@ -1267,7 +1265,7 @@ fn add_function_type<'a>(
     let args = env.subs.get_subs_slice(*args);
     let mut arg_type_ids = Vec::with_capacity(args.len());
 
-    let name = format!("RocFunction_{:?}", closure_var);
+    let name = format!("RocFunction_{closure_var:?}");
 
     let id = env.lambda_set_ids.get(&closure_var).unwrap();
     let extern_name = format!("roc__mainForHost_{}_caller", id.0);
@@ -1851,7 +1849,7 @@ where
                         getter: getter.clone(),
                     };
 
-                    (format!("{}", label), type_id, accessors)
+                    (format!("{label}"), type_id, accessors)
                 })
                 .collect();
 
@@ -1865,7 +1863,7 @@ where
                 .map(|(label, field_var, field_layout)| {
                     let type_id = add_type_help(env, field_layout, field_var, None, types);
 
-                    (format!("{}", label), type_id)
+                    (format!("{label}"), type_id)
                 })
                 .collect();
 
@@ -2086,16 +2084,6 @@ fn tag_union_type_from_layout<'a>(
             }
         }
         LayoutRepr::Ptr(_) => unreachable!("Ptr values are never publicly exposed"),
-        LayoutRepr::Boxed(elem_layout) => {
-            let (tag_name, payload_fields) =
-                single_tag_payload_fields(env, union_tags, subs, layout, &[elem_layout], types);
-
-            RocTagUnion::SingleTagStruct {
-                name: name.clone(),
-                tag_name,
-                payload: payload_fields,
-            }
-        }
         LayoutRepr::LambdaSet(lambda_set) => tag_union_type_from_layout(
             env,
             opt_name,

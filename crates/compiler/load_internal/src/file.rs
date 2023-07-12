@@ -175,7 +175,7 @@ fn start_phase<'a>(
 
                 match opt_dep_name {
                     None => {
-                        panic!("Module {:?} is not in module_cache.module_names", module_id)
+                        panic!("Module {module_id:?} is not in module_cache.module_names")
                     }
                     Some(dep_name) => {
                         let module_name = dep_name.clone();
@@ -820,11 +820,11 @@ impl std::fmt::Display for ModuleTiming {
         let multiple_make_specializations_passes = module_timing.make_specializations.len() > 1;
         for (i, pass_time) in module_timing.make_specializations.iter().enumerate() {
             let suffix = if multiple_make_specializations_passes {
-                format!(" (Pass {})", i)
+                format!(" (Pass {i})")
             } else {
                 String::new()
             };
-            report_timing(f, &format!("Make Specializations{}", suffix), *pass_time)?;
+            report_timing(f, &format!("Make Specializations{suffix}"), *pass_time)?;
         }
         report_timing(f, "Other", module_timing.other())?;
         f.write_str("\n")?;
@@ -1866,7 +1866,7 @@ fn worker_task<'a>(
                         ">>> {}",
                         match &task {
                             BuildTask::LoadModule { module_name, .. } => {
-                                format!("BuildTask::LoadModule({:?})", module_name)
+                                format!("BuildTask::LoadModule({module_name:?})")
                             }
                             BuildTask::Parse { header } => {
                                 format!("BuildTask::Parse({})", header.module_path.display())
@@ -1879,10 +1879,10 @@ fn worker_task<'a>(
                                 format!("BuildTask::Solve({:?})", module.module_id)
                             }
                             BuildTask::BuildPendingSpecializations { module_id, .. } => {
-                                format!("BuildTask::BuildPendingSpecializations({:?})", module_id)
+                                format!("BuildTask::BuildPendingSpecializations({module_id:?})")
                             }
                             BuildTask::MakeSpecializations { module_id, .. } => {
-                                format!("BuildTask::MakeSpecializations({:?})", module_id)
+                                format!("BuildTask::MakeSpecializations({module_id:?})")
                             }
                         }
                     );
@@ -3248,8 +3248,7 @@ fn load_package_from_disk<'a>(
                     },
                     _parse_state,
                 )) => Err(LoadingProblem::UnexpectedHeader(format!(
-                    "expected platform/package module, got Interface with header\n{:?}",
-                    header
+                    "expected platform/package module, got Interface with header\n{header:?}"
                 ))),
                 Ok((
                     ast::Module {
@@ -3258,8 +3257,7 @@ fn load_package_from_disk<'a>(
                     },
                     _parse_state,
                 )) => Err(LoadingProblem::UnexpectedHeader(format!(
-                    "expected platform/package module, got Hosted module with header\n{:?}",
-                    header
+                    "expected platform/package module, got Hosted module with header\n{header:?}"
                 ))),
                 Ok((
                     ast::Module {
@@ -3268,8 +3266,7 @@ fn load_package_from_disk<'a>(
                     },
                     _parse_state,
                 )) => Err(LoadingProblem::UnexpectedHeader(format!(
-                    "expected platform/package module, got App with header\n{:?}",
-                    header
+                    "expected platform/package module, got App with header\n{header:?}"
                 ))),
                 Ok((
                     ast::Module {
@@ -3402,10 +3399,7 @@ fn load_builtin_module_help<'a>(
             (info, parse_state)
         }
         Ok(_) => panic!("invalid header format for builtin module"),
-        Err(e) => panic!(
-            "Hit a parse error in the header of {:?}:\n{:?}",
-            filename, e
-        ),
+        Err(e) => panic!("Hit a parse error in the header of {filename:?}:\n{e:?}"),
     }
 }
 
@@ -5583,8 +5577,7 @@ fn build_pending_specializations<'a>(
                             }
                             LayoutProblem::UnresolvedTypeVar(v) => {
                                 let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
+                                    "top level function has unresolved type variable {v:?}"
                                 );
                                 procs_base
                                     .runtime_errors
@@ -5664,8 +5657,7 @@ fn build_pending_specializations<'a>(
                             }
                             LayoutProblem::UnresolvedTypeVar(v) => {
                                 let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
+                                    "top level function has unresolved type variable {v:?}"
                                 );
                                 procs_base
                                     .runtime_errors
@@ -5702,14 +5694,13 @@ fn build_pending_specializations<'a>(
                 use roc_can::pattern::Pattern;
                 let symbol = match &loc_pattern.value {
                     Pattern::Identifier(_) => {
-                        debug_assert!(false, "identifier ended up in Destructure {:?}", symbol);
+                        debug_assert!(false, "identifier ended up in Destructure {symbol:?}");
                         symbol
                     }
                     Pattern::AbilityMemberSpecialization { ident, specializes } => {
                         debug_assert!(
                             false,
-                            "ability member ended up in Destructure {:?} specializes {:?}",
-                            ident, specializes
+                            "ability member ended up in Destructure {ident:?} specializes {specializes:?}"
                         );
                         symbol
                     }
@@ -5741,8 +5732,7 @@ fn build_pending_specializations<'a>(
                             }
                             LayoutProblem::UnresolvedTypeVar(v) => {
                                 let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
+                                    "top level function has unresolved type variable {v:?}"
                                 );
                                 procs_base
                                     .runtime_errors
@@ -5808,8 +5798,7 @@ fn build_pending_specializations<'a>(
                             }
                             LayoutProblem::UnresolvedTypeVar(v) => {
                                 let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
+                                    "top level function has unresolved type variable {v:?}"
                                 );
                                 procs_base
                                     .runtime_errors
@@ -5881,8 +5870,7 @@ fn build_pending_specializations<'a>(
                             }
                             LayoutProblem::UnresolvedTypeVar(v) => {
                                 let message = format!(
-                                    "top level function has unresolved type variable {:?}",
-                                    v
+                                    "top level function has unresolved type variable {v:?}"
                                 );
                                 procs_base
                                     .runtime_errors

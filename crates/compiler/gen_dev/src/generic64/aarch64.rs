@@ -832,6 +832,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("saving floating point reg to base offset for AArch64");
     }
     #[inline(always)]
+    fn mov_base32_freg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
+        todo!("saving floating point reg to base offset for AArch64");
+    }
+    #[inline(always)]
     fn movesd_mem64_offset32_freg64(
         _buf: &mut Vec<'_, u8>,
         _ptr: AArch64GeneralReg,
@@ -3160,7 +3164,7 @@ mod tests {
                     UsesZR => "xzr".to_owned(),
                     UsesSP => "sp".to_owned(),
                 },
-                _ => format!("{}", self),
+                _ => format!("{self}"),
             }
         }
     }

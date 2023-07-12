@@ -89,10 +89,10 @@ fn create_llvm_module<'a>(
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
         ))) => {
-            println!("{}", report);
+            println!("{report}");
             panic!();
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     };
 
     use roc_load::MonomorphizedModule;
@@ -283,8 +283,7 @@ fn create_llvm_module<'a>(
         let path = std::env::temp_dir().join("test.ll");
         env.module.print_to_file(&path).unwrap();
         panic!(
-            "Errors defining module:\n\n{}\n\nI have written the full module to `{:?}`",
-            errors, path
+            "Errors defining module:\n\n{errors}\n\nI have written the full module to `{path:?}`"
         );
     };
 
@@ -374,7 +373,7 @@ fn annotate_with_debug_info<'ctx>(
                 ErrorKind::NotFound => panic!(
                     r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
                 ),
-                _ => panic!("{:?}", error),
+                _ => panic!("{error:?}"),
             }
         }
     }
@@ -495,17 +494,14 @@ fn llvm_module_to_wasm_file(
         let msg = String::from_utf8_lossy(&output.stderr);
 
         if msg.contains("wasm-ld: error: unknown file type") {
-            panic!(
-                "{}\nThis can happen if multiple tests have the same input string",
-                msg
-            );
+            panic!("{msg}\nThis can happen if multiple tests have the same input string");
         } else {
             panic!("{}", msg);
         }
     }
 
-    assert!(output.status.success(), "{:#?}", output);
-    assert!(output.stdout.is_empty(), "{:#?}", output);
+    assert!(output.status.success(), "{output:#?}");
+    assert!(output.stdout.is_empty(), "{output:#?}");
 
     test_wasm_path
 }
@@ -570,7 +566,7 @@ pub fn try_run_lib_function<T>(
         let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>)> = lib
             .get(main_fn_name.as_bytes())
             .ok()
-            .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+            .ok_or(format!("Unable to JIT compile `{main_fn_name}`"))
             .expect("errored");
 
         let mut main_result = MaybeUninit::uninit();
@@ -607,7 +603,7 @@ where
     match result {
         Ok(raw) => {
             // only if there are no exceptions thrown, check for errors
-            assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
+            assert!(errors.is_empty(), "Encountered errors:\n{errors}");
 
             #[allow(clippy::redundant_closure_call)]
             let given = transform(raw);
@@ -618,8 +614,8 @@ where
             std::mem::forget(given);
         }
         Err((msg, tag)) => match tag {
-            CrashTag::Roc => panic!(r#"Roc failed with message: "{}""#, msg),
-            CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+            CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
         },
     }
 }

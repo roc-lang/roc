@@ -117,7 +117,7 @@ where
     }
 
     if debug() {
-        for (i, c) in (format!("{:?}", symbol)).chars().take(25).enumerate() {
+        for (i, c) in (format!("{symbol:?}")).chars().take(25).enumerate() {
             name_bytes[25 + i] = c as u8;
         }
     }
@@ -131,7 +131,7 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     let mut buf = String::new();
 
     for byte in bytes {
-        write!(buf, "{:02X}", byte).unwrap();
+        write!(buf, "{byte:02X}").unwrap();
     }
 
     buf
@@ -1358,16 +1358,6 @@ fn expr_spec<'a>(
 
             builder.add_make_named(block, MOD_APP, type_name, tag_value_id)
         }
-        ExprBox { symbol } => {
-            let value_id = env.symbols[symbol];
-
-            with_new_heap_cell(builder, block, value_id)
-        }
-        ExprUnbox { symbol } => {
-            let tuple_id = env.symbols[symbol];
-
-            builder.add_get_tuple_field(block, tuple_id, BOX_VALUE_INDEX)
-        }
         Struct(fields) => build_tuple_value(builder, env, block, fields),
         UnionAtIndex {
             index,
@@ -1622,7 +1612,7 @@ fn layout_spec_help<'a>(
             }
         }
 
-        Ptr(inner_layout) | Boxed(inner_layout) => {
+        Ptr(inner_layout) => {
             let inner_type =
                 layout_spec_help(env, builder, interner, interner.get_repr(inner_layout))?;
             let cell_type = builder.add_heap_cell_type();
@@ -1683,10 +1673,6 @@ fn static_list_type<TC: TypeContext>(builder: &mut TC) -> Result<TypeId> {
 
 const LIST_CELL_INDEX: u32 = 0;
 const LIST_BAG_INDEX: u32 = 1;
-
-#[allow(dead_code)]
-const BOX_CELL_INDEX: u32 = LIST_CELL_INDEX;
-const BOX_VALUE_INDEX: u32 = LIST_BAG_INDEX;
 
 const TAG_CELL_INDEX: u32 = 0;
 const TAG_DATA_INDEX: u32 = 1;

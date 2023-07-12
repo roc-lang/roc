@@ -14,8 +14,8 @@ use roc_target::TargetInfo;
 
 use super::struct_::RocStruct;
 
-pub fn basic_type_from_layout<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn basic_type_from_layout<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     layout: LayoutRepr<'_>,
 ) -> BasicTypeEnum<'ctx> {
@@ -31,7 +31,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             layout_interner.get_repr(lambda_set.runtime_representation()),
         ),
 
-        Ptr(inner_layout) | Boxed(inner_layout) => {
+        Ptr(inner_layout) => {
             let inner_type = basic_type_from_layout(
                 env,
                 layout_interner,

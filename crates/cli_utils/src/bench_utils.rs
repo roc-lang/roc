@@ -25,8 +25,7 @@ fn exec_bench_w_input<T: Measurement>(
 
     assert!(
         compile_out.status.success(),
-        "build ended with bad status {:?}",
-        compile_out
+        "build ended with bad status {compile_out:?}"
     );
 
     check_cmd_output(file, stdin_str, executable_filename, expected_ending);
@@ -58,10 +57,7 @@ fn check_cmd_output(
     };
 
     if !&out.stdout.ends_with(expected_ending) {
-        panic!(
-            "expected output to end with {:?} but instead got {:#?}",
-            expected_ending, out
-        );
+        panic!("expected output to end with {expected_ending:?} but instead got {out:#?}");
     }
     assert!(out.status.success());
 }
@@ -96,7 +92,7 @@ fn bench_cmd<T: Measurement>(
     }
 
     if let Some(bench_group) = bench_group_opt {
-        bench_group.bench_function(&format!("Benchmarking {:?}", executable_filename), |b| {
+        bench_group.bench_function(&format!("Benchmarking {executable_filename:?}"), |b| {
             b.iter(|| run_cmd(black_box(&cmd_str), black_box([stdin_str]), &[], []))
         });
     } else {

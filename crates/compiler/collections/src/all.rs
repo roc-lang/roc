@@ -202,7 +202,7 @@ fn int_to_ordinal(number: usize) -> std::string::String {
         },
     };
 
-    format!("{}{}", number, ending)
+    format!("{number}{ending}")
 }
 
 #[macro_export]

@@ -37,7 +37,6 @@ pub fn eq_generic<'a>(
         Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
         Struct(field_layouts) => eq_struct(root, ident_ids, ctx, layout_interner, field_layouts),
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
-        Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),
         RecursivePointer(_) => {
@@ -139,7 +138,7 @@ fn eq_struct<'a>(
 ) -> Stmt<'a> {
     let mut else_stmt = Stmt::Ret(Symbol::BOOL_TRUE);
     for (i, layout) in field_layouts.iter().enumerate().rev() {
-        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}", i));
+        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{i}"));
         let field1_expr = Expr::StructAtIndex {
             index: i as u64,
             field_layouts,
@@ -147,7 +146,7 @@ fn eq_struct<'a>(
         };
         let field1_stmt = |next| Stmt::Let(field1_sym, field1_expr, *layout, next);
 
-        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}", i));
+        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{i}"));
         let field2_expr = Expr::StructAtIndex {
             index: i as u64,
             field_layouts,
@@ -165,7 +164,7 @@ fn eq_struct<'a>(
             )
             .unwrap();
 
-        let eq_call_name = format!("eq_call_{}", i);
+        let eq_call_name = format!("eq_call_{i}");
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
         let eq_call_stmt = |next| Stmt::Let(eq_call_sym, eq_call_expr, LAYOUT_BOOL, next);
 
@@ -489,8 +488,8 @@ fn eq_tag_fields<'a>(
         Some(i) => {
             // Implement tail recursion on this RecursivePointer,
             // in the innermost `else` clause after all other fields have been checked
-            let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
-            let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}_{}", tag_id, i));
+            let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{tag_id}_{i}"));
+            let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{tag_id}_{i}"));
 
             let field1_expr = Expr::UnionAtIndex {
                 union_layout,
@@ -534,8 +533,8 @@ fn eq_tag_fields<'a>(
             continue; // the tail-recursive field is handled elsewhere
         }
 
-        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
-        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}_{}", tag_id, i));
+        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{tag_id}_{i}"));
+        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{tag_id}_{i}"));
 
         let field1_expr = Expr::UnionAtIndex {
             union_layout,
@@ -561,7 +560,7 @@ fn eq_tag_fields<'a>(
             )
             .unwrap();
 
-        let eq_call_name = format!("eq_call_{}", i);
+        let eq_call_name = format!("eq_call_{i}");
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
 
         stmt = Stmt::Let(

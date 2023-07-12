@@ -55,11 +55,11 @@ impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
         use RecordField::*;
 
         match self {
-            Optional(typ) => write!(f, "Optional({:?})", typ),
-            Required(typ) => write!(f, "Required({:?})", typ),
-            Demanded(typ) => write!(f, "Demanded({:?})", typ),
-            RigidRequired(typ) => write!(f, "RigidRequired({:?})", typ),
-            RigidOptional(typ) => write!(f, "RigidOptional({:?})", typ),
+            Optional(typ) => write!(f, "Optional({typ:?})"),
+            Required(typ) => write!(f, "Required({typ:?})"),
+            Demanded(typ) => write!(f, "Demanded({typ:?})"),
+            RigidRequired(typ) => write!(f, "RigidRequired({typ:?})"),
+            RigidOptional(typ) => write!(f, "RigidOptional({typ:?})"),
         }
     }
 }
@@ -1949,10 +1949,10 @@ fn write_tags<'a>(
 
     let mut it = tags.peekable();
     while let Some((label, arguments)) = it.next() {
-        write!(f, "{:?}", label)?;
+        write!(f, "{label:?}")?;
 
         for argument in arguments {
-            write!(f, " {:?}", argument)?;
+            write!(f, " {argument:?}")?;
         }
 
         if it.peek().is_some() {
@@ -1976,23 +1976,23 @@ impl fmt::Debug for Type {
                         write!(f, ", ")?;
                     }
 
-                    write!(f, "{:?}", arg)?;
+                    write!(f, "{arg:?}")?;
                 }
 
-                write!(f, " |{:?}|", closure)?;
+                write!(f, " |{closure:?}|")?;
                 write!(f, " -> ")?;
 
                 ret.fmt(f)?;
 
                 write!(f, ")")
             }
-            Type::Variable(var) => write!(f, "<{:?}>", var),
+            Type::Variable(var) => write!(f, "<{var:?}>"),
 
             Type::Apply(symbol, args, _) => {
-                write!(f, "({:?}", symbol)?;
+                write!(f, "({symbol:?}")?;
 
                 for arg in args {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " {arg:?}")?;
                 }
 
                 write!(f, ")")
@@ -2004,10 +2004,10 @@ impl fmt::Debug for Type {
                 lambda_set_variables,
                 infer_ext_in_output_types,
             }) => {
-                write!(f, "(DelayedAlias {:?}", symbol)?;
+                write!(f, "(DelayedAlias {symbol:?}")?;
 
                 for arg in type_arguments {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " {arg:?}")?;
                 }
 
                 for (lambda_set, greek_letter) in
@@ -2017,7 +2017,7 @@ impl fmt::Debug for Type {
                 }
 
                 for (i, infer_ext) in infer_ext_in_output_types.iter().enumerate() {
-                    write!(f, " `{}@{:?}", i, infer_ext)?;
+                    write!(f, " `{i}@{infer_ext:?}")?;
                 }
 
                 write!(f, ")")?;
@@ -2032,12 +2032,12 @@ impl fmt::Debug for Type {
                 actual: _actual,
                 ..
             } => {
-                write!(f, "(Alias {:?}", symbol)?;
+                write!(f, "(Alias {symbol:?}")?;
 
                 for arg in type_arguments {
                     write!(f, " {:?}", &arg.typ)?;
                     if let Some(abs) = &arg.opt_abilities {
-                        write!(f, ":{:?}", abs)?;
+                        write!(f, ":{abs:?}")?;
                     }
                 }
 
@@ -2048,7 +2048,7 @@ impl fmt::Debug for Type {
                 }
 
                 // Sometimes it's useful to see the expansion of the alias
-                write!(f, "[ but actually {:?} ]", _actual)?;
+                write!(f, "[ but actually {_actual:?} ]")?;
 
                 write!(f, ")")?;
 
@@ -2059,10 +2059,10 @@ impl fmt::Debug for Type {
                 type_arguments: arguments,
                 ..
             } => {
-                write!(f, "HostExposedAlias {:?}", name)?;
+                write!(f, "HostExposedAlias {name:?}")?;
 
                 for arg in arguments {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " {arg:?}")?;
                 }
 
                 // Sometimes it's useful to see the expansion of the alias
@@ -2082,13 +2082,11 @@ impl fmt::Debug for Type {
                 for (label, field_type) in fields {
                     match field_type {
                         RecordField::Optional(_) | RecordField::RigidOptional(_) => {
-                            write!(f, "{:?} ? {:?}", label, field_type)?
+                            write!(f, "{label:?} ? {field_type:?}")?
                         }
                         RecordField::Required(_)
                         | RecordField::Demanded(_)
-                        | RecordField::RigidRequired(_) => {
-                            write!(f, "{:?} : {:?}", label, field_type)?
-                        }
+                        | RecordField::RigidRequired(_) => write!(f, "{label:?} : {field_type:?}")?,
                     }
 
                     if any_written_yet {
@@ -2129,7 +2127,7 @@ impl fmt::Debug for Type {
                 let mut any_written_yet = false;
 
                 for (_, field_type) in elems.iter() {
-                    write!(f, "{:?}", field_type)?;
+                    write!(f, "{field_type:?}")?;
 
                     if any_written_yet {
                         write!(f, ", ")?;
@@ -2179,7 +2177,7 @@ impl fmt::Debug for Type {
             }
             Type::FunctionOrTagUnion(tag_name, _, ext) => {
                 write!(f, "[")?;
-                write!(f, "{:?}", tag_name)?;
+                write!(f, "{tag_name:?}")?;
                 write!(f, "]")?;
 
                 match ext {
@@ -2204,9 +2202,9 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "ClosureTag(")?;
 
-                write!(f, "{:?}, ", name)?;
+                write!(f, "{name:?}, ")?;
                 for capture in captures {
-                    write!(f, "{:?}, ", capture)?;
+                    write!(f, "{capture:?}, ")?;
                 }
 
                 write!(f, ")")
@@ -2229,13 +2227,13 @@ impl fmt::Debug for Type {
                     }
                 }?;
 
-                write!(f, " as <{:?}>", rec)
+                write!(f, " as <{rec:?}>")
             }
             Type::RangedNumber(range_vars) => {
-                write!(f, "Ranged({:?})", range_vars)
+                write!(f, "Ranged({range_vars:?})")
             }
             Type::UnspecializedLambdaSet { unspecialized } => {
-                write!(f, "{:?}", unspecialized)
+                write!(f, "{unspecialized:?}")
             }
         }
     }
@@ -4005,7 +4003,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            write!(buf, "has {:?}", symbol).unwrap();
+            write!(buf, "has {symbol:?}").unwrap();
             if write_parens {
                 buf.push(')');
             }
@@ -4016,7 +4014,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             if write_parens {
                 buf.push('(');
             }
-            write!(buf, "{:?}", symbol).unwrap();
+            write!(buf, "{symbol:?}").unwrap();
 
             for arg in arguments {
                 buf.push(' ');
@@ -4061,7 +4059,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             if write_parens {
                 buf.push('(');
             }
-            write!(buf, "{:?}", symbol).unwrap();
+            write!(buf, "{symbol:?}").unwrap();
 
             for arg in arguments {
                 buf.push(' ');
@@ -4146,7 +4144,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             let mut it = tags.into_iter().peekable();
 
             while let Some((tag, args)) = it.next() {
-                write!(buf, "{:?}", tag).unwrap();
+                write!(buf, "{tag:?}").unwrap();
                 for arg in args {
                     buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::InTypeParam);
@@ -4165,7 +4163,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
 
             let mut it = tags.into_iter().peekable();
             while let Some((tag, args)) = it.next() {
-                write!(buf, "{:?}", tag).unwrap();
+                write!(buf, "{tag:?}").unwrap();
                 for arg in args {
                     buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::Unnecessary);

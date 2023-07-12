@@ -775,8 +775,7 @@ fn to_relevant_branch<'a>(
                 // if there is no test, the pattern should not require any
                 debug_assert!(
                     matches!(pattern, Pattern::Identifier(_) | Pattern::Underscore,),
-                    "{:?}",
-                    pattern,
+                    "{pattern:?}",
                 );
 
                 Some(branch.clone())

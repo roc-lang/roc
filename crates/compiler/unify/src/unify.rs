@@ -1853,8 +1853,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
 
     debug_assert!(
         is_sorted_unspecialized_lamba_set_list(env.subs, &merged_uls),
-        "merging of unspecialized lambda sets does not preserve sort! {:?}",
-        merged_uls
+        "merging of unspecialized lambda sets does not preserve sort! {merged_uls:?}"
     );
 
     Ok((

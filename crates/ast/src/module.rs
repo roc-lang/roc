@@ -25,14 +25,8 @@ pub fn load_module(
     match loaded {
         Ok(x) => x,
         Err(roc_load::LoadingProblem::FormattedReport(report)) => {
-            panic!(
-                "Failed to load module from src_file: {:?}. Report: {}",
-                src_file, report
-            );
+            panic!("Failed to load module from src_file: {src_file:?}. Report: {report}");
         }
-        Err(e) => panic!(
-            "Failed to load module from src_file {:?}: {:?}",
-            src_file, e
-        ),
+        Err(e) => panic!("Failed to load module from src_file {src_file:?}: {e:?}"),
     }
 }

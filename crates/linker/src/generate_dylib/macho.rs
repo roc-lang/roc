@@ -82,12 +82,10 @@ pub fn create_dylib_macho(
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {
             Ok(stderr) => panic!(
-                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
-                stderr
+                "Failed to link dummy shared library - stderr of the `ld` command was:\n{stderr}"
             ),
             Err(utf8_err) => panic!(
-                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
-                utf8_err
+                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({utf8_err:?})"
             ),
         }
     }

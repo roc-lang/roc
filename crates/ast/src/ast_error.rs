@@ -59,7 +59,7 @@ impl From<ModuleError> for ASTError {
 impl From<(Region, Loc<Ident>)> for ASTError {
     fn from(ident_exists_err: (Region, Loc<Ident>)) -> Self {
         Self::IdentExistsError {
-            msg: format!("{:?}", ident_exists_err),
+            msg: format!("{ident_exists_err:?}"),
         }
     }
 }
@@ -67,7 +67,7 @@ impl From<(Region, Loc<Ident>)> for ASTError {
 impl<'a> From<SyntaxError<'a>> for ASTError {
     fn from(syntax_err: SyntaxError) -> Self {
         Self::SyntaxErrorNoBacktrace {
-            msg: format!("{:?}", syntax_err),
+            msg: format!("{syntax_err:?}"),
         }
     }
 }

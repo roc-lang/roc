@@ -404,7 +404,7 @@ fn solve(
                     if it.peek().is_some() {
                         let failing: Vec<_> = it.collect();
                         println!("Rigids {:?}", &rigid_vars);
-                        println!("Failing {:?}", failing);
+                        println!("Failing {failing:?}");
                         debug_assert!(false);
                     }
                 });
@@ -1739,8 +1739,7 @@ fn check_ability_specialization(
         );
         debug_assert!(
             !awaiting_specializations.waiting_for(impl_key),
-            "still have lambda sets waiting for {:?}, but it was just resolved",
-            impl_key
+            "still have lambda sets waiting for {impl_key:?}, but it was just resolved"
         );
     }
 }
