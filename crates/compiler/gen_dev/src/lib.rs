@@ -517,7 +517,7 @@ trait Backend<'a> {
                 self.return_symbol(sym, ret_layout);
                 self.free_symbols(stmt);
             }
-            Stmt::Refcounting(ModifyRc::Free(symbol), following) => {
+            Stmt::Refcounting(ModifyRc::Free(symbol, null_check), following) => {
                 let dst = Symbol::DEV_TMP;
 
                 let layout = *self.layout_map().get(symbol).unwrap();
@@ -526,6 +526,9 @@ trait Backend<'a> {
                 self.load_literal_i32(&alignment, alignment_bytes as i32);
 
                 // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+                // the zig UTILS_FREE_DATA_PTR always performs a null check
+                let _ = null_check;
 
                 self.build_fn_call(
                     &dst,

@@ -17,8 +17,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
-    ProcLayout, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc,
+    NullCheck, Proc, ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -558,7 +558,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     updated_stmt
                 }
             }
-            ModifyRc::DecRef(_) | ModifyRc::Free(_) => {
+            ModifyRc::DecRef(_) | ModifyRc::Free(_, _) => {
                 // These operations are not recursive (the children are not touched)
                 // so inlining is not useful
                 arena.alloc(Stmt::Refcounting(
@@ -1011,7 +1011,7 @@ fn specialize_union<'a, 'i>(
                                             // we know for sure that the allocation is unique at
                                             // this point. Therefore we can free (or maybe reuse)
                                             // without checking the refcount again.
-                                            ModifyRc::Free(*symbol),
+                                            ModifyRc::Free(*symbol, NullCheck::Skip),
                                             continuation,
                                         )),
                                     )

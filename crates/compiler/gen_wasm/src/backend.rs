@@ -9,7 +9,7 @@ use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc,
-    Param, Proc, ProcLayout, Stmt,
+    NullCheck, Param, Proc, ProcLayout, Stmt,
 };
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
@@ -720,7 +720,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             Stmt::Jump(id, arguments) => self.stmt_jump(*id, arguments),
 
             Stmt::Refcounting(modify, following) => match modify {
-                ModifyRc::Free(symbol) => self.stmt_refcounting_free(*symbol, following),
+                ModifyRc::Free(symbol, null_check) => {
+                    self.stmt_refcounting_free(*symbol, *null_check, following)
+                }
                 _ => self.stmt_refcounting(modify, following),
             },
 
@@ -1002,44 +1004,48 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.stmt(rc_stmt);
     }
 
-    fn stmt_refcounting_free(&mut self, value: Symbol, following: &'a Stmt<'a>) {
-        self.storage.load_symbols(&mut self.code_builder, &[value]);
-        self.code_builder.if_();
-        {
-            let layout = self.storage.symbol_layouts[&value];
-            let alignment = self.layout_interner.allocation_alignment_bytes(layout);
+    fn stmt_refcounting_free(
+        &mut self,
+        value: Symbol,
+        null_check: NullCheck,
+        following: &'a Stmt<'a>,
+    ) {
+        let layout = self.storage.symbol_layouts[&value];
+        let alignment = self.layout_interner.allocation_alignment_bytes(layout);
 
-            // Get pointer and offset
-            let value_storage = self.storage.get(&value).to_owned();
-            let stored_with_local =
-                self.storage
-                    .ensure_value_has_local(&mut self.code_builder, value, value_storage);
-            let (tag_local_id, tag_offset) = match stored_with_local {
-                StoredValue::StackMemory { location, .. } => {
-                    location.local_and_offset(self.storage.stack_frame_pointer)
-                }
-                StoredValue::Local { local_id, .. } => (local_id, 0),
-                StoredValue::VirtualMachineStack { .. } => {
-                    internal_error!("{:?} should have a local variable", value)
-                }
-            };
-
-            // load pointer, and add the offset to the pointer
-            self.code_builder.get_local(tag_local_id);
-
-            if tag_offset > 0 {
-                self.code_builder.i32_const(tag_offset as i32);
-                self.code_builder.i32_add();
+        // Get pointer and offset
+        let value_storage = self.storage.get(&value).to_owned();
+        let stored_with_local =
+            self.storage
+                .ensure_value_has_local(&mut self.code_builder, value, value_storage);
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
             }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", value)
+            }
+        };
 
-            // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+        // load pointer, and add the offset to the pointer
+        self.code_builder.get_local(tag_local_id);
 
-            // push the allocation's alignment
-            self.code_builder.i32_const(alignment as i32);
-
-            self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
+        if tag_offset > 0 {
+            self.code_builder.i32_const(tag_offset as i32);
+            self.code_builder.i32_add();
         }
-        self.code_builder.end();
+
+        // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+        // the zig UTILS_FREE_DATA_PTR always performs a null check
+        let _ = null_check;
+
+        // push the allocation's alignment
+        self.code_builder.i32_const(alignment as i32);
+
+        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
+
         self.stmt(following);
     }
 

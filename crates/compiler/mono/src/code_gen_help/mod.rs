@@ -140,7 +140,7 @@ impl<'a> CodeGenHelp<'a> {
                 let jp_decref = JoinPointId(self.create_symbol(ident_ids, "jp_decref"));
                 HelperOp::DecRef(jp_decref)
             }
-            ModifyRc::Free(_) => unreachable!("free should be handled by the backend directly"),
+            ModifyRc::Free(_, _) => unreachable!("free should be handled by the backend directly"),
         };
 
         let mut ctx = Context {

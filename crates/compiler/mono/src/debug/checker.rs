@@ -690,7 +690,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         use ModifyRc::*;
 
         match rc {
-            Inc(sym, _) | Dec(sym) | DecRef(sym) | Free(sym) => {
+            Inc(sym, _) | Dec(sym) | DecRef(sym) | Free(sym, _) => {
                 // TODO: also check that sym layout needs refcounting
                 self.check_sym_exists(sym);
             }

@@ -9,7 +9,7 @@ use std::hash::Hash;
 
 use crate::borrow::Ownership;
 use crate::ir::{
-    BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, ReuseToken, Stmt,
+    BranchInfo, Expr, JoinPointId, ModifyRc, NullCheck, Param, Proc, ProcLayout, ReuseToken, Stmt,
     UpdateModeId, UpdateModeIds,
 };
 use crate::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout};
@@ -422,7 +422,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         SymbolIsUnique::MustCheck(*symbol)
                     }
                 }
-                ModifyRc::Free(symbol) => {
+                ModifyRc::Free(symbol, _null_check) => {
                     // a free'd symbol is guaranteed to be unique
                     SymbolIsUnique::Always(*symbol)
                 }
@@ -458,7 +458,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                             Symbol::new(home, ident_ids.gen_unique()),
                                             ResetOperation::Reset,
                                         ),
-                                        ModifyRc::Free(_) => {
+                                        ModifyRc::Free(_, _) => {
                                             if union_layout
                                                 .stores_tag_id_in_pointer(environment.target_info)
                                             {
@@ -1379,7 +1379,8 @@ fn drop_unused_reuse_tokens<'a>(
 ) -> &'a Stmt<'a> {
     unused_tokens.fold(continuation, |continuation, reuse_token| {
         arena.alloc(Stmt::Refcounting(
-            ModifyRc::Free(reuse_token.symbol),
+            // reset can produce a reuse token that is NULL
+            ModifyRc::Free(reuse_token.symbol, NullCheck::Perform),
             continuation,
         ))
     })

@@ -118,7 +118,7 @@ pub fn refcount_stmt<'a>(
                 },
             }
         }
-        ModifyRc::Free(_) => {
+        ModifyRc::Free(_, _) => {
             unreachable!("free should be handled by the backend directly")
         }
     }
