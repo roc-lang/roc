@@ -5783,7 +5783,7 @@ pub fn with_hole<'a>(
                         _ => unreachable!("invalid layout for a box expression"),
                     };
 
-                    let expr = boxed::expr_box(arena.alloc(x), element_layout);
+                    let expr = boxed::box_(arena.alloc(x), element_layout);
 
                     Stmt::Let(assigned, expr, layout, hole)
                 }
@@ -5791,7 +5791,7 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    let expr = boxed::expr_unbox(x, arena.alloc(layout));
+                    let expr = boxed::unbox(x, arena.alloc(layout));
 
                     Stmt::Let(assigned, expr, layout, hole)
                 }
@@ -10284,7 +10284,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = boxed::expr_unbox(argument, arena.alloc(interned_unboxed_struct_layout));
+        let unbox_expr = boxed::unbox(argument, arena.alloc(interned_unboxed_struct_layout));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10386,7 +10386,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = boxed::expr_unbox(argument, arena.alloc(interned));
+        let unbox_expr = boxed::unbox(argument, arena.alloc(interned));
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 
         let proc = Proc {

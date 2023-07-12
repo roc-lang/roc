@@ -8,7 +8,7 @@ use crate::{
 };
 
 use super::{
-    boxed::{self, expr_unbox},
+    boxed::{self, unbox},
     with_hole, BranchInfo, Call, CallType, CapturedSymbols, Env, ErasedField, Expr, JoinPointId,
     Param, Procs, Stmt, UpdateModeId,
 };
@@ -351,7 +351,7 @@ pub fn build_erased_function<'a>(
 
             let result = Stmt::Let(
                 value.unwrap(),
-                boxed::expr_box(env.arena.alloc(stack_captures), stack_captures_layout),
+                boxed::box_(env.arena.alloc(stack_captures), stack_captures_layout),
                 boxed_captures_layout,
                 env.arena.alloc(result),
             );
@@ -485,7 +485,7 @@ pub fn unpack_closure_data<'a>(
 
     hole = Stmt::Let(
         stack_captures,
-        expr_unbox(heap_captures, stack_captures_layout),
+        unbox(heap_captures, stack_captures_layout),
         *stack_captures_layout,
         env.arena.alloc(hole),
     );
