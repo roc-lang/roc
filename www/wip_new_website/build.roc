@@ -4,7 +4,6 @@ app "website-builder"
     imports [
         pf.Task.{ Task },
         pf.Command,
-        pf.Arg
     ]
     provides [main] to pf
 
@@ -22,7 +21,7 @@ main =
     # Build site
     {} <- 
         Command.new "roc"
-        |> Command.args ["run", "main.roc", "--", "content/", "dist/"]
+        |> Command.args ["run", "main.roc", "--", "content/", "dist/wip/"]
         |> Command.status
         |> Task.onErr \_ -> crash "Failed to build site"
         |> Task.await
@@ -30,7 +29,7 @@ main =
     # Copy static files
     {} <- 
         Command.new "cp"
-        |> Command.args ["-r", "static/site.css", "dist/"]
+        |> Command.args ["-r", "static/site.css", "dist/wip/"]
         |> Command.status
         |> Task.onErr \_ -> crash "Failed to copy static files"
         |> Task.await

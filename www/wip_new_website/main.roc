@@ -41,7 +41,7 @@ view = \page, htmlContent ->
             Html.title [] [text (getTitle page)],
             meta [name "description", content (getDescription page)] [],
             meta [name "viewport", content "width=device-width"] [],
-            link [rel "stylesheet", href "./site.css"] [],
+            link [rel "stylesheet", href "/wip/site.css"] [],
             link [rel "icon", href "/favicon.svg"] [],
         ],
         body [] [
@@ -69,16 +69,16 @@ viewNavbar : Html.Node
 viewNavbar =
     div [id "top-bar"] [
         nav [] [
-            a [href "./home.html", title "The Roc Programming Language"] [
+            a [href "/wip/index.html", title "The Roc Programming Language"] [
                 rocLogo
             ],
             div [id "top-bar-links"] [
-                a [href "./tutorial.html"] [text "tutorial"],
-                a [href "./install.html"] [text "install"],
+                a [href "/wip/tutorial.html"] [text "tutorial"],
+                a [href "/wip/install.html"] [text "install"],
                 a [href "#todo-link-to-examples-site"] [text "examples"],
-                a [href "./community.html"] [text "community"],
-                a [href "./sponsor.html"] [text "sponsor"],
-                a [href "./docs.html"] [text "docs"],
+                a [href "/wip/community.html"] [text "community"],
+                a [href "/wip/sponsor.html"] [text "sponsor"],
+                a [href "/wip//docs.html"] [text "docs"],
             ],
         ],
     ]
