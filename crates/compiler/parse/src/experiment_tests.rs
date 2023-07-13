@@ -26,6 +26,8 @@ impl Listener for TestOutput {
             Token::Outdent => todo!(),
             Token::InterpolationStart => todo!(),
             Token::InterpolationEnd => todo!(),
+            Token::Newline => todo!(),
+            Token::ErrOutdentInMultilineStr => todo!(),
         }
     }
 }
@@ -136,6 +138,7 @@ fn chunk_from_str(str: &str) -> Chunk {
 }
 
 // TODO get rid of this; it's obsolete
+#[cfg(test)]
 trait Listener {
     fn emit(&mut self, token: Token, start_offset: u32, end_offset: u32);
 }

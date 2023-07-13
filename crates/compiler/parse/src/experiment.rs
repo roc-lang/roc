@@ -84,7 +84,7 @@ const ODDS: Bitmask =
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InProgress {
     Nothing = 0,
-    Comment = 1,
+    Comment = 2,
     // The strings must have the highest numeric values, for `is_str` to work
     MultiLineStr = 253, // This must have the lowest numeric value of the strings, for `is_str` to work
     SingleLineStr = 254,

@@ -136,6 +136,8 @@ impl Default for TokenMap {
             bitmask: Default::default(),
             tokens: [MaybeToken::NONE; 64],
             regions: [Region::ZERO; 64],
+            leading_indent: Region::ZERO,
+            leading_outdents: Vec::new(),
         }
     }
 }
@@ -215,14 +217,15 @@ pub enum Token {
     // These numbers must all be the same as the corresponding numbers on InProgress
     // (except of course for the variants which this enum has, but InProgress doesn't have),
     // so that we can tranmute from InProgress to Token.
-    Comment = 1,
-    Lambda = 2,
-    Indent = 3,
-    Outdent = 4,
-    InterpolationStart = 5,
-    InterpolationEnd = 6,
+    Newline = 1,
+    Comment = 2,
+    Lambda = 3,
+    Indent = 4,
+    Outdent = 5,
+    InterpolationStart = 6,
+    InterpolationEnd = 7,
     // Errors
-    ErrOutdentInMultilineStr = 7,
+    ErrOutdentInMultilineStr = 8,
     // Strings must have the highest numbers - see InProgress
     MultiLineStr = 253,
     SingleLineStr = 254,
