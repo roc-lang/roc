@@ -568,7 +568,6 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-        hosted_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         exposed_types_storage: ExposedTypesStorageSubs,
         resolved_implementations: ResolvedImplementations,
@@ -671,7 +670,9 @@ impl MakeSpecializationsPass {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
-    pub hosted_ids: Vec<ModuleId>,
+    pub hosted_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub hosted_ids: Vec<ModuleId>, // This is just for `hosted` modules
+
     pub root_subs: Option<Subs>,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
@@ -779,6 +780,7 @@ impl<'a> State<'a> {
             ident_ids_by_module,
             declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
+            hosted_vars_by_symbol: Vec::new(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_types: Arc::new(Mutex::new(cached_types)),
@@ -1377,7 +1379,6 @@ fn state_thread_step<'a>(
                 Msg::FinishedAllTypeChecking {
                     solved_subs,
                     exposed_vars_by_symbol,
-                    hosted_vars_by_symbol,
                     exposed_aliases_by_symbol,
                     exposed_types_storage,
                     resolved_implementations,
@@ -1398,7 +1399,6 @@ fn state_thread_step<'a>(
                         solved_subs,
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
-                        hosted_vars_by_symbol,
                         exposed_types_storage,
                         resolved_implementations,
                         dep_idents,
@@ -2209,6 +2209,8 @@ fn update<'a>(
                             ));
                             state.platform_path = PlatformPath::RootIsHosted;
                         }
+
+                        state.hosted_ids.push(header.module_id);
                     }
                 }
             }
@@ -2407,6 +2409,25 @@ fn update<'a>(
                 None
             };
 
+            if state.hosted_ids.contains(&module_id) {
+                // Get all the exposed symbols in top-level decls for this `hosted` module.
+                //
+                // We assume every top-level decl in the hosted module
+                // is supposed to be implemented by the host (e.g. it's just a type annotation)
+                state.hosted_vars_by_symbol = decls
+                    .symbols
+                    .iter()
+                    .enumerate()
+                    .map(|(index, loc_symbol)| {
+                        // Get the Variable corresponding to this symbol
+                        let symbol = loc_symbol.value;
+                        let var = decls.variables.get(index).unwrap();
+
+                        (symbol, *var)
+                    })
+                    .collect();
+            }
+
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
             // if there is a platform, the `platform` module provides host-exposed,
@@ -2476,41 +2497,10 @@ fn update<'a>(
                     empty
                 };
 
-                let hosted_vars_by_symbol =
-                    state
-                        .hosted_ids
-                        .iter()
-                        .flat_map(|hosted_id| {
-                            let hosted_decls = state.declarations_by_id.get(hosted_id).unwrap();
-                            let hosted_exposed =
-                                state.exposed_symbols_by_module.get(hosted_id).unwrap();
-
-                            // Get all the exposed symbols in top-level decls for the `hosted` module.
-                            //
-                            // We assume every top-level decl in the hosted module
-                            // is supposed to be implemented by the host (e.g. it's just a type annotation)
-                            hosted_decls.symbols.iter().enumerate().filter_map(
-                                |(index, loc_symbol)| {
-                                    // Get the Variable corresponding to this symbol
-                                    let symbol = loc_symbol.value;
-
-                                    if hosted_exposed.contains(&symbol) {
-                                        let var = hosted_decls.variables.get(index).unwrap();
-
-                                        Some((symbol, *var))
-                                    } else {
-                                        None
-                                    }
-                                },
-                            )
-                        })
-                        .collect();
-
                 msg_tx
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
-                        hosted_vars_by_symbol,
                         exposed_aliases_by_symbol: solved_module.aliases,
                         exposed_types_storage: solved_module.exposed_types,
                         resolved_implementations: solved_module.solved_implementations,
@@ -3192,7 +3182,6 @@ fn finish(
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
-    hosted_vars_by_symbol: Vec<(Symbol, Variable)>,
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
@@ -3241,7 +3230,7 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        hosted: hosted_vars_by_symbol.into_iter().collect(),
+        hosted: state.hosted_vars_by_symbol.into_iter().collect(),
         exposed_types_storage,
         resolved_implementations,
         sources,
