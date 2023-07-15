@@ -21,7 +21,6 @@ const BUILD_DIR: &str = "./generated-docs";
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
 pub fn generate_docs_html(root_file: PathBuf) {
-
     let build_dir = Path::new(BUILD_DIR);
     let loaded_module = load_module_for_docs(root_file);
 
@@ -237,12 +236,7 @@ fn render_module_documentation(
     push_html(&mut buf, "h2", vec![("class", "module-name")], {
         let mut link_buf = String::new();
 
-        push_html(
-            &mut link_buf,
-            "a",
-            vec![("href", "/#")],
-            module_name,
-        );
+        push_html(&mut link_buf, "a", vec![("href", "/#")], module_name);
 
         link_buf
     });
