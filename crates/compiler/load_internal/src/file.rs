@@ -568,6 +568,7 @@ enum Msg<'a> {
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
         exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+        hosted_vars_by_symbol: Vec<(Symbol, Variable)>,
         exposed_aliases_by_symbol: MutMap<Symbol, (bool, Alias)>,
         exposed_types_storage: ExposedTypesStorageSubs,
         resolved_implementations: ResolvedImplementations,
@@ -670,6 +671,7 @@ impl MakeSpecializationsPass {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
+    pub hosted_ids: Vec<ModuleId>,
     pub root_subs: Option<Subs>,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
@@ -755,6 +757,7 @@ impl<'a> State<'a> {
 
         Self {
             root_id,
+            hosted_ids: Vec::new(),
             root_subs: None,
             opt_platform_shorthand,
             cache_dir,
@@ -1374,6 +1377,7 @@ fn state_thread_step<'a>(
                 Msg::FinishedAllTypeChecking {
                     solved_subs,
                     exposed_vars_by_symbol,
+                    hosted_vars_by_symbol,
                     exposed_aliases_by_symbol,
                     exposed_types_storage,
                     resolved_implementations,
@@ -1394,6 +1398,7 @@ fn state_thread_step<'a>(
                         solved_subs,
                         exposed_aliases_by_symbol,
                         exposed_vars_by_symbol,
+                        hosted_vars_by_symbol,
                         exposed_types_storage,
                         resolved_implementations,
                         dep_idents,
@@ -2471,10 +2476,41 @@ fn update<'a>(
                     empty
                 };
 
+                let hosted_vars_by_symbol =
+                    state
+                        .hosted_ids
+                        .iter()
+                        .flat_map(|hosted_id| {
+                            let hosted_decls = state.declarations_by_id.get(hosted_id).unwrap();
+                            let hosted_exposed =
+                                state.exposed_symbols_by_module.get(hosted_id).unwrap();
+
+                            // Get all the exposed symbols in top-level decls for the `hosted` module.
+                            //
+                            // We assume every top-level decl in the hosted module
+                            // is supposed to be implemented by the host (e.g. it's just a type annotation)
+                            hosted_decls.symbols.iter().enumerate().filter_map(
+                                |(index, loc_symbol)| {
+                                    // Get the Variable corresponding to this symbol
+                                    let symbol = loc_symbol.value;
+
+                                    if hosted_exposed.contains(&symbol) {
+                                        let var = hosted_decls.variables.get(index).unwrap();
+
+                                        Some((symbol, *var))
+                                    } else {
+                                        None
+                                    }
+                                },
+                            )
+                        })
+                        .collect();
+
                 msg_tx
                     .send(Msg::FinishedAllTypeChecking {
                         solved_subs,
                         exposed_vars_by_symbol: solved_module.exposed_vars_by_symbol,
+                        hosted_vars_by_symbol,
                         exposed_aliases_by_symbol: solved_module.aliases,
                         exposed_types_storage: solved_module.exposed_types,
                         resolved_implementations: solved_module.solved_implementations,
@@ -3156,6 +3192,7 @@ fn finish(
     solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
+    hosted_vars_by_symbol: Vec<(Symbol, Variable)>,
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
@@ -3194,6 +3231,7 @@ fn finish(
 
     LoadedModule {
         module_id: state.root_id,
+        hosted_ids: state.hosted_ids,
         interns,
         solved,
         can_problems: state.module_cache.can_problems,
@@ -3203,6 +3241,7 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        hosted: hosted_vars_by_symbol.into_iter().collect(),
         exposed_types_storage,
         resolved_implementations,
         sources,

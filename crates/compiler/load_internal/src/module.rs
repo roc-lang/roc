@@ -31,12 +31,16 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub struct LoadedModule {
     pub module_id: ModuleId,
+    pub hosted_ids: Vec<ModuleId>,
     pub interns: Interns,
     pub solved: Solved<Subs>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Declarations>,
+    /// things in the platform's `provides`, usually mainForHost
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    /// effects, e.g. `stdoutLine`
+    pub hosted: MutMap<Symbol, Variable>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,

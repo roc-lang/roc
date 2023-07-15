@@ -343,6 +343,7 @@ pub fn load_types(
         mut solved,
         interns,
         exposed_to_host,
+        hosted,
         ..
     } = roc_load::load_and_typecheck(
         arena,
@@ -390,6 +391,7 @@ pub fn load_types(
     let operating_system = target_info.operating_system;
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());
+    let generated = hosted.values().copied();
 
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
