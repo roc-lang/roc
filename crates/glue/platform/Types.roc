@@ -34,7 +34,7 @@ entryPoints : Types -> List Tuple1
 entryPoints = \@Types { entrypoints } -> entrypoints
 
 generated : Types -> List Tuple1
-generated = \@Types { generated } -> entrypoints
+generated = \@Types rec -> rec.generated
 
 walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
 walkShapes = \@Types { types: shapes }, originalState, update ->

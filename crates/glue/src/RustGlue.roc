@@ -122,12 +122,16 @@ convertTypesToFile = \types ->
 
     {
         name: "roc_app/src/\(archStr).rs",
-        content: content |> generateEntryPoints types,
+        content: content |> generateEntryPoints types |> generateEffects types,
     }
 
 generateEntryPoints : Str, Types -> Str
 generateEntryPoints = \buf, types ->
     List.walk (Types.entryPoints types) buf \accum, T name id -> generateEntryPoint accum types name id
+
+generateEffects : Str, Types -> Str
+generateEffects = \buf, types ->
+    List.walk (Types.generated types) buf \accum, T name id -> generateEffect accum types name id
 
 generateEntryPoint : Str, Types, Str, TypeId -> Str
 generateEntryPoint = \buf, types, name, id ->
@@ -256,6 +260,73 @@ generateFunction = \buf, types, rocFn ->
         }
     }
     """
+
+generateEffect : Str, Types, Str, TypeId -> Str
+generateEffect = \buf, types, name, id ->
+    publicSignature =
+        when Types.shape types id is
+            Function rocFn ->
+                arguments =
+                    rocFn.args
+                    |> List.mapWithIndex \argId, i ->
+                        type = typeName types argId
+                        c = Num.toStr i
+                        "arg\(c): \(type)"
+                    |> Str.joinWith ", "
+
+                ret = typeName types rocFn.ret
+
+                "(\(arguments)) -> \(ret)"
+
+            _ ->
+                ret = typeName types id
+                "() -> \(ret)"
+
+    externSignature =
+        when Types.shape types id is
+            Function rocFn ->
+                arguments =
+                    rocFn.args
+                    |> List.map \argId ->
+                        type = typeName types argId
+                        "_: \(type)"
+                    |> Str.joinWith ", "
+
+                ret = typeName types rocFn.ret
+                "(_: *mut \(ret), \(arguments))"
+
+            _ ->
+                ret = typeName types id
+                "(_: *mut \(ret))"
+
+    externArguments =
+        when Types.shape types id is
+            Function rocFn ->
+                rocFn.args
+                |> List.mapWithIndex \_, i ->
+                    c = Num.toStr i
+                    "arg\(c)"
+                |> Str.joinWith ", "
+
+            _ ->
+                ""
+
+    """
+    \(buf)
+
+    pub fn \(name)\(publicSignature) {
+        extern "C" {
+            fn roc__\(name)_1_exposed_generic\(externSignature);
+        }
+
+        let mut ret = std::mem::MaybeUninit::uninit();
+
+        unsafe { roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments)) };
+
+        unsafe { ret.assume_init() }
+    }
+    """
+
 
 generateStruct : Str, Types, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
