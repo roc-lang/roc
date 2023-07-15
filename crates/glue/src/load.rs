@@ -17,7 +17,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, TargetInfo};
 use roc_types::subs::{Subs, Variable};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, ErrorKind, Write};
 use std::mem::ManuallyDrop;
 use std::path::{Component, Path, PathBuf};
@@ -335,6 +335,7 @@ pub fn load_types(
 ) -> Result<Vec<Types>, io::Error> {
     let target_info = (&Triple::host()).into();
     let arena = &Bump::new();
+
     let LoadedModule {
         module_id: home,
         mut can_problems,
@@ -344,28 +345,7 @@ pub fn load_types(
         interns,
         exposed_to_host,
         ..
-    } = roc_load::load_and_typecheck(
-        arena,
-        full_file_path,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-        LoadConfig {
-            target_info,
-            render: RenderTarget::Generic,
-            palette: DEFAULT_PALETTE,
-            threading,
-            exec_mode: ExecutionMode::Check,
-        },
-    )
-    .unwrap_or_else(|problem| match problem {
-        LoadingProblem::FormattedReport(report) => {
-            eprintln!("{report}");
-
-            process::exit(1);
-        }
-        problem => {
-            todo!("{:?}", problem);
-        }
-    });
+    } = load_app_or_platform(arena, full_file_path, target_info, threading);
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
@@ -467,4 +447,40 @@ pub fn load_types(
     }
 
     Ok(arch_types)
+}
+
+fn load_app_or_platform(
+    arena: &Bump,
+    full_file_path: PathBuf,
+    target_info: TargetInfo,
+    threading: Threading,
+) -> LoadedModule {
+    let read_result = fs::read(full_file_path).unwrap_or_else(|_| {
+        todo!("Glue file not found");
+    });
+    let parse_state = roc_parse::state::State::new(bytes);
+    let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
+
+    roc_load::load_and_typecheck(
+        arena,
+        full_file_path,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        LoadConfig {
+            target_info,
+            render: RenderTarget::Generic,
+            palette: DEFAULT_PALETTE,
+            threading,
+            exec_mode: ExecutionMode::Check,
+        },
+    )
+    .unwrap_or_else(|problem| match problem {
+        LoadingProblem::FormattedReport(report) => {
+            eprintln!("{report}");
+
+            process::exit(1);
+        }
+        problem => {
+            todo!("{:?}", problem);
+        }
+    })
 }
