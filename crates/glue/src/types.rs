@@ -56,6 +56,7 @@ pub struct Types {
     aligns: Vec<u32>,
 
     entry_points: Vec<(String, TypeId)>,
+    generated: Vec<(String, TypeId)>,
 
     // Needed to check for duplicates
     types_by_name: FnvHashMap<String, TypeId>,
@@ -86,6 +87,7 @@ impl Types {
             aligns,
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             entry_points: Vec::new(),
+            generated: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
@@ -98,7 +100,9 @@ impl Types {
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
-        mut entry_points: MutMap<Symbol, Variable>,
+        entry_points: MutMap<Symbol, Variable>,
+        // e.g. effect functions like stdoutLine
+        generated: MutMap<Symbol, Variable>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
         let mut env = Env::new(
@@ -109,24 +113,57 @@ impl Types {
             glue_procs_by_layout,
             target,
         );
+        {
+            // We will remove keys from this as we encounter them,
+            // and then afterwards do a debug_assert to verify it's empty
+            #[cfg(debug_assertions)]
+            let mut remaining_entry_points = entry_points.clone();
 
-        let variables: Vec<_> = entry_points.values().copied().collect();
-        for var in variables {
-            env.lambda_set_ids = env.find_lambda_sets(var);
-            let id = env.add_toplevel_type(var, &mut types);
+            for var in entry_points.values().copied() {
+                env.lambda_set_ids = env.find_lambda_sets(var);
+                let id = env.add_toplevel_type(var, &mut types);
 
-            let key = entry_points
-                .iter()
-                .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+                let key = entry_points
+                    .iter()
+                    .find_map(|(k, v)| (*v == var).then_some((*k, id)));
 
-            if let Some((k, id)) = key {
-                let name = k.as_str(env.interns).to_string();
-                types.entry_points.push((name, id));
-                entry_points.remove(&k);
+                if let Some((k, id)) = key {
+                    let name = k.as_str(env.interns).to_string();
+                    types.entry_points.push((name, id));
+
+                    #[cfg(debug_assertions)]
+                    remaining_entry_points.remove(&k);
+                }
             }
+
+            #[cfg(debug_assertions)] // needed because otherwise remaining_entry_points is not in scope!
+            debug_assert!(remaining_entry_points.is_empty());
         }
 
-        debug_assert!(entry_points.is_empty());
+        {
+            #[cfg(debug_assertions)]
+            let mut remaining_generated = generated.clone();
+
+            for var in generated.values().copied() {
+                env.lambda_set_ids = env.find_lambda_sets(var);
+                let id = env.add_toplevel_type(var, &mut types);
+
+                let key = entry_points
+                    .iter()
+                    .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+
+                if let Some((k, id)) = key {
+                    let name = k.as_str(env.interns).to_string();
+                    types.entry_points.push((name, id));
+
+                    #[cfg(debug_assertions)]
+                    remaining_generated.remove(&k);
+                }
+            }
+
+            #[cfg(debug_assertions)] // needed because otherwise remaining_generated is not in scope!
+            debug_assert!(remaining_generated.is_empty());
+        }
 
         env.resolve_pending_recursive_types(&mut types);
 
@@ -135,6 +172,10 @@ impl Types {
 
     pub fn entry_points(&self) -> &[(String, TypeId)] {
         self.entry_points.as_slice()
+    }
+
+    pub fn generated(&self) -> &[(String, TypeId)] {
+        self.generated.as_slice()
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
@@ -663,10 +704,17 @@ impl From<&Types> for roc_type::Types {
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
 
+        let generated = types
+            .generated()
+            .iter()
+            .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
+            .collect();
+
         roc_type::Types {
             aligns: types.aligns.as_slice().into(),
             deps,
             entrypoints,
+            generated,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(roc_type::RocType::from).collect(),
             typesByName: types_by_name,

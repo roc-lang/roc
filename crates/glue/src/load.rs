@@ -382,16 +382,19 @@ pub fn load_types(
         );
     }
 
-    // Get the variables for all the exposed_to_host symbols
-    let variables = (0..decls.len()).filter_map(|index| {
-        let symbol = decls.symbols[index].value;
-        exposed_to_host.get(&symbol).copied()
-    });
+    let generated = hosted.values().copied();
+
+    // Get the variables for all the exposed_to_host and generated symbols
+    let variables = (0..decls.len())
+        .filter_map(|index| {
+            let symbol = decls.symbols[index].value;
+            exposed_to_host.get(&symbol).copied()
+        })
+        .chain(generated);
 
     let operating_system = target_info.operating_system;
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());
-    let generated = hosted.values().copied();
 
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
@@ -402,7 +405,6 @@ pub fn load_types(
         let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut glue_procs_by_layout = MutMap::default();
-
         let mut extern_names = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
@@ -463,6 +465,7 @@ pub fn load_types(
             layout_cache,
             target_info,
             exposed_to_host.clone(),
+            hosted.clone(),
         );
 
         arch_types.push(types);

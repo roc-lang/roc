@@ -1,5 +1,5 @@
 interface Types
-    exposes [Types, shape, size, alignment, target, walkShapes, entryPoints]
+    exposes [Types, shape, size, alignment, target, walkShapes, entryPoints, generated]
     imports [Shape.{ Shape }, TypeId.{ TypeId }, Target.{ Target }, InternalTypeId]
 
 # TODO: switch AssocList uses to Dict once roc_std is updated.
@@ -22,6 +22,8 @@ Types := {
 
     ## Names and types of the entry points of the program (e.g. mainForHost)
     entrypoints : List Tuple1,
+    ## Names and types of the generated hosted values (e.g. for effects, such as stdoutLine)
+    generated : List Tuple1,
     target : Target,
 }
 
@@ -30,6 +32,9 @@ target = \@Types types -> types.target
 
 entryPoints : Types -> List Tuple1
 entryPoints = \@Types { entrypoints } -> entrypoints
+
+generated : Types -> List Tuple1
+generated = \@Types { generated } -> entrypoints
 
 walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
 walkShapes = \@Types { types: shapes }, originalState, update ->
