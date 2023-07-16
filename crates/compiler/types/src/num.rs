@@ -154,7 +154,7 @@ impl NumericRange {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum IntSignedness {
+pub enum IntSignedness {
     Unsigned,
     Signed,
 }
@@ -184,7 +184,7 @@ pub enum IntLitWidth {
 
 impl IntLitWidth {
     /// Returns the `IntSignedness` and bit width of a variant.
-    fn signedness_and_width(&self) -> (IntSignedness, u32) {
+    pub fn signedness_and_width(&self) -> (IntSignedness, u32) {
         use IntLitWidth::*;
         use IntSignedness::*;
         match self {
