@@ -8,12 +8,6 @@ pub enum Constraint {}
 #[derive(Serialize, Debug, PartialEq)]
 pub struct Variable(pub u32);
 
-#[derive(Serialize)]
-pub enum VariableValue {
-    Link(Variable),
-    Content(Content),
-}
-
 macro_rules! impl_content {
     ($($name:ident { $($arg:ident: $ty:ty,)* },)*) => {
         #[derive(Serialize)]
