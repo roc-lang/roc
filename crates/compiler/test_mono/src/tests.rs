@@ -2328,32 +2328,6 @@ fn issue_4557() {
 }
 
 #[mono_test]
-fn nullable_wrapped_with_non_nullable_singleton_tags() {
-    indoc!(
-        r###"
-        app "test" provides [main] to "./platform"
-
-        F : [
-            A F,
-            B,
-            C,
-        ]
-
-        g : F -> Str
-        g = \f -> when f is
-                A _ -> "A"
-                B -> "B"
-                C -> "C"
-
-        main =
-            g (A (B))
-            |> Str.concat (g B)
-            |> Str.concat (g C)
-        "###
-    )
-}
-
-#[mono_test]
 fn nullable_wrapped_with_nullable_not_last_index() {
     indoc!(
         r###"
@@ -3257,6 +3231,27 @@ fn capture_void_layout_task() {
         main : Task {} []
         main =
             forEach [] \_ -> succeed {}
+        "#
+    )
+}
+
+#[mono_test]
+fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Ast : [ A, B, C Str Ast ]
+
+        main : Str
+        main =
+            x : Ast
+            x = A
+
+            when x is
+                A -> "A"
+                B -> "B"
+                C _ _ -> "C"
         "#
     )
 }
