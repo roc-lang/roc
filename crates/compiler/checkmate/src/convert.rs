@@ -9,7 +9,8 @@ use roc_types::{
 
 use crate::schema::{
     AliasKind, AliasTypeVariables, ClosureType, Content, NumericRange, NumericRangeKind, Rank,
-    RecordField, RecordFieldKind, Symbol, TagUnionExtension, UnspecializedClosureType, Variable,
+    RecordField, RecordFieldKind, Symbol, TagUnionExtension, UnificationMode,
+    UnspecializedClosureType, Variable,
 };
 
 pub trait AsSchema<T> {
@@ -303,5 +304,19 @@ impl AsSchema<String> for ident::TagName {
 impl AsSchema<Rank> for subs::Rank {
     fn as_schema(&self, _subs: &Subs) -> Rank {
         Rank(self.into_usize() as _)
+    }
+}
+
+impl AsSchema<UnificationMode> for roc_solve_schema::UnificationMode {
+    fn as_schema(&self, _subs: &Subs) -> UnificationMode {
+        if self.is_eq() {
+            UnificationMode::Eq
+        } else if self.is_present() {
+            UnificationMode::Present
+        } else if self.is_lambda_set_specialization() {
+            UnificationMode::LambdaSetSpecialization
+        } else {
+            unreachable!()
+        }
     }
 }

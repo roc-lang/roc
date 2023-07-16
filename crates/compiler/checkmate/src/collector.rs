@@ -2,7 +2,7 @@ use roc_types::subs as s;
 
 use crate::{
     convert::AsSchema,
-    schema::{Event, UnificationMode, VariableEvent},
+    schema::{Event, VariableEvent},
 };
 
 pub struct Collector {
@@ -61,11 +61,16 @@ impl Collector {
         });
     }
 
-    pub fn start_unification(&mut self, subs: &s::Subs, left: s::Variable, right: s::Variable) {
+    pub fn start_unification(
+        &mut self,
+        subs: &s::Subs,
+        left: s::Variable,
+        right: s::Variable,
+        mode: roc_solve_schema::UnificationMode,
+    ) {
         let left = left.as_schema(subs);
         let right = right.as_schema(subs);
-        // TODO add mode
-        let mode = UnificationMode::Eq;
+        let mode = mode.as_schema(subs);
         let subevents = Vec::new();
         self.add_event(Event::Unification {
             left,
