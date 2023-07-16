@@ -229,7 +229,7 @@ fn solve<'a>(
             );
 
             match unify(
-                &mut with_checkmate!(None, {
+                &mut with_checkmate!({
                     on => UEnv::new(subs, None),
                     off => UEnv::new(subs),
                 }),
@@ -330,7 +330,7 @@ fn solve<'a>(
                     );
 
                     match unify(
-                        &mut with_checkmate!(None, {
+                        &mut with_checkmate!({
                             on => UEnv::new(subs, None),
                             off => UEnv::new(subs),
                         }),
@@ -409,7 +409,7 @@ fn solve<'a>(
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
             match unify(
-                &mut with_checkmate!(None, {
+                &mut with_checkmate!({
                     on => UEnv::new(subs, None),
                     off => UEnv::new(subs),
                 }),
@@ -728,7 +728,7 @@ fn solve<'a>(
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
             match unify(
-                &mut with_checkmate!(None, {
+                &mut with_checkmate!({
                     on => UEnv::new(subs, None),
                     off => UEnv::new(subs),
                 }),

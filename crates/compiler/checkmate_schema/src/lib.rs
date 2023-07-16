@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::Serialize;
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum Constraint {}
 
@@ -12,7 +12,7 @@ pub struct Variable(pub u32);
 
 macro_rules! impl_content {
     ($($name:ident { $($arg:ident: $ty:ty,)* },)*) => {
-        #[derive(Serialize, JsonSchema)]
+        #[derive(Serialize, JsonSchema, Debug)]
         #[serde(tag = "type")]
         pub enum Content {
             $(
@@ -104,40 +104,40 @@ impl_content! {
     Error {},
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct ClosureType {
     pub function: Symbol,
     pub environment: Vec<Variable>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct UnspecializedClosureType {
     pub specialization: Variable,
     pub ability_member: Symbol,
     pub lambda_set_region: u8,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum AliasKind {
     Structural,
     Opaque,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct AliasTypeVariables {
     pub type_variables: Vec<Variable>,
     pub lambda_set_variables: Vec<Variable>,
     pub infer_ext_in_output_position_variables: Vec<Variable>,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct RecordField {
     pub kind: RecordFieldKind,
     pub field_type: Variable,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum RecordFieldKind {
     Demanded,
@@ -145,43 +145,43 @@ pub enum RecordFieldKind {
     Optional { rigid: bool },
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum TagUnionExtension {
     Openness(Variable),
     Any(Variable),
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct NumericRange {
     pub kind: NumericRangeKind,
     pub signed: bool,
     pub min_width: u32,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum NumericRangeKind {
     Int,
     AnyNum,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct Rank(pub u32);
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct Symbol(
     // TODO: should this be module ID + symbol?
     pub String,
 );
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum UnificationMode {
     Eq,
@@ -189,7 +189,7 @@ pub enum UnificationMode {
     LambdaSetSpecialization,
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum Event {
     VariableEvent(VariableEvent),
@@ -202,10 +202,10 @@ pub enum Event {
     },
 }
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 pub struct AllEvents(pub Vec<Event>);
 
-#[derive(Serialize, JsonSchema)]
+#[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum VariableEvent {
     Unify {

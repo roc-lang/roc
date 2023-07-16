@@ -364,7 +364,7 @@ pub fn unify(
     );
     let unified = roc_unify::unify::unify_with_collector::<ChangedVariableCollector>(
         // TODO(checkmate): pass checkmate through
-        &mut with_checkmate!(None, {
+        &mut with_checkmate!({
             on => UEnv::new(subs, None),
             off => UEnv::new(subs),
         }),
@@ -395,6 +395,9 @@ pub fn unify(
                     derived_env: &derived_env,
                     arena,
                     pools: &mut pools,
+
+                    #[cfg(debug_assertions)]
+                    checkmate: None,
                 };
 
                 compact_lambda_sets_of_vars(&mut env, lambda_sets_to_specialize, &late_phase)

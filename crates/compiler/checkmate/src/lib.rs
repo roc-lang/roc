@@ -29,7 +29,7 @@ macro_rules! debug_checkmate {
 
 #[macro_export]
 macro_rules! with_checkmate {
-    ($opt_collector:expr, { on => $on:expr, off => $off:expr, }) => {{
+    ({ on => $on:expr, off => $off:expr, }) => {{
         #[cfg(debug_assertions)]
         {
             $on

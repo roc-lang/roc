@@ -3,6 +3,7 @@ use roc_types::subs as s;
 
 use crate::convert::AsSchema;
 
+#[derive(Debug)]
 pub struct Collector {
     events: AllEvents,
     current_event_path: Vec<usize>,

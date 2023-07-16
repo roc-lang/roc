@@ -3662,6 +3662,7 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
+ "roc_checkmate",
  "roc_collections",
  "roc_constrain",
  "roc_debug_flags",

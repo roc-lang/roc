@@ -94,27 +94,32 @@ struct State {
     mark: Mark,
 }
 
+pub struct RunSolveOutput {
+    pub solved: Solved<Subs>,
+    pub scope: Scope,
+
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
+}
+
 pub fn run(
     config: SolveConfig,
     problems: &mut Vec<TypeError>,
-    mut subs: Subs,
+    subs: Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-) -> (Solved<Subs>, Scope) {
-    let env = run_in_place(config, problems, &mut subs, aliases, abilities_store);
-
-    (Solved(subs), env)
+) -> RunSolveOutput {
+    run_help(config, problems, subs, aliases, abilities_store)
 }
 
-/// Modify an existing subs in-place instead
-#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
-fn run_in_place(
+fn run_help(
     config: SolveConfig,
     problems: &mut Vec<TypeError>,
-    subs: &mut Subs,
+    mut owned_subs: Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-) -> Scope {
+) -> RunSolveOutput {
+    let subs = &mut owned_subs;
     let SolveConfig {
         home: _,
         constraints,
@@ -124,6 +129,7 @@ fn run_in_place(
         exposed_by_module,
         derived_module,
         function_kind,
+        ..
     } = config;
 
     let mut pools = Pools::default();
@@ -150,6 +156,8 @@ fn run_in_place(
         derived_env: &derived_env,
         subs,
         pools: &mut pools,
+        #[cfg(debug_assertions)]
+        checkmate: config.checkmate,
     };
 
     let pending_derives = PendingDerivesTable::new(
@@ -180,7 +188,12 @@ fn run_in_place(
         &mut awaiting_specializations,
     );
 
-    state.scope
+    RunSolveOutput {
+        scope: state.scope,
+        #[cfg(debug_assertions)]
+        checkmate: env.checkmate,
+        solved: Solved(owned_subs),
+    }
 }
 
 #[derive(Debug)]

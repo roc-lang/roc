@@ -19,6 +19,8 @@ pub struct SolveEnv<'a> {
     pub derived_env: &'a DerivedEnv<'a>,
     pub subs: &'a mut Subs,
     pub pools: &'a mut Pools,
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 /// Environment necessary for inference.
@@ -94,9 +96,8 @@ impl<'a> InferenceEnv<'a> {
 
     /// Retrieves an environment for unification.
     pub fn uenv(&mut self) -> UEnv {
-        // TODO(checkmate): pass checkmate through
-        with_checkmate!(None, {
-            on => UEnv::new(self.subs, None),
+        with_checkmate!({
+            on => UEnv::new(self.subs, self.checkmate.as_mut()),
             off => UEnv::new(self.subs),
         })
     }

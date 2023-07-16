@@ -80,7 +80,7 @@ impl Env<'_> {
 
         let unified = unify(
             // TODO(checkmate): pass checkmate through
-            &mut with_checkmate!(None, {
+            &mut with_checkmate!({
                 on => Env::new(self.subs, None),
                 off => Env::new(self.subs),
             }),
@@ -121,7 +121,7 @@ impl Env<'_> {
 
         let unified = unify_introduced_ability_specialization(
             // TODO(checkmate): pass checkmate through
-            &mut with_checkmate!(None, {
+            &mut with_checkmate!({
                 on => Env::new(self.subs, None),
                 off => Env::new(self.subs),
             }),

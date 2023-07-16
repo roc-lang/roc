@@ -1294,7 +1294,7 @@ impl DerivableVisitor for DeriveEq {
         // only Dec implements Eq.
         // TODO(checkmate): pass checkmate through
         let unified = unify(
-            &mut with_checkmate!(None, {
+            &mut with_checkmate!({
                 on => UEnv::new(subs, None),
                 off => UEnv::new(subs),
             }),
@@ -1430,7 +1430,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
     instantiate_rigids(subs, signature_var);
     let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
         // TODO(checkmate): pass checkmate through
-        &mut with_checkmate!(None, {
+        &mut with_checkmate!({
             on => UEnv::new(subs, None),
             off => UEnv::new(subs),
         }),
