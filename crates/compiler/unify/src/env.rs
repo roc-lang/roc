@@ -90,15 +90,24 @@ impl<'a> Env<'a> {
         self.fixed_variables.extend(vars);
     }
 
+    #[cfg(debug_assertions)]
     pub(crate) fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
+        let left_root = self.subs.get_root_key_without_compacting(left);
+        let right_root = self.subs.get_root_key_without_compacting(right);
+
         self.subs.union(left, right, desc);
 
         debug_checkmate!(self.cm, cm => {
             let new_root = self.subs.get_root_key_without_compacting(left);
             cm.set_descriptor(self.subs, new_root, desc);
-            cm.unify(self.subs, left, new_root);
-            cm.unify(self.subs, right, new_root);
+            cm.unify(self.subs, left_root, new_root);
+            cm.unify(self.subs, right_root, new_root);
         });
+    }
+
+    #[cfg(not(debug_assertions))]
+    pub(crate) fn union(&mut self, left: Variable, right: Variable, desc: Descriptor) {
+        self.subs.union(left, right, desc);
     }
 
     #[cfg(debug_assertions)]
@@ -109,7 +118,7 @@ impl<'a> Env<'a> {
         mode: roc_solve_schema::UnificationMode,
     ) {
         debug_checkmate!(self.cm, cm => {
-            cm.start_unification(self.subs, left, right);
+            cm.start_unification(self.subs, left, right, mode);
         });
     }
 
