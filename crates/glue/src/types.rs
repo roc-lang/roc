@@ -56,7 +56,7 @@ pub struct Types {
     aligns: Vec<u32>,
 
     entry_points: Vec<(String, TypeId)>,
-    generated: Vec<(String, TypeId)>,
+    effects: Vec<(String, TypeId)>,
 
     // Needed to check for duplicates
     types_by_name: FnvHashMap<String, TypeId>,
@@ -87,7 +87,7 @@ impl Types {
             aligns,
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             entry_points: Vec::new(),
-            generated: Vec::new(),
+            effects: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
@@ -102,7 +102,7 @@ impl Types {
         target: TargetInfo,
         entry_points: MutMap<Symbol, Variable>,
         // e.g. effect functions like stdoutLine
-        generated: MutMap<Symbol, Variable>,
+        effects: MutMap<Symbol, Variable>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
         let mut env = Env::new(
@@ -142,13 +142,13 @@ impl Types {
 
         {
             #[cfg(debug_assertions)]
-            let mut remaining_generated = generated.clone();
+            let mut remaining_effects = effects.clone();
 
-            for var in generated.values().copied() {
+            for var in effects.values().copied() {
                 env.lambda_set_ids = env.find_lambda_sets(var);
                 let id = env.add_toplevel_type(var, &mut types);
 
-                let key = generated
+                let key = effects
                     .iter()
                     .find_map(|(k, v)| (*v == var).then_some((*k, id)));
 
@@ -158,16 +158,16 @@ impl Types {
                     // TODO remove this check once Task is a builtin; this is only necessary
                     // because we currently generate these from `hosted` modules.
                     if !["after", "map", "always", "forever"].contains(&name.as_str()) {
-                        types.generated.push((name, id));
+                        types.effects.push((name, id));
                     }
 
                     #[cfg(debug_assertions)]
-                    remaining_generated.remove(&k);
+                    remaining_effects.remove(&k);
                 }
             }
 
-            #[cfg(debug_assertions)] // needed because otherwise remaining_generated is not in scope!
-            debug_assert!(remaining_generated.is_empty());
+            #[cfg(debug_assertions)] // needed because otherwise remaining_effects is not in scope!
+            debug_assert!(remaining_effects.is_empty());
         }
 
         env.resolve_pending_recursive_types(&mut types);
@@ -179,8 +179,8 @@ impl Types {
         self.entry_points.as_slice()
     }
 
-    pub fn generated(&self) -> &[(String, TypeId)] {
-        self.generated.as_slice()
+    pub fn effects(&self) -> &[(String, TypeId)] {
+        self.effects.as_slice()
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
@@ -709,8 +709,8 @@ impl From<&Types> for roc_type::Types {
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
 
-        let generated = types
-            .generated()
+        let effects = types
+            .effects()
             .iter()
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
@@ -719,7 +719,7 @@ impl From<&Types> for roc_type::Types {
             aligns: types.aligns.as_slice().into(),
             deps,
             entrypoints,
-            generated,
+            effects,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(roc_type::RocType::from).collect(),
             typesByName: types_by_name,

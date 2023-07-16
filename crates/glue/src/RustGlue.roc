@@ -131,7 +131,7 @@ generateEntryPoints = \buf, types ->
 
 generateEffects : Str, Types -> Str
 generateEffects = \buf, types ->
-    List.walk (Types.generated types) buf \accum, T name id -> generateEffect accum types name id
+    List.walk (Types.effects types) buf \accum, T name id -> generateEffect accum types name id
 
 generateEntryPoint : Str, Types, Str, TypeId -> Str
 generateEntryPoint = \buf, types, name, id ->
