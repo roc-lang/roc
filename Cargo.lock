@@ -3204,6 +3204,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_checkmate"
+version = "0.0.1"
+dependencies = [
+ "roc_module",
+ "roc_types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "roc_cli"
 version = "0.0.1"
 dependencies = [
