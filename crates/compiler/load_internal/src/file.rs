@@ -3244,6 +3244,8 @@ fn finish(
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
+    roc_checkmate::dump_checkmate!(checkmate);
+
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -3261,9 +3263,6 @@ fn finish(
         timings: state.timings,
         docs_by_module: documentation,
         abilities_store,
-
-        #[cfg(debug_assertions)]
-        checkmate,
     }
 }
 

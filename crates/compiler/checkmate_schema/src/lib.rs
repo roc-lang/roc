@@ -229,4 +229,8 @@ impl AllEvents {
     pub fn schema() -> RootSchema {
         schema_for!(AllEvents)
     }
+
+    pub fn write(&self, writer: impl std::io::Write) -> Result<(), serde_json::Error> {
+        serde_json::to_writer(writer, self)
+    }
 }

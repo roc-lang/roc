@@ -46,9 +46,6 @@ pub struct LoadedModule {
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
-
-    #[cfg(debug_assertions)]
-    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 impl LoadedModule {

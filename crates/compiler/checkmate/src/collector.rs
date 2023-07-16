@@ -1,3 +1,5 @@
+use std::error::Error;
+
 use roc_checkmate_schema::{AllEvents, Event, VariableEvent};
 use roc_types::subs as s;
 
@@ -103,6 +105,11 @@ impl Collector {
             _ => panic!("end_unification called when not in a unification"),
         }
         self.current_event_path.pop();
+    }
+
+    pub fn write(&self, writer: impl std::io::Write) -> Result<(), Box<dyn Error>> {
+        self.events.write(writer)?;
+        Ok(())
     }
 
     fn add_event(&mut self, event: impl Into<Event>) {
