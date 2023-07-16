@@ -1,3 +1,4 @@
+#[cfg(debug_assertions)]
 use roc_checkmate::debug_checkmate;
 use roc_collections::VecSet;
 use roc_types::subs::{Descriptor, Subs, Variable};
