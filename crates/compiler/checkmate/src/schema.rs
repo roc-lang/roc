@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub enum Constraint {}
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, JsonSchema, Debug, PartialEq)]
 pub struct Variable(pub u32);
 
 macro_rules! impl_content {
     ($($name:ident { $($arg:ident: $ty:ty,)* },)*) => {
-        #[derive(Serialize)]
+        #[derive(Serialize, JsonSchema)]
         pub enum Content {
             $(
                 $name {
@@ -101,39 +102,39 @@ impl_content! {
     Error {},
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct ClosureType {
     pub function: Symbol,
     pub environment: Vec<Variable>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct UnspecializedClosureType {
     pub specialization: Variable,
     pub ability_member: Symbol,
     pub lambda_set_region: u8,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub enum AliasKind {
     Structural,
     Opaque,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct AliasTypeVariables {
     pub type_variables: Vec<Variable>,
     pub lambda_set_variables: Vec<Variable>,
     pub infer_ext_in_output_position_variables: Vec<Variable>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct RecordField {
     pub kind: RecordFieldKind,
     pub field_type: Variable,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum RecordFieldKind {
     Demanded,
@@ -141,49 +142,49 @@ pub enum RecordFieldKind {
     Optional { rigid: bool },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum TagUnionExtension {
     Openness(Variable),
     Any(Variable),
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct NumericRange {
     pub kind: NumericRangeKind,
     pub signed: bool,
     pub min_width: u32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub enum NumericRangeKind {
     Int,
     AnyNum,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct Rank(pub u32);
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct Descriptor {
     pub content: Content,
     pub rank: Rank,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub struct Symbol(
     // TODO: should this be module ID + symbol?
     pub String,
 );
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub enum UnificationMode {
     Eq,
     Present,
     LambdaSetSpecialization,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub enum Event {
     Top(Vec<Event>),
     VariableEvent(VariableEvent),
@@ -196,7 +197,7 @@ pub enum Event {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 pub enum VariableEvent {
     Unify {
         from: Variable,

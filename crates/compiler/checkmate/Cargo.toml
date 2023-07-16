@@ -14,3 +14,4 @@ roc_types = { path = "../types" }
 
 serde.workspace = true
 serde_json.workspace = true
+schemars.workspace = true
