@@ -8,6 +8,12 @@ pub enum Constraint {}
 #[derive(Serialize)]
 pub struct Variable(pub u32);
 
+#[derive(Serialize)]
+pub enum VariableValue {
+    Link(Variable),
+    Content(Content),
+}
+
 macro_rules! impl_content {
     ($($name:ident { $($arg:ident: $ty:ty,)* },)*) => {
         #[derive(Serialize)]
@@ -175,3 +181,35 @@ pub struct Symbol(
     // TODO: should this be module ID + symbol?
     pub String,
 );
+
+#[derive(Serialize)]
+pub enum UnificationMode {
+    Eq,
+    Present,
+    LambdaSetSpecialization,
+}
+
+#[derive(Serialize)]
+pub enum Event {
+    Top(Vec<Event>),
+    VariableEvent(VariableEvent),
+    Unification {
+        left: Variable,
+        right: Variable,
+        mode: UnificationMode,
+        subevents: Vec<Event>,
+    },
+}
+
+#[derive(Serialize)]
+pub enum VariableEvent {
+    Unify {
+        from: Variable,
+        to: Variable,
+    },
+    SetDescriptor {
+        variable: Variable,
+        rank: Option<Rank>,
+        content: Option<Content>,
+    },
+}

@@ -1,0 +1,148 @@
+use roc_types::subs as s;
+
+use crate::{
+    convert::AsSchema,
+    schema::{Event, UnificationMode, VariableEvent},
+};
+
+pub struct Collector {
+    events: Event,
+    current_event_path: Vec<usize>,
+}
+
+impl Default for Collector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Collector {
+    pub fn new() -> Self {
+        Self {
+            events: Event::Top(Vec::new()),
+            current_event_path: Vec::new(),
+        }
+    }
+
+    pub fn unify(&mut self, subs: &s::Subs, to: s::Variable, from: s::Variable) {
+        let to = to.as_schema(subs);
+        let from = from.as_schema(subs);
+        self.add_event(VariableEvent::Unify { to, from });
+    }
+
+    pub fn set_content(&mut self, subs: &s::Subs, var: s::Variable, content: s::Content) {
+        let variable = var.as_schema(subs);
+        let content = content.as_schema(subs);
+        self.add_event(VariableEvent::SetDescriptor {
+            variable,
+            content: Some(content),
+            rank: None,
+        });
+    }
+
+    pub fn set_rank(&mut self, subs: &s::Subs, var: s::Variable, rank: s::Rank) {
+        let variable = var.as_schema(subs);
+        let rank = rank.as_schema(subs);
+        self.add_event(VariableEvent::SetDescriptor {
+            variable,
+            rank: Some(rank),
+            content: None,
+        });
+    }
+
+    pub fn set_descriptor(&mut self, subs: &s::Subs, var: s::Variable, descriptor: s::Descriptor) {
+        let variable = var.as_schema(subs);
+        let rank = descriptor.rank.as_schema(subs);
+        let content = descriptor.content.as_schema(subs);
+        self.add_event(VariableEvent::SetDescriptor {
+            variable,
+            rank: Some(rank),
+            content: Some(content),
+        });
+    }
+
+    pub fn start_unification(&mut self, subs: &s::Subs, left: &s::Variable, right: &s::Variable) {
+        let left = left.as_schema(subs);
+        let right = right.as_schema(subs);
+        // TODO add mode
+        let mode = UnificationMode::Eq;
+        let subevents = Vec::new();
+        self.add_event(Event::Unification {
+            left,
+            right,
+            mode,
+            subevents,
+        });
+    }
+
+    pub fn end_unification(&mut self) {
+        let current_event = self.get_path_event();
+        assert!(matches!(current_event, Event::Unification { .. }));
+        self.current_event_path.pop();
+    }
+
+    fn add_event(&mut self, event: impl Into<Event>) {
+        let event = event.into();
+        let is_appendable = event.appendable();
+        let path_event = self.get_path_event();
+        let new_event_index = path_event.append(event);
+        if is_appendable {
+            self.current_event_path.push(new_event_index);
+        }
+    }
+
+    fn get_path_event(&mut self) -> &mut Event {
+        let mut event = &mut self.events;
+        for i in &self.current_event_path {
+            event = event.index(*i);
+        }
+        event
+    }
+}
+
+impl From<VariableEvent> for Event {
+    fn from(event: VariableEvent) -> Event {
+        Event::VariableEvent(event)
+    }
+}
+
+impl Event {
+    fn append(&mut self, event: Event) -> usize {
+        let list = self.subevents_mut().unwrap();
+        let index = list.len();
+        list.push(event);
+        index
+    }
+
+    fn appendable(&self) -> bool {
+        self.subevents().is_some()
+    }
+
+    fn index(&mut self, index: usize) -> &mut Event {
+        &mut self.subevents_mut().unwrap()[index]
+    }
+}
+
+macro_rules! impl_subevents {
+    ($($pat:pat => $body:expr,)*) => {
+        impl Event {
+            fn subevents(&self) -> Option<&Vec<Event>> {
+                match self {$(
+                    $pat => $body,
+                )*}
+            }
+
+            fn subevents_mut(&mut self) -> Option<&mut Vec<Event>> {
+                match self {$(
+                    $pat => $body,
+                )*}
+            }
+        }
+    };
+}
+
+impl_subevents! {
+    Event::Top(events) => Some(events),
+    Event::Unification { subevents, .. } => Some(subevents),
+    Event::VariableEvent(_) => None,
+}

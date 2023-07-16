@@ -8,11 +8,11 @@ use roc_types::{
 };
 
 use crate::schema::{
-    AliasKind, AliasTypeVariables, ClosureType, Content, NumericRange, NumericRangeKind,
+    AliasKind, AliasTypeVariables, ClosureType, Content, NumericRange, NumericRangeKind, Rank,
     RecordField, RecordFieldKind, Symbol, TagUnionExtension, UnspecializedClosureType, Variable,
 };
 
-trait AsSchema<T> {
+pub trait AsSchema<T> {
     fn as_schema(&self, subs: &Subs) -> T;
 }
 
@@ -297,5 +297,11 @@ impl AsSchema<NumericRange> for num::NumericRange {
 impl AsSchema<String> for ident::TagName {
     fn as_schema(&self, _subs: &Subs) -> String {
         self.0.to_string()
+    }
+}
+
+impl AsSchema<Rank> for subs::Rank {
+    fn as_schema(&self, _subs: &Subs) -> Rank {
+        Rank(self.into_usize() as _)
     }
 }
