@@ -22,7 +22,7 @@ use roc_mono::{
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use roc_types::{
     subs::{Content, FlatType, GetSubsSlice, Label, Subs, SubsSlice, UnionLabels, Variable},
-    types::{AliasKind, RecordField, Type},
+    types::{AliasKind, RecordField},
 };
 use std::convert::From;
 use std::fmt::Display;
@@ -119,26 +119,20 @@ impl Types {
             #[cfg(debug_assertions)]
             let mut remaining_entry_points = entry_points.clone();
 
-            for (&symbol, &var) in entry_points.iter() {
+            for var in entry_points.values().copied() {
                 env.lambda_set_ids = env.find_lambda_sets(var);
+                let id = env.add_toplevel_type(var, &mut types);
 
-                match env.add_toplevel_type(var, &mut types) {
-                    Ok(id) => {
-                        let key = entry_points
-                            .iter()
-                            .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+                let key = entry_points
+                    .iter()
+                    .find_map(|(k, v)| (*v == var).then_some((*k, id)));
 
-                        if let Some((k, id)) = key {
-                            let name = k.as_str(env.interns).to_string();
-                            types.entry_points.push((name, id));
+                if let Some((k, id)) = key {
+                    let name = k.as_str(env.interns).to_string();
+                    types.entry_points.push((name, id));
 
-                            #[cfg(debug_assertions)]
-                            remaining_entry_points.remove(&k);
-                        }
-                    }
-                    Err(TypeProblem::NonConcreteType(err_var)) => {
-                        report_non_conrete_type(symbol, err_var);
-                    }
+                    #[cfg(debug_assertions)]
+                    remaining_entry_points.remove(&k);
                 }
             }
 
@@ -689,13 +683,6 @@ impl Types {
     pub fn target(&self) -> TargetInfo {
         self.target
     }
-}
-
-fn report_non_conrete_type(symbol: Symbol, err_var: Variable) {
-    eprintln!(
-        "This effect type is polymorphic, but isn't allowed to be: {:?} (the non-concrete type was {:?})",
-        symbol, err_var
-    );
 }
 
 impl From<&Types> for roc_type::Types {
@@ -1287,11 +1274,7 @@ impl<'a> Env<'a> {
         roc_mono::ir::find_lambda_sets_help(self.subs, stack)
     }
 
-    fn add_toplevel_type(
-        &mut self,
-        var: Variable,
-        types: &mut Types,
-    ) -> Result<TypeId, TypeProblem> {
+    fn add_toplevel_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
         roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding toplevel type");
 
         let layout = self
@@ -1326,7 +1309,7 @@ fn add_function_type<'a>(
     closure_var: Variable,
     ret_var: Variable,
     is_toplevel: bool,
-) -> Result<TypeId, TypeProblem> {
+) -> TypeId {
     let args = env.subs.get_subs_slice(*args);
     let mut arg_type_ids = Vec::with_capacity(args.len());
 
@@ -1341,7 +1324,7 @@ fn add_function_type<'a>(
             .from_var(env.arena, *arg_var, env.subs)
             .expect("Something weird ended up in the content");
 
-        arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types)?);
+        arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
     }
 
     let lambda_set_type_id = if is_toplevel {
@@ -1354,7 +1337,7 @@ fn add_function_type<'a>(
 
         // TODO this treats any lambda set as unsized. We should be able to figure out whether a
         // lambda set is unsized in practice, and use the runtime representation otherwise.
-        add_type_help(env, lambda_set_layout, closure_var, None, types)?
+        add_type_help(env, lambda_set_layout, closure_var, None, types)
     };
 
     let ret_type_id = {
@@ -1363,7 +1346,7 @@ fn add_function_type<'a>(
             .from_var(env.arena, ret_var, env.subs)
             .expect("Something weird ended up in the content");
 
-        add_type_help(env, ret_layout, ret_var, None, types)?
+        add_type_help(env, ret_layout, ret_var, None, types)
     };
 
     let fn_type_id = add_function(env, name, types, layout, |name| {
@@ -1383,11 +1366,7 @@ fn add_function_type<'a>(
         types.depends(fn_type_id, arg_type_id);
     }
 
-    Ok(fn_type_id)
-}
-
-enum TypeProblem {
-    NonConcreteType(Variable),
+    fn_type_id
 }
 
 fn add_type_help<'a>(
@@ -1396,14 +1375,16 @@ fn add_type_help<'a>(
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
-) -> Result<TypeId, TypeProblem> {
+) -> TypeId {
     let subs = env.subs;
 
     match subs.get_content_without_compacting(var) {
         Content::FlexVar(_)
         | Content::RigidVar(_)
         | Content::FlexAbleVar(_, _)
-        | Content::RigidAbleVar(_, _) => Err(TypeProblem::NonConcreteType(var)),
+        | Content::RigidAbleVar(_, _) => {
+            todo!("TODO give a nice error message for a non-concrete type being passed to the host")
+        }
         Content::Structure(FlatType::Tuple(..)) => {
             todo!();
         }
@@ -1890,7 +1871,7 @@ fn add_struct<'a, I, L, F>(
     types: &mut Types,
     in_layout: InLayout<'a>,
     to_type: F,
-) -> Result<TypeId, TypeProblem>
+) -> TypeId
 where
     I: IntoIterator<Item = (L, Variable)>,
     L: Display + Ord,
@@ -1932,43 +1913,43 @@ where
                 .interner
                 .has_varying_stack_size(in_layout, arena));
 
-            debug_assert_eq!(sortables.len(), glue_procs.len());
+            let fields: Vec<(String, TypeId, Accessors)> = sortables
+                .into_iter()
+                .zip(glue_procs.iter())
+                .map(|((label, field_var, field_layout), getter)| {
+                    let type_id = add_type_help(env, field_layout, field_var, None, types);
+                    let accessors = Accessors {
+                        getter: getter.clone(),
+                    };
 
-            let it = sortables.into_iter().zip(glue_procs.iter());
-            let mut fields: Vec<(String, TypeId, Accessors)> = Vec::with_capacity(sortables.len());
-
-            for ((label, field_var, field_layout), getter) in it {
-                let type_id = add_type_help(env, field_layout, field_var, None, types)?;
-                let accessors = Accessors {
-                    getter: getter.clone(),
-                };
-
-                fields.push((format!("{label}"), type_id, accessors));
-            }
+                    (format!("{label}"), type_id, accessors)
+                })
+                .collect();
 
             RocStructFields::HasClosure { fields }
         }
         None => {
             // debug_assert!(!layout.has_varying_stack_size(&env.layout_cache.interner, arena));
 
-            let mut fields: Vec<(String, TypeId)> = Vec::with_capacity(sortables.len());
+            let fields: Vec<(String, TypeId)> = sortables
+                .into_iter()
+                .map(|(label, field_var, field_layout)| {
+                    let type_id = add_type_help(env, field_layout, field_var, None, types);
 
-            for (label, field_var, field_layout) in sortables {
-                let type_id = add_type_help(env, field_layout, field_var, None, types)?;
-
-                fields.push((format!("{label}"), type_id));
-            }
+                    (format!("{label}"), type_id)
+                })
+                .collect();
 
             RocStructFields::HasNoClosure { fields }
         }
     };
 
-    Ok(types.add_named(
+    types.add_named(
         &env.layout_cache.interner,
         name.clone(),
         to_type(name, struct_fields),
         in_layout,
-    ))
+    )
 }
 
 trait UnionTag: Label + std::fmt::Debug {
@@ -2201,7 +2182,7 @@ fn add_tag_union<'a>(
     types: &mut Types,
     layout: InLayout<'a>,
     rec_root: Option<Variable>,
-) -> Result<TypeId, TypeProblem> {
+) -> TypeId {
     let name = match opt_name {
         Some(sym) => sym.as_str(env.interns).to_string(),
         None => env.enum_names.get_name(var),
@@ -2224,7 +2205,7 @@ fn add_tag_union<'a>(
         env.known_recursive_types.insert(rec_var, type_id);
     }
 
-    Ok(type_id)
+    type_id
 }
 
 fn add_int_enumeration(
@@ -2300,7 +2281,7 @@ fn single_tag_payload_fields<'a, 'b>(
     in_layout: InLayout<'a>,
     field_layouts: &[InLayout<'a>],
     types: &mut Types,
-) -> Result<(String, RocSingleTagPayload), TypeProblem> {
+) -> (String, RocSingleTagPayload) {
     let layout = env.layout_cache.interner.get(in_layout);
     // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
     // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
@@ -2322,39 +2303,31 @@ fn single_tag_payload_fields<'a, 'b>(
 
     let payload = match env.glue_procs_by_layout.get(&layout) {
         Some(glue_procs) => {
-            debug_assert_eq!(payload_vars.len(), field_layouts.len());
-            debug_assert_eq!(payload_vars.len(), glue_procs.len());
-
-            let mut payload_getters = Vec::new();
-
-            let it = payload_vars
+            let payload_getters = payload_vars
                 .iter()
                 .zip(field_layouts.iter())
-                .zip(glue_procs.iter());
+                .zip(glue_procs.iter())
+                .map(|((field_var, field_layout), getter_name)| {
+                    let type_id = add_type_help(env, *field_layout, *field_var, None, types);
 
-            for ((field_var, field_layout), getter_name) in it {
-                let type_id = add_type_help(env, *field_layout, *field_var, None, types)?;
-
-                payload_getters.push((type_id, getter_name.to_string()));
-            }
+                    (type_id, getter_name.to_string())
+                })
+                .collect();
 
             RocSingleTagPayload::HasClosure { payload_getters }
         }
-        None => {
-            debug_assert_eq!(payload_vars.len(), field_layouts.len());
-
-            let it = payload_vars.iter().zip(field_layouts.iter());
-            let mut payload_fields = Vec::with_capacity(payload_vars.len());
-
-            for (field_var, field_layout) in it {
-                payload_fields.push(add_type_help(env, *field_layout, *field_var, None, types)?);
-            }
-
-            RocSingleTagPayload::HasNoClosure { payload_fields }
-        }
+        None => RocSingleTagPayload::HasNoClosure {
+            payload_fields: payload_vars
+                .iter()
+                .zip(field_layouts.iter())
+                .map(|(field_var, field_layout)| {
+                    add_type_help(env, *field_layout, *field_var, None, types)
+                })
+                .collect(),
+        },
     };
 
-    Ok((tag_name, payload))
+    (tag_name, payload)
 }
 
 fn tag_to_type<'a, D: Display>(
@@ -2365,11 +2338,11 @@ fn tag_to_type<'a, D: Display>(
     types: &mut Types,
     layout: InLayout<'a>,
     is_recursive: bool,
-) -> Result<(D, Option<TypeId>), TypeProblem> {
+) -> (D, Option<TypeId>) {
     match struct_fields_needed(env, payload_vars.iter().copied()) {
         0 => {
             // no payload
-            Ok((tag_name, None))
+            (tag_name, None)
         }
         1 if !is_recursive => {
             // this isn't recursive and there's 1 payload item, so it doesn't
@@ -2380,9 +2353,9 @@ fn tag_to_type<'a, D: Display>(
                 .layout_cache
                 .from_var(env.arena, *payload_var, env.subs)
                 .expect("Something weird ended up in the content");
-            let payload_id = add_type_help(env, payload_layout, *payload_var, None, types)?;
+            let payload_id = add_type_help(env, payload_layout, *payload_var, None, types);
 
-            Ok((tag_name, Some(payload_id)))
+            (tag_name, Some(payload_id))
         }
         _ => {
             // create a RocType for the payload and save it
@@ -2390,9 +2363,9 @@ fn tag_to_type<'a, D: Display>(
             let fields = payload_vars.iter().copied().enumerate();
             let struct_id = add_struct(env, struct_name, fields, types, layout, |name, fields| {
                 RocType::TagUnionPayload { name, fields }
-            })?;
+            });
 
-            Ok((tag_name, Some(struct_id)))
+            (tag_name, Some(struct_id))
         }
     }
 }
