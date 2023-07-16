@@ -1533,6 +1533,17 @@ fn add_type_help<'a>(
                             }
                         }
                     }
+                    LayoutRepr::Union { .. } if *name == Symbol::DECODE_DECODE_ERROR => {
+                        // NOTE: There is already another branch handling Decode.DecodeError!
+                        // It looks like this:
+                        //
+                        // LayoutRepr::Struct { .. } if *name == Symbol::DECODE_DECODE_ERROR => {
+                        //
+                        // Look down below for a branch like this and delete it, before
+                        // implementing this branch (since if DecodeError has become a LayoutRepr::Union,
+                        // that means it must have multiple tags in it now.)
+                        todo!("glue for Decode.DecodeError has not yet been implemented.");
+                    }
                     LayoutRepr::Struct { .. } if *name == Symbol::RESULT_RESULT => {
                         // can happen if one or both of a and b in `Result.Result a b` are the
                         // empty tag union `[]`
@@ -1582,8 +1593,22 @@ fn add_type_help<'a>(
 
                         type_id
                     }
-                    _ => {
-                        unreachable!()
+                    LayoutRepr::Struct { .. } if *name == Symbol::DECODE_DECODE_ERROR => {
+                        // Currently, it's:
+                        //
+                        //     DecodeError : [TooShort]
+                        //
+                        // So, unit.
+                        //
+                        // If we ever add any more errors cases to this, then it will become
+                        // a LayoutRepr::Union instead.
+                        types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+                    }
+                    repr => {
+                        unreachable!(
+                            "Encountered an unrecognized builtin Alias named `{name}` with this repr: {:?}",
+                            repr
+                        );
                     }
                 }
             } else {
