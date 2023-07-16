@@ -6,6 +6,9 @@ interface List
         replace,
         update,
         append,
+        appendIfOk,
+        prepend,
+        prependIfOk,
         map,
         len,
         withCapacity,
@@ -15,7 +18,6 @@ interface List
         single,
         repeat,
         reverse,
-        prepend,
         join,
         keepIf,
         contains,
@@ -319,6 +321,21 @@ append = \list, element ->
     |> List.reserve 1
     |> List.appendUnsafe element
 
+## If the given [Result] is `Ok`, add it to the end of a list.
+## Otherwise, return the list unmodified.
+##
+## ```
+## List.appendIfOk [1, 2, 3] (Ok 4)
+##
+## [0, 1, 2]
+##     |> List.appendIfOk (Err 3)
+## ```
+appendIfOk : List a, Result a * -> List a
+appendIfOk = \list, result ->
+    when result is
+        Ok elem -> append list elem
+        Err _ -> list
+
 ## Writes the element after the current last element unconditionally.
 ## In other words, it is assumed that
 ##
@@ -334,6 +351,21 @@ appendUnsafe : List a, a -> List a
 ##     |> List.prepend 1
 ## ```
 prepend : List a, a -> List a
+
+## If the given [Result] is `Ok`, add it to the beginning of a list.
+## Otherwise, return the list unmodified.
+##
+## ```
+## List.prepend [1, 2, 3] (Ok 0)
+##
+## [2, 3, 4]
+##     |> List.prepend (Err 1)
+## ```
+prependIfOk : List a, Result a * -> List a
+prependIfOk = \list, result ->
+    when result is
+        Ok elem -> prepend list elem
+        Err _ -> list
 
 ## Returns the length of the list - the number of elements it contains.
 ##
