@@ -800,7 +800,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                 let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
 
                 for i in 0..other_tags.len() + 1 {
-                    if i == nullable_id as _ {
+                    if i == nullable_id as usize {
                         continue;
                     }
 

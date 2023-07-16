@@ -749,7 +749,7 @@ fn unify_two_aliases<M: MetaCollector>(
             merged_args.capacity()
                 + merged_lambda_set_args.capacity()
                 + merged_infer_ext_in_output_vars.capacity(),
-            args.all_variables_len as _,
+            args.all_variables_len as usize,
         );
 
         for (l, r) in args_it {

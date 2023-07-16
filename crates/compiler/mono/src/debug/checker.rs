@@ -910,7 +910,7 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
             nullable_id,
             other_fields,
         } => {
-            if tag_id == nullable_id as _ {
+            if tag_id == nullable_id as u16 {
                 TagPayloads::Payloads(&[])
             } else {
                 check_tag_id_oob!(2);
