@@ -102,7 +102,7 @@ impl Types {
         target: TargetInfo,
         entry_points: MutMap<Symbol, Variable>,
         // e.g. effect functions like stdoutLine
-        effects: MutMap<Symbol, Variable>,
+        effects: Vec<(Symbol, Variable)>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
         let mut env = Env::new(
@@ -113,61 +113,31 @@ impl Types {
             glue_procs_by_layout,
             target,
         );
-        {
-            // We will remove keys from this as we encounter them,
-            // and then afterwards do a debug_assert to verify it's empty
-            #[cfg(debug_assertions)]
-            let mut remaining_entry_points = entry_points.clone();
 
-            for var in entry_points.values().copied() {
-                env.lambda_set_ids = env.find_lambda_sets(var);
-                let id = env.add_toplevel_type(var, &mut types);
+        // Add all the entrypoints (e.g. `mainForHost`) to types.entry_points
+        for (&symbol, &var) in entry_points.iter() {
+            env.lambda_set_ids.extend(env.find_lambda_sets(var));
 
-                let key = entry_points
-                    .iter()
-                    .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+            let type_id = env.add_toplevel_type(var, &mut types);
+            let name = symbol.as_str(env.interns).to_string();
 
-                if let Some((k, id)) = key {
-                    let name = k.as_str(env.interns).to_string();
-                    types.entry_points.push((name, id));
-
-                    #[cfg(debug_assertions)]
-                    remaining_entry_points.remove(&k);
-                }
-            }
-
-            #[cfg(debug_assertions)] // needed because otherwise remaining_entry_points is not in scope!
-            debug_assert!(remaining_entry_points.is_empty());
+            types.entry_points.push((name, type_id));
         }
 
-        {
-            #[cfg(debug_assertions)]
-            let mut remaining_effects = effects.clone();
+        // Add all the effects (e.g. `stdoutLine`) to types.effects
+        for (symbol, var) in effects.iter().copied() {
+            env.lambda_set_ids.extend(env.find_lambda_sets(var));
 
-            for var in effects.values().copied() {
-                env.lambda_set_ids = env.find_lambda_sets(var);
-                let id = env.add_toplevel_type(var, &mut types);
+            let type_id = env.add_toplevel_type(var, &mut types);
+            let name = symbol.as_str(env.interns).to_string();
 
-                let key = effects
-                    .iter()
-                    .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+            // TODO remove this check once Task is a builtin; this is only necessary
+            // because we currently generate these from `hosted` modules.
+            if !["after", "map", "always", "forever"].contains(&name.as_str()) {
 
-                if let Some((k, id)) = key {
-                    let name = k.as_str(env.interns).to_string();
-
-                    // TODO remove this check once Task is a builtin; this is only necessary
-                    // because we currently generate these from `hosted` modules.
-                    if !["after", "map", "always", "forever"].contains(&name.as_str()) {
-                        types.effects.push((name, id));
                     }
-
-                    #[cfg(debug_assertions)]
-                    remaining_effects.remove(&k);
                 }
-            }
 
-            #[cfg(debug_assertions)] // needed because otherwise remaining_effects is not in scope!
-            debug_assert!(remaining_effects.is_empty());
         }
 
         env.resolve_pending_recursive_types(&mut types);

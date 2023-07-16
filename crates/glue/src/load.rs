@@ -343,7 +343,7 @@ pub fn load_types(
         mut solved,
         interns,
         exposed_to_host,
-        hosted,
+        effects,
         ..
     } = roc_load::load_and_typecheck(
         arena,
@@ -382,7 +382,7 @@ pub fn load_types(
         );
     }
 
-    let generated = hosted.values().copied();
+    let generated = effects.iter().map(|(symbol, var)| *var);
 
     // Get the variables for all the exposed_to_host and generated symbols
     let variables = (0..decls.len())
@@ -465,7 +465,7 @@ pub fn load_types(
             layout_cache,
             target_info,
             exposed_to_host.clone(),
-            hosted.clone(),
+            effects.clone(),
         );
 
         arch_types.push(types);

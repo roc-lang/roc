@@ -65,7 +65,9 @@ use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget
 use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
-use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
+use roc_types::subs::{
+    copy_import_to, CopiedImport, ExposedTypesStorageSubs, Rank, Subs, VarStore, Variable,
+};
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
@@ -2058,8 +2060,6 @@ fn update<'a>(
             use HeaderType::*;
 
             log!("loaded header for {:?}", header.module_id);
-            let home = header.module_id;
-
             let mut work = MutSet::default();
 
             // Register the package's path under its shorthand
@@ -2234,7 +2234,7 @@ fn update<'a>(
 
             state
                 .exposed_symbols_by_module
-                .insert(home, exposed_symbols);
+                .insert(header.module_id, exposed_symbols);
 
             // add the prelude
             let mut header = header;
@@ -2254,6 +2254,9 @@ fn update<'a>(
                 extend_header_with_builtin(header, ModuleId::DECODE);
                 extend_header_with_builtin(header, ModuleId::HASH);
             }
+
+            // We don't need it to be mutable from here on.
+            let header = header;
 
             state
                 .module_cache
@@ -2285,11 +2288,13 @@ fn update<'a>(
 
             work.extend(new_work);
 
-            state.module_cache.headers.insert(header.module_id, header);
+            let module_id = header.module_id;
+
+            state.module_cache.headers.insert(module_id, header);
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
-            let work = state.dependencies.notify(home, Phase::LoadHeader);
+            let work = state.dependencies.notify(module_id, Phase::LoadHeader);
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
@@ -2372,7 +2377,7 @@ fn update<'a>(
             module_id,
             ident_ids,
             solved_module,
-            solved_subs,
+            mut solved_subs,
             decls,
             dep_idents,
             mut module_timing,
@@ -2414,18 +2419,15 @@ fn update<'a>(
                 //
                 // We assume every top-level decl in the hosted module
                 // is supposed to be implemented by the host (e.g. it's just a type annotation)
-                state.hosted_vars_by_symbol = decls
-                    .symbols
-                    .iter()
-                    .enumerate()
-                    .map(|(index, loc_symbol)| {
+                state
+                    .hosted_vars_by_symbol
+                    .extend(decls.symbols.iter().enumerate().map(|(index, loc_symbol)| {
                         // Get the Variable corresponding to this symbol
                         let symbol = loc_symbol.value;
                         let var = decls.variables.get(index).unwrap();
 
                         (symbol, *var)
-                    })
-                    .collect();
+                    }));
             }
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
@@ -2473,7 +2475,7 @@ fn update<'a>(
                 state.timings.insert(module_id, module_timing);
 
                 if state.exec_mode.build_if_checks() {
-                    // We there may outstanding modules in the typecheked cache whose ident IDs
+                    // There may outstanding modules in the typecheked cache whose ident IDs
                     // aren't registered; transfer all of their idents over to the state, since
                     // we're now done and ready to report errors.
                     for (
@@ -3220,7 +3222,6 @@ fn finish(
 
     LoadedModule {
         module_id: state.root_id,
-        hosted_ids: state.hosted_ids,
         interns,
         solved,
         can_problems: state.module_cache.can_problems,
@@ -3230,7 +3231,7 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
-        hosted: state.hosted_vars_by_symbol.into_iter().collect(),
+        effects: state.hosted_vars_by_symbol,
         exposed_types_storage,
         resolved_implementations,
         sources,
@@ -4479,7 +4480,7 @@ impl<'a> BuildTask<'a> {
 }
 
 fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable {
-    use roc_types::subs::{Descriptor, Mark, OptVariable, Rank};
+    use roc_types::subs::{Descriptor, Mark, OptVariable};
     subs.fresh(Descriptor {
         content,
         rank: Rank::import(),
