@@ -4,6 +4,7 @@ use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::Serialize;
 
 #[derive(Serialize, JsonSchema)]
+#[serde(tag = "type")]
 pub enum Constraint {}
 
 #[derive(Serialize, JsonSchema, Debug, PartialEq)]
@@ -12,6 +13,7 @@ pub struct Variable(pub u32);
 macro_rules! impl_content {
     ($($name:ident { $($arg:ident: $ty:ty,)* },)*) => {
         #[derive(Serialize, JsonSchema)]
+        #[serde(tag = "type")]
         pub enum Content {
             $(
                 $name {
@@ -116,6 +118,7 @@ pub struct UnspecializedClosureType {
 }
 
 #[derive(Serialize, JsonSchema)]
+#[serde(tag = "type")]
 pub enum AliasKind {
     Structural,
     Opaque,
@@ -135,7 +138,7 @@ pub struct RecordField {
 }
 
 #[derive(Serialize, JsonSchema)]
-#[serde(tag = "kind")]
+#[serde(tag = "type")]
 pub enum RecordFieldKind {
     Demanded,
     Required { rigid: bool },
@@ -143,7 +146,7 @@ pub enum RecordFieldKind {
 }
 
 #[derive(Serialize, JsonSchema)]
-#[serde(tag = "kind")]
+#[serde(tag = "type")]
 pub enum TagUnionExtension {
     Openness(Variable),
     Any(Variable),
@@ -157,6 +160,7 @@ pub struct NumericRange {
 }
 
 #[derive(Serialize, JsonSchema)]
+#[serde(tag = "type")]
 pub enum NumericRangeKind {
     Int,
     AnyNum,
@@ -178,6 +182,7 @@ pub struct Symbol(
 );
 
 #[derive(Serialize, JsonSchema)]
+#[serde(tag = "type")]
 pub enum UnificationMode {
     Eq,
     Present,
@@ -185,8 +190,8 @@ pub enum UnificationMode {
 }
 
 #[derive(Serialize, JsonSchema)]
+#[serde(tag = "type")]
 pub enum Event {
-    Top(Vec<Event>),
     VariableEvent(VariableEvent),
     Unification {
         left: Variable,
@@ -198,6 +203,10 @@ pub enum Event {
 }
 
 #[derive(Serialize, JsonSchema)]
+pub struct AllEvents(pub Vec<Event>);
+
+#[derive(Serialize, JsonSchema)]
+#[serde(tag = "type")]
 pub enum VariableEvent {
     Unify {
         from: Variable,
@@ -216,47 +225,8 @@ impl From<VariableEvent> for Event {
     }
 }
 
-impl Event {
-    pub fn append(&mut self, event: Event) -> usize {
-        let list = self.subevents_mut().unwrap();
-        let index = list.len();
-        list.push(event);
-        index
-    }
-
-    pub fn appendable(&self) -> bool {
-        self.subevents().is_some()
-    }
-
-    pub fn index(&mut self, index: usize) -> &mut Event {
-        &mut self.subevents_mut().unwrap()[index]
-    }
-
+impl AllEvents {
     pub fn schema() -> RootSchema {
-        schema_for!(Event)
+        schema_for!(AllEvents)
     }
-}
-
-macro_rules! impl_subevents {
-    ($($pat:pat => $body:expr,)*) => {
-        impl Event {
-            fn subevents(&self) -> Option<&Vec<Event>> {
-                match self {$(
-                    $pat => $body,
-                )*}
-            }
-
-            fn subevents_mut(&mut self) -> Option<&mut Vec<Event>> {
-                match self {$(
-                    $pat => $body,
-                )*}
-            }
-        }
-    };
-}
-
-impl_subevents! {
-    Event::Top(events) => Some(events),
-    Event::Unification { subevents, .. } => Some(subevents),
-    Event::VariableEvent(_) => None,
 }

@@ -1,10 +1,10 @@
-use roc_checkmate_schema::{Event, VariableEvent};
+use roc_checkmate_schema::{AllEvents, Event, VariableEvent};
 use roc_types::subs as s;
 
 use crate::convert::AsSchema;
 
 pub struct Collector {
-    events: Event,
+    events: AllEvents,
     current_event_path: Vec<usize>,
 }
 
@@ -17,7 +17,7 @@ impl Default for Collector {
 impl Collector {
     pub fn new() -> Self {
         Self {
-            events: Event::Top(Vec::new()),
+            events: AllEvents(Vec::new()),
             current_event_path: Vec::new(),
         }
     }
@@ -88,12 +88,12 @@ impl Collector {
     ) {
         let current_event = self.get_path_event();
         match current_event {
-            Event::Unification {
+            EventW::Sub(Event::Unification {
                 left: l,
                 right: r,
                 success: s,
                 ..
-            } => {
+            }) => {
                 assert_eq!(left.as_schema(subs), *l);
                 assert_eq!(right.as_schema(subs), *r);
                 assert!(s.is_none());
@@ -101,13 +101,14 @@ impl Collector {
             }
             _ => panic!("end_unification called when not in a unification"),
         }
-        assert!(matches!(current_event, Event::Unification { .. }));
         self.current_event_path.pop();
     }
 
     fn add_event(&mut self, event: impl Into<Event>) {
-        let event = event.into();
-        let is_appendable = event.appendable();
+        let mut event = event.into();
+        let is_appendable = EventW::Sub(&mut event).appendable();
+        let event = event;
+
         let path_event = self.get_path_event();
         let new_event_index = path_event.append(event);
         if is_appendable {
@@ -115,11 +116,52 @@ impl Collector {
         }
     }
 
-    fn get_path_event(&mut self) -> &mut Event {
-        let mut event = &mut self.events;
+    fn get_path_event(&mut self) -> EventW {
+        let mut event = EventW::Top(&mut self.events);
         for i in &self.current_event_path {
             event = event.index(*i);
         }
         event
+    }
+}
+
+enum EventW<'a> {
+    Top(&'a mut AllEvents),
+    Sub(&'a mut Event),
+}
+
+impl<'a> EventW<'a> {
+    fn append(self, event: Event) -> usize {
+        let list = self.subevents_mut().unwrap();
+        let index = list.len();
+        list.push(event);
+        index
+    }
+
+    fn appendable(self) -> bool {
+        self.subevents().is_some()
+    }
+
+    fn index(self, index: usize) -> EventW<'a> {
+        Self::Sub(&mut self.subevents_mut().unwrap()[index])
+    }
+}
+
+impl<'a> EventW<'a> {
+    fn subevents(self) -> Option<&'a Vec<Event>> {
+        use EventW::*;
+        match self {
+            Top(events) => Some(&events.0),
+            Sub(Event::Unification { subevents, .. }) => Some(subevents),
+            Sub(Event::VariableEvent(_)) => None,
+        }
+    }
+    fn subevents_mut(self) -> Option<&'a mut Vec<Event>> {
+        use EventW::*;
+        match self {
+            Top(events) => Some(&mut events.0),
+            Sub(Event::Unification { subevents, .. }) => Some(subevents),
+            Sub(Event::VariableEvent(_)) => None,
+        }
     }
 }

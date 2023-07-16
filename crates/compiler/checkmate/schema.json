@@ -1,82 +1,41 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Event",
-  "oneOf": [
-    {
-      "type": "object",
-      "required": [
-        "Top"
-      ],
-      "properties": {
-        "Top": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/Event"
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "required": [
-        "VariableEvent"
-      ],
-      "properties": {
-        "VariableEvent": {
-          "$ref": "#/definitions/VariableEvent"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "required": [
-        "Unification"
-      ],
-      "properties": {
-        "Unification": {
+  "title": "AllEvents",
+  "type": "array",
+  "items": {
+    "$ref": "#/definitions/Event"
+  },
+  "definitions": {
+    "AliasKind": {
+      "oneOf": [
+        {
           "type": "object",
           "required": [
-            "left",
-            "mode",
-            "right",
-            "subevents"
+            "type"
           ],
           "properties": {
-            "left": {
-              "$ref": "#/definitions/Variable"
-            },
-            "mode": {
-              "$ref": "#/definitions/UnificationMode"
-            },
-            "right": {
-              "$ref": "#/definitions/Variable"
-            },
-            "subevents": {
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/Event"
-              }
-            },
-            "success": {
-              "type": [
-                "boolean",
-                "null"
+            "type": {
+              "type": "string",
+              "enum": [
+                "Structural"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Opaque"
               ]
             }
           }
         }
-      },
-      "additionalProperties": false
-    }
-  ],
-  "definitions": {
-    "AliasKind": {
-      "type": "string",
-      "enum": [
-        "Structural",
-        "Opaque"
       ]
     },
     "AliasTypeVariables": {
@@ -130,478 +89,458 @@
         {
           "type": "object",
           "required": [
-            "Flex"
+            "type"
           ],
           "properties": {
-            "Flex": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              }
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Flex"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "Rigid"
+            "name",
+            "type"
           ],
           "properties": {
-            "Rigid": {
-              "type": "object",
-              "required": [
-                "name"
-              ],
-              "properties": {
-                "name": {
-                  "type": "string"
-                }
-              }
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Rigid"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "FlexAble"
+            "abilities",
+            "type"
           ],
           "properties": {
-            "FlexAble": {
-              "type": "object",
-              "required": [
-                "abilities"
-              ],
-              "properties": {
-                "abilities": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/Symbol"
-                  }
+            "abilities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Symbol"
+              }
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "FlexAble"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "abilities",
+            "name",
+            "type"
+          ],
+          "properties": {
+            "abilities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Symbol"
+              }
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "RigidAble"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "structure",
+            "type"
+          ],
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "structure": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Recursive"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "ambient_function",
+            "solved",
+            "type",
+            "unspecialized"
+          ],
+          "properties": {
+            "ambient_function": {
+              "$ref": "#/definitions/Variable"
+            },
+            "recursion_var": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Variable"
                 },
-                "name": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                {
+                  "type": "null"
                 }
+              ]
+            },
+            "solved": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ClosureType"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "LambdaSet"
+              ]
+            },
+            "unspecialized": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/UnspecializedClosureType"
               }
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "RigidAble"
+            "kind",
+            "name",
+            "real_variable",
+            "type",
+            "variables"
           ],
           "properties": {
-            "RigidAble": {
-              "type": "object",
-              "required": [
-                "abilities",
-                "name"
-              ],
-              "properties": {
-                "abilities": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/Symbol"
-                  }
-                },
-                "name": {
-                  "type": "string"
-                }
-              }
+            "kind": {
+              "$ref": "#/definitions/AliasKind"
+            },
+            "name": {
+              "$ref": "#/definitions/Symbol"
+            },
+            "real_variable": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Alias"
+              ]
+            },
+            "variables": {
+              "$ref": "#/definitions/AliasTypeVariables"
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "Recursive"
+            "symbol",
+            "type",
+            "variables"
           ],
           "properties": {
-            "Recursive": {
+            "symbol": {
+              "$ref": "#/definitions/Symbol"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Apply"
+              ]
+            },
+            "variables": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Variable"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "arguments",
+            "lambda_type",
+            "ret",
+            "type"
+          ],
+          "properties": {
+            "arguments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Variable"
+              }
+            },
+            "lambda_type": {
+              "$ref": "#/definitions/Variable"
+            },
+            "ret": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Function"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "extension",
+            "fields",
+            "type"
+          ],
+          "properties": {
+            "extension": {
+              "$ref": "#/definitions/Variable"
+            },
+            "fields": {
               "type": "object",
-              "required": [
-                "structure"
-              ],
-              "properties": {
-                "name": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "structure": {
+              "additionalProperties": {
+                "$ref": "#/definitions/RecordField"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Record"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "elements",
+            "extension",
+            "type"
+          ],
+          "properties": {
+            "elements": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/Variable"
+              }
+            },
+            "extension": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Tuple"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "extension",
+            "tags",
+            "type"
+          ],
+          "properties": {
+            "extension": {
+              "$ref": "#/definitions/TagUnionExtension"
+            },
+            "tags": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
                   "$ref": "#/definitions/Variable"
                 }
               }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "TagUnion"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "LambdaSet"
+            "extension",
+            "functions",
+            "tags",
+            "type"
           ],
           "properties": {
-            "LambdaSet": {
-              "type": "object",
-              "required": [
-                "ambient_function",
-                "solved",
-                "unspecialized"
-              ],
-              "properties": {
-                "ambient_function": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "recursion_var": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/Variable"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "solved": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/ClosureType"
-                  }
-                },
-                "unspecialized": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/UnspecializedClosureType"
-                  }
-                }
+            "extension": {
+              "$ref": "#/definitions/TagUnionExtension"
+            },
+            "functions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Symbol"
               }
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "Alias"
-          ],
-          "properties": {
-            "Alias": {
-              "type": "object",
-              "required": [
-                "kind",
-                "name",
-                "real_variable",
-                "variables"
-              ],
-              "properties": {
-                "kind": {
-                  "$ref": "#/definitions/AliasKind"
-                },
-                "name": {
-                  "$ref": "#/definitions/Symbol"
-                },
-                "real_variable": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "variables": {
-                  "$ref": "#/definitions/AliasTypeVariables"
-                }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
               }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "FunctionOrTagUnion"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "Apply"
+            "extension",
+            "recursion_var",
+            "tags",
+            "type"
           ],
           "properties": {
-            "Apply": {
+            "extension": {
+              "$ref": "#/definitions/TagUnionExtension"
+            },
+            "recursion_var": {
+              "$ref": "#/definitions/Variable"
+            },
+            "tags": {
               "type": "object",
-              "required": [
-                "symbol",
-                "variables"
-              ],
-              "properties": {
-                "symbol": {
-                  "$ref": "#/definitions/Symbol"
-                },
-                "variables": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/Variable"
-                  }
-                }
-              }
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "Function"
-          ],
-          "properties": {
-            "Function": {
-              "type": "object",
-              "required": [
-                "arguments",
-                "lambda_type",
-                "ret"
-              ],
-              "properties": {
-                "arguments": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/Variable"
-                  }
-                },
-                "lambda_type": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "ret": {
+              "additionalProperties": {
+                "type": "array",
+                "items": {
                   "$ref": "#/definitions/Variable"
                 }
               }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "RecursiveTagUnion"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "Record"
+            "type"
           ],
           "properties": {
-            "Record": {
-              "type": "object",
-              "required": [
-                "extension",
-                "fields"
-              ],
-              "properties": {
-                "extension": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "fields": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "$ref": "#/definitions/RecordField"
-                  }
-                }
-              }
+            "type": {
+              "type": "string",
+              "enum": [
+                "EmptyRecord"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "Tuple"
+            "type"
           ],
           "properties": {
-            "Tuple": {
-              "type": "object",
-              "required": [
-                "elements",
-                "extension"
-              ],
-              "properties": {
-                "elements": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "$ref": "#/definitions/Variable"
-                  }
-                },
-                "extension": {
-                  "$ref": "#/definitions/Variable"
-                }
-              }
+            "type": {
+              "type": "string",
+              "enum": [
+                "EmptyTuple"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "TagUnion"
+            "type"
           ],
           "properties": {
-            "TagUnion": {
-              "type": "object",
-              "required": [
-                "extension",
-                "tags"
-              ],
-              "properties": {
-                "extension": {
-                  "$ref": "#/definitions/TagUnionExtension"
-                },
-                "tags": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/definitions/Variable"
-                    }
-                  }
-                }
-              }
+            "type": {
+              "type": "string",
+              "enum": [
+                "EmptyTagUnion"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "FunctionOrTagUnion"
+            "range",
+            "type"
           ],
           "properties": {
-            "FunctionOrTagUnion": {
-              "type": "object",
-              "required": [
-                "extension",
-                "functions",
-                "tags"
-              ],
-              "properties": {
-                "extension": {
-                  "$ref": "#/definitions/TagUnionExtension"
-                },
-                "functions": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/Symbol"
-                  }
-                },
-                "tags": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                }
-              }
+            "range": {
+              "$ref": "#/definitions/NumericRange"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "RangedNumber"
+              ]
             }
-          },
-          "additionalProperties": false
+          }
         },
         {
           "type": "object",
           "required": [
-            "RecursiveTagUnion"
+            "type"
           ],
           "properties": {
-            "RecursiveTagUnion": {
-              "type": "object",
-              "required": [
-                "extension",
-                "recursion_var",
-                "tags"
-              ],
-              "properties": {
-                "extension": {
-                  "$ref": "#/definitions/TagUnionExtension"
-                },
-                "recursion_var": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "tags": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/definitions/Variable"
-                    }
-                  }
-                }
-              }
+            "type": {
+              "type": "string",
+              "enum": [
+                "Error"
+              ]
             }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "EmptyRecord"
-          ],
-          "properties": {
-            "EmptyRecord": {
-              "type": "object"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "EmptyTuple"
-          ],
-          "properties": {
-            "EmptyTuple": {
-              "type": "object"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "EmptyTagUnion"
-          ],
-          "properties": {
-            "EmptyTagUnion": {
-              "type": "object"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "RangedNumber"
-          ],
-          "properties": {
-            "RangedNumber": {
-              "type": "object",
-              "required": [
-                "range"
-              ],
-              "properties": {
-                "range": {
-                  "$ref": "#/definitions/NumericRange"
-                }
-              }
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "Error"
-          ],
-          "properties": {
-            "Error": {
-              "type": "object"
-            }
-          },
-          "additionalProperties": false
+          }
         }
       ]
     },
@@ -609,71 +548,118 @@
       "oneOf": [
         {
           "type": "object",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "from",
+                "to",
+                "type"
+              ],
+              "properties": {
+                "from": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "to": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "Unify"
+                  ]
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "type",
+                "variable"
+              ],
+              "properties": {
+                "content": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/Content"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "rank": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/Rank"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "SetDescriptor"
+                  ]
+                },
+                "variable": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            }
+          ],
           "required": [
-            "Top"
+            "type"
           ],
           "properties": {
-            "Top": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "VariableEvent"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "left",
+            "mode",
+            "right",
+            "subevents",
+            "type"
+          ],
+          "properties": {
+            "left": {
+              "$ref": "#/definitions/Variable"
+            },
+            "mode": {
+              "$ref": "#/definitions/UnificationMode"
+            },
+            "right": {
+              "$ref": "#/definitions/Variable"
+            },
+            "subevents": {
               "type": "array",
               "items": {
                 "$ref": "#/definitions/Event"
               }
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Unification"
+              ]
             }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "VariableEvent"
-          ],
-          "properties": {
-            "VariableEvent": {
-              "$ref": "#/definitions/VariableEvent"
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "Unification"
-          ],
-          "properties": {
-            "Unification": {
-              "type": "object",
-              "required": [
-                "left",
-                "mode",
-                "right",
-                "subevents"
-              ],
-              "properties": {
-                "left": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "mode": {
-                  "$ref": "#/definitions/UnificationMode"
-                },
-                "right": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "subevents": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/definitions/Event"
-                  }
-                },
-                "success": {
-                  "type": [
-                    "boolean",
-                    "null"
-                  ]
-                }
-              }
-            }
-          },
-          "additionalProperties": false
+          }
         }
       ]
     },
@@ -699,10 +685,35 @@
       }
     },
     "NumericRangeKind": {
-      "type": "string",
-      "enum": [
-        "Int",
-        "AnyNum"
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Int"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "AnyNum"
+              ]
+            }
+          }
+        }
       ]
     },
     "Rank": {
@@ -730,10 +741,10 @@
         {
           "type": "object",
           "required": [
-            "kind"
+            "type"
           ],
           "properties": {
-            "kind": {
+            "type": {
               "type": "string",
               "enum": [
                 "Demanded"
@@ -744,36 +755,36 @@
         {
           "type": "object",
           "required": [
-            "kind",
-            "rigid"
+            "rigid",
+            "type"
           ],
           "properties": {
-            "kind": {
+            "rigid": {
+              "type": "boolean"
+            },
+            "type": {
               "type": "string",
               "enum": [
                 "Required"
               ]
-            },
-            "rigid": {
-              "type": "boolean"
             }
           }
         },
         {
           "type": "object",
           "required": [
-            "kind",
-            "rigid"
+            "rigid",
+            "type"
           ],
           "properties": {
-            "kind": {
+            "rigid": {
+              "type": "boolean"
+            },
+            "type": {
               "type": "string",
               "enum": [
                 "Optional"
               ]
-            },
-            "rigid": {
-              "type": "boolean"
             }
           }
         }
@@ -792,10 +803,10 @@
           "format": "uint32",
           "minimum": 0.0,
           "required": [
-            "kind"
+            "type"
           ],
           "properties": {
-            "kind": {
+            "type": {
               "type": "string",
               "enum": [
                 "Openness"
@@ -811,10 +822,10 @@
           "format": "uint32",
           "minimum": 0.0,
           "required": [
-            "kind"
+            "type"
           ],
           "properties": {
-            "kind": {
+            "type": {
               "type": "string",
               "enum": [
                 "Any"
@@ -825,11 +836,49 @@
       ]
     },
     "UnificationMode": {
-      "type": "string",
-      "enum": [
-        "Eq",
-        "Present",
-        "LambdaSetSpecialization"
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Eq"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Present"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "LambdaSetSpecialization"
+              ]
+            }
+          }
+        }
       ]
     },
     "UnspecializedClosureType": {
@@ -857,74 +906,6 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0.0
-    },
-    "VariableEvent": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "Unify"
-          ],
-          "properties": {
-            "Unify": {
-              "type": "object",
-              "required": [
-                "from",
-                "to"
-              ],
-              "properties": {
-                "from": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "to": {
-                  "$ref": "#/definitions/Variable"
-                }
-              }
-            }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": [
-            "SetDescriptor"
-          ],
-          "properties": {
-            "SetDescriptor": {
-              "type": "object",
-              "required": [
-                "variable"
-              ],
-              "properties": {
-                "content": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/Content"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "rank": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/Rank"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "variable": {
-                  "$ref": "#/definitions/Variable"
-                }
-              }
-            }
-          },
-          "additionalProperties": false
-        }
-      ]
     }
   }
 }

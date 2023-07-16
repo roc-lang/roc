@@ -1,9 +1,9 @@
 use std::fs;
 
-use roc_checkmate_schema::Event;
+use roc_checkmate_schema::AllEvents;
 
 fn main() {
-    let schema = Event::schema();
+    let schema = AllEvents::schema();
     fs::write(
         "schema.json",
         serde_json::to_string_pretty(&schema).unwrap(),
