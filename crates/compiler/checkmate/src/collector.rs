@@ -24,7 +24,7 @@ impl Collector {
         }
     }
 
-    pub fn unify(&mut self, subs: &s::Subs, to: s::Variable, from: s::Variable) {
+    pub fn unify(&mut self, subs: &s::Subs, from: s::Variable, to: s::Variable) {
         let to = to.as_schema(subs);
         let from = from.as_schema(subs);
         self.add_event(VariableEvent::Unify { to, from });
@@ -61,7 +61,7 @@ impl Collector {
         });
     }
 
-    pub fn start_unification(&mut self, subs: &s::Subs, left: &s::Variable, right: &s::Variable) {
+    pub fn start_unification(&mut self, subs: &s::Subs, left: s::Variable, right: s::Variable) {
         let left = left.as_schema(subs);
         let right = right.as_schema(subs);
         // TODO add mode
@@ -72,11 +72,32 @@ impl Collector {
             right,
             mode,
             subevents,
+            success: None,
         });
     }
 
-    pub fn end_unification(&mut self) {
+    pub fn end_unification(
+        &mut self,
+        subs: &s::Subs,
+        left: s::Variable,
+        right: s::Variable,
+        success: bool,
+    ) {
         let current_event = self.get_path_event();
+        match current_event {
+            Event::Unification {
+                left: l,
+                right: r,
+                success: s,
+                ..
+            } => {
+                assert_eq!(left.as_schema(subs), *l);
+                assert_eq!(right.as_schema(subs), *r);
+                assert!(s.is_none());
+                *s = Some(success);
+            }
+            _ => panic!("end_unification called when not in a unification"),
+        }
         assert!(matches!(current_event, Event::Unification { .. }));
         self.current_event_path.pop();
     }

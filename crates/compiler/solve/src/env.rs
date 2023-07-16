@@ -1,8 +1,9 @@
 use bumpalo::Bump;
 use roc_can::{constraint::Constraints, module::ExposedByModule};
+use roc_checkmate::with_checkmate;
 use roc_derive::SharedDerivedModule;
 use roc_types::subs::{Content, Descriptor, Mark, OptVariable, Rank, Subs, Variable};
-use roc_unify::unify::Env as UEnv;
+use roc_unify::Env as UEnv;
 
 use crate::{FunctionKind, Pools};
 
@@ -93,7 +94,11 @@ impl<'a> InferenceEnv<'a> {
 
     /// Retrieves an environment for unification.
     pub fn uenv(&mut self) -> UEnv {
-        UEnv::new(self.subs)
+        // TODO(checkmate): pass checkmate through
+        with_checkmate!(None, {
+            on => UEnv::new(self.subs, None),
+            off => UEnv::new(self.subs),
+        })
     }
 
     pub fn as_solve_env(&mut self) -> SolveEnv {

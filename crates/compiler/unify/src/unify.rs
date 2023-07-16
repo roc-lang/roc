@@ -468,6 +468,14 @@ fn debug_print_unified_types<M: MetaCollector>(
 
     static mut UNIFICATION_DEPTH: usize = 0;
 
+    match opt_outcome {
+        None => env.debug_start_unification(ctx.first, ctx.second, ctx.mode),
+        Some(outcome) => {
+            let success = outcome.mismatches.is_empty();
+            env.debug_end_unification(ctx.first, ctx.second, success);
+        }
+    }
+
     dbg_do!(ROC_PRINT_UNIFICATIONS, {
         let prefix = match opt_outcome {
             None => "❔",

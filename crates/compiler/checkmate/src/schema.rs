@@ -5,7 +5,7 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub enum Constraint {}
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, PartialEq)]
 pub struct Variable(pub u32);
 
 #[derive(Serialize)]
@@ -197,6 +197,7 @@ pub enum Event {
         left: Variable,
         right: Variable,
         mode: UnificationMode,
+        success: Option<bool>,
         subevents: Vec<Event>,
     },
 }

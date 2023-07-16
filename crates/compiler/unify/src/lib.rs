@@ -7,3 +7,4 @@
 mod env;
 mod fix;
 pub mod unify;
+pub use env::Env;

@@ -3095,6 +3095,7 @@ dependencies = [
  "page_size",
  "roc_builtins",
  "roc_can",
+ "roc_checkmate",
  "roc_collections",
  "roc_error_macros",
  "roc_load",
@@ -3321,6 +3322,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_can",
+ "roc_checkmate",
  "roc_collections",
  "roc_derive_key",
  "roc_error_macros",
@@ -3574,6 +3576,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "roc_can",
+ "roc_checkmate",
  "roc_collections",
  "roc_derive",
  "roc_error_macros",
@@ -3927,6 +3930,7 @@ dependencies = [
  "regex",
  "roc_builtins",
  "roc_can",
+ "roc_checkmate",
  "roc_collections",
  "roc_debug_flags",
  "roc_derive",

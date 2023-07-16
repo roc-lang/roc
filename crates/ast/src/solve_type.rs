@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
+use roc_checkmate::with_checkmate;
 use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
@@ -17,9 +18,9 @@ use roc_types::types::{
     RecordField,
 };
 use roc_unify::unify::unify;
-use roc_unify::unify::Env as UEnv;
 use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
+use roc_unify::Env as UEnv;
 
 use crate::constrain::{Constraint, PresenceConstraint};
 use crate::lang::core::types::Type2;
@@ -228,7 +229,10 @@ fn solve<'a>(
             );
 
             match unify(
-                &mut UEnv::new(subs),
+                &mut with_checkmate!(None, {
+                    on => UEnv::new(subs, None),
+                    off => UEnv::new(subs),
+                }),
                 actual,
                 expected,
                 Mode::EQ,
@@ -326,7 +330,10 @@ fn solve<'a>(
                     );
 
                     match unify(
-                        &mut UEnv::new(subs),
+                        &mut with_checkmate!(None, {
+                            on => UEnv::new(subs, None),
+                            off => UEnv::new(subs),
+                        }),
                         actual,
                         expected,
                         Mode::EQ,
@@ -402,7 +409,10 @@ fn solve<'a>(
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
             match unify(
-                &mut UEnv::new(subs),
+                &mut with_checkmate!(None, {
+                    on => UEnv::new(subs, None),
+                    off => UEnv::new(subs),
+                }),
                 actual,
                 expected,
                 Mode::EQ,
@@ -718,7 +728,10 @@ fn solve<'a>(
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
             match unify(
-                &mut UEnv::new(subs),
+                &mut with_checkmate!(None, {
+                    on => UEnv::new(subs, None),
+                    off => UEnv::new(subs),
+                }),
                 actual,
                 includes,
                 Mode::PRESENT,

@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::module::ExposedByModule;
+use roc_checkmate::with_checkmate;
 use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -19,7 +20,8 @@ use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, Lambd
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_types::types::Polarity;
 use roc_unify::unify::MetaCollector;
-use roc_unify::unify::{Env as UEnv, Mode, Unified};
+use roc_unify::unify::{Mode, Unified};
+use roc_unify::Env as UEnv;
 
 pub use roc_solve::ability::{ResolveError, Resolved};
 pub use roc_types::subs::instantiate_rigids;
@@ -360,7 +362,11 @@ pub fn unify(
         "derived module can only unify its subs in its own context!"
     );
     let unified = roc_unify::unify::unify_with_collector::<ChangedVariableCollector>(
-        &mut UEnv::new(subs),
+        // TODO(checkmate): pass checkmate through
+        &mut with_checkmate!(None, {
+            on => UEnv::new(subs, None),
+            off => UEnv::new(subs),
+        }),
         left,
         right,
         Mode::EQ,
