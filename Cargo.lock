@@ -4022,6 +4022,7 @@ name = "roc_unify"
 version = "0.0.1"
 dependencies = [
  "bitflags",
+ "roc_checkmate",
  "roc_collections",
  "roc_debug_flags",
  "roc_error_macros",

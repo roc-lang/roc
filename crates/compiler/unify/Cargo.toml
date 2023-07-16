@@ -27,3 +27,6 @@ path = "../debug_flags"
 
 [dependencies.roc_tracing]
 path = "../../tracing"
+
+[dependencies.roc_checkmate]
+path = "../checkmate"
