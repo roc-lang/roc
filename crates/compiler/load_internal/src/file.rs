@@ -2415,6 +2415,8 @@ fn update<'a>(
             abilities_store,
             loc_expects,
             loc_dbgs,
+
+            #[cfg(debug_assertions)]
             checkmate,
         } => {
             log!("solved types for {:?}", module_id);

@@ -433,6 +433,9 @@ fn check_derived_typechecks_and_golden(
         pending_derives: Default::default(),
         exposed_by_module: &exposed_for_module.exposed_by_module,
         derived_module: Default::default(),
+
+        #[cfg(debug_assertions)]
+        checkmate: None,
     };
 
     let SolveOutput {

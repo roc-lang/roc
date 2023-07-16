@@ -16,6 +16,7 @@ use roc_parse::parser::{SourceError, SyntaxError};
 use roc_problem::can::Problem;
 use roc_region::all::Loc;
 use roc_solve::module::SolveConfig;
+use roc_solve::solve::RunSolveOutput;
 use roc_solve::{solve, Aliases, FunctionKind};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
@@ -50,9 +51,12 @@ pub fn infer_expr(
         exposed_by_module: &Default::default(),
         derived_module,
         function_kind: FunctionKind::LambdaSet,
+        #[cfg(debug_assertions)]
+        checkmate: None,
     };
 
-    let (solved, _) = solve::run(config, problems, subs, aliases, abilities_store);
+    let RunSolveOutput { solved, .. } =
+        solve::run(config, problems, subs, aliases, abilities_store);
 
     let content = *solved.inner().get_content_without_compacting(expr_var);
 
