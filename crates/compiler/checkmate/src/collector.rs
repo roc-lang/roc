@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use roc_checkmate_schema::{AllEvents, Event, VariableEvent};
+use roc_checkmate_schema::{AllEvents, Event};
 use roc_types::subs as s;
 
 use crate::convert::AsSchema;
@@ -28,13 +28,13 @@ impl Collector {
     pub fn unify(&mut self, subs: &s::Subs, from: s::Variable, to: s::Variable) {
         let to = to.as_schema(subs);
         let from = from.as_schema(subs);
-        self.add_event(VariableEvent::Unify { to, from });
+        self.add_event(Event::VariableUnified { to, from });
     }
 
     pub fn set_content(&mut self, subs: &s::Subs, var: s::Variable, content: s::Content) {
         let variable = var.as_schema(subs);
         let content = content.as_schema(subs);
-        self.add_event(VariableEvent::SetDescriptor {
+        self.add_event(Event::VariableSetDescriptor {
             variable,
             content: Some(content),
             rank: None,
@@ -44,7 +44,7 @@ impl Collector {
     pub fn set_rank(&mut self, subs: &s::Subs, var: s::Variable, rank: s::Rank) {
         let variable = var.as_schema(subs);
         let rank = rank.as_schema(subs);
-        self.add_event(VariableEvent::SetDescriptor {
+        self.add_event(Event::VariableSetDescriptor {
             variable,
             rank: Some(rank),
             content: None,
@@ -55,7 +55,7 @@ impl Collector {
         let variable = var.as_schema(subs);
         let rank = descriptor.rank.as_schema(subs);
         let content = descriptor.content.as_schema(subs);
-        self.add_event(VariableEvent::SetDescriptor {
+        self.add_event(Event::VariableSetDescriptor {
             variable,
             rank: Some(rank),
             content: Some(content),
@@ -161,7 +161,7 @@ impl<'a> EventW<'a> {
         match self {
             Top(events) => Some(&events.0),
             Sub(Event::Unification { subevents, .. }) => Some(subevents),
-            Sub(Event::VariableEvent(_)) => None,
+            Sub(Event::VariableUnified { .. } | Event::VariableSetDescriptor { .. }) => None,
         }
     }
     fn subevents_mut(self) -> Option<&'a mut Vec<Event>> {
@@ -169,7 +169,7 @@ impl<'a> EventW<'a> {
         match self {
             Top(events) => Some(&mut events.0),
             Sub(Event::Unification { subevents, .. }) => Some(subevents),
-            Sub(Event::VariableEvent(_)) => None,
+            Sub(Event::VariableUnified { .. } | Event::VariableSetDescriptor { .. }) => None,
         }
     }
 }

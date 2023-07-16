@@ -6,21 +6,6 @@
  */
 
 export type Event =
-  | (
-      | {
-          from: Variable;
-          to: Variable;
-          type: "Unify";
-          [k: string]: unknown;
-        }
-      | {
-          content?: Content | null;
-          rank?: Rank | null;
-          type: "SetDescriptor";
-          variable: Variable;
-          [k: string]: unknown;
-        }
-    )
   | {
       left: Variable;
       mode: UnificationMode;
@@ -29,8 +14,34 @@ export type Event =
       success?: boolean | null;
       type: "Unification";
       [k: string]: unknown;
+    }
+  | {
+      from: Variable;
+      to: Variable;
+      type: "VariableUnified";
+      [k: string]: unknown;
+    }
+  | {
+      content?: Content | null;
+      rank?: Rank | null;
+      type: "VariableSetDescriptor";
+      variable: Variable;
+      [k: string]: unknown;
     };
 export type Variable = number;
+export type UnificationMode =
+  | {
+      type: "Eq";
+      [k: string]: unknown;
+    }
+  | {
+      type: "Present";
+      [k: string]: unknown;
+    }
+  | {
+      type: "LambdaSetSpecialization";
+      [k: string]: unknown;
+    };
 export type Content =
   | {
       name?: string | null;
@@ -176,20 +187,16 @@ export type RecordFieldKind =
       [k: string]: unknown;
     };
 export type TagUnionExtension =
-  | (
-      | {
-          type: "Openness";
-          [k: string]: unknown;
-        }
-      | number
-    )
-  | (
-      | {
-          type: "Any";
-          [k: string]: unknown;
-        }
-      | number
-    );
+  | {
+      type: "Openness";
+      variable: Variable;
+      [k: string]: unknown;
+    }
+  | {
+      type: "Any";
+      variable: Variable;
+      [k: string]: unknown;
+    };
 export type NumericRangeKind =
   | {
       type: "Int";
@@ -200,19 +207,6 @@ export type NumericRangeKind =
       [k: string]: unknown;
     };
 export type Rank = number;
-export type UnificationMode =
-  | {
-      type: "Eq";
-      [k: string]: unknown;
-    }
-  | {
-      type: "Present";
-      [k: string]: unknown;
-    }
-  | {
-      type: "LambdaSetSpecialization";
-      [k: string]: unknown;
-    };
 export type AllEvents = Event[];
 
 export interface ClosureType {

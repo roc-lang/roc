@@ -548,82 +548,6 @@
       "oneOf": [
         {
           "type": "object",
-          "oneOf": [
-            {
-              "type": "object",
-              "required": [
-                "from",
-                "to",
-                "type"
-              ],
-              "properties": {
-                "from": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "to": {
-                  "$ref": "#/definitions/Variable"
-                },
-                "type": {
-                  "type": "string",
-                  "enum": [
-                    "Unify"
-                  ]
-                }
-              }
-            },
-            {
-              "type": "object",
-              "required": [
-                "type",
-                "variable"
-              ],
-              "properties": {
-                "content": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/Content"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "rank": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/definitions/Rank"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": {
-                  "type": "string",
-                  "enum": [
-                    "SetDescriptor"
-                  ]
-                },
-                "variable": {
-                  "$ref": "#/definitions/Variable"
-                }
-              }
-            }
-          ],
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "VariableEvent"
-              ]
-            }
-          }
-        },
-        {
-          "type": "object",
           "required": [
             "left",
             "mode",
@@ -658,6 +582,66 @@
               "enum": [
                 "Unification"
               ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "from",
+            "to",
+            "type"
+          ],
+          "properties": {
+            "from": {
+              "$ref": "#/definitions/Variable"
+            },
+            "to": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "VariableUnified"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "variable"
+          ],
+          "properties": {
+            "content": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Content"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rank": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Rank"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "VariableSetDescriptor"
+              ]
+            },
+            "variable": {
+              "$ref": "#/definitions/Variable"
             }
           }
         }
@@ -796,14 +780,10 @@
     "TagUnionExtension": {
       "oneOf": [
         {
-          "type": [
-            "object",
-            "integer"
-          ],
-          "format": "uint32",
-          "minimum": 0.0,
+          "type": "object",
           "required": [
-            "type"
+            "type",
+            "variable"
           ],
           "properties": {
             "type": {
@@ -811,18 +791,17 @@
               "enum": [
                 "Openness"
               ]
+            },
+            "variable": {
+              "$ref": "#/definitions/Variable"
             }
           }
         },
         {
-          "type": [
-            "object",
-            "integer"
-          ],
-          "format": "uint32",
-          "minimum": 0.0,
+          "type": "object",
           "required": [
-            "type"
+            "type",
+            "variable"
           ],
           "properties": {
             "type": {
@@ -830,6 +809,9 @@
               "enum": [
                 "Any"
               ]
+            },
+            "variable": {
+              "$ref": "#/definitions/Variable"
             }
           }
         }

@@ -40,7 +40,7 @@ macro_rules! dump_checkmate {
 }
 
 pub fn dump_checkmate(collector: &Collector) {
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H-%M-%S");
     let filename = format!("checkmate_{timestamp}.json");
     let fi = std::fs::File::create(&filename).unwrap();
     collector.write(fi).unwrap();

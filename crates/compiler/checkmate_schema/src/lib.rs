@@ -146,7 +146,7 @@ pub enum RecordFieldKind {
 }
 
 #[derive(Serialize, JsonSchema, Debug)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "variable")]
 pub enum TagUnionExtension {
     Openness(Variable),
     Any(Variable),
@@ -192,7 +192,6 @@ pub enum UnificationMode {
 #[derive(Serialize, JsonSchema, Debug)]
 #[serde(tag = "type")]
 pub enum Event {
-    VariableEvent(VariableEvent),
     Unification {
         left: Variable,
         right: Variable,
@@ -200,30 +199,19 @@ pub enum Event {
         success: Option<bool>,
         subevents: Vec<Event>,
     },
-}
-
-#[derive(Serialize, JsonSchema, Debug)]
-pub struct AllEvents(pub Vec<Event>);
-
-#[derive(Serialize, JsonSchema, Debug)]
-#[serde(tag = "type")]
-pub enum VariableEvent {
-    Unify {
+    VariableUnified {
         from: Variable,
         to: Variable,
     },
-    SetDescriptor {
+    VariableSetDescriptor {
         variable: Variable,
         rank: Option<Rank>,
         content: Option<Content>,
     },
 }
 
-impl From<VariableEvent> for Event {
-    fn from(event: VariableEvent) -> Event {
-        Event::VariableEvent(event)
-    }
-}
+#[derive(Serialize, JsonSchema, Debug)]
+pub struct AllEvents(pub Vec<Event>);
 
 impl AllEvents {
     pub fn schema() -> RootSchema {
