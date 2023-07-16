@@ -38,7 +38,7 @@ impl NumericRange {
         width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
-    pub(crate) fn width(&self) -> IntLitWidth {
+    pub fn min_width(&self) -> IntLitWidth {
         use NumericRange::*;
         match self {
             IntAtLeastSigned(w)
@@ -52,7 +52,7 @@ impl NumericRange {
     /// `None` if there is no common lower bound.
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         use NumericRange::*;
-        let (left, right) = (self.width(), other.width());
+        let (left, right) = (self.min_width(), other.min_width());
         let (constructor, is_negative): (fn(IntLitWidth) -> NumericRange, _) = match (self, other) {
             // Matching against a signed int, the intersection must also be a signed int
             (IntAtLeastSigned(_), _) | (_, IntAtLeastSigned(_)) => (IntAtLeastSigned, true),

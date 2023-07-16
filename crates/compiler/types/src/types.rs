@@ -1609,7 +1609,7 @@ mod debug_types {
         use crate::num::IntLitWidth::*;
         use crate::num::NumericRange::*;
 
-        let fmt_width = f.text(match range.width() {
+        let fmt_width = f.text(match range.min_width() {
             U8 | I8 => "8",
             U16 | I16 => "16",
             U32 | I32 => "32",
