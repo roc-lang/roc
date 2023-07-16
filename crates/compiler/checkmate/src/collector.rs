@@ -1,9 +1,7 @@
+use roc_checkmate_schema::{Event, VariableEvent};
 use roc_types::subs as s;
 
-use crate::{
-    convert::AsSchema,
-    schema::{Event, VariableEvent},
-};
+use crate::convert::AsSchema;
 
 pub struct Collector {
     events: Event,
@@ -124,51 +122,4 @@ impl Collector {
         }
         event
     }
-}
-
-impl From<VariableEvent> for Event {
-    fn from(event: VariableEvent) -> Event {
-        Event::VariableEvent(event)
-    }
-}
-
-impl Event {
-    fn append(&mut self, event: Event) -> usize {
-        let list = self.subevents_mut().unwrap();
-        let index = list.len();
-        list.push(event);
-        index
-    }
-
-    fn appendable(&self) -> bool {
-        self.subevents().is_some()
-    }
-
-    fn index(&mut self, index: usize) -> &mut Event {
-        &mut self.subevents_mut().unwrap()[index]
-    }
-}
-
-macro_rules! impl_subevents {
-    ($($pat:pat => $body:expr,)*) => {
-        impl Event {
-            fn subevents(&self) -> Option<&Vec<Event>> {
-                match self {$(
-                    $pat => $body,
-                )*}
-            }
-
-            fn subevents_mut(&mut self) -> Option<&mut Vec<Event>> {
-                match self {$(
-                    $pat => $body,
-                )*}
-            }
-        }
-    };
-}
-
-impl_subevents! {
-    Event::Top(events) => Some(events),
-    Event::Unification { subevents, .. } => Some(subevents),
-    Event::VariableEvent(_) => None,
 }

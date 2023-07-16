@@ -1,0 +1,930 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Event",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "Top"
+      ],
+      "properties": {
+        "Top": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Event"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "VariableEvent"
+      ],
+      "properties": {
+        "VariableEvent": {
+          "$ref": "#/definitions/VariableEvent"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "Unification"
+      ],
+      "properties": {
+        "Unification": {
+          "type": "object",
+          "required": [
+            "left",
+            "mode",
+            "right",
+            "subevents"
+          ],
+          "properties": {
+            "left": {
+              "$ref": "#/definitions/Variable"
+            },
+            "mode": {
+              "$ref": "#/definitions/UnificationMode"
+            },
+            "right": {
+              "$ref": "#/definitions/Variable"
+            },
+            "subevents": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Event"
+              }
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  ],
+  "definitions": {
+    "AliasKind": {
+      "type": "string",
+      "enum": [
+        "Structural",
+        "Opaque"
+      ]
+    },
+    "AliasTypeVariables": {
+      "type": "object",
+      "required": [
+        "infer_ext_in_output_position_variables",
+        "lambda_set_variables",
+        "type_variables"
+      ],
+      "properties": {
+        "infer_ext_in_output_position_variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        },
+        "lambda_set_variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        },
+        "type_variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        }
+      }
+    },
+    "ClosureType": {
+      "type": "object",
+      "required": [
+        "environment",
+        "function"
+      ],
+      "properties": {
+        "environment": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        },
+        "function": {
+          "$ref": "#/definitions/Symbol"
+        }
+      }
+    },
+    "Content": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Flex"
+          ],
+          "properties": {
+            "Flex": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Rigid"
+          ],
+          "properties": {
+            "Rigid": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "FlexAble"
+          ],
+          "properties": {
+            "FlexAble": {
+              "type": "object",
+              "required": [
+                "abilities"
+              ],
+              "properties": {
+                "abilities": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Symbol"
+                  }
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "RigidAble"
+          ],
+          "properties": {
+            "RigidAble": {
+              "type": "object",
+              "required": [
+                "abilities",
+                "name"
+              ],
+              "properties": {
+                "abilities": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Symbol"
+                  }
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Recursive"
+          ],
+          "properties": {
+            "Recursive": {
+              "type": "object",
+              "required": [
+                "structure"
+              ],
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "structure": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "LambdaSet"
+          ],
+          "properties": {
+            "LambdaSet": {
+              "type": "object",
+              "required": [
+                "ambient_function",
+                "solved",
+                "unspecialized"
+              ],
+              "properties": {
+                "ambient_function": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "recursion_var": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/Variable"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "solved": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/ClosureType"
+                  }
+                },
+                "unspecialized": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/UnspecializedClosureType"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Alias"
+          ],
+          "properties": {
+            "Alias": {
+              "type": "object",
+              "required": [
+                "kind",
+                "name",
+                "real_variable",
+                "variables"
+              ],
+              "properties": {
+                "kind": {
+                  "$ref": "#/definitions/AliasKind"
+                },
+                "name": {
+                  "$ref": "#/definitions/Symbol"
+                },
+                "real_variable": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "variables": {
+                  "$ref": "#/definitions/AliasTypeVariables"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Apply"
+          ],
+          "properties": {
+            "Apply": {
+              "type": "object",
+              "required": [
+                "symbol",
+                "variables"
+              ],
+              "properties": {
+                "symbol": {
+                  "$ref": "#/definitions/Symbol"
+                },
+                "variables": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Variable"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Function"
+          ],
+          "properties": {
+            "Function": {
+              "type": "object",
+              "required": [
+                "arguments",
+                "lambda_type",
+                "ret"
+              ],
+              "properties": {
+                "arguments": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Variable"
+                  }
+                },
+                "lambda_type": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "ret": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Record"
+          ],
+          "properties": {
+            "Record": {
+              "type": "object",
+              "required": [
+                "extension",
+                "fields"
+              ],
+              "properties": {
+                "extension": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/definitions/RecordField"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Tuple"
+          ],
+          "properties": {
+            "Tuple": {
+              "type": "object",
+              "required": [
+                "elements",
+                "extension"
+              ],
+              "properties": {
+                "elements": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/definitions/Variable"
+                  }
+                },
+                "extension": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "TagUnion"
+          ],
+          "properties": {
+            "TagUnion": {
+              "type": "object",
+              "required": [
+                "extension",
+                "tags"
+              ],
+              "properties": {
+                "extension": {
+                  "$ref": "#/definitions/TagUnionExtension"
+                },
+                "tags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/Variable"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "FunctionOrTagUnion"
+          ],
+          "properties": {
+            "FunctionOrTagUnion": {
+              "type": "object",
+              "required": [
+                "extension",
+                "functions",
+                "tags"
+              ],
+              "properties": {
+                "extension": {
+                  "$ref": "#/definitions/TagUnionExtension"
+                },
+                "functions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Symbol"
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "RecursiveTagUnion"
+          ],
+          "properties": {
+            "RecursiveTagUnion": {
+              "type": "object",
+              "required": [
+                "extension",
+                "recursion_var",
+                "tags"
+              ],
+              "properties": {
+                "extension": {
+                  "$ref": "#/definitions/TagUnionExtension"
+                },
+                "recursion_var": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "tags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/definitions/Variable"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "EmptyRecord"
+          ],
+          "properties": {
+            "EmptyRecord": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "EmptyTuple"
+          ],
+          "properties": {
+            "EmptyTuple": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "EmptyTagUnion"
+          ],
+          "properties": {
+            "EmptyTagUnion": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "RangedNumber"
+          ],
+          "properties": {
+            "RangedNumber": {
+              "type": "object",
+              "required": [
+                "range"
+              ],
+              "properties": {
+                "range": {
+                  "$ref": "#/definitions/NumericRange"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Error"
+          ],
+          "properties": {
+            "Error": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Top"
+          ],
+          "properties": {
+            "Top": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Event"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "VariableEvent"
+          ],
+          "properties": {
+            "VariableEvent": {
+              "$ref": "#/definitions/VariableEvent"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "Unification"
+          ],
+          "properties": {
+            "Unification": {
+              "type": "object",
+              "required": [
+                "left",
+                "mode",
+                "right",
+                "subevents"
+              ],
+              "properties": {
+                "left": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "mode": {
+                  "$ref": "#/definitions/UnificationMode"
+                },
+                "right": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "subevents": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/Event"
+                  }
+                },
+                "success": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NumericRange": {
+      "type": "object",
+      "required": [
+        "kind",
+        "min_width",
+        "signed"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/NumericRangeKind"
+        },
+        "min_width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "NumericRangeKind": {
+      "type": "string",
+      "enum": [
+        "Int",
+        "AnyNum"
+      ]
+    },
+    "Rank": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "RecordField": {
+      "type": "object",
+      "required": [
+        "field_type",
+        "kind"
+      ],
+      "properties": {
+        "field_type": {
+          "$ref": "#/definitions/Variable"
+        },
+        "kind": {
+          "$ref": "#/definitions/RecordFieldKind"
+        }
+      }
+    },
+    "RecordFieldKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Demanded"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "rigid"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Required"
+              ]
+            },
+            "rigid": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "rigid"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Optional"
+              ]
+            },
+            "rigid": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "Symbol": {
+      "type": "string"
+    },
+    "TagUnionExtension": {
+      "oneOf": [
+        {
+          "type": [
+            "object",
+            "integer"
+          ],
+          "format": "uint32",
+          "minimum": 0.0,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Openness"
+              ]
+            }
+          }
+        },
+        {
+          "type": [
+            "object",
+            "integer"
+          ],
+          "format": "uint32",
+          "minimum": 0.0,
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Any"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "UnificationMode": {
+      "type": "string",
+      "enum": [
+        "Eq",
+        "Present",
+        "LambdaSetSpecialization"
+      ]
+    },
+    "UnspecializedClosureType": {
+      "type": "object",
+      "required": [
+        "ability_member",
+        "lambda_set_region",
+        "specialization"
+      ],
+      "properties": {
+        "ability_member": {
+          "$ref": "#/definitions/Symbol"
+        },
+        "lambda_set_region": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "specialization": {
+          "$ref": "#/definitions/Variable"
+        }
+      }
+    },
+    "Variable": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "VariableEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "Unify"
+          ],
+          "properties": {
+            "Unify": {
+              "type": "object",
+              "required": [
+                "from",
+                "to"
+              ],
+              "properties": {
+                "from": {
+                  "$ref": "#/definitions/Variable"
+                },
+                "to": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "SetDescriptor"
+          ],
+          "properties": {
+            "SetDescriptor": {
+              "type": "object",
+              "required": [
+                "variable"
+              ],
+              "properties": {
+                "content": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/Content"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "rank": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/definitions/Rank"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "variable": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

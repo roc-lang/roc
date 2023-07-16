@@ -7,7 +7,7 @@ use roc_types::{
     types,
 };
 
-use crate::schema::{
+use roc_checkmate_schema::{
     AliasKind, AliasTypeVariables, ClosureType, Content, NumericRange, NumericRangeKind, Rank,
     RecordField, RecordFieldKind, Symbol, TagUnionExtension, UnificationMode,
     UnspecializedClosureType, Variable,

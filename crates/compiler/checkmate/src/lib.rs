@@ -1,6 +1,5 @@
 mod collector;
 mod convert;
-mod schema;
 
 pub use collector::Collector;
 

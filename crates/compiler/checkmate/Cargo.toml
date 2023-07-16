@@ -8,10 +8,11 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+roc_checkmate_schema = { path = "../checkmate_schema" }
 roc_module = { path = "../module" }
 roc_solve_schema = { path = "../solve_schema" }
 roc_types = { path = "../types" }
 
-serde.workspace = true
+[build-dependencies]
+roc_checkmate_schema = { path = "../checkmate_schema" }
 serde_json.workspace = true
-schemars.workspace = true

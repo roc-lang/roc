@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use schemars::JsonSchema;
+use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::Serialize;
 
 #[derive(Serialize, JsonSchema)]
@@ -23,7 +23,7 @@ macro_rules! impl_content {
         impl Content {
             $(
                 #[allow(non_snake_case)]
-                pub(crate) fn $name($($arg: $ty),*) -> Self {
+                pub fn $name($($arg: $ty),*) -> Self {
                     Self::$name { $($arg),* }
                 }
             )*
@@ -208,4 +208,55 @@ pub enum VariableEvent {
         rank: Option<Rank>,
         content: Option<Content>,
     },
+}
+
+impl From<VariableEvent> for Event {
+    fn from(event: VariableEvent) -> Event {
+        Event::VariableEvent(event)
+    }
+}
+
+impl Event {
+    pub fn append(&mut self, event: Event) -> usize {
+        let list = self.subevents_mut().unwrap();
+        let index = list.len();
+        list.push(event);
+        index
+    }
+
+    pub fn appendable(&self) -> bool {
+        self.subevents().is_some()
+    }
+
+    pub fn index(&mut self, index: usize) -> &mut Event {
+        &mut self.subevents_mut().unwrap()[index]
+    }
+
+    pub fn schema() -> RootSchema {
+        schema_for!(Event)
+    }
+}
+
+macro_rules! impl_subevents {
+    ($($pat:pat => $body:expr,)*) => {
+        impl Event {
+            fn subevents(&self) -> Option<&Vec<Event>> {
+                match self {$(
+                    $pat => $body,
+                )*}
+            }
+
+            fn subevents_mut(&mut self) -> Option<&mut Vec<Event>> {
+                match self {$(
+                    $pat => $body,
+                )*}
+            }
+        }
+    };
+}
+
+impl_subevents! {
+    Event::Top(events) => Some(events),
+    Event::Unification { subevents, .. } => Some(subevents),
+    Event::VariableEvent(_) => None,
 }
