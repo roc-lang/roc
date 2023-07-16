@@ -159,6 +159,12 @@ pub enum IntSignedness {
     Signed,
 }
 
+impl IntSignedness {
+    pub fn is_signed(&self) -> bool {
+        matches!(self, IntSignedness::Signed)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IntLitWidth {
     U8,
@@ -207,7 +213,7 @@ impl IntLitWidth {
     }
 
     fn is_signed(&self) -> bool {
-        self.signedness_and_width().0 == IntSignedness::Signed
+        self.signedness_and_width().0.is_signed()
     }
 
     pub fn type_str(&self) -> &'static str {
