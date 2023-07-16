@@ -3106,6 +3106,7 @@ dependencies = [
  "roc_region",
  "roc_reporting",
  "roc_solve",
+ "roc_solve_schema",
  "roc_target",
  "roc_types",
  "roc_unify",
@@ -3209,6 +3210,7 @@ name = "roc_checkmate"
 version = "0.0.1"
 dependencies = [
  "roc_module",
+ "roc_solve_schema",
  "roc_types",
  "serde",
  "serde_json",
@@ -3328,6 +3330,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "roc_solve_schema",
  "roc_types",
  "roc_unify",
 ]
@@ -3582,6 +3585,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_solve",
+ "roc_solve_schema",
  "roc_types",
  "roc_unify",
 ]
@@ -3946,6 +3950,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_solve_problem",
+ "roc_solve_schema",
  "roc_target",
  "roc_types",
  "roc_unify",
@@ -3964,6 +3969,13 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_types",
+]
+
+[[package]]
+name = "roc_solve_schema"
+version = "0.0.1"
+dependencies = [
+ "bitflags",
 ]
 
 [[package]]
@@ -4025,12 +4037,12 @@ dependencies = [
 name = "roc_unify"
 version = "0.0.1"
 dependencies = [
- "bitflags",
  "roc_checkmate",
  "roc_collections",
  "roc_debug_flags",
  "roc_error_macros",
  "roc_module",
+ "roc_solve_schema",
  "roc_tracing",
  "roc_types",
 ]

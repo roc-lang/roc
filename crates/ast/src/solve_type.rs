@@ -9,6 +9,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve::module::Solved;
+use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
     Subs, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
@@ -18,7 +19,6 @@ use roc_types::types::{
     RecordField,
 };
 use roc_unify::unify::unify;
-use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
 use roc_unify::Env as UEnv;
 
@@ -235,7 +235,7 @@ fn solve<'a>(
                 }),
                 actual,
                 expected,
-                Mode::EQ,
+                UnificationMode::EQ,
                 Polarity::OF_VALUE,
             ) {
                 Success {
@@ -336,7 +336,7 @@ fn solve<'a>(
                         }),
                         actual,
                         expected,
-                        Mode::EQ,
+                        UnificationMode::EQ,
                         Polarity::OF_VALUE,
                     ) {
                         Success {
@@ -415,7 +415,7 @@ fn solve<'a>(
                 }),
                 actual,
                 expected,
-                Mode::EQ,
+                UnificationMode::EQ,
                 Polarity::OF_PATTERN,
             ) {
                 Success {
@@ -734,7 +734,7 @@ fn solve<'a>(
                 }),
                 actual,
                 includes,
-                Mode::PRESENT,
+                UnificationMode::PRESENT,
                 Polarity::OF_PATTERN,
             ) {
                 Success {

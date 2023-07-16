@@ -16,11 +16,12 @@ use roc_solve::ability::AbilityResolver;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, Phase};
 use roc_solve::Pools;
 use roc_solve::{DerivedEnv, SolveEnv};
+use roc_solve_schema::UnificationMode;
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_types::types::Polarity;
 use roc_unify::unify::MetaCollector;
-use roc_unify::unify::{Mode, Unified};
+use roc_unify::unify::Unified;
 use roc_unify::Env as UEnv;
 
 pub use roc_solve::ability::{ResolveError, Resolved};
@@ -369,7 +370,7 @@ pub fn unify(
         }),
         left,
         right,
-        Mode::EQ,
+        UnificationMode::EQ,
         Polarity::Pos,
     );
 

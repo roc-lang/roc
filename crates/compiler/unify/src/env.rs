@@ -2,8 +2,6 @@ use roc_checkmate::debug_checkmate;
 use roc_collections::VecSet;
 use roc_types::subs::{Descriptor, Subs, Variable};
 
-use crate::unify::Mode;
-
 pub struct Env<'a> {
     subs: &'a mut Subs,
     #[cfg(debug_assertions)]
@@ -104,7 +102,12 @@ impl<'a> Env<'a> {
     }
 
     #[cfg(debug_assertions)]
-    pub(crate) fn debug_start_unification(&mut self, left: Variable, right: Variable, mode: Mode) {
+    pub(crate) fn debug_start_unification(
+        &mut self,
+        left: Variable,
+        right: Variable,
+        mode: roc_solve_schema::UnificationMode,
+    ) {
         debug_checkmate!(self.cm, cm => {
             cm.start_unification(self.subs, left, right);
         });

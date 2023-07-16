@@ -1,4 +1,3 @@
-use bitflags::bitflags;
 use roc_collections::VecMap;
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
@@ -8,6 +7,7 @@ use roc_debug_flags::{
 use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
@@ -101,63 +101,13 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
-bitflags! {
-    pub struct Mode : u8 {
-        /// Instructs the unifier to solve two types for equality.
-        ///
-        /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
-        const EQ = 1 << 0;
-        /// Instructs the unifier to treat the right-hand-side of a constraint as
-        /// present in the left-hand-side, rather than strictly equal.
-        ///
-        /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
-        const PRESENT = 1 << 1;
-        /// Like [`Mode::EQ`], but also instructs the unifier that the ambient lambda set
-        /// specialization algorithm is running. This has implications for the unification of
-        /// unspecialized lambda sets; see [`unify_unspecialized_lambdas`].
-        const LAMBDA_SET_SPECIALIZATION = Mode::EQ.bits | (1 << 2);
-    }
-}
-
-impl Mode {
-    fn is_eq(&self) -> bool {
-        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
-        self.contains(Mode::EQ)
-    }
-
-    fn is_present(&self) -> bool {
-        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
-        self.contains(Mode::PRESENT)
-    }
-
-    fn is_lambda_set_specialization(&self) -> bool {
-        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
-        self.contains(Mode::LAMBDA_SET_SPECIALIZATION)
-    }
-
-    fn as_eq(self) -> Self {
-        (self - Mode::PRESENT) | Mode::EQ
-    }
-
-    #[cfg(debug_assertions)]
-    fn pretty_print(&self) -> &str {
-        if self.contains(Mode::EQ) {
-            "~"
-        } else if self.contains(Mode::PRESENT) {
-            "+="
-        } else {
-            unreachable!("Bad mode!")
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Context {
     first: Variable,
     first_desc: Descriptor,
     second: Variable,
     second_desc: Descriptor,
-    mode: Mode,
+    mode: UnificationMode,
 }
 
 pub trait MetaCollector: Default + std::fmt::Debug {
@@ -333,7 +283,7 @@ impl<M: MetaCollector> Outcome<M> {
 }
 
 /// Unifies two types.
-/// The [mode][Mode] enables or disables certain extensional features of unification.
+/// The [mode][UnificationMode] enables or disables certain extensional features of unification.
 ///
 /// `observed_pol` describes the [polarity][Polarity] of the type observed to be under unification.
 /// This is only relevant for producing error types, and is not material to the unification
@@ -343,7 +293,7 @@ pub fn unify(
     env: &mut Env,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
     observed_pol: Polarity,
 ) -> Unified {
     unify_help(env, var1, var2, mode, observed_pol)
@@ -355,7 +305,7 @@ pub fn unify_introduced_ability_specialization(
     env: &mut Env,
     ability_member_signature: Variable,
     specialization_var: Variable,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Unified<SpecializationLsetCollector> {
     unify_help(
         env,
@@ -372,7 +322,7 @@ pub fn unify_with_collector<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
     observed_pol: Polarity,
 ) -> Unified<M> {
     unify_help(env, var1, var2, mode, observed_pol)
@@ -384,7 +334,7 @@ fn unify_help<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
     observed_pol: Polarity,
 ) -> Unified<M> {
     let mut vars = Vec::new();
@@ -438,7 +388,7 @@ pub fn unify_pool<M: MetaCollector>(
     pool: &mut Pool,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Outcome<M> {
     if env.equivalent(var1, var2) {
         Outcome::default()
@@ -1332,7 +1282,7 @@ struct SeparatedUnionLambdas {
 fn separate_union_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    mode: Mode,
+    mode: UnificationMode,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
 ) -> Result<(Outcome<M>, SeparatedUnionLambdas), Outcome<M>> {
@@ -1585,7 +1535,7 @@ fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    mode: Mode,
+    mode: UnificationMode,
     uls_left: SubsSlice<Uls>,
     uls_right: SubsSlice<Uls>,
 ) -> Result<(SubsSlice<Uls>, Outcome<M>), Outcome<M>> {
@@ -2651,7 +2601,7 @@ fn unify_tag_ext<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     vars: UnifySides<TagExt, Variable>,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Outcome<M> {
     let (ext, var, flip_for_unify) = match vars {
         UnifySides::Left(ext, var) => (ext, var, false),
@@ -3437,7 +3387,7 @@ fn unify_zip_slices<M: MetaCollector>(
     pool: &mut Pool,
     left: SubsSlice<Variable>,
     right: SubsSlice<Variable>,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Outcome<M> {
     let mut outcome = Outcome::default();
 

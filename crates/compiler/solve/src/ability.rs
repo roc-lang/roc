@@ -13,6 +13,7 @@ use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
     UnderivableReason, Unfulfilled,
 };
+use roc_solve_schema::UnificationMode;
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
@@ -1287,7 +1288,7 @@ impl DerivableVisitor for DeriveEq {
         subs: &mut Subs,
         content_var: Variable,
     ) -> Result<Descend, NotDerivable> {
-        use roc_unify::unify::{unify, Mode};
+        use roc_unify::unify::unify;
 
         // Of the floating-point types,
         // only Dec implements Eq.
@@ -1299,7 +1300,7 @@ impl DerivableVisitor for DeriveEq {
             }),
             content_var,
             Variable::DECIMAL,
-            Mode::EQ,
+            UnificationMode::EQ,
             Polarity::Pos,
         );
         match unified {
@@ -1417,7 +1418,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
     ability_member: Symbol,
     specialization_var: Variable,
 ) -> Result<Resolved, ResolveError> {
-    use roc_unify::unify::{unify, Mode};
+    use roc_unify::unify::unify;
 
     let (parent_ability, signature_var) = resolver
         .member_parent_and_signature_var(ability_member, subs)
@@ -1435,7 +1436,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
         }),
         specialization_var,
         signature_var,
-        Mode::EQ,
+        UnificationMode::EQ,
         Polarity::Pos,
     )
     .expect_success(

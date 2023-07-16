@@ -24,13 +24,14 @@ use roc_module::symbol::Symbol;
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
+use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
     Variable,
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
-    unify, unify_introduced_ability_specialization, Mode, Obligated, SpecializationLsetCollector,
+    unify, unify_introduced_ability_specialization, Obligated, SpecializationLsetCollector,
     Unified::*,
 };
 
@@ -489,7 +490,7 @@ fn solve(
                     &mut env.uenv(),
                     actual,
                     expected,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     Success {
@@ -600,7 +601,7 @@ fn solve(
                             &mut env.uenv(),
                             actual,
                             expected,
-                            Mode::EQ,
+                            UnificationMode::EQ,
                             Polarity::OF_VALUE,
                         ) {
                             Success {
@@ -699,8 +700,8 @@ fn solve(
                 );
 
                 let mode = match constraint {
-                    PatternPresence(..) => Mode::PRESENT,
-                    _ => Mode::EQ,
+                    PatternPresence(..) => UnificationMode::PRESENT,
+                    _ => UnificationMode::EQ,
                 };
 
                 match unify(
@@ -919,7 +920,7 @@ fn solve(
                     &mut env.uenv(),
                     actual,
                     includes,
-                    Mode::PRESENT,
+                    UnificationMode::PRESENT,
                     Polarity::OF_PATTERN,
                 ) {
                     Success {
@@ -1053,7 +1054,7 @@ fn solve(
                     &mut env.uenv(),
                     branches_var,
                     real_var,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     cond_polarity,
                 );
 
@@ -1103,7 +1104,7 @@ fn solve(
                                 &mut env.uenv(),
                                 real_var,
                                 branches_var,
-                                Mode::EQ,
+                                UnificationMode::EQ,
                                 cond_polarity,
                             ),
                             Success { .. }
@@ -1121,7 +1122,7 @@ fn solve(
                                 &mut env.uenv(),
                                 real_var,
                                 branches_var,
-                                Mode::EQ,
+                                UnificationMode::EQ,
                                 cond_polarity,
                             ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
@@ -1320,7 +1321,7 @@ fn solve(
                     &mut env.uenv(),
                     actual,
                     Variable::LIST_U8,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     // List U8 always valid.
@@ -1340,7 +1341,7 @@ fn solve(
                         &mut env.uenv(),
                         actual,
                         Variable::STR,
-                        Mode::EQ,
+                        UnificationMode::EQ,
                         Polarity::OF_VALUE,
                     ) {
                         Success {
@@ -1591,7 +1592,7 @@ fn check_ability_specialization(
             &mut env.uenv(),
             root_signature_var,
             symbol_loc_var.value,
-            Mode::EQ,
+            UnificationMode::EQ,
         );
 
         let resolved_mark = match unified {

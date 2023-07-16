@@ -10,6 +10,7 @@ use roc_debug_flags::ROC_TRACE_COMPACTION;
 use roc_derive_key::{DeriveError, DeriveKey};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
@@ -17,7 +18,7 @@ use roc_types::{
     },
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
-use roc_unify::unify::{unify, Mode, MustImplementConstraints};
+use roc_unify::unify::{unify, MustImplementConstraints};
 
 use crate::{
     ability::builtin_module_with_unlisted_ability_impl,
@@ -577,7 +578,7 @@ fn compact_lambda_set<P: Phase>(
         &mut env.uenv(),
         t_f1,
         t_f2,
-        Mode::LAMBDA_SET_SPECIALIZATION,
+        UnificationMode::LAMBDA_SET_SPECIALIZATION,
         Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");

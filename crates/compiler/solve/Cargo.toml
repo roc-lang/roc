@@ -21,6 +21,7 @@ roc_packaging = { path = "../../packaging" }
 roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_solve_problem = { path = "../solve_problem" }
+roc_solve_schema = { path = "../solve_schema" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
 

@@ -2,6 +2,7 @@ use roc_can::{abilities::SpecializationLambdaSets, module::ExposedByModule};
 use roc_checkmate::with_checkmate;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{IdentIds, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{instantiate_rigids, Subs, Variable},
     types::Polarity,
@@ -73,7 +74,7 @@ impl Env<'_> {
 
     pub fn unify(&mut self, left: Variable, right: Variable) {
         use roc_unify::{
-            unify::{unify, Mode, Unified},
+            unify::{unify, Unified},
             Env,
         };
 
@@ -85,7 +86,7 @@ impl Env<'_> {
             }),
             left,
             right,
-            Mode::EQ,
+            UnificationMode::EQ,
             Polarity::OF_PATTERN,
         );
 
@@ -112,7 +113,7 @@ impl Env<'_> {
         ability_member: Symbol,
     ) -> SpecializationLambdaSets {
         use roc_unify::{
-            unify::{unify_introduced_ability_specialization, Mode, Unified},
+            unify::{unify_introduced_ability_specialization, Unified},
             Env,
         };
 
@@ -126,7 +127,7 @@ impl Env<'_> {
             }),
             member_signature,
             specialization_type,
-            Mode::EQ,
+            UnificationMode::EQ,
         );
 
         match unified {
