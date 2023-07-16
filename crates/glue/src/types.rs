@@ -148,13 +148,18 @@ impl Types {
                 env.lambda_set_ids = env.find_lambda_sets(var);
                 let id = env.add_toplevel_type(var, &mut types);
 
-                let key = entry_points
+                let key = generated
                     .iter()
                     .find_map(|(k, v)| (*v == var).then_some((*k, id)));
 
                 if let Some((k, id)) = key {
                     let name = k.as_str(env.interns).to_string();
-                    types.entry_points.push((name, id));
+
+                    // TODO remove this check once Task is a builtin; this is only necessary
+                    // because we currently generate these from `hosted` modules.
+                    if !["after", "map", "always", "forever"].contains(&name.as_str()) {
+                        types.generated.push((name, id));
+                    }
 
                     #[cfg(debug_assertions)]
                     remaining_generated.remove(&k);
