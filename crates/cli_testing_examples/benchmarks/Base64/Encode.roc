@@ -1,6 +1,6 @@
 interface Base64.Encode
     exposes [toBytes, toStr]
-    imports [Bytes.Encode.{ ByteEncoder }]
+    imports []
 
 ## Base64-encodes a [Str] into another [Str].
 toStr : Str -> Str
