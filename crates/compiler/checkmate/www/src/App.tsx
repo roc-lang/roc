@@ -11,7 +11,7 @@ export default function App() {
   });
 
   return (
-    <div className="container w-screen h-screen p-2">
+    <div className="w-screen h-screen p-2 bg-gray-100">
       <FileInput setResult={setEvents} />
       <EventsWrapper events={events} />
     </div>
