@@ -2788,13 +2788,26 @@ fn update<'a>(
 
                     // use the subs of the root module;
                     // this is used in the repl to find the type of `main`
-                    let subs = state.root_subs.clone().unwrap();
+                    let subs = {
+                        let mut empty = None;
+                        std::mem::swap(&mut empty, &mut state.root_subs);
+
+                        empty
+                    }
+                    .unwrap();
+
+                    let exposed_to_host = {
+                        let mut empty = ExposedToHost::default();
+                        std::mem::swap(&mut empty, &mut state.exposed_to_host);
+
+                        empty
+                    };
 
                     msg_tx
                         .send(Msg::FinishedAllSpecialization {
                             subs,
                             layout_interner,
-                            exposed_to_host: state.exposed_to_host.clone(),
+                            exposed_to_host,
                             module_expectations,
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
