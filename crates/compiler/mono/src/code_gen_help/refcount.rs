@@ -2,6 +2,7 @@
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
@@ -188,7 +189,8 @@ pub fn refcount_generic<'a>(
     match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-        ) => {
+        )
+        | LayoutRepr::FunctionPointer(_) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
@@ -229,6 +231,9 @@ pub fn refcount_generic<'a>(
                 runtime_layout,
                 structure,
             )
+        }
+        LayoutRepr::Erased(_) => {
+            todo_lambda_erasure!()
         }
         LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"

@@ -8,6 +8,7 @@ extern crate bumpalo;
 #[cfg(test)]
 mod solve_expr {
     use roc_load::LoadedModule;
+    use roc_solve::FunctionKind;
     use test_solve_helpers::{format_problems, run_load_and_infer};
 
     use roc_types::pretty_print::{name_and_print_var, DebugPrint};
@@ -27,7 +28,7 @@ mod solve_expr {
                 ..
             },
             src,
-        ) = run_load_and_infer(src, [], false)?;
+        ) = run_load_and_infer(src, [], false, FunctionKind::LambdaSet)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();

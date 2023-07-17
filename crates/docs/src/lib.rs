@@ -454,6 +454,7 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     let arena = Bump::new();
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
+        function_kind: roc_solve::FunctionKind::LambdaSet,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::AllAvailable,

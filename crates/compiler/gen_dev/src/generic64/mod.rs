@@ -5,7 +5,7 @@ use crate::{
 use bumpalo::collections::{CollectIn, Vec};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp, HelperOp};
 use roc_mono::ir::{
@@ -3630,7 +3630,8 @@ impl<
                 }
                 LayoutRepr::Union(UnionLayout::NonRecursive(_))
                 | LayoutRepr::Builtin(_)
-                | LayoutRepr::Struct(_) => {
+                | LayoutRepr::Struct(_)
+                | LayoutRepr::Erased(_) => {
                     internal_error!("All primitive values should fit in a single register");
                 }
             }
@@ -4306,6 +4307,8 @@ impl<
                     dst,
                 );
             }
+
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
@@ -4527,5 +4530,6 @@ macro_rules! pointer_layouts {
                     | UnionLayout::NullableWrapped { .. }
                     | UnionLayout::NullableUnwrapped { .. },
             )
+            | LayoutRepr::FunctionPointer(_)
     };
 }

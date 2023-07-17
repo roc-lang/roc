@@ -9,6 +9,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
 use roc_collections::ReferenceMatrix;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -560,6 +561,10 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_using_params(arguments, ps);
             }
 
+            ByPointer { .. } => {
+                todo_lambda_erasure!()
+            }
+
             LowLevel { op, .. } => {
                 debug_assert!(!op.is_higher_order());
 
@@ -703,6 +708,27 @@ impl<'a> BorrowInfState<'a> {
                 self.own_args_if_param(xs);
             }
 
+            ErasedMake { value, callee } => {
+                value.map(|v| {
+                    // if the value is owned, the erasure is
+                    self.if_is_owned_then_own(v, z);
+
+                    // if the erasure is owned, the value is
+                    self.if_is_owned_then_own(z, v);
+                });
+
+                // the erasure owns the callee (which should always be a stack value)
+                self.own_var(*callee);
+            }
+
+            ErasedLoad { symbol, field: _ } => {
+                // if the extracted value is owned, the erasure is too
+                self.if_is_owned_then_own(*symbol, z);
+
+                // if the erasure is owned, so is the extracted value
+                self.if_is_owned_then_own(z, *symbol);
+            }
+
             Reset { symbol: x, .. } | ResetRef { symbol: x, .. } => {
                 self.own_var(z);
                 self.own_var(*x);
@@ -714,7 +740,7 @@ impl<'a> BorrowInfState<'a> {
 
             Call(call) => self.collect_call(interner, param_map, z, call),
 
-            Literal(_) | NullPointer | RuntimeErrorFunction(_) => {}
+            Literal(_) | NullPointer | RuntimeErrorFunction(_) | FunctionPointer { .. } => {}
 
             StructAtIndex { structure: x, .. } => {
                 // if the structure (record/tag/array) is owned, the extracted value is
@@ -1036,9 +1062,10 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
 
         PtrStore => arena.alloc_slice_copy(&[owned, owned]),
         PtrLoad => arena.alloc_slice_copy(&[owned]),
+        PtrCast => arena.alloc_slice_copy(&[owned]),
         Alloca => arena.alloc_slice_copy(&[owned]),
 
-        PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
@@ -1055,6 +1082,9 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
     match call.call_type {
         ByName { name, .. } => {
             info.keys.push(name.name());
+        }
+        ByPointer { .. } => {
+            todo_lambda_erasure!()
         }
         Foreign { .. } => {}
         LowLevel { .. } => {}

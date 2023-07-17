@@ -8,8 +8,8 @@ use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{
-    EntryPoint, ExecutionMode, ExpectMetadata, LoadConfig, LoadMonomorphizedError, LoadedModule,
-    LoadingProblem, MonomorphizedModule, Threading,
+    EntryPoint, ExecutionMode, ExpectMetadata, FunctionKind, LoadConfig, LoadMonomorphizedError,
+    LoadedModule, LoadingProblem, MonomorphizedModule, Threading,
 };
 use roc_mono::ir::{OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
@@ -740,8 +740,20 @@ pub fn standard_load_config(
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
     };
 
+    // UNSTABLE(lambda-erasure)
+    let function_kind = if cfg!(debug_assertions) {
+        if std::env::var("EXPERIMENTAL_ROC_ERASE").is_ok() {
+            FunctionKind::Erased
+        } else {
+            FunctionKind::LambdaSet
+        }
+    } else {
+        FunctionKind::LambdaSet
+    };
+
     LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
@@ -1205,6 +1217,8 @@ pub fn check_file<'a>(
 
     let load_config = LoadConfig {
         target_info,
+        // TODO: we may not want this for just checking.
+        function_kind: FunctionKind::LambdaSet,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,

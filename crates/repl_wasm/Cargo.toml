@@ -32,6 +32,7 @@ roc_load = { path = "../compiler/load" }
 roc_parse = { path = "../compiler/parse" }
 roc_repl_eval = { path = "../repl_eval" }
 roc_reporting = { path = "../reporting" }
+roc_solve = { path = "../compiler/solve" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
 

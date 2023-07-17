@@ -192,23 +192,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.600 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.600;
 
-procedure List.80 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
-    joinpoint List.556 List.439 List.440 List.441 List.442 List.443:
-        let List.558 : Int1 = CallByName Num.22 List.442 List.443;
-        if List.558 then
-            let List.565 : {Str, Str} = CallByName List.66 List.439 List.442;
-            inc List.565;
-            let List.559 : {List U8, U64} = CallByName List.145 List.440 List.565 List.441;
-            let List.562 : U64 = 1i64;
-            let List.561 : U64 = CallByName Num.19 List.442 List.562;
-            jump List.556 List.439 List.559 List.441 List.561 List.443;
-        else
-            dec List.439;
-            ret List.440;
-    in
-    jump List.556 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
-
-procedure List.80 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20):
+procedure List.80 (#Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14):
     joinpoint List.647 List.439 List.440 List.441 List.442 List.443:
         let List.649 : Int1 = CallByName Num.22 List.442 List.443;
         if List.649 then
@@ -232,9 +216,9 @@ procedure List.80 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_g
             let List.648 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.440;
             ret List.648;
     in
-    jump List.647 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20;
+    jump List.647 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14;
 
-procedure List.80 (#Derived_gen.21, #Derived_gen.22, #Derived_gen.23, #Derived_gen.24, #Derived_gen.25):
+procedure List.80 (#Derived_gen.18, #Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_gen.22):
     joinpoint List.576 List.439 List.440 List.441 List.442 List.443:
         let List.578 : Int1 = CallByName Num.22 List.442 List.443;
         if List.578 then
@@ -247,7 +231,23 @@ procedure List.80 (#Derived_gen.21, #Derived_gen.22, #Derived_gen.23, #Derived_g
             dec List.439;
             ret List.440;
     in
-    jump List.576 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25;
+    jump List.576 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22;
+
+procedure List.80 (#Derived_gen.31, #Derived_gen.32, #Derived_gen.33, #Derived_gen.34, #Derived_gen.35):
+    joinpoint List.556 List.439 List.440 List.441 List.442 List.443:
+        let List.558 : Int1 = CallByName Num.22 List.442 List.443;
+        if List.558 then
+            let List.565 : {Str, Str} = CallByName List.66 List.439 List.442;
+            inc List.565;
+            let List.559 : {List U8, U64} = CallByName List.145 List.440 List.565 List.441;
+            let List.562 : U64 = 1i64;
+            let List.561 : U64 = CallByName Num.19 List.442 List.562;
+            jump List.556 List.439 List.559 List.441 List.561 List.443;
+        else
+            dec List.439;
+            ret List.440;
+    in
+    jump List.556 #Derived_gen.31 #Derived_gen.32 #Derived_gen.33 #Derived_gen.34 #Derived_gen.35;
 
 procedure List.93 (List.436, List.437, List.438):
     let List.554 : U64 = 0i64;
@@ -323,8 +323,8 @@ procedure Str.9 (Str.79):
     else
         let Str.300 : U8 = StructAtIndex 3 Str.80;
         let Str.301 : U64 = StructAtIndex 0 Str.80;
-        let #Derived_gen.38 : Str = StructAtIndex 1 Str.80;
-        dec #Derived_gen.38;
+        let #Derived_gen.36 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.36;
         let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
         let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
         ret Str.298;
@@ -1215,8 +1215,8 @@ procedure TotallyNotJson.82 (TotallyNotJson.802, TotallyNotJson.803):
 
 procedure TotallyNotJson.832 (TotallyNotJson.1493):
     let TotallyNotJson.1494 : List Str = StructAtIndex 1 TotallyNotJson.1493;
-    let #Derived_gen.36 : List Str = StructAtIndex 0 TotallyNotJson.1493;
-    dec #Derived_gen.36;
+    let #Derived_gen.38 : List Str = StructAtIndex 0 TotallyNotJson.1493;
+    dec #Derived_gen.38;
     ret TotallyNotJson.1494;
 
 procedure TotallyNotJson.840 (TotallyNotJson.1214):
@@ -1277,7 +1277,7 @@ procedure TotallyNotJson.95 (TotallyNotJson.829):
     dec TotallyNotJson.1489;
     ret TotallyNotJson.1488;
 
-procedure TotallyNotJson.96 (#Derived_gen.32):
+procedure TotallyNotJson.96 (#Derived_gen.26):
     joinpoint TotallyNotJson.1496 TotallyNotJson.1168:
         let TotallyNotJson.834 : List Str = StructAtIndex 0 TotallyNotJson.1168;
         let TotallyNotJson.833 : List Str = StructAtIndex 1 TotallyNotJson.1168;
@@ -1313,7 +1313,7 @@ procedure TotallyNotJson.96 (#Derived_gen.32):
             let TotallyNotJson.1497 : {List Str, List Str} = Struct {TotallyNotJson.834, TotallyNotJson.833};
             ret TotallyNotJson.1497;
     in
-    jump TotallyNotJson.1496 #Derived_gen.32;
+    jump TotallyNotJson.1496 #Derived_gen.26;
 
 procedure TotallyNotJson.97 (TotallyNotJson.837):
     let TotallyNotJson.838 : List Str = CallByName Str.55 TotallyNotJson.837;
@@ -1330,7 +1330,7 @@ procedure TotallyNotJson.97 (TotallyNotJson.837):
     dec TotallyNotJson.1210;
     ret TotallyNotJson.1209;
 
-procedure TotallyNotJson.98 (#Derived_gen.10):
+procedure TotallyNotJson.98 (#Derived_gen.30):
     joinpoint TotallyNotJson.1217 TotallyNotJson.1169:
         let TotallyNotJson.842 : List Str = StructAtIndex 0 TotallyNotJson.1169;
         let TotallyNotJson.841 : List Str = StructAtIndex 1 TotallyNotJson.1169;
@@ -1366,7 +1366,7 @@ procedure TotallyNotJson.98 (#Derived_gen.10):
             let TotallyNotJson.1218 : {List Str, List Str} = Struct {TotallyNotJson.842, TotallyNotJson.841};
             ret TotallyNotJson.1218;
     in
-    jump TotallyNotJson.1217 #Derived_gen.10;
+    jump TotallyNotJson.1217 #Derived_gen.30;
 
 procedure Test.0 ():
     let Test.11 : Str = "foo";

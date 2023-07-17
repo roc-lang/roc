@@ -8,7 +8,9 @@ use roc_collections::all::MutSet;
 use roc_command_utils::zig;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
-use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+use roc_load::{
+    EntryPoint, ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError, Threading,
+};
 use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
@@ -44,13 +46,13 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-#[allow(clippy::too_many_arguments)]
 fn create_llvm_module<'a>(
     arena: &'a bumpalo::Bump,
     src: &str,
     config: HelperConfig,
     context: &'a inkwell::context::Context,
     target: &Triple,
+    function_kind: FunctionKind,
 ) -> (&'static str, String, &'a Module<'a>) {
     let target_info = roc_target::TargetInfo::from(target);
 
@@ -70,6 +72,7 @@ fn create_llvm_module<'a>(
 
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -330,11 +333,12 @@ pub fn helper<'a>(
     config: HelperConfig,
     src: &str,
     context: &'a inkwell::context::Context,
+    function_kind: FunctionKind,
 ) -> (&'static str, String, Library) {
     let target = target_lexicon::Triple::host();
 
     let (main_fn_name, delayed_errors, module) =
-        create_llvm_module(arena, src, config, context, &target);
+        create_llvm_module(arena, src, config, context, &target, function_kind);
 
     let res_lib = if config.add_debug_info {
         let module = annotate_with_debug_info(module, context);
@@ -420,11 +424,12 @@ fn compile_to_wasm_bytes<'a>(
     config: HelperConfig,
     src: &str,
     context: &'a inkwell::context::Context,
+    function_kind: FunctionKind,
 ) -> Vec<u8> {
     let target = wasm32_target_tripple();
 
     let (_main_fn_name, _delayed_errors, llvm_module) =
-        create_llvm_module(arena, src, config, context, &target);
+        create_llvm_module(arena, src, config, context, &target, function_kind);
 
     let content_hash = crate::helpers::src_hash(src);
     let wasm_file = llvm_module_to_wasm_file(&TEMP_DIR, content_hash, llvm_module);
@@ -512,7 +517,11 @@ fn fake_wasm_main_function(_: u32, _: u32) -> u32 {
 }
 
 #[cfg(feature = "gen-llvm-wasm")]
-pub fn assert_wasm_evals_to_help<T>(src: &str, ignore_problems: bool) -> Result<T, String>
+pub fn assert_wasm_evals_to_help<T>(
+    src: &str,
+    ignore_problems: bool,
+    function_kind: FunctionKind,
+) -> Result<T, String>
 where
     T: FromWasm32Memory + Wasm32Result,
 {
@@ -526,15 +535,19 @@ where
         opt_level: OPT_LEVEL,
     };
 
-    let wasm_bytes = compile_to_wasm_bytes(&arena, config, src, &context);
+    let wasm_bytes = compile_to_wasm_bytes(&arena, config, src, &context, function_kind);
 
     crate::helpers::wasm::run_wasm_test_bytes::<T>(TEST_WRAPPER_NAME, wasm_bytes)
 }
 
-#[allow(unused_macros)]
+#[cfg(feature = "gen-llvm-wasm")]
 macro_rules! assert_wasm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>($src, $ignore_problems) {
+        match $crate::helpers::llvm::assert_wasm_evals_to_help::<$ty>(
+            $src,
+            $ignore_problems,
+            roc_load::FunctionKind::LambdaSet,
+        ) {
             Err(msg) => panic!("Wasm test failed: {}", msg),
             Ok(actual) => {
                 assert_eq!($transform(actual), $expected, "Wasm test failed")
@@ -577,9 +590,13 @@ pub fn try_run_lib_function<T>(
 }
 
 // only used in tests
-#[allow(unused)]
-pub(crate) fn llvm_evals_to<T, U, F>(src: &str, expected: U, transform: F, ignore_problems: bool)
-where
+pub(crate) fn llvm_evals_to<T, U, F>(
+    src: &str,
+    expected: U,
+    transform: F,
+    ignore_problems: bool,
+    function_kind: FunctionKind,
+) where
     U: PartialEq + std::fmt::Debug,
     F: FnOnce(T) -> U,
 {
@@ -596,7 +613,8 @@ where
         opt_level: crate::helpers::llvm::OPT_LEVEL,
     };
 
-    let (main_fn_name, errors, lib) = crate::helpers::llvm::helper(&arena, config, src, &context);
+    let (main_fn_name, errors, lib) =
+        crate::helpers::llvm::helper(&arena, config, src, &context, function_kind);
 
     let result = crate::helpers::llvm::try_run_lib_function::<T>(main_fn_name, &lib);
 
@@ -620,7 +638,6 @@ where
     }
 }
 
-#[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
@@ -628,6 +645,7 @@ macro_rules! assert_llvm_evals_to {
             $expected,
             $transform,
             $ignore_problems,
+            roc_load::FunctionKind::LambdaSet,
         );
     };
 
@@ -653,8 +671,6 @@ macro_rules! assert_llvm_evals_to {
 //
 //   let (_main_fn_name, _delayed_errors, _module) =
 //       $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
-
-#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
         assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
@@ -685,14 +701,24 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(dead_code)]
+macro_rules! assert_evals_to_erased {
+    ($src:expr, $expected:expr, $ty:ty) => {{
+        crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
+            $src,
+            $expected,
+            $crate::helpers::llvm::identity,
+            false,
+            roc_load::FunctionKind::Erased,
+        );
+    }};
+}
+
 pub fn identity<T>(value: T) -> T {
     value
 }
 
-#[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-#[allow(unused_imports)]
+pub(crate) use assert_evals_to_erased;
 pub(crate) use assert_llvm_evals_to;
-#[allow(unused_imports)]
+#[cfg(feature = "gen-llvm-wasm")]
 pub(crate) use assert_wasm_evals_to;

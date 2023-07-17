@@ -14,6 +14,7 @@ roc_load_internal = { path = "../load_internal" }
 roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
 
@@ -25,6 +26,7 @@ roc_can = { path = "../can" }
 roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 roc_error_macros = { path = "../../error_macros" }
 

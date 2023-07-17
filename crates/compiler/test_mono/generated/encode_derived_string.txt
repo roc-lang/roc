@@ -88,7 +88,22 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.529 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.529;
 
-procedure List.80 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.6, #Derived_gen.7):
+procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+    joinpoint List.540 List.439 List.440 List.441 List.442 List.443:
+        let List.542 : Int1 = CallByName Num.22 List.442 List.443;
+        if List.542 then
+            let List.549 : U8 = CallByName List.66 List.439 List.442;
+            let List.543 : List U8 = CallByName List.145 List.440 List.549 List.441;
+            let List.546 : U64 = 1i64;
+            let List.545 : U64 = CallByName Num.19 List.442 List.546;
+            jump List.540 List.439 List.543 List.441 List.545 List.443;
+        else
+            dec List.439;
+            ret List.440;
+    in
+    jump List.540 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
+
+procedure List.80 (#Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11, #Derived_gen.12):
     joinpoint List.578 List.439 List.440 List.441 List.442 List.443:
         let List.580 : Int1 = CallByName Num.22 List.442 List.443;
         if List.580 then
@@ -112,22 +127,7 @@ procedure List.80 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.
             let List.579 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.440;
             ret List.579;
     in
-    jump List.578 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7;
-
-procedure List.80 (#Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11, #Derived_gen.12):
-    joinpoint List.540 List.439 List.440 List.441 List.442 List.443:
-        let List.542 : Int1 = CallByName Num.22 List.442 List.443;
-        if List.542 then
-            let List.549 : U8 = CallByName List.66 List.439 List.442;
-            let List.543 : List U8 = CallByName List.145 List.440 List.549 List.441;
-            let List.546 : U64 = 1i64;
-            let List.545 : U64 = CallByName Num.19 List.442 List.546;
-            jump List.540 List.439 List.543 List.441 List.545 List.443;
-        else
-            dec List.439;
-            ret List.440;
-    in
-    jump List.540 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12;
+    jump List.578 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12;
 
 procedure List.93 (List.436, List.437, List.438):
     let List.538 : U64 = 0i64;

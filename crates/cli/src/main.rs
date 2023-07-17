@@ -11,7 +11,7 @@ use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{LoadingProblem, Threading};
+use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_target::Target;
 use std::fs::{self, FileType};
@@ -123,10 +123,12 @@ fn main() -> io::Result<()> {
                 .get_one::<String>(FLAG_TARGET)
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
+            let function_kind = FunctionKind::LambdaSet;
             roc_linker::generate_stub_lib(
                 input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &target.to_triple(),
+                function_kind,
             )
         }
         Some((CMD_BUILD, matches)) => {

@@ -19,7 +19,7 @@ procedure Test.11 (Test.29, #Attr.12):
 procedure Test.11 (Test.29, Test.10):
     ret Test.10;
 
-procedure Test.14 (#Derived_gen.2, #Derived_gen.3):
+procedure Test.14 (#Derived_gen.7, #Derived_gen.8):
     joinpoint Test.37 Test.36 #Attr.12:
         let Test.12 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
         let Test.13 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
@@ -46,7 +46,7 @@ procedure Test.14 (#Derived_gen.2, #Derived_gen.3):
             decref #Attr.12;
             jump #Derived_gen.10;
     in
-    jump Test.37 #Derived_gen.2 #Derived_gen.3;
+    jump Test.37 #Derived_gen.7 #Derived_gen.8;
 
 procedure Test.2 ():
     let Test.6 : Str = "Hello";

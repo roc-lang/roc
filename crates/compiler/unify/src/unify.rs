@@ -5,7 +5,7 @@ use roc_debug_flags::{dbg_do, dbg_set};
 use roc_debug_flags::{
     ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_ONE_RECURSION,
 };
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
@@ -611,6 +611,7 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
             unify_opaque(env, pool, &ctx, *symbol, *args, *real_var)
         }
         LambdaSet(lset) => unify_lambda_set(env, pool, &ctx, *lset, &ctx.second_desc.content),
+        ErasedLambda => unify_erased_lambda(env, pool, &ctx, &ctx.second_desc.content),
         &RangedNumber(range_vars) => unify_ranged_number(env, pool, &ctx, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -680,7 +681,7 @@ fn unify_ranged_number<M: MetaCollector>(
             Some(range) => merge(env, ctx, RangedNumber(range)),
             None => not_in_range_mismatch(),
         },
-        LambdaSet(..) => mismatch!(),
+        LambdaSet(..) | ErasedLambda => mismatch!(),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1004,6 +1005,7 @@ fn unify_alias<M: MetaCollector>(
             check_and_merge_valid_range(env, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
         LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
+        ErasedLambda => mismatch!("cannot unify alias {:?} with an erased lambda!", ctx.first),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1198,13 +1200,44 @@ fn unify_structure<M: MetaCollector>(
                 "Cannot unify structure \n{:?} \nwith lambda set\n {:?}",
                 roc_types::subs::SubsFmtContent(&Content::Structure(*flat_type), env.subs),
                 roc_types::subs::SubsFmtContent(other, env.subs),
-                // &flat_type,
-                // other
             )
         }
+        ErasedLambda => mismatch!(),
         RangedNumber(other_range_vars) => {
             check_and_merge_valid_range(env, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
+        Error => merge(env, ctx, Error),
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_erased_lambda<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    other: &Content,
+) -> Outcome<M> {
+    match other {
+        FlexVar(_) => {
+            if M::UNIFYING_SPECIALIZATION {
+                todo_lambda_erasure!()
+            }
+            merge(env, ctx, Content::ErasedLambda)
+        }
+        Content::LambdaSet(..) => {
+            if M::UNIFYING_SPECIALIZATION {
+                todo_lambda_erasure!()
+            }
+            merge(env, ctx, Content::ErasedLambda)
+        }
+        ErasedLambda => merge(env, ctx, Content::ErasedLambda),
+        RecursionVar { structure, .. } => unify_pool(env, pool, ctx.first, *structure, ctx.mode),
+        RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
+        FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
+        Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
+        RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
+        Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1254,6 +1287,7 @@ fn unify_lambda_set<M: MetaCollector>(
             env.remove_recursion_pair(ctx.first, ctx.second);
             outcome
         }
+        ErasedLambda => merge(env, ctx, ErasedLambda),
         RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
         FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
@@ -3521,7 +3555,8 @@ fn unify_rigid<M: MetaCollector>(
         | RecursionVar { .. }
         | Structure(_)
         | Alias(..)
-        | LambdaSet(..) => {
+        | LambdaSet(..)
+        | ErasedLambda => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3581,7 +3616,8 @@ fn unify_rigid_able<M: MetaCollector>(
         | Structure(_)
         | Alias(..)
         | RangedNumber(..)
-        | LambdaSet(..) => {
+        | LambdaSet(..)
+        | ErasedLambda => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3621,7 +3657,8 @@ fn unify_flex<M: MetaCollector>(
         | Structure(_)
         | Alias(_, _, _, _)
         | RangedNumber(..)
-        | LambdaSet(..) => {
+        | LambdaSet(..)
+        | ErasedLambda => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             merge(env, ctx, *other)
@@ -3716,7 +3753,7 @@ fn unify_flex_able<M: MetaCollector>(
         }
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
-        LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
+        LambdaSet(..) | ErasedLambda => mismatch!("FlexAble with LambdaSet"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
             // Opaque type wins
@@ -3884,6 +3921,8 @@ fn unify_recursion<M: MetaCollector>(
             // suppose that the recursion var is a lambda set
             unify_pool(env, pool, structure, ctx.second, ctx.mode)
         }
+
+        ErasedLambda => mismatch!(),
 
         Error => merge(env, ctx, Error),
     };

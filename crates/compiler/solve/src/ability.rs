@@ -21,7 +21,7 @@ use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarit
 use roc_unify::unify::{Env as UEnv, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
-use crate::env::Env;
+use crate::env::InferenceEnv;
 use crate::{aliases::Aliases, to_var::type_to_var};
 
 #[derive(Debug, Clone)]
@@ -56,7 +56,7 @@ pub struct PendingDerivesTable(
 
 impl PendingDerivesTable {
     pub fn new(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         types: &mut Types,
         aliases: &mut Aliases,
         pending_derives: PendingDerives,
@@ -822,6 +822,12 @@ trait DerivableVisitor {
                 RangedNumber(range) => Self::visit_ranged_number(var, range)?,
 
                 LambdaSet(..) => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
+                ErasedLambda => {
                     return Err(NotDerivable {
                         var,
                         context: NotDerivableContext::NoContext,

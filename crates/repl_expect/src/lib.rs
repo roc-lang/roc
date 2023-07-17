@@ -95,7 +95,7 @@ mod test {
     use pretty_assertions::assert_eq;
     use roc_error_macros::internal_error;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
-    use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+    use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError, Threading};
     use roc_packaging::cache::RocCacheDir;
     use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
@@ -113,6 +113,7 @@ mod test {
 
         let opt_level = roc_mono::ir::OptLevel::Normal;
         let target_info = TargetInfo::from(target);
+        let function_kind = FunctionKind::LambdaSet;
 
         // Step 1: compile the app and generate the .o file
         let src_dir = tempfile::tempdir().unwrap();
@@ -122,6 +123,7 @@ mod test {
 
         let load_config = LoadConfig {
             target_info,
+            function_kind,
             render: RenderTarget::ColorTerminal,
             palette: DEFAULT_PALETTE,
             threading: Threading::Single,

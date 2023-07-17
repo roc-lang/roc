@@ -10,7 +10,8 @@ use roc_build::{
     },
 };
 use roc_collections::MutMap;
-use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
+use roc_error_macros::todo_lambda_erasure;
+use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
@@ -321,6 +322,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(*var);
                 }
             }
+            ErasedLambda => todo_lambda_erasure!(),
             &RangedNumber(_) => {}
         }
     }
@@ -334,6 +336,8 @@ pub fn load_types(
     ignore_errors: IgnoreErrors,
 ) -> Result<Vec<Types>, io::Error> {
     let target_info = (&Triple::host()).into();
+    // TODO the function kind may need to be parameterizable.
+    let function_kind = FunctionKind::LambdaSet;
     let arena = &Bump::new();
     let LoadedModule {
         module_id: home,
@@ -350,6 +354,7 @@ pub fn load_types(
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target_info,
+            function_kind,
             render: RenderTarget::Generic,
             palette: DEFAULT_PALETTE,
             threading,

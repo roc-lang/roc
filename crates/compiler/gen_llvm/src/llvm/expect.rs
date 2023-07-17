@@ -9,7 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
@@ -387,6 +387,8 @@ fn build_clone<'a, 'ctx>(
                 union_layout,
             )
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 

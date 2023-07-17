@@ -14,6 +14,7 @@ use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
+use crate::ir::ErasedField;
 use crate::{
     borrow::{lowlevel_borrow_signature, Ownership},
     ir::{
@@ -872,7 +873,11 @@ fn insert_refcount_operations_binding<'a>(
     }
 
     match expr {
-        Expr::Literal(_) | Expr::NullPointer | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
+        Expr::Literal(_)
+        | Expr::NullPointer
+        | Expr::FunctionPointer { .. }
+        | Expr::EmptyArray
+        | Expr::RuntimeErrorFunction(_) => {
             // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
             new_let!(stmt)
         }
@@ -881,6 +886,25 @@ fn insert_refcount_operations_binding<'a>(
             let new_let = new_let!(stmt);
 
             inc_owned!(arguments.iter().copied(), new_let)
+        }
+
+        Expr::ErasedMake { value, callee: _ } => {
+            let new_let = new_let!(stmt);
+
+            if let Some(value) = value {
+                inc_owned!([*value], new_let)
+            } else {
+                new_let
+            }
+        }
+
+        Expr::ErasedLoad { symbol, field } => {
+            let new_let = new_let!(stmt);
+
+            match field {
+                ErasedField::Value => inc_owned!([*symbol], new_let),
+                ErasedField::Callee | ErasedField::ValuePtr => new_let,
+            }
         }
 
         Expr::GetTagId { structure, .. }
@@ -938,6 +962,14 @@ fn insert_refcount_operations_binding<'a>(
                 // A by name call refers to a normal function call.
                 // Normal functions take all their parameters as owned, so we can mark them all as such.
                 CallType::ByName { .. } => {
+                    let new_let = new_let!(stmt);
+
+                    inc_owned!(arguments.iter().copied(), new_let)
+                }
+                // A normal Roc function call, but we don't actually know where its target is.
+                // As such, we assume that it takes all parameters as owned, as will the function
+                // itself.
+                CallType::ByPointer { .. } => {
                     let new_let = new_let!(stmt);
 
                     inc_owned!(arguments.iter().copied(), new_let)

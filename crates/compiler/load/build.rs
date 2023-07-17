@@ -77,6 +77,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     let cwd = std::env::current_dir().unwrap();
     let source = roc_builtins::roc::module_source(module_id);
     let target_info = roc_target::TargetInfo::default_x86_64();
+    let function_kind = roc_solve::FunctionKind::LambdaSet;
 
     let res_module = roc_load_internal::file::load_and_typecheck_str(
         &arena,
@@ -85,6 +86,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         cwd,
         Default::default(),
         target_info,
+        function_kind,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
         RocCacheDir::Disallowed,

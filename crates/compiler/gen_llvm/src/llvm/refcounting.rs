@@ -14,16 +14,20 @@ use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, InstructionValue, IntValue, PointerValue};
+use inkwell::values::{
+    BasicValueEnum, CallableValue, FunctionValue, InstructionValue, IntValue, PointerValue,
+};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::ErasedField;
 use roc_mono::layout::{
-    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
+use super::erased;
 
 pub struct PointerToRefcount<'ctx> {
     value: PointerValue<'ctx>,
@@ -388,6 +392,94 @@ fn modify_refcount_struct_help<'a, 'ctx>(
     builder.build_return(None);
 }
 
+fn modify_refcount_erased<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let (_, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_erased",
+        "decrement_erased",
+        layout_interner.get_repr(Layout::ERASED),
+        mode,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arg_type = erased::basic_type(env);
+            let function_value = build_header(env, arg_type.into(), mode, &fn_name);
+
+            modify_refcount_erased_help(env, mode, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+
+    function
+}
+
+fn modify_refcount_erased_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    mode: Mode,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap().into_struct_value();
+
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
+
+    let refcounter = erased::load_refcounter(env, arg_val, mode);
+    let refcounter_is_null = env.builder.build_is_null(refcounter, "refcounter_unset");
+
+    let call_refcounter_block = ctx.append_basic_block(fn_val, "call_refcounter");
+    let noop_block = ctx.append_basic_block(fn_val, "noop");
+
+    builder.build_conditional_branch(refcounter_is_null, noop_block, call_refcounter_block);
+    {
+        builder.position_at_end(call_refcounter_block);
+        let value = erased::load(
+            env,
+            arg_val,
+            ErasedField::Value,
+            erased::opaque_ptr_type(env),
+        );
+
+        builder.build_call(
+            CallableValue::try_from(refcounter).unwrap(),
+            &[value.into()],
+            "call_refcounter",
+        );
+
+        builder.build_return(None);
+    }
+
+    {
+        builder.position_at_end(noop_block);
+        builder.build_return(None);
+    }
+}
+
 pub fn increment_refcount_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -624,6 +716,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             mode,
             lambda_set.runtime_representation(),
         ),
+        FunctionPointer(_) => None,
+        Erased(_) => {
+            let function = modify_refcount_erased(env, layout_interner, layout_ids, mode);
+
+            Some(function)
+        }
     }
 }
 

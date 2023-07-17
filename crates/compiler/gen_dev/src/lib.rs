@@ -10,7 +10,7 @@ use std::collections::hash_map::Entry;
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -149,6 +149,13 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
+                    Expr::ErasedMake { value, callee } => {
+                        value.map(|v| self.set_last_seen(v, stmt));
+                        self.set_last_seen(*callee, stmt);
+                    }
+                    Expr::ErasedLoad { symbol, field: _ } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
                     Expr::Struct(syms) => {
                         for sym in *syms {
                             self.set_last_seen(*sym, stmt);
@@ -176,6 +183,7 @@ impl<'a> LastSeenMap<'a> {
                     Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
+                    Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
                 }
@@ -265,6 +273,7 @@ impl<'a> LastSeenMap<'a> {
 
         match call_type {
             CallType::ByName { .. } => {}
+            CallType::ByPointer { .. } => {}
             CallType::LowLevel { .. } => {}
             CallType::HigherOrder { .. } => {}
             CallType::Foreign { .. } => {}
@@ -729,6 +738,10 @@ trait Backend<'a> {
                         self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                     }
 
+                    CallType::ByPointer { .. } => {
+                        todo_lambda_erasure!()
+                    }
+
                     CallType::LowLevel { op: lowlevel, .. } => {
                         let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                             bumpalo::vec![in self.env().arena];
@@ -839,6 +852,9 @@ trait Backend<'a> {
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
             }
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::ErasedMake { .. } => todo_lambda_erasure!(),
+            Expr::ErasedLoad { .. } => todo_lambda_erasure!(),
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();
 

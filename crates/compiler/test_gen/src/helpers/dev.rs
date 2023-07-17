@@ -5,6 +5,7 @@ use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::SingleEntryPoint;
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
+use roc_solve::FunctionKind;
 use tempfile::tempdir;
 
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
@@ -58,6 +59,7 @@ pub fn helper(
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
+        function_kind: FunctionKind::LambdaSet,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,

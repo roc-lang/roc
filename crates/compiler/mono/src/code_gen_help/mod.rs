@@ -453,6 +453,7 @@ impl<'a> CodeGenHelp<'a> {
             ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         });
 
         proc_symbol
@@ -582,6 +583,10 @@ impl<'a> CodeGenHelp<'a> {
 
             // This line is the whole point of the function
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
+
+            LayoutRepr::FunctionPointer(_) => return layout,
+
+            LayoutRepr::Erased(_) => return layout,
         };
 
         layout_interner.insert(Layout::new(LayoutWrapper::Direct(repr), semantic))
@@ -768,6 +773,7 @@ impl<'a> CallerProc<'a> {
             ret_layout: Layout::UNIT,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         if false {
@@ -838,5 +844,7 @@ fn layout_needs_helper_proc<'a>(
         LayoutRepr::LambdaSet(_) => true,
         LayoutRepr::RecursivePointer(_) => false,
         LayoutRepr::Ptr(_) => false,
+        LayoutRepr::FunctionPointer(_) => false,
+        LayoutRepr::Erased(_) => true,
     }
 }

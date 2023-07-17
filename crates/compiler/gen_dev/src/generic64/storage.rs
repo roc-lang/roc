@@ -6,7 +6,7 @@ use crate::{
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
@@ -830,6 +830,7 @@ impl<
 
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
             pointer_layouts!() => {
                 // like a 64-bit integer
                 debug_assert_eq!(to_offset % 8, 0);

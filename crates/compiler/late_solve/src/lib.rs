@@ -5,7 +5,6 @@ use std::sync::{Arc, RwLock};
 
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
-use roc_can::constraint::Constraints;
 use roc_can::module::ExposedByModule;
 use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
@@ -15,7 +14,7 @@ use roc_module::symbol::Symbol;
 use roc_solve::ability::AbilityResolver;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, Phase};
 use roc_solve::Pools;
-use roc_solve::{DerivedEnv, Env};
+use roc_solve::{DerivedEnv, SolveEnv};
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_types::types::Polarity;
@@ -342,19 +341,6 @@ impl MetaCollector for ChangedVariableCollector {
     }
 }
 
-std::thread_local! {
-    static SCRATCHPAD_FOR_OCCURS: std::cell::RefCell<Option<Constraints>> = std::cell::RefCell::new(Some(Constraints::empty()));
-}
-
-fn with_empty_solve_constraints<T>(f: impl FnOnce(&Constraints) -> T) -> T {
-    SCRATCHPAD_FOR_OCCURS.with(|cell| {
-        let constr = cell.take().unwrap();
-        let result = f(&constr);
-        cell.replace(Some(constr));
-        result
-    })
-}
-
 /// Unifies two variables and performs lambda set compaction.
 /// Ranks and other ability demands are disregarded.
 #[allow(clippy::too_many_arguments)]
@@ -396,9 +382,8 @@ pub fn unify(
                 exposed_types: exposed_by_module,
             };
 
-            let must_implement_constraints = with_empty_solve_constraints(|c| {
-                let mut env = Env {
-                    constraints: c,
+            let must_implement_constraints = {
+                let mut env = SolveEnv {
                     subs,
                     derived_env: &derived_env,
                     arena,
@@ -406,7 +391,8 @@ pub fn unify(
                 };
 
                 compact_lambda_sets_of_vars(&mut env, lambda_sets_to_specialize, &late_phase)
-            });
+            };
+
             // At this point we can't do anything with must-implement constraints, since we're no
             // longer solving. We must assume that they were totally caught during solving.
             // After we land https://github.com/roc-lang/roc/issues/3207 this concern should totally

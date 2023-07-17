@@ -10,6 +10,7 @@ use roc_load::{EntryPoint, ExecutionMode, ExposedToHost, LoadConfig, Threading};
 use roc_module::symbol::Interns;
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_solve::FunctionKind;
 use roc_target::get_target_triple_str;
 use std::cmp::Ordering;
 use std::mem;
@@ -88,6 +89,7 @@ pub fn generate_stub_lib(
     input_path: &Path,
     roc_cache_dir: RocCacheDir<'_>,
     triple: &Triple,
+    function_kind: FunctionKind,
 ) -> std::io::Result<i32> {
     // Note: this should theoretically just be able to load the host, I think.
     // Instead, I am loading an entire app because that was simpler and had example code.
@@ -101,6 +103,7 @@ pub fn generate_stub_lib(
         roc_cache_dir,
         LoadConfig {
             target_info,
+            function_kind,
             render: RenderTarget::Generic,
             palette: DEFAULT_PALETTE,
             threading: Threading::AllAvailable,

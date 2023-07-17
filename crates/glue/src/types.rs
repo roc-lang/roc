@@ -8,6 +8,7 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::{MutMap, VecMap};
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
@@ -1567,6 +1568,7 @@ fn add_type_help<'a>(
 
             type_id
         }
+        Content::ErasedLambda => todo_lambda_erasure!(),
         Content::LambdaSet(lambda_set) => {
             let tags = lambda_set.solved;
 
@@ -2098,6 +2100,8 @@ fn tag_union_type_from_layout<'a>(
             // been turned into an error earlier in the process.
             unreachable!();
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 

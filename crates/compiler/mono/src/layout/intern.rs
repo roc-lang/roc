@@ -75,11 +75,12 @@ cache_interned_layouts! {
     15, DEC,  pub, nosema!(LayoutRepr::DEC)
     16, STR,  pub, nosema!(LayoutRepr::STR)
     17, OPAQUE_PTR,  pub, nosema!(LayoutRepr::OPAQUE_PTR)
-    18, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
-    19, STR_PTR, pub, nosema!(LayoutRepr::Ptr(Layout::STR))
-    20, LIST_U8, pub, nosema!(LayoutRepr::Builtin(crate::layout::Builtin::List(Layout::U8)))
+    18, ERASED, pub, nosema!(LayoutRepr::ERASED)
+    19, NAKED_RECURSIVE_PTR,  pub(super), nosema!(LayoutRepr::RecursivePointer(Layout::VOID))
+    20, STR_PTR, pub, nosema!(LayoutRepr::Ptr(Layout::STR))
+    21, LIST_U8, pub, nosema!(LayoutRepr::Builtin(crate::layout::Builtin::List(Layout::U8)))
 
-    ; 21
+    ; 22
 }
 
 macro_rules! impl_to_from_int_width {
@@ -354,6 +355,8 @@ pub trait LayoutInterner<'a>: Sized {
                 .text("Ptr(")
                 .append(self.to_doc(inner, alloc, seen_rec, parens))
                 .append(")"),
+            FunctionPointer(fp) => fp.to_doc(alloc, self, seen_rec, parens),
+            Erased(e) => e.to_doc(alloc),
         }
     }
 
@@ -1076,7 +1079,9 @@ mod reify {
     use bumpalo::{collections::Vec, Bump};
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, Layout, LayoutRepr, LayoutWrapper, UnionLayout};
+    use crate::layout::{
+        Builtin, FunctionPointer, LambdaSet, Layout, LayoutRepr, LayoutWrapper, UnionLayout,
+    };
 
     use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
@@ -1121,6 +1126,13 @@ mod reify {
                 // another recursive union's layout, do not change it.
                 LayoutRepr::RecursivePointer(if l == Layout::VOID { slot } else { l })
             }
+            LayoutRepr::FunctionPointer(FunctionPointer { args, ret }) => {
+                LayoutRepr::FunctionPointer(FunctionPointer {
+                    args: reify_layout_slice(arena, interner, slot, args),
+                    ret: reify_layout(arena, interner, slot, ret),
+                })
+            }
+            LayoutRepr::Erased(e) => LayoutRepr::Erased(e),
         }
     }
 
@@ -1394,7 +1406,7 @@ mod equiv {
 pub mod dbg_deep {
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, LayoutRepr, UnionLayout};
+    use crate::layout::{Builtin, Erased, LambdaSet, LayoutRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner};
 
@@ -1447,6 +1459,12 @@ pub mod dbg_deep {
                 LayoutRepr::RecursivePointer(rp) => {
                     f.debug_tuple("RecursivePointer").field(&rp.0).finish()
                 }
+                LayoutRepr::FunctionPointer(fp) => f
+                    .debug_struct("FunctionPointer")
+                    .field("args", &fp.args)
+                    .field("ret", &fp.ret)
+                    .finish(),
+                LayoutRepr::Erased(Erased) => f.debug_struct("?Erased").finish(),
             }
         }
     }
@@ -1559,7 +1577,7 @@ pub mod dbg_deep {
 pub mod dbg_stable {
     use roc_module::symbol::Symbol;
 
-    use crate::layout::{Builtin, LambdaSet, LayoutRepr, SemanticRepr, UnionLayout};
+    use crate::layout::{Builtin, Erased, LambdaSet, LayoutRepr, SemanticRepr, UnionLayout};
 
     use super::{InLayout, LayoutInterner};
 
@@ -1620,6 +1638,12 @@ pub mod dbg_stable {
                 LayoutRepr::RecursivePointer(rp) => {
                     f.debug_tuple("RecursivePointer").field(&rp.0).finish()
                 }
+                LayoutRepr::FunctionPointer(fp) => f
+                    .debug_struct("FunctionPointer")
+                    .field("args", &fp.args)
+                    .field("ret", &fp.ret)
+                    .finish(),
+                LayoutRepr::Erased(Erased) => f.debug_struct("?Erased").finish(),
             }
         }
     }

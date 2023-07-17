@@ -29,6 +29,7 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
@@ -40,6 +41,7 @@ fn load_and_typecheck(
     filename: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
@@ -52,6 +54,7 @@ fn load_and_typecheck(
     )?;
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::Generic,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -176,7 +179,13 @@ fn multiple_modules_help<'a>(
         writeln!(file, "{source}")?;
         file_handles.push(file);
 
-        load_and_typecheck(arena, full_file_path, Default::default(), TARGET_INFO)
+        load_and_typecheck(
+            arena,
+            full_file_path,
+            Default::default(),
+            TARGET_INFO,
+            FunctionKind::LambdaSet,
+        )
     };
 
     Ok(result)
@@ -190,7 +199,13 @@ fn load_fixture(
     let src_dir = fixtures_dir().join(dir_name);
     let filename = src_dir.join(format!("{module_name}.roc"));
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
     let mut loaded_module = match loaded {
         Ok(x) => x,
         Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
@@ -347,7 +362,13 @@ fn interface_with_deps() {
     let src_dir = fixtures_dir().join("interface_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
 
     let mut loaded_module = loaded.expect("Test module failed to load");
     let home = loaded_module.module_id;

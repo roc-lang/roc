@@ -3,7 +3,7 @@ use crate::ability::{
     CheckedDerives, ObligationCache, PendingDerivesTable, Resolved,
 };
 use crate::deep_copy::deep_copy_var_in;
-use crate::env::{DerivedEnv, Env};
+use crate::env::{DerivedEnv, InferenceEnv};
 use crate::module::{SolveConfig, Solved};
 use crate::pools::Pools;
 use crate::specialize::{
@@ -122,6 +122,7 @@ fn run_in_place(
         pending_derives,
         exposed_by_module,
         derived_module,
+        function_kind,
     } = config;
 
     let mut pools = Pools::default();
@@ -141,9 +142,10 @@ fn run_in_place(
         exposed_types: exposed_by_module,
     };
 
-    let mut env = Env {
+    let mut env = InferenceEnv {
         arena: &arena,
         constraints,
+        function_kind,
         derived_env: &derived_env,
         subs,
         pools: &mut pools,
@@ -218,7 +220,7 @@ enum Work<'a> {
 }
 
 fn solve(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     mut can_types: Types,
     mut state: State,
     rank: Rank,
@@ -576,7 +578,11 @@ fn solve(
                         // then we copy from that module's Subs into our own. If the value
                         // is being looked up in this module, then we use our Subs as both
                         // the source and destination.
-                        let actual = deep_copy_var_in(env, rank, var, env.arena);
+                        let actual = {
+                            let mut solve_env = env.as_solve_env();
+                            let solve_env = &mut solve_env;
+                            deep_copy_var_in(solve_env, rank, var, solve_env.arena)
+                        };
                         let expectation = &env.constraints.expectations[expectation_index.index()];
 
                         let expected = either_type_index_to_var(
@@ -1390,7 +1396,7 @@ fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
 }
 
 fn compact_lambdas_and_check_obligations(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
@@ -1401,7 +1407,7 @@ fn compact_lambdas_and_check_obligations(
         obligations,
         awaiting_specialization: new_awaiting,
     } = compact_lambda_sets_of_vars(
-        env,
+        &mut env.as_solve_env(),
         lambda_sets_to_specialize,
         &SolvePhase { abilities_store },
     );
@@ -1414,7 +1420,7 @@ fn compact_lambdas_and_check_obligations(
     awaiting_specialization.union(new_awaiting);
 }
 
-fn open_tag_union(env: &mut Env, var: Variable) {
+fn open_tag_union(env: &mut InferenceEnv, var: Variable) {
     let mut stack = vec![var];
     while let Some(var) = stack.pop() {
         use {Content::*, FlatType::*};
@@ -1546,7 +1552,7 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
 // Aggressive but necessary - there aren't many usages.
 #[inline(always)]
 fn check_ability_specialization(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
@@ -1570,8 +1576,16 @@ fn check_ability_specialization(
 
         // We need to freshly instantiate the root signature so that all unifications are reflected
         // in the specialization type, but not the original signature type.
-        let root_signature_var =
-            deep_copy_var_in(env, Rank::toplevel(), root_signature_var, env.arena);
+        let root_signature_var = {
+            let mut solve_env = env.as_solve_env();
+            let solve_env = &mut solve_env;
+            deep_copy_var_in(
+                solve_env,
+                Rank::toplevel(),
+                root_signature_var,
+                solve_env.arena,
+            )
+        };
         let snapshot = env.subs.snapshot();
         let unified = unify_introduced_ability_specialization(
             &mut env.uenv(),
@@ -1777,7 +1791,7 @@ impl<T> LocalDefVarsVec<T> {
 
 impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     fn from_def_types(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         problems: &mut Vec<TypeError>,
         abilities_store: &mut AbilitiesStore,
@@ -1811,7 +1825,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 }
 
 fn check_for_infinite_type(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     problems: &mut Vec<TypeError>,
     symbol: Symbol,
     loc_var: Loc<Variable>,
@@ -1874,7 +1888,7 @@ fn circular_error(
 /// Ensures that variables introduced at the `young_rank`, but that should be
 /// stuck at a lower level, are marked at that level and not generalized at the
 /// present `young_rank`. See [adjust_rank].
-fn generalize(env: &mut Env, young_mark: Mark, visit_mark: Mark, young_rank: Rank) {
+fn generalize(env: &mut InferenceEnv, young_mark: Mark, visit_mark: Mark, young_rank: Rank) {
     let subs = &mut env.subs;
     let pools = &mut env.pools;
 
@@ -2301,6 +2315,8 @@ fn adjust_rank_content(
 
             rank
         }
+
+        ErasedLambda => group_rank,
 
         RangedNumber(_) => group_rank,
     }

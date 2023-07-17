@@ -119,8 +119,9 @@ impl<'a> LlvmAlignment<'a> for LayoutRepr<'a> {
                 .runtime_representation()
                 .llvm_alignment_bytes(interner),
             Builtin(builtin) => builtin.llvm_alignment_bytes(interner),
-            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Ptr(_) => interner.target_info().ptr_width() as u32,
+            RecursivePointer(_) | Ptr(_) | FunctionPointer(_) | Erased(_) => {
+                interner.target_info().ptr_width() as u32
+            }
         }
     }
 }
