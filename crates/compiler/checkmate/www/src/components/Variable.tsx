@@ -53,6 +53,8 @@ function contentStyles(desc: TypeDescriptor | undefined): ContentStyles {
       return { name: "Rec", bg: "bg-blue-grey-500" };
     case "LambdaSet":
       return { name: "LambdaSet", bg: "bg-green-500" };
+    case "ErasedLambda":
+      return { name: "ErasedLambda", bg: "bg-green-700" };
     case "Alias": {
       switch (content.kind.type) {
         case "Structural":
