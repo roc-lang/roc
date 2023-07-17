@@ -304,7 +304,7 @@ generateEffect = \buf, types, name, id ->
     """
         \(buf)
         HostedFn {
-            name: \(name),
+            name: "\(name)",
             arg_types: &[\(args)],
             ret_type: \(ret),
         },
