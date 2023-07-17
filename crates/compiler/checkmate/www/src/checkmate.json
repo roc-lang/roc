@@ -1,0 +1,545 @@
+[
+  {
+    "type": "Unification",
+    "left": 1540,
+    "right": 71,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 71,
+        "rank": 1,
+        "content": {
+          "type": "Function",
+          "arguments": [1543, 1544],
+          "lambda_type": 1542,
+          "ret": 1541
+        }
+      },
+      { "type": "VariableUnified", "from": 1540, "to": 71 },
+      { "type": "VariableUnified", "from": 71, "to": 71 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 71,
+    "right": 1546,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "Unification",
+        "left": 1543,
+        "right": 67,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 67,
+            "rank": 1,
+            "content": {
+              "type": "Alias",
+              "name": "`Num.Num`",
+              "variables": {
+                "type_variables": [1545],
+                "lambda_set_variables": [],
+                "infer_ext_in_output_position_variables": []
+              },
+              "real_variable": 1545,
+              "kind": { "type": "Opaque" }
+            }
+          },
+          { "type": "VariableUnified", "from": 1543, "to": 67 },
+          { "type": "VariableUnified", "from": 67, "to": 67 }
+        ]
+      },
+      {
+        "type": "Unification",
+        "left": 1544,
+        "right": 69,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 69,
+            "rank": 1,
+            "content": {
+              "type": "Alias",
+              "name": "`Num.Num`",
+              "variables": {
+                "type_variables": [1545],
+                "lambda_set_variables": [],
+                "infer_ext_in_output_position_variables": []
+              },
+              "real_variable": 1545,
+              "kind": { "type": "Opaque" }
+            }
+          },
+          { "type": "VariableUnified", "from": 1544, "to": 69 },
+          { "type": "VariableUnified", "from": 69, "to": 69 }
+        ]
+      },
+      {
+        "type": "Unification",
+        "left": 1541,
+        "right": 73,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 73,
+            "rank": 1,
+            "content": {
+              "type": "Alias",
+              "name": "`Num.Num`",
+              "variables": {
+                "type_variables": [1545],
+                "lambda_set_variables": [],
+                "infer_ext_in_output_position_variables": []
+              },
+              "real_variable": 1545,
+              "kind": { "type": "Opaque" }
+            }
+          },
+          { "type": "VariableUnified", "from": 1541, "to": 73 },
+          { "type": "VariableUnified", "from": 73, "to": 73 }
+        ]
+      },
+      {
+        "type": "Unification",
+        "left": 1542,
+        "right": 72,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 72,
+            "rank": 1,
+            "content": {
+              "type": "LambdaSet",
+              "solved": [{ "function": "`Num.add`", "environment": [] }],
+              "unspecialized": [],
+              "recursion_var": null,
+              "ambient_function": 1540
+            }
+          },
+          { "type": "VariableUnified", "from": 1542, "to": 72 },
+          { "type": "VariableUnified", "from": 72, "to": 72 }
+        ]
+      },
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 1546,
+        "rank": 1,
+        "content": {
+          "type": "Function",
+          "arguments": [67, 69],
+          "lambda_type": 1542,
+          "ret": 73
+        }
+      },
+      { "type": "VariableUnified", "from": 71, "to": 1546 },
+      { "type": "VariableUnified", "from": 1546, "to": 1546 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 66,
+    "right": 1547,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 1547,
+        "rank": 1,
+        "content": {
+          "type": "RangedNumber",
+          "range": {
+            "kind": { "type": "AnyNum" },
+            "signed": true,
+            "min_width": 8
+          }
+        }
+      },
+      { "type": "VariableUnified", "from": 66, "to": 1547 },
+      { "type": "VariableUnified", "from": 1547, "to": 1547 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 1548,
+    "right": 67,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "Unification",
+        "left": 66,
+        "right": 1545,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 1545,
+            "rank": 1,
+            "content": {
+              "type": "RangedNumber",
+              "range": {
+                "kind": { "type": "AnyNum" },
+                "signed": true,
+                "min_width": 8
+              }
+            }
+          },
+          { "type": "VariableUnified", "from": 1547, "to": 1545 },
+          { "type": "VariableUnified", "from": 1545, "to": 1545 }
+        ]
+      },
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 67,
+        "rank": 1,
+        "content": {
+          "type": "Alias",
+          "name": "`Num.Num`",
+          "variables": {
+            "type_variables": [66],
+            "lambda_set_variables": [],
+            "infer_ext_in_output_position_variables": []
+          },
+          "real_variable": 66,
+          "kind": { "type": "Opaque" }
+        }
+      },
+      { "type": "VariableUnified", "from": 1548, "to": 67 },
+      { "type": "VariableUnified", "from": 67, "to": 67 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 68,
+    "right": 1549,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 1549,
+        "rank": 1,
+        "content": {
+          "type": "RangedNumber",
+          "range": {
+            "kind": { "type": "AnyNum" },
+            "signed": true,
+            "min_width": 8
+          }
+        }
+      },
+      { "type": "VariableUnified", "from": 68, "to": 1549 },
+      { "type": "VariableUnified", "from": 1549, "to": 1549 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 1550,
+    "right": 69,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "Unification",
+        "left": 68,
+        "right": 1545,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 1545,
+            "rank": 1,
+            "content": {
+              "type": "RangedNumber",
+              "range": {
+                "kind": { "type": "AnyNum" },
+                "signed": true,
+                "min_width": 8
+              }
+            }
+          },
+          { "type": "VariableUnified", "from": 1549, "to": 1545 },
+          { "type": "VariableUnified", "from": 1545, "to": 1545 }
+        ]
+      },
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 69,
+        "rank": 1,
+        "content": {
+          "type": "Alias",
+          "name": "`Num.Num`",
+          "variables": {
+            "type_variables": [68],
+            "lambda_set_variables": [],
+            "infer_ext_in_output_position_variables": []
+          },
+          "real_variable": 68,
+          "kind": { "type": "Opaque" }
+        }
+      },
+      { "type": "VariableUnified", "from": 1550, "to": 69 },
+      { "type": "VariableUnified", "from": 69, "to": 69 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 73,
+    "right": 1551,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "Unification",
+        "left": 73,
+        "right": 1552,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "Unification",
+            "left": 1545,
+            "right": 1553,
+            "mode": { "type": "Eq" },
+            "success": true,
+            "subevents": [
+              {
+                "type": "Unification",
+                "left": 1556,
+                "right": 1554,
+                "mode": { "type": "Eq" },
+                "success": true,
+                "subevents": [
+                  {
+                    "type": "VariableSetDescriptor",
+                    "variable": 1554,
+                    "rank": 1,
+                    "content": {
+                      "type": "Alias",
+                      "name": "`Num.Unsigned8`",
+                      "variables": {
+                        "type_variables": [],
+                        "lambda_set_variables": [],
+                        "infer_ext_in_output_position_variables": []
+                      },
+                      "real_variable": 1555,
+                      "kind": { "type": "Opaque" }
+                    }
+                  },
+                  { "type": "VariableUnified", "from": 1556, "to": 1554 },
+                  { "type": "VariableUnified", "from": 1554, "to": 1554 }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "Unification",
+            "left": 1545,
+            "right": 1553,
+            "mode": { "type": "Eq" },
+            "success": true,
+            "subevents": [
+              {
+                "type": "VariableSetDescriptor",
+                "variable": 1553,
+                "rank": 1,
+                "content": {
+                  "type": "Alias",
+                  "name": "`Num.Integer`",
+                  "variables": {
+                    "type_variables": [1556],
+                    "lambda_set_variables": [],
+                    "infer_ext_in_output_position_variables": []
+                  },
+                  "real_variable": 1556,
+                  "kind": { "type": "Opaque" }
+                }
+              },
+              { "type": "VariableUnified", "from": 1545, "to": 1553 },
+              { "type": "VariableUnified", "from": 1553, "to": 1553 }
+            ]
+          },
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 1552,
+            "rank": 1,
+            "content": {
+              "type": "Alias",
+              "name": "`Num.Num`",
+              "variables": {
+                "type_variables": [1545],
+                "lambda_set_variables": [],
+                "infer_ext_in_output_position_variables": []
+              },
+              "real_variable": 1545,
+              "kind": { "type": "Opaque" }
+            }
+          },
+          { "type": "VariableUnified", "from": 73, "to": 1552 },
+          { "type": "VariableUnified", "from": 1552, "to": 1552 }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 1551,
+    "right": 75,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 75,
+        "rank": 1,
+        "content": {
+          "type": "Alias",
+          "name": "`Num.U8`",
+          "variables": {
+            "type_variables": [],
+            "lambda_set_variables": [],
+            "infer_ext_in_output_position_variables": []
+          },
+          "real_variable": 1552,
+          "kind": { "type": "Structural" }
+        }
+      },
+      { "type": "VariableUnified", "from": 1551, "to": 75 },
+      { "type": "VariableUnified", "from": 75, "to": 75 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 80,
+    "right": 75,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 75,
+        "rank": 1,
+        "content": {
+          "type": "Alias",
+          "name": "`Num.U8`",
+          "variables": {
+            "type_variables": [],
+            "lambda_set_variables": [],
+            "infer_ext_in_output_position_variables": []
+          },
+          "real_variable": 1552,
+          "kind": { "type": "Structural" }
+        }
+      },
+      { "type": "VariableUnified", "from": 80, "to": 75 },
+      { "type": "VariableUnified", "from": 75, "to": 75 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 1557,
+    "right": 79,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 79,
+        "rank": 1,
+        "content": {
+          "type": "Alias",
+          "name": "`Bool.Bool`",
+          "variables": {
+            "type_variables": [],
+            "lambda_set_variables": [],
+            "infer_ext_in_output_position_variables": []
+          },
+          "real_variable": 1558,
+          "kind": { "type": "Opaque" }
+        }
+      },
+      { "type": "VariableUnified", "from": 1557, "to": 79 },
+      { "type": "VariableUnified", "from": 79, "to": 79 }
+    ]
+  },
+  {
+    "type": "Unification",
+    "left": 79,
+    "right": 5,
+    "mode": { "type": "Eq" },
+    "success": true,
+    "subevents": [
+      {
+        "type": "Unification",
+        "left": 1558,
+        "right": 4,
+        "mode": { "type": "Eq" },
+        "success": true,
+        "subevents": [
+          {
+            "type": "Unification",
+            "left": 84,
+            "right": 3,
+            "mode": { "type": "Eq" },
+            "success": true,
+            "subevents": [
+              {
+                "type": "VariableSetDescriptor",
+                "variable": 3,
+                "rank": 0,
+                "content": { "type": "EmptyTagUnion" }
+              },
+              { "type": "VariableUnified", "from": 84, "to": 3 },
+              { "type": "VariableUnified", "from": 3, "to": 3 }
+            ]
+          },
+          {
+            "type": "VariableSetDescriptor",
+            "variable": 4,
+            "rank": 0,
+            "content": {
+              "type": "TagUnion",
+              "tags": { "False": [], "True": [] },
+              "extension": { "type": "Any", "variable": 84 }
+            }
+          },
+          { "type": "VariableUnified", "from": 1558, "to": 4 },
+          { "type": "VariableUnified", "from": 4, "to": 4 }
+        ]
+      },
+      {
+        "type": "VariableSetDescriptor",
+        "variable": 5,
+        "rank": 0,
+        "content": {
+          "type": "Alias",
+          "name": "`Bool.Bool`",
+          "variables": {
+            "type_variables": [],
+            "lambda_set_variables": [],
+            "infer_ext_in_output_position_variables": []
+          },
+          "real_variable": 1558,
+          "kind": { "type": "Opaque" }
+        }
+      },
+      { "type": "VariableUnified", "from": 79, "to": 5 },
+      { "type": "VariableUnified", "from": 5, "to": 5 }
+    ]
+  }
+]
