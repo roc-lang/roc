@@ -1,9 +1,14 @@
 import React from "react";
 import FileInput, { LoadedEvents } from "./components/FileInput";
 import Ui from "./components/Ui";
+import data from "./checkmate.json";
+import { AllEvents } from "./schema";
 
 export default function App() {
-  const [events, setEvents] = React.useState<LoadedEvents | null>(null);
+  const [events, setEvents] = React.useState<LoadedEvents | null>({
+    kind: "ok",
+    events: data as AllEvents,
+  });
 
   return (
     <div className="w-screen h-screen p-2 bg-gray-100">
