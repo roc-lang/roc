@@ -25,10 +25,7 @@ jobs:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-old_linux_arm64-$DATE-$SHA" >> $GITHUB_ENV
-       
-      - name: install earthly
-        run: sudo /bin/sh -c 'wget https://github.com/earthly/earthly/releases/latest/download/earthly-linux-amd64 -O /usr/local/bin/earthly && chmod +x /usr/local/bin/earthly && /usr/local/bin/earthly bootstrap --with-autocomplete'
-      
+
       - run: earthly --version
 
       - name: build release with earthly
