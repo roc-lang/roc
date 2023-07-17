@@ -245,6 +245,20 @@
         {
           "type": "object",
           "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ErasedLambda"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
             "kind",
             "name",
             "real_variable",

@@ -20,7 +20,7 @@ pub struct SolveEnv<'a> {
     pub subs: &'a mut Subs,
     pub pools: &'a mut Pools,
     #[cfg(debug_assertions)]
-    pub checkmate: Option<roc_checkmate::Collector>,
+    pub checkmate: &'a mut Option<roc_checkmate::Collector>,
 }
 
 /// Environment necessary for inference.
@@ -31,6 +31,8 @@ pub struct InferenceEnv<'a> {
     pub derived_env: &'a DerivedEnv<'a>,
     pub subs: &'a mut Subs,
     pub pools: &'a mut Pools,
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 impl<'a> SolveEnv<'a> {
@@ -42,7 +44,10 @@ impl<'a> SolveEnv<'a> {
 
     /// Retrieves an environment for unification.
     pub fn uenv(&mut self) -> UEnv {
-        UEnv::new(self.subs)
+        with_checkmate!({
+            on => UEnv::new(self.subs, self.checkmate.as_mut()),
+            off => UEnv::new(self.subs),
+        })
     }
 }
 
@@ -108,6 +113,8 @@ impl<'a> InferenceEnv<'a> {
             derived_env: self.derived_env,
             subs: self.subs,
             pools: self.pools,
+            #[cfg(debug_assertions)]
+            checkmate: &mut self.checkmate,
         }
     }
 }

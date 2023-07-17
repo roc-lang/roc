@@ -58,6 +58,7 @@ impl_content! {
         recursion_var: Option<Variable>,
         ambient_function: Variable,
     },
+    ErasedLambda {},
     Alias {
         name: Symbol,
         variables: AliasTypeVariables,

@@ -397,7 +397,7 @@ pub fn unify(
                     pools: &mut pools,
 
                     #[cfg(debug_assertions)]
-                    checkmate: None,
+                    checkmate: &mut None,
                 };
 
                 compact_lambda_sets_of_vars(&mut env, lambda_sets_to_specialize, &late_phase)
