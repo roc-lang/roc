@@ -382,7 +382,7 @@ pub fn load_types(
         );
     }
 
-    let generated = effects.iter().map(|(symbol, var)| *var);
+    let generated = effects.iter().map(|(_, var)| *var);
 
     // Get the variables for all the exposed_to_host and generated symbols
     let variables = (0..decls.len())
