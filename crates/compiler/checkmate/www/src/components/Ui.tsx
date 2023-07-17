@@ -85,7 +85,6 @@ function Unification({ engine, event }: UnificationProps): JSX.Element {
   const [isOpen, setIsOpen] = React.useState(false);
 
   const modeIcon = <UnificationModeIcon mode={mode} />;
-  const dropdownIcon = isOpen ? DROPDOWN_OPEN : DROPDOWN_CLOSED;
 
   const resultIcon = success ? UN_SUCCESS : UN_FAILURE;
   const resultHeadline = <Headline icon={resultIcon}></Headline>;
@@ -96,7 +95,11 @@ function Unification({ engine, event }: UnificationProps): JSX.Element {
   function getHeadline(index: EventIndex) {
     return (
       <button onClick={() => setIsOpen(!isOpen)} className="w-full text-left">
-        <span className="text-slate-400 mr-2">{dropdownIcon}</span>
+        <span
+          className={clsx("mr-2", isOpen ? "text-slate-500" : "text-slate-400")}
+        >
+          {isOpen ? DROPDOWN_OPEN : DROPDOWN_CLOSED}
+        </span>
         {topHeadline} {leftVar(index)} {modeIcon} {rightVar(index)}
       </button>
     );
@@ -107,7 +110,7 @@ function Unification({ engine, event }: UnificationProps): JSX.Element {
     return <div className={UNFOCUSED}>{headLine}</div>;
   } else {
     const dropdownTransparent = (
-      <span className="text-transparent mr-2">{dropdownIcon}</span>
+      <span className="text-transparent mr-2">{DROPDOWN_OPEN}</span>
     );
 
     const headlineBefore = getHeadline(beforeUnificationIndex);
@@ -123,9 +126,9 @@ function Unification({ engine, event }: UnificationProps): JSX.Element {
     return (
       <div
         className={clsx(
-          "relative",
-          "before:content-[''] before:border-l before:border-slate-400",
-          "before:absolute before:w-0 before:h-[calc(100%-2rem)] before:top-[1.5rem] before:left-[0.3rem]"
+          "relative z-[1]",
+          "before:content-[''] before:border-l before:border-slate-500 before:z-[-1]",
+          "before:absolute before:w-0 before:h-[calc(100%-1.5rem)] before:top-[1rem] before:left-[0.3rem]"
         )}
       >
         <div>{headlineBefore}</div>
