@@ -59,7 +59,15 @@ export type ChangeEvent =
 export type Change = ChangeEvent | RollbackChange;
 
 export class Subs {
-  #map: Map<Variable, VarType> = new Map();
+  #map: Map<Variable, VarType>;
+
+  private constructor(map: Map<Variable, VarType>) {
+    this.#map = map;
+  }
+
+  static new(): Subs {
+    return new Subs(new Map());
+  }
 
   get(variable: Variable): VarType | undefined {
     return this.#map.get(variable);
@@ -78,6 +86,41 @@ export class Subs {
       default:
         assertExhaustive(type);
     }
+  }
+
+  get_root_key(variable: Variable): Variable {
+    const type = this.get(variable);
+    if (type === undefined) {
+      return variable;
+    }
+    switch (type.type) {
+      case "descriptor":
+        return variable;
+      case "link":
+        return this.get_root_key(type.to);
+      default:
+        assertExhaustive(type);
+    }
+  }
+
+  snapshot(): SubsSnapshot {
+    const snapshotMap = new Map<Variable, VarType>();
+    for (const [key, value] of this.#map) {
+      snapshotMap.set(key, { ...value });
+    }
+    const snapshot = new Subs(snapshotMap);
+    return {
+      get(variable: Variable): VarType | undefined {
+        return snapshot.get(variable);
+      },
+      get_root(variable: Variable): TypeDescriptor | undefined {
+        return snapshot.get_root(variable);
+      },
+      get_root_key(variable: Variable): Variable {
+        return snapshot.get_root_key(variable);
+      },
+      __snapshot__: SnapshotSymbol,
+    };
   }
 
   apply(change: Change): void {
@@ -118,4 +161,13 @@ export class Subs {
         assertExhaustive(change);
     }
   }
+}
+
+const SnapshotSymbol = Symbol("Snapshot");
+
+export interface SubsSnapshot {
+  get(variable: Variable): VarType | undefined;
+  get_root(variable: Variable): TypeDescriptor | undefined;
+  get_root_key(variable: Variable): Variable;
+  __snapshot__: typeof SnapshotSymbol;
 }

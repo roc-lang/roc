@@ -1,40 +1,12 @@
-import clsx from "clsx";
-import { Engine, EventIndex } from "../engine/engine";
-import { TypeDescriptor } from "../engine/subs";
-import { Variable } from "../schema";
-import { assertExhaustive } from "../utils/exhaustive";
+import { TypeDescriptor } from "../../engine/subs";
+import { assertExhaustive } from "../../utils/exhaustive";
 
-interface VariableProps {
-  engine: Engine;
-  index: EventIndex;
-  variable: Variable;
-}
-
-export function VariableEl({
-  engine,
-  index,
-  variable,
-}: VariableProps): JSX.Element {
-  engine.stepTo(index);
-  const desc = engine.subs.get_root(variable);
-  const { name, bg } = contentStyles(desc);
-
-  return (
-    <span className={clsx("py-0 pl-0 pr-1 rounded-md", bg)}>
-      <span className="ring-1 ring-inset ring-black-100 mr-1 px-1 bg-white rounded-md">
-        {variable}
-      </span>
-      {name}
-    </span>
-  );
-}
-
-interface ContentStyles {
+export interface ContentStyles {
   name: string;
   bg: string;
 }
 
-function contentStyles(desc: TypeDescriptor | undefined): ContentStyles {
+export function contentStyles(desc: TypeDescriptor | undefined): ContentStyles {
   if (!desc) {
     return { name: "???", bg: "bg-red-500" };
   }

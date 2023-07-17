@@ -11,9 +11,13 @@ export default function App() {
   });
 
   return (
-    <div className="w-screen h-screen p-2 bg-gray-100">
-      <FileInput setResult={setEvents} />
-      <EventsWrapper events={events} />
+    <div className="w-screen h-screen p-2 bg-gray-100 flex flex-col">
+      <div>
+        <FileInput setResult={setEvents} />
+      </div>
+      <div className="flex-1 overflow-hidden">
+        <EventsWrapper events={events} />
+      </div>
     </div>
   );
 }

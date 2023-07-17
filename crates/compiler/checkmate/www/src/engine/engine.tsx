@@ -44,7 +44,7 @@ function getFlatEvents(events: Event[]): {
 export class Engine {
   #eventIndexMap: Map<Event, EventIndex>;
   #events: Event[];
-  #subs: Subs = new Subs();
+  #subs: Subs = Subs.new();
   #reverseEvents: Map<EventIndex, RollbackChange> = new Map();
 
   #nextIndexForward: EventIndex = 0 as EventIndex;
@@ -80,6 +80,10 @@ export class Engine {
 
   get subs(): Readonly<Subs> {
     return this.#subs;
+  }
+
+  lastEventIndex(): EventIndex {
+    return (this.#events.length - 1) as EventIndex;
   }
 
   private stepForward(eventIndex: EventIndex): void {
