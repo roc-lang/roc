@@ -134,10 +134,8 @@ impl Types {
             // TODO remove this check once Task is a builtin; this is only necessary
             // because we currently generate these from `hosted` modules.
             if !["after", "map", "always", "forever"].contains(&name.as_str()) {
-
-                    }
-                }
-
+                types.effects.push((name, type_id));
+            }
         }
 
         env.resolve_pending_recursive_types(&mut types);

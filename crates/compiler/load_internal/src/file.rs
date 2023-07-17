@@ -676,6 +676,7 @@ struct State<'a> {
     pub hosted_ids: Vec<ModuleId>, // This is just for `hosted` modules
 
     pub root_subs: Option<Subs>,
+    pub hosted_subs: VecMap<ModuleId, Subs>,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
     pub opt_platform_shorthand: Option<&'a str>,
@@ -762,6 +763,7 @@ impl<'a> State<'a> {
             root_id,
             hosted_ids: Vec::new(),
             root_subs: None,
+            hosted_subs: VecMap::default(),
             opt_platform_shorthand,
             cache_dir,
             target_info,
@@ -2377,7 +2379,7 @@ fn update<'a>(
             module_id,
             ident_ids,
             solved_module,
-            mut solved_subs,
+            solved_subs,
             decls,
             dep_idents,
             mut module_timing,
@@ -2415,6 +2417,10 @@ fn update<'a>(
             };
 
             if state.hosted_ids.contains(&module_id) {
+                state
+                    .hosted_subs
+                    .insert(module_id, solved_subs.inner().clone());
+
                 // Get all the exposed symbols in top-level decls for this `hosted` module.
                 //
                 // We assume every top-level decl in the hosted module
@@ -3194,7 +3200,7 @@ fn proc_layout_for<'a>(
 #[allow(clippy::too_many_arguments)]
 fn finish(
     mut state: State,
-    solved: Solved<Subs>,
+    mut solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     exposed_types_storage: ExposedTypesStorageSubs,
@@ -3232,6 +3238,29 @@ fn finish(
         .collect();
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
+
+    // Import all the hosted_vars_by_symbol into the root module's Subs,
+    // and update the variables in hosted_vars_by_symbol to use the resulting
+    // variables in the root module's Subs, since that's the Subs they'll
+    // be looked up in later in `roc glue`.
+    for (symbol, var) in state.hosted_vars_by_symbol.iter_mut() {
+        // TODO it would be nice to have a better way to do this than by cloning
+        // each `hosted` module's Subs into `hosted_subs` like this.
+        // However, module_cache.typechecked seems to always have removed
+        // the `hosted` modules by the time this matters.
+        //
+        // Fortunately, `hosted_subs` can go away if `hosted` modules do,
+        // which seems likely in the future.
+        let hosted_subs = state
+            .hosted_subs
+            .get(&symbol.module_id())
+            .unwrap_or_else(|| {
+                internal_error!("state.hosted_subs had no entry for ModuleId {:?}, even though the symbol {:?} in hosted_vars_by_symbol had that ModuleId", symbol.module_id(), symbol);
+            });
+
+        *var =
+            copy_import_to(hosted_subs, solved.inner_mut(), false, *var, Rank::import()).variable;
+    }
 
     LoadedModule {
         module_id: state.root_id,
