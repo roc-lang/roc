@@ -14,7 +14,7 @@ export default function Ui({ events }: UiProps): JSX.Element {
   const engine = new Engine(events);
 
   return (
-    <div className="font-mono mt-4">
+    <div className="font-mono mt-4 text-lg">
       <EventList engine={engine} root events={events}></EventList>
     </div>
   );
@@ -31,7 +31,7 @@ const UNFOCUSED = "opacity-40";
 
 function EventList({ engine, events, root }: EventListProps): JSX.Element {
   return (
-    <ul className={clsx(MT, root ? "ml-2" : "ml-[1.5em]", "relative")}>
+    <ul className={clsx(MT, root ? "ml-2" : "ml-[1.5em]")}>
       {events.map((event, i) => (
         <li key={i} className={MT}>
           <OneEvent engine={engine} event={event} />
@@ -60,7 +60,7 @@ function OneEvent({ event, engine }: OneEventProps): JSX.Element {
 const DROPDOWN_CLOSED = "▶";
 const DROPDOWN_OPEN = "▼";
 
-const UN_UNKNOWN = "❔";
+const UN_UNKNOWN = "💭";
 const UN_SUCCESS = "✅";
 const UN_FAILURE = "❌";
 
@@ -121,7 +121,13 @@ function Unification({ engine, event }: UnificationProps): JSX.Element {
     );
 
     return (
-      <div>
+      <div
+        className={clsx(
+          "relative",
+          "before:content-[''] before:border-l before:border-slate-400",
+          "before:absolute before:w-0 before:h-[calc(100%-2rem)] before:top-[1.5rem] before:left-[0.3rem]"
+        )}
+      >
         <div>{headlineBefore}</div>
         <EventList engine={engine} events={subevents} />
         {headlineAfter}
