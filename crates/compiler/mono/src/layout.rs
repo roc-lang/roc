@@ -3883,6 +3883,36 @@ where
     union_sorted_tags_help(env, tags_vec, opt_rec_var, DropUninhabitedVariants(true)).value()
 }
 
+fn find_nullable_tag<'a, L, I>(tags: I) -> Option<(TagIdIntType, L)>
+where
+    I: Iterator<Item = (&'a L, &'a [Variable])>,
+    L: Into<TagOrClosure> + Ord + Clone + 'a,
+{
+    let mut length = 0;
+    let mut has_payload = 0;
+    let mut nullable = None;
+
+    for (index, (name, variables)) in tags.enumerate() {
+        length += 1;
+
+        if variables.is_empty() {
+            nullable = nullable.or_else(|| Some((index as TagIdIntType, name.clone())));
+        } else {
+            has_payload += 1;
+        }
+    }
+
+    let has_no_payload = length - has_payload;
+
+    // in the scenario of `[ A Str, B, C, D ]`, rather than having one tag be nullable, we want
+    // to store the tag id in the pointer. (we want NonNullableUnwrapped, not NullableWrapped)
+    if (has_payload > 1 && has_no_payload > 0) || has_no_payload == 1 {
+        nullable
+    } else {
+        None
+    }
+}
+
 fn union_sorted_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
     mut tags_vec: std::vec::Vec<(L, std::vec::Vec<Variable>)>,
@@ -3965,12 +3995,7 @@ where
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
-                for (index, (name, variables)) in tags_vec.iter().enumerate() {
-                    if variables.is_empty() {
-                        nullable = Some((index as TagIdIntType, name.clone()));
-                        break;
-                    }
-                }
+                nullable = find_nullable_tag(tags_vec.iter().map(|(a, b)| (a, b.as_slice())));
             }
 
             for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
@@ -4260,17 +4285,12 @@ where
     let mut nullable = None;
 
     if GENERATE_NULLABLE {
-        for (index, (_name, variables)) in tags_vec.iter().enumerate() {
-            if variables.is_empty() {
-                nullable = Some(index as TagIdIntType);
-                break;
-            }
-        }
+        nullable = find_nullable_tag(tags_vec.iter().map(|(a, b)| (*a, *b)));
     }
 
     env.insert_seen(rec_var);
     for (index, &(_name, variables)) in tags_vec.iter().enumerate() {
-        if matches!(nullable, Some(i) if i == index as TagIdIntType) {
+        if matches!(nullable, Some((i, _)) if i == index as TagIdIntType) {
             // don't add the nullable case
             continue;
         }
@@ -4303,7 +4323,7 @@ where
     }
     env.remove_seen(rec_var);
 
-    let union_layout = if let Some(tag_id) = nullable {
+    let union_layout = if let Some((tag_id, _)) = nullable {
         match tag_layouts.into_bump_slice() {
             [one] => {
                 let nullable_id = tag_id != 0;

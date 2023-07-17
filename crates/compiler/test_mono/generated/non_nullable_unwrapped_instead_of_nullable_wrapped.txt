@@ -1,0 +1,17 @@
+procedure Test.0 ():
+    let Test.4 : [<r>C , C , C Str *self] = TagId(0) ;
+    let Test.9 : U8 = GetTagId Test.4;
+    dec Test.4;
+    switch Test.9:
+        case 0:
+            let Test.6 : Str = "A";
+            ret Test.6;
+    
+        case 1:
+            let Test.7 : Str = "B";
+            ret Test.7;
+    
+        default:
+            let Test.8 : Str = "C";
+            ret Test.8;
+    
