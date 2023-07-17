@@ -9,7 +9,7 @@ name: Nightly Release Linux arm64/aarch64
 jobs:
   build:
     name: build and package nightly release
-    runs-on: [self-hosted, pi-4-8GB-aarch64]
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
