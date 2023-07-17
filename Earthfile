@@ -44,11 +44,12 @@ copy-dirs:
 
 build-nightly-release:
     ARG RELEASE_FOLDER_NAME
+    ARG RUSTFLAGS
     FROM +copy-dirs
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc
+    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc
     # strip debug info
     RUN strip ./target/release-with-lto/roc
     RUN ./ci/package_release.sh $RELEASE_FOLDER_NAME
