@@ -16,8 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: goto-bus-stop/setup-zig@v2
-          with:
-            version: 0.9.1
+        with:
+          version: 0.9.1
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
