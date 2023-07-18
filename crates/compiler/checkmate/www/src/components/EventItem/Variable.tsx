@@ -1,7 +1,6 @@
 import { EventIndex } from "../../engine/engine";
 import { Variable } from "../../schema";
-import { contentStyles } from "../Content";
-import { VariableElHelp } from "../Common/Variable";
+import { VariableElPretty } from "../Common/Variable";
 import { CommonProps } from "./types";
 
 interface VariableProps extends CommonProps {
@@ -16,15 +15,13 @@ export function VariableEl({
   variable,
 }: VariableProps): JSX.Element {
   engine.stepTo(index);
-  const desc = engine.subs.get_root(variable);
-  const styles = contentStyles(desc);
   return (
-    <VariableElHelp
+    <VariableElPretty
       variable={variable}
-      styles={styles}
-      onClick={() => {
+      subs={engine.subs}
+      onClick={(variable: Variable) => {
         toggleVariableVis(variable);
       }}
-    ></VariableElHelp>
+    ></VariableElPretty>
   );
 }

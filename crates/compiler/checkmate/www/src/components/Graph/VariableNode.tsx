@@ -3,7 +3,7 @@ import { Handle, Position } from "reactflow";
 import { Variable } from "../../schema";
 import { assertExhaustive } from "../../utils/exhaustive";
 import { contentStyles } from "../Content";
-import { VariableElHelp } from "../Common/Variable";
+import { VariableElPretty } from "../Common/Variable";
 import { SubsSnapshot, TypeDescriptor } from "../../engine/subs";
 
 type AddSubVariableLink = (from: Variable, subVariable: Variable) => void;
@@ -54,7 +54,7 @@ export default function VariableNode({ data }: VariableNodeProps): JSX.Element {
     >
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <div>
-        <VariableElHelp variable={variable} styles={styles} />
+        <VariableElPretty variable={variable} subs={subs} />
       </div>
       {expandedContent}
       <Handle type="source" position={Position.Bottom} isConnectable={false} />
@@ -185,12 +185,10 @@ function SubVariable({
 }: {
   variable: Variable;
 } & BasisProps): JSX.Element {
-  const desc = subs.get_root(variable);
-  const styles = contentStyles(desc);
   return (
-    <VariableElHelp
+    <VariableElPretty
       variable={variable}
-      styles={styles}
+      subs={subs}
       onClick={() => addSubVariableLink(origin, variable)}
     />
   );

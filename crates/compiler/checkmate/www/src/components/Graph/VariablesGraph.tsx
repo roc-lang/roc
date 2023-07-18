@@ -20,10 +20,12 @@ import "reactflow/dist/style.css";
 import clsx from "clsx";
 import VariableNode, { VariableNodeProps } from "./VariableNode";
 import { SubsSnapshot } from "../../engine/subs";
+import { KeydownHandler } from "../Events";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
   onVariable: (handler: (variable: Variable) => void) => void;
+  onKeydown: (handler: KeydownHandler) => void;
 }
 
 type GraphDirection = "TB" | "BT" | "LR" | "RL";
@@ -103,7 +105,11 @@ function addEdgeChange(edge: Edge, existingEdges: Edge[]): EdgeChange | null {
   };
 }
 
-function Graph({ subs, onVariable }: VariablesGraphProps): JSX.Element {
+function Graph({
+  subs,
+  onVariable,
+  onKeydown,
+}: VariablesGraphProps): JSX.Element {
   const instance = useReactFlow();
   const initialNodes: Node[] = [];
   const initialEdges: Edge[] = [];
@@ -225,6 +231,13 @@ function Graph({ subs, onVariable }: VariablesGraphProps): JSX.Element {
   );
 
   onVariable(addNode);
+  onKeydown((key) => {
+    switch (key) {
+      case "c": {
+        onLayoutChange(direction);
+      }
+    }
+  });
 
   return (
     <ReactFlow

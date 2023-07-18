@@ -81,7 +81,10 @@ function Unification(props: UnificationProps): JSX.Element {
 
   function getHeadline(index: EventIndex) {
     return (
-      <button onClick={() => setIsOpen(!isOpen)} className="w-full text-left">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full text-left whitespace-nowrap"
+      >
         <span
           className={clsx("mr-2", isOpen ? "text-slate-500" : "text-slate-400")}
         >
@@ -103,7 +106,7 @@ function Unification(props: UnificationProps): JSX.Element {
     const headlineBefore = getHeadline(beforeUnificationIndex);
 
     const headlineAfter = (
-      <div className={MT}>
+      <div className={clsx(MT, "whitespace-nowrap")}>
         {dropdownTransparent}
         {resultHeadline} {leftVar(afterUnificationIndex)} {modeIcon}{" "}
         {rightVar(afterUnificationIndex)}

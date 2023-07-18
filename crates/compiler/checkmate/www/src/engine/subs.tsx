@@ -58,7 +58,7 @@ export type ChangeEvent =
 
 export type Change = ChangeEvent | RollbackChange;
 
-export class Subs {
+export class Subs implements QuerySubs {
   #map: Map<Variable, VarType>;
 
   private constructor(map: Map<Variable, VarType>) {
@@ -165,9 +165,12 @@ export class Subs {
 
 const SnapshotSymbol = Symbol("Snapshot");
 
-export interface SubsSnapshot {
+export interface QuerySubs {
   get(variable: Variable): VarType | undefined;
   get_root(variable: Variable): TypeDescriptor | undefined;
   get_root_key(variable: Variable): Variable;
+}
+
+export interface SubsSnapshot extends QuerySubs {
   __snapshot__: typeof SnapshotSymbol;
 }
