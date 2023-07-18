@@ -3,6 +3,9 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
+# temp test
+$ROC_ZIG version
+
 # Remove everything in this dir except the tar and ci folder.
 # We want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout.
 ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$" | xargs rm -rf
