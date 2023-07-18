@@ -8,7 +8,13 @@ zig version
 
 # Remove everything in this dir except the tar and ci folder.
 # We want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout.
-ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$"
+to_delete=$(ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$")
+
+for file_or_dir in $to_delete
+do
+    echo "Removing: $file_or_dir" 
+    rm -rf "$file_or_dir"
+done
 
 # decompress the tar
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
