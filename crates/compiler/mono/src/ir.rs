@@ -10028,8 +10028,12 @@ pub fn find_lambda_sets_help(
                     stack.extend(subs.get_subs_slice(*arguments).iter().rev());
                 }
                 FlatType::Func(arguments, lambda_set_var, ret_var) => {
-                    result.insert(*lambda_set_var, lambda_set_id);
-                    lambda_set_id = lambda_set_id.next();
+                    use std::collections::hash_map::Entry;
+                    // Only insert a lambda_set_var if we didn't already have a value for this key.
+                    if let Entry::Vacant(entry) = result.entry(*lambda_set_var) {
+                        entry.insert(lambda_set_id);
+                        lambda_set_id = lambda_set_id.next();
+                    }
 
                     let arguments = &subs.variables[arguments.indices()];
 
