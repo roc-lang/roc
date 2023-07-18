@@ -1,7 +1,5 @@
 on:
-  pull_request:
-    commit-ignore:
-      - skipdefaultci
+  #pull_request:
 
 name: Macos x86-64 rust tests
 

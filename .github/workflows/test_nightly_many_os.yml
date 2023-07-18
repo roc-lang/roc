@@ -4,9 +4,6 @@ on:
 
 name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
 
-env:
-  ZIG_VERSION: 0.9.1
-
 jobs:
   test-nightly:
     name: test nightly macos 11, macos 12, ubu 20.04, ubu 22.04
@@ -18,6 +15,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
+      - uses: goto-bus-stop/setup-zig@v2
+          with:
+            version: 0.9.1
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
@@ -27,34 +27,14 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
 
-      - name: get OS to use for zig download
-        if: startsWith(matrix.os, 'ubuntu')
-        run: echo "OS_TYPE=linux" >> $GITHUB_ENV
-
-      - name: get OS to use for zig download
-        if: startsWith(matrix.os, 'macos')
-        run: echo "OS_TYPE=macos" >> $GITHUB_ENV
-
-      - name: Install zig
-        run: |
-          curl -fL -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
-          echo "ROC_ZIG=${GITHUB_WORKSPACE}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}/zig" >> $GITHUB_ENV
-      
-      - name: zig version
-        env:
-          ROC_ZIG: ${{ env.ROC_ZIG }}
-        run: $ROC_ZIG version
+      - run: zig version
 
       - name: prep and run basic tests
-        env:
-          ROC_ZIG: ${{ env.ROC_ZIG }}
         run: |
           ./ci/basic_nightly_test.sh
 
       - name: clean up, get old linux release (x86_64), run tests
         if: startsWith(matrix.os, 'ubuntu')
-        env:
-          ROC_ZIG: ${{ env.ROC_ZIG }}
         run: |
           rm -rf roc_nightly
           curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz

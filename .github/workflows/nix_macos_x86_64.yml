@@ -1,7 +1,5 @@
 on:
-  pull_request:
-    commit-ignore:
-      - skipdefaultci
+  #pull_request:
 
 name: Nix macOS x86_64 cargo test
 

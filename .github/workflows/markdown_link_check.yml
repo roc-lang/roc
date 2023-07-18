@@ -1,7 +1,5 @@
 on:
-  pull_request:
-    commit-ignore:
-      - skipdefaultci
+  #pull_request:
   schedule:
     - cron: '0 9 * * *' # 9=9am utc+0
 

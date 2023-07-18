@@ -4,7 +4,7 @@
 set -euxo pipefail
 
 # temp test
-$ROC_ZIG version
+zig version
 
 # Remove everything in this dir except the tar and ci folder.
 # We want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout.
