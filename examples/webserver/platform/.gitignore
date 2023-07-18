@@ -1,0 +1,8 @@
+target
+dynhost
+*.so
+*.so.*
+*.dylib
+*.rh
+*.rm
+*.o

@@ -1,176 +1,27 @@
-use futures::{Future, FutureExt};
-use hyper::{Body, Request, Response, Server, StatusCode};
-use roc_app;
 use roc_std::RocStr;
 use std::cell::RefCell;
-use std::convert::Infallible;
-use std::net::SocketAddr;
-use std::os::raw::{c_int, c_long, c_void};
-use std::panic::AssertUnwindSafe;
-use tokio::task::spawn_blocking;
-use libc::{sigaction, siginfo_t, sigemptyset, SIGBUS, SIGFPE, SIGILL, SIGSEGV, sighandler_t, sigset_t, SA_SIGINFO, SIG_DFL};
+use std::os::raw::c_void;
 
-const DEFAULT_PORT: u16 = 8000;
+mod http_client;
+mod request_handling;
+mod server;
+mod signal_handling;
 
-// If we have a roc_panic or a segfault, these will be used to record where to jump back to
-// (a point at which we can return a different response).
-thread_local! {
-    // 64 is the biggest jmp_buf in setjmp.h
-    static SETJMP_ENV: RefCell<[c_long; 64]> = RefCell::new([0 as c_long; 64]);
-    static ROC_CRASH_MSG: RefCell<RocStr> = RefCell::new(RocStr::empty());
-    static SIGNAL_CAUGHT: RefCell<c_int> = RefCell::new(0);
-}
-
-extern "C" {
-    #[link_name = "setjmp"]
-    pub fn setjmp(env: *mut c_void) -> c_int;
-
-    #[link_name = "longjmp"]
-    pub fn longjmp(env: *mut c_void, val: c_int);
-}
-
-unsafe extern "C" fn signal_handler(sig: c_int, _: *mut siginfo_t, _: *mut libc::c_void) {
-    SIGNAL_CAUGHT.with(|val| {
-        *val.borrow_mut() = sig;
-    });
-
-    SETJMP_ENV.with(|env| {
-        longjmp(env.borrow_mut().as_mut_ptr().cast(), 1);
-    });
-}
-
-fn setup_signal(sig: c_int) {
-    let sa = libc::sigaction {
-        sa_sigaction: signal_handler as sighandler_t,
-        sa_mask: sigset_t::default(),
-        sa_flags: SA_SIGINFO,
-    };
-
-    let mut old_sa = libc::sigaction {
-        sa_sigaction: SIG_DFL,
-        sa_mask: sigset_t::default(),
-        sa_flags: 0,
-    };
-
-    unsafe {
-        sigemptyset(&mut old_sa.sa_mask as *mut sigset_t);
-        sigaction(sig, &sa, &mut old_sa);
-    }
-}
-
-fn call_roc(req_bytes: &[u8]) -> Response<Body> {
-    let mut setjmp_result = 0;
-
-    SETJMP_ENV.with(|env| {
-        setjmp_result = unsafe { setjmp(env.borrow_mut().as_mut_ptr().cast()) };
-    });
-
-    if setjmp_result == 0 {
-        setup_signal(SIGSEGV);
-        setup_signal(SIGILL);
-        setup_signal(SIGFPE);
-        setup_signal(SIGBUS);
-
-        let req_str: &str = std::str::from_utf8(req_bytes).unwrap(); // TODO don't unwrap
-        let resp: String = roc_app::mainForHost(req_str.into()).as_str().into();
-
-        Response::builder()
-            .status(StatusCode::OK) // TODO get status code from Roc too
-            .body(Body::from(resp))
-            .unwrap() // TODO don't unwrap() here
-    } else {
-        let mut crash_msg: String = String::new();
-        let mut sig: c_int = 0;
-
-        SIGNAL_CAUGHT.with(|val| {
-            sig = *val.borrow();
-        });
-
-        if sig == 0 {
-            ROC_CRASH_MSG.with(|env| {
-                crash_msg = env.borrow().as_str().into();
-            });
-        } else {
-            crash_msg = "Roc crashed with signal {sig}".into(); // TODO print the name of the signal
-        }
-
-        Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from(crash_msg))
-            .unwrap() // TODO don't unwrap() here
-    }
-}
-
-async fn handle_req(req: Request<Body>) -> Response<Body> {
-    match hyper::body::to_bytes(req.into_body()).await {
-        Ok(req_body) => {
-            spawn_blocking(move || call_roc(&req_body))
-                .then(|resp| async {
-                    resp.unwrap() // TODO don't unwrap here
-                })
-                .await
-        }
-        Err(_) => todo!(), // TODO
-    }
-}
-
-/// Translate Rust panics in the given Future into 500 errors
-async fn handle_panics(
-    fut: impl Future<Output = Response<Body>>,
-) -> Result<Response<Body>, Infallible> {
-    match AssertUnwindSafe(fut).catch_unwind().await {
-        Ok(response) => Ok(response),
-        Err(_panic) => {
-            let error = Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body("Panic detected!".into())
-                .unwrap(); // TODO don't unwrap here
-
-            Ok(error)
-        }
-    }
-}
-
-const LOCALHOST: [u8; 4] = [127, 0, 0, 1];
-
-async fn run_server(port: u16) -> i32 {
-    let addr = SocketAddr::from((LOCALHOST, port));
-    let server = Server::bind(&addr).serve(hyper::service::make_service_fn(|_conn| async {
-        Ok::<_, Infallible>(hyper::service::service_fn(|req| handle_panics(handle_req(req))))
-    }));
-
-    println!("Listening on <http://localhost:{port}>");
-
-    match server.await {
-        Ok(_) => 0,
-        Err(err) => {
-            eprintln!("Error initializing Rust `hyper` server: {}", err); // TODO improve this
-
-            1
-        }
-    }
-}
+use signal_handling::{longjmp, SETJMP_ENV, SIGNAL_CAUGHT};
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime.block_on(async { run_server(DEFAULT_PORT).await }),
-        Err(err) => {
-            eprintln!("Error initializing tokio multithreaded runtime: {}", err); // TODO improve this
-
-            1
-        }
-    }
+    server::start()
 }
 
 // Externs required by roc_std and by the Roc app
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
-    return libc::malloc(size);
+    let c_ptr = libc::malloc(size);
+    eprintln!("+0x{:x} <- alloc({size})", c_ptr as usize);
+
+    return c_ptr;
 }
 
 #[no_mangle]
@@ -180,12 +31,73 @@ pub unsafe extern "C" fn roc_realloc(
     _old_size: usize,
     _alignment: u32,
 ) -> *mut c_void {
-    return libc::realloc(c_ptr, new_size);
+    let answer_ptr = libc::realloc(c_ptr, new_size);
+    eprintln!(
+        "~Ox{:x} <- realloc(0x{:x}, {new_size})",
+        answer_ptr as usize, c_ptr as usize,
+    );
+    return answer_ptr;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
-    return libc::free(c_ptr);
+    // eprintln!("Here is the call stack that led to the crash:\n");
+
+    // let mut entries = Vec::new();
+
+    // #[derive(Default)]
+    // struct Entry {
+    //     pub fn_name: String,
+    //     pub filename: Option<String>,
+    //     pub line: Option<u32>,
+    //     pub col: Option<u32>,
+    // }
+
+    // backtrace::trace(|frame| {
+    //     backtrace::resolve_frame(frame, |symbol| {
+    //         if let Some(fn_name) = symbol.name() {
+    //             let fn_name = fn_name.to_string();
+
+    //             let mut entry: Entry = Default::default();
+
+    //             entry.fn_name = fn_name;
+
+    //             if let Some(path) = symbol.filename() {
+    //                 entry.filename = Some(path.to_string_lossy().into_owned());
+    //             };
+
+    //             entry.line = symbol.lineno();
+    //             entry.col = symbol.colno();
+
+    //             entries.push(entry);
+    //         } else {
+    //             entries.push(Entry {
+    //                 fn_name: "???".to_string(),
+    //                 ..Default::default()
+    //             });
+    //         }
+    //     });
+
+    //     true // keep going to the next frame
+    // });
+
+    // for entry in entries {
+    //     eprintln!("\t{}", entry.fn_name);
+
+    //     if let Some(filename) = entry.filename {
+    //         eprintln!("\t\t{filename}");
+    //     }
+    // }
+
+    eprintln!("-0x{:x} <- dealloc", c_ptr as usize);
+    let answer = libc::free(c_ptr);
+    // eprintln!("Done calling libc::free()");
+
+    answer
+}
+
+thread_local! {
+    static ROC_CRASH_MSG: RefCell<RocStr> = RefCell::new(RocStr::empty());
 }
 
 #[no_mangle]
@@ -208,3 +120,146 @@ pub unsafe extern "C" fn roc_panic(msg: RocStr) {
 pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
     libc::memset(dst, c, n)
 }
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_mmap(
+    addr: *mut libc::c_void,
+    len: libc::size_t,
+    prot: libc::c_int,
+    flags: libc::c_int,
+    fd: libc::c_int,
+    offset: libc::off_t,
+) -> *mut libc::c_void {
+    libc::mmap(addr, len, prot, flags, fd, offset)
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_shm_open(
+    name: *const libc::c_char,
+    oflag: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    libc::shm_open(name, oflag, mode as libc::c_uint)
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_getppid() -> libc::pid_t {
+    libc::getppid()
+}
+
+// #[no_mangle]
+// pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
+//     match tag_id {
+//         0 => {
+//             eprintln!("Roc crashed with:\n\n\t{}\n", msg.as_str());
+
+//             print_backtrace();
+//             std::process::exit(1);
+//         }
+//         1 => {
+//             eprintln!("The program crashed with:\n\n\t{}\n", msg.as_str());
+
+//             print_backtrace();
+//             std::process::exit(1);
+//         }
+//         _ => todo!(),
+//     }
+// }
+
+// fn print_backtrace() {
+//     eprintln!("Here is the call stack that led to the crash:\n");
+
+//     let mut entries = Vec::new();
+
+//     #[derive(Default)]
+//     struct Entry {
+//         pub fn_name: String,
+//         pub filename: Option<String>,
+//         pub line: Option<u32>,
+//         pub col: Option<u32>,
+//     }
+
+//     backtrace::trace(|frame| {
+//         backtrace::resolve_frame(frame, |symbol| {
+//             if let Some(fn_name) = symbol.name() {
+//                 let fn_name = fn_name.to_string();
+
+//                 if should_show_in_backtrace(&fn_name) {
+//                     let mut entry: Entry = Default::default();
+
+//                     entry.fn_name = format_fn_name(&fn_name);
+
+//                     if let Some(path) = symbol.filename() {
+//                         entry.filename = Some(path.to_string_lossy().into_owned());
+//                     };
+
+//                     entry.line = symbol.lineno();
+//                     entry.col = symbol.colno();
+
+//                     entries.push(entry);
+//                 }
+//             } else {
+//                 entries.push(Entry {
+//                     fn_name: "???".to_string(),
+//                     ..Default::default()
+//                 });
+//             }
+//         });
+
+//         true // keep going to the next frame
+//     });
+
+//     for entry in entries {
+//         eprintln!("\t{}", entry.fn_name);
+
+//         if let Some(filename) = entry.filename {
+//             eprintln!("\t\t{filename}");
+//         }
+//     }
+
+//     eprintln!("\nOptimizations can make this list inaccurate! If it looks wrong, try running without `--optimize` and with `--linker=legacy`\n");
+// }
+
+// fn should_show_in_backtrace(fn_name: &str) -> bool {
+//     let is_from_rust = fn_name.contains("::");
+//     let is_host_fn = fn_name.starts_with("roc_panic")
+//         || fn_name.starts_with("_Effect_effect")
+//         || fn_name.starts_with("_roc__")
+//         || fn_name.starts_with("rust_main")
+//         || fn_name == "_main";
+
+//     !is_from_rust && !is_host_fn
+// }
+
+// fn format_fn_name(fn_name: &str) -> String {
+//     // e.g. convert "_Num_sub_a0c29024d3ec6e3a16e414af99885fbb44fa6182331a70ab4ca0886f93bad5"
+//     // to ["Num", "sub", "a0c29024d3ec6e3a16e414af99885fbb44fa6182331a70ab4ca0886f93bad5"]
+//     let mut pieces_iter = fn_name.split("_");
+
+//     if let (_, Some(module_name), Some(name)) =
+//         (pieces_iter.next(), pieces_iter.next(), pieces_iter.next())
+//     {
+//         display_roc_fn(module_name, name)
+//     } else {
+//         "???".to_string()
+//     }
+// }
+
+// fn display_roc_fn(module_name: &str, fn_name: &str) -> String {
+//     let module_name = if module_name == "#UserApp" {
+//         "app"
+//     } else {
+//         module_name
+//     };
+
+//     let fn_name = if fn_name.parse::<u64>().is_ok() {
+//         "(anonymous function)"
+//     } else {
+//         fn_name
+//     };
+
+//     format!("\u{001B}[36m{module_name}\u{001B}[39m.{fn_name}")
+// }
