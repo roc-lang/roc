@@ -108,6 +108,12 @@
           wasm-pack # for repl_wasm
           jq
         ]);
+
+        aliases = ''
+          alias clippy='cargo clippy --workspace --tests --release -- --deny warnings'
+          alias fmt='cargo fmt --all'
+        '';
+
       in {
 
         devShell = pkgs.mkShell {
@@ -127,6 +133,10 @@
               ++ linuxInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the editor with NVIDIA's closed source drivers
+          
+          shellHook = ''
+            source <(echo "${aliases}")
+          '';
         };
 
         formatter = pkgs.nixpkgs-fmt;
