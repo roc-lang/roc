@@ -13,11 +13,12 @@ install-other-libs:
     RUN apt -y install unzip # for www/build.sh
 
 install-zig-llvm:
+    ARG ZIG_ARCH
     FROM +install-other-libs
     # zig
-    RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-x86_64-0.9.1.tar.xz
-    RUN ln -s /earthbuild/zig-linux-x86_64-0.9.1/zig /bin/zig
+    RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-$ZIG_ARCH-0.9.1.tar.xz --no-check-certificate
+    RUN tar -xf zig-linux-$ZIG_ARCH-0.9.1.tar.xz
+    RUN ln -s /earthbuild/zig-linux-$ZIG_ARCH-0.9.1/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     # llvm
@@ -39,16 +40,19 @@ install-zig-llvm:
     ENV CARGO_INCREMENTAL=0 # no need to recompile package when using new function
 
 copy-dirs:
-    FROM +install-zig-llvm
+    ARG ZIG_ARCH
+    FROM +install-zig-llvm --ZIG_ARCH=$ZIG_ARCH
     COPY --dir crates examples Cargo.toml Cargo.lock version.txt .cargo www rust-toolchain.toml ./
 
 build-nightly-release:
     ARG RELEASE_FOLDER_NAME
-    FROM +copy-dirs
+    ARG RUSTFLAGS
+    ARG ZIG_ARCH=x86_64
+    FROM +copy-dirs --ZIG_ARCH=$ZIG_ARCH
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc
+    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc
     # strip debug info
     RUN strip ./target/release-with-lto/roc
     RUN ./ci/package_release.sh $RELEASE_FOLDER_NAME
