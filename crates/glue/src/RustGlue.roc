@@ -156,8 +156,13 @@ generateEntryPoint = \buf, types, name, id ->
                 arguments =
                     rocFn.args
                     |> List.map \argId ->
+                        shape = Types.shape types argId
                         type = typeName types argId
-                        "_: \(type)"
+
+                        if canDeriveCopy types shape then
+                            "_: \(type)"
+                        else
+                            "_: &mut core::mem::ManuallyDrop<\(type)>"
                     |> Str.joinWith ", "
 
                 ret = typeName types rocFn.ret
@@ -171,9 +176,14 @@ generateEntryPoint = \buf, types, name, id ->
         when Types.shape types id is
             Function rocFn ->
                 rocFn.args
-                |> List.mapWithIndex \_, i ->
-                    c = Num.toStr i
-                    "arg\(c)"
+                |> List.mapWithIndex \argId, index ->
+                    indexStr = Num.toStr index
+                    shape = Types.shape types argId
+
+                    if canDeriveCopy types shape then
+                        "arg\(indexStr)"
+                    else
+                        "&mut core::mem::ManuallyDrop::new(arg\(indexStr))"
                 |> Str.joinWith ", "
 
             _ ->
@@ -187,11 +197,13 @@ generateEntryPoint = \buf, types, name, id ->
             fn roc__\(name)_1_exposed_generic\(externSignature);
         }
 
-        let mut ret = std::mem::MaybeUninit::uninit();
+        let mut ret = core::mem::MaybeUninit::uninit();
 
-        unsafe { roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments)) };
+        unsafe {
+            roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
 
-        unsafe { ret.assume_init() }
+            ret.assume_init()
+        }
     }
     """
 
@@ -244,7 +256,7 @@ generateFunction = \buf, types, rocFn ->
                 fn \(externName)(\(externDefArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
             }
 
-            let mut output = std::mem::MaybeUninit::uninit();
+            let mut output = core::mem::MaybeUninit::uninit();
             let ptr = &mut self.closure_data as *mut _ as *mut u8;
 
             unsafe { \(externName)(\(externCallArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
