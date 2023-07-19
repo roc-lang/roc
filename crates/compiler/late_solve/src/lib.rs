@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 use bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::module::ExposedByModule;
+use roc_checkmate::with_checkmate;
 use roc_collections::MutMap;
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -15,11 +16,13 @@ use roc_solve::ability::AbilityResolver;
 use roc_solve::specialize::{compact_lambda_sets_of_vars, Phase};
 use roc_solve::Pools;
 use roc_solve::{DerivedEnv, SolveEnv};
+use roc_solve_schema::UnificationMode;
 use roc_types::subs::{get_member_lambda_sets_at_region, Content, FlatType, LambdaSet};
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, Variable};
 use roc_types::types::Polarity;
 use roc_unify::unify::MetaCollector;
-use roc_unify::unify::{Env as UEnv, Mode, Unified};
+use roc_unify::unify::Unified;
+use roc_unify::Env as UEnv;
 
 pub use roc_solve::ability::{ResolveError, Resolved};
 pub use roc_types::subs::instantiate_rigids;
@@ -360,10 +363,14 @@ pub fn unify(
         "derived module can only unify its subs in its own context!"
     );
     let unified = roc_unify::unify::unify_with_collector::<ChangedVariableCollector>(
-        &mut UEnv::new(subs),
+        // TODO(checkmate): pass checkmate through
+        &mut with_checkmate!({
+            on => UEnv::new(subs, None),
+            off => UEnv::new(subs),
+        }),
         left,
         right,
-        Mode::EQ,
+        UnificationMode::EQ,
         Polarity::Pos,
     );
 
@@ -388,6 +395,9 @@ pub fn unify(
                     derived_env: &derived_env,
                     arena,
                     pools: &mut pools,
+
+                    #[cfg(debug_assertions)]
+                    checkmate: &mut None,
                 };
 
                 compact_lambda_sets_of_vars(&mut env, lambda_sets_to_specialize, &late_phase)

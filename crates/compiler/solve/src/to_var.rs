@@ -6,6 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         self, AliasVariables, Content, FlatType, GetSubsSlice, LambdaSet, OptVariable, Rank,
@@ -17,7 +18,7 @@ use roc_types::{
         Category, ExtImplicitOpenness, Polarity, TypeTag, Types,
     },
 };
-use roc_unify::unify::{unify, Mode, Unified};
+use roc_unify::unify::{unify, Unified};
 
 use crate::{
     ability::{AbilityImplError, ObligationCache},
@@ -875,7 +876,7 @@ pub(crate) fn type_to_var_help(
                     &mut env.uenv(),
                     var,
                     flex_ability,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     Unified::Success {

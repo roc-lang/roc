@@ -85,3 +85,6 @@ www/src/roc-tutorial
 
 # snapshot tests temp file
 *.pending-snap
+
+# checkmate
+checkmate_*.json

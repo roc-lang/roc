@@ -24,13 +24,14 @@ use roc_module::symbol::Symbol;
 use roc_problem::can::CycleEntry;
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
+use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
     Variable,
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
-    unify, unify_introduced_ability_specialization, Mode, Obligated, SpecializationLsetCollector,
+    unify, unify_introduced_ability_specialization, Obligated, SpecializationLsetCollector,
     Unified::*,
 };
 
@@ -93,27 +94,32 @@ struct State {
     mark: Mark,
 }
 
+pub struct RunSolveOutput {
+    pub solved: Solved<Subs>,
+    pub scope: Scope,
+
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
+}
+
 pub fn run(
     config: SolveConfig,
     problems: &mut Vec<TypeError>,
-    mut subs: Subs,
+    subs: Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-) -> (Solved<Subs>, Scope) {
-    let env = run_in_place(config, problems, &mut subs, aliases, abilities_store);
-
-    (Solved(subs), env)
+) -> RunSolveOutput {
+    run_help(config, problems, subs, aliases, abilities_store)
 }
 
-/// Modify an existing subs in-place instead
-#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
-fn run_in_place(
+fn run_help(
     config: SolveConfig,
     problems: &mut Vec<TypeError>,
-    subs: &mut Subs,
+    mut owned_subs: Subs,
     aliases: &mut Aliases,
     abilities_store: &mut AbilitiesStore,
-) -> Scope {
+) -> RunSolveOutput {
+    let subs = &mut owned_subs;
     let SolveConfig {
         home: _,
         constraints,
@@ -123,6 +129,7 @@ fn run_in_place(
         exposed_by_module,
         derived_module,
         function_kind,
+        ..
     } = config;
 
     let mut pools = Pools::default();
@@ -149,6 +156,8 @@ fn run_in_place(
         derived_env: &derived_env,
         subs,
         pools: &mut pools,
+        #[cfg(debug_assertions)]
+        checkmate: config.checkmate,
     };
 
     let pending_derives = PendingDerivesTable::new(
@@ -179,7 +188,12 @@ fn run_in_place(
         &mut awaiting_specializations,
     );
 
-    state.scope
+    RunSolveOutput {
+        scope: state.scope,
+        #[cfg(debug_assertions)]
+        checkmate: env.checkmate,
+        solved: Solved(owned_subs),
+    }
 }
 
 #[derive(Debug)]
@@ -489,7 +503,7 @@ fn solve(
                     &mut env.uenv(),
                     actual,
                     expected,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     Success {
@@ -600,7 +614,7 @@ fn solve(
                             &mut env.uenv(),
                             actual,
                             expected,
-                            Mode::EQ,
+                            UnificationMode::EQ,
                             Polarity::OF_VALUE,
                         ) {
                             Success {
@@ -699,8 +713,8 @@ fn solve(
                 );
 
                 let mode = match constraint {
-                    PatternPresence(..) => Mode::PRESENT,
-                    _ => Mode::EQ,
+                    PatternPresence(..) => UnificationMode::PRESENT,
+                    _ => UnificationMode::EQ,
                 };
 
                 match unify(
@@ -919,7 +933,7 @@ fn solve(
                     &mut env.uenv(),
                     actual,
                     includes,
-                    Mode::PRESENT,
+                    UnificationMode::PRESENT,
                     Polarity::OF_PATTERN,
                 ) {
                     Success {
@@ -1053,7 +1067,7 @@ fn solve(
                     &mut env.uenv(),
                     branches_var,
                     real_var,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     cond_polarity,
                 );
 
@@ -1103,7 +1117,7 @@ fn solve(
                                 &mut env.uenv(),
                                 real_var,
                                 branches_var,
-                                Mode::EQ,
+                                UnificationMode::EQ,
                                 cond_polarity,
                             ),
                             Success { .. }
@@ -1121,7 +1135,7 @@ fn solve(
                                 &mut env.uenv(),
                                 real_var,
                                 branches_var,
-                                Mode::EQ,
+                                UnificationMode::EQ,
                                 cond_polarity,
                             ) {
                                 Failure(vars, actual_type, expected_type, _bad_impls) => {
@@ -1320,7 +1334,7 @@ fn solve(
                     &mut env.uenv(),
                     actual,
                     Variable::LIST_U8,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     // List U8 always valid.
@@ -1340,7 +1354,7 @@ fn solve(
                         &mut env.uenv(),
                         actual,
                         Variable::STR,
-                        Mode::EQ,
+                        UnificationMode::EQ,
                         Polarity::OF_VALUE,
                     ) {
                         Success {
@@ -1591,7 +1605,7 @@ fn check_ability_specialization(
             &mut env.uenv(),
             root_signature_var,
             symbol_loc_var.value,
-            Mode::EQ,
+            UnificationMode::EQ,
         );
 
         let resolved_mark = match unified {

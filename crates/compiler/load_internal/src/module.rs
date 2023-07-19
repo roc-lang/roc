@@ -125,6 +125,9 @@ pub struct TypeCheckedModule<'a> {
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
     pub expectations: Option<Expectations>,
+
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 #[derive(Debug)]

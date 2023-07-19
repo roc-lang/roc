@@ -1890,7 +1890,7 @@ fn build_tag<'a, 'ctx>(
             let roc_union =
                 RocUnion::untagged_from_slices(layout_interner, env.context, &[other_fields]);
 
-            if tag_id == *nullable_id as _ {
+            if tag_id == *nullable_id as u16 {
                 let output_type = roc_union.struct_type().ptr_type(AddressSpace::default());
 
                 return output_type.const_null().into();

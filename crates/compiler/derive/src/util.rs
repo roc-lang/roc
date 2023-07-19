@@ -1,6 +1,8 @@
 use roc_can::{abilities::SpecializationLambdaSets, module::ExposedByModule};
+use roc_checkmate::with_checkmate;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{IdentIds, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{instantiate_rigids, Subs, Variable},
     types::Polarity,
@@ -71,13 +73,20 @@ impl Env<'_> {
     }
 
     pub fn unify(&mut self, left: Variable, right: Variable) {
-        use roc_unify::unify::{unify, Env, Mode, Unified};
+        use roc_unify::{
+            unify::{unify, Unified},
+            Env,
+        };
 
         let unified = unify(
-            &mut Env::new(self.subs),
+            // TODO(checkmate): pass checkmate through
+            &mut with_checkmate!({
+                on => Env::new(self.subs, None),
+                off => Env::new(self.subs),
+            }),
             left,
             right,
-            Mode::EQ,
+            UnificationMode::EQ,
             Polarity::OF_PATTERN,
         );
 
@@ -103,15 +112,22 @@ impl Env<'_> {
         specialization_type: Variable,
         ability_member: Symbol,
     ) -> SpecializationLambdaSets {
-        use roc_unify::unify::{unify_introduced_ability_specialization, Env, Mode, Unified};
+        use roc_unify::{
+            unify::{unify_introduced_ability_specialization, Unified},
+            Env,
+        };
 
         let member_signature = self.import_builtin_symbol_var(ability_member);
 
         let unified = unify_introduced_ability_specialization(
-            &mut Env::new(self.subs),
+            // TODO(checkmate): pass checkmate through
+            &mut with_checkmate!({
+                on => Env::new(self.subs, None),
+                off => Env::new(self.subs),
+            }),
             member_signature,
             specialization_type,
-            Mode::EQ,
+            UnificationMode::EQ,
         );
 
         match unified {

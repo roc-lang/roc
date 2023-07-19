@@ -1139,7 +1139,7 @@ fn to_relevant_branch_help<'a>(
         EnumLiteral { tag_id, .. } => match test {
             IsByte {
                 tag_id: test_id, ..
-            } if tag_id == *test_id as _ => {
+            } if tag_id == *test_id as u8 => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,

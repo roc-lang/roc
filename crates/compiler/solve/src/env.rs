@@ -1,8 +1,9 @@
 use bumpalo::Bump;
 use roc_can::{constraint::Constraints, module::ExposedByModule};
+use roc_checkmate::with_checkmate;
 use roc_derive::SharedDerivedModule;
 use roc_types::subs::{Content, Descriptor, Mark, OptVariable, Rank, Subs, Variable};
-use roc_unify::unify::Env as UEnv;
+use roc_unify::Env as UEnv;
 
 use crate::{FunctionKind, Pools};
 
@@ -18,6 +19,8 @@ pub struct SolveEnv<'a> {
     pub derived_env: &'a DerivedEnv<'a>,
     pub subs: &'a mut Subs,
     pub pools: &'a mut Pools,
+    #[cfg(debug_assertions)]
+    pub checkmate: &'a mut Option<roc_checkmate::Collector>,
 }
 
 /// Environment necessary for inference.
@@ -28,6 +31,8 @@ pub struct InferenceEnv<'a> {
     pub derived_env: &'a DerivedEnv<'a>,
     pub subs: &'a mut Subs,
     pub pools: &'a mut Pools,
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 impl<'a> SolveEnv<'a> {
@@ -39,7 +44,10 @@ impl<'a> SolveEnv<'a> {
 
     /// Retrieves an environment for unification.
     pub fn uenv(&mut self) -> UEnv {
-        UEnv::new(self.subs)
+        with_checkmate!({
+            on => UEnv::new(self.subs, self.checkmate.as_mut()),
+            off => UEnv::new(self.subs),
+        })
     }
 }
 
@@ -93,7 +101,10 @@ impl<'a> InferenceEnv<'a> {
 
     /// Retrieves an environment for unification.
     pub fn uenv(&mut self) -> UEnv {
-        UEnv::new(self.subs)
+        with_checkmate!({
+            on => UEnv::new(self.subs, self.checkmate.as_mut()),
+            off => UEnv::new(self.subs),
+        })
     }
 
     pub fn as_solve_env(&mut self) -> SolveEnv {
@@ -102,6 +113,8 @@ impl<'a> InferenceEnv<'a> {
             derived_env: self.derived_env,
             subs: self.subs,
             pools: self.pools,
+            #[cfg(debug_assertions)]
+            checkmate: &mut self.checkmate,
         }
     }
 }

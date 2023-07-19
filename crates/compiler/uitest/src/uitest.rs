@@ -438,7 +438,7 @@ fn write_source_with_answers<W: io::Write>(
             Some(InferredQuery {
                 source_line_column,
                 ..
-            }) if source_line_column.line == i as _
+            }) if source_line_column.line == i as u32
         ) {
             let inferred = sorted_queries.pop().unwrap();
 

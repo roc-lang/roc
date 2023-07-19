@@ -1,5 +1,6 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
+use roc_checkmate::with_checkmate;
 use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -12,14 +13,16 @@ use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
     UnderivableReason, Unfulfilled,
 };
+use roc_solve_schema::UnificationMode;
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
     TupleElems, Variable,
 };
 use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity, Types};
-use roc_unify::unify::{Env as UEnv, MustImplementConstraints};
+use roc_unify::unify::MustImplementConstraints;
 use roc_unify::unify::{MustImplementAbility, Obligated};
+use roc_unify::Env as UEnv;
 
 use crate::env::InferenceEnv;
 use crate::{aliases::Aliases, to_var::type_to_var};
@@ -1285,16 +1288,19 @@ impl DerivableVisitor for DeriveEq {
         subs: &mut Subs,
         content_var: Variable,
     ) -> Result<Descend, NotDerivable> {
-        use roc_unify::unify::{unify, Mode};
+        use roc_unify::unify::unify;
 
         // Of the floating-point types,
         // only Dec implements Eq.
-        let mut env = UEnv::new(subs);
+        // TODO(checkmate): pass checkmate through
         let unified = unify(
-            &mut env,
+            &mut with_checkmate!({
+                on => UEnv::new(subs, None),
+                off => UEnv::new(subs),
+            }),
             content_var,
             Variable::DECIMAL,
-            Mode::EQ,
+            UnificationMode::EQ,
             Polarity::Pos,
         );
         match unified {
@@ -1412,7 +1418,7 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
     ability_member: Symbol,
     specialization_var: Variable,
 ) -> Result<Resolved, ResolveError> {
-    use roc_unify::unify::{unify, Mode};
+    use roc_unify::unify::unify;
 
     let (parent_ability, signature_var) = resolver
         .member_parent_and_signature_var(ability_member, subs)
@@ -1423,10 +1429,14 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     instantiate_rigids(subs, signature_var);
     let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
-        &mut UEnv::new(subs),
+        // TODO(checkmate): pass checkmate through
+        &mut with_checkmate!({
+            on => UEnv::new(subs, None),
+            off => UEnv::new(subs),
+        }),
         specialization_var,
         signature_var,
-        Mode::EQ,
+        UnificationMode::EQ,
         Polarity::Pos,
     )
     .expect_success(
