@@ -1,6 +1,6 @@
 platform "echo-in-c"
     requires {} { main : Str }
-    exposes []
+    exposes [Base64]
     packages {}
     imports []
     provides [mainForHost]
