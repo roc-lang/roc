@@ -1,9 +1,9 @@
 platform "cli"
-    requires {} { main : Task {} [] }
-    exposes []
+    requires {} { main : Effect Str }
+    exposes [Effect]
     packages {}
-    imports [Task.{ Task }]
+    imports [Effect.{ Effect }]
     provides [mainForHost]
 
-mainForHost : Task {} [] as Fx
+mainForHost : Effect Str as Fx
 mainForHost = main
