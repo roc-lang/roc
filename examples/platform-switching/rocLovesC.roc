@@ -1,6 +1,6 @@
 app "rocLovesC"
     packages { pf: "c-platform/main.roc" }
-    imports [pf.Base64]
+    imports [pf.Dep]
     provides [main] to pf
 
-main = Base64.toStr "blah"
+main = Dep.strIdentity "blah"
