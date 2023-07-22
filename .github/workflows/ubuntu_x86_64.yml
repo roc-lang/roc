@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: CI
 
@@ -61,7 +62,6 @@ jobs:
         run: ./ci/www-repl.sh && sccache --show-stats
 
       #TODO i386 (32-bit linux) cli tests
-
       #TODO verify-no-git-changes
 
       - name: test website build script

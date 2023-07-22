@@ -1,10 +1,8 @@
 on:
+  #pull_request:
   workflow_dispatch:
 
 name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
-
-env:
-  ZIG_VERSION: 0.9.1
 
 jobs:
   test-nightly:
@@ -17,6 +15,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.9.1
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
@@ -26,44 +27,19 @@ jobs:
         if: startsWith(matrix.os, 'macos')
         run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
 
-      - name: remove everything in this dir except the tar # we want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout
-        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+      - run: zig version
 
-      - name: decompress the tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
-
-      - name: delete tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
-
-      - name: rename nightly folder
-        run: mv roc_nightly* roc_nightly
-
-      - name: test roc hello world
-        run: cd roc_nightly && ./roc examples/helloWorld.roc
-
-      - name: test platform switching rust
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesRust.roc
-
-      - name: get OS to use for zig download
-        if: startsWith(matrix.os, 'ubuntu')
-        run: echo "OS_TYPE=linux" >> $GITHUB_ENV
-
-      - name: get OS to use for zig download
-        if: startsWith(matrix.os, 'macos')
-        run: echo "OS_TYPE=macos" >> $GITHUB_ENV
-
-      - name: Install zig
+      - name: prep and run basic tests
         run: |
-          curl -fL -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
-          echo "${GITHUB_WORKSPACE}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
-      - name: zig version
-        run: zig version
+          ./ci/basic_nightly_test.sh
 
-      - name: test platform switching zig
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc
+      - name: clean up, get old linux release (x86_64), run tests
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          rm -rf roc_nightly
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz
+          ./ci/basic_nightly_test.sh
 
-      - name: test platform switching c
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc
 
 
 
