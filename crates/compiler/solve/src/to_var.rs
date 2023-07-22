@@ -83,7 +83,7 @@ pub(crate) fn either_type_index_to_var(
     }
 }
 
-pub(crate) fn type_to_var(
+pub fn type_to_var(
     env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,

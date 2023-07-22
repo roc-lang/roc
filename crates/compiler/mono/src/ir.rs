@@ -11,7 +11,8 @@ use crate::layout::{
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
-use roc_can::abilities::SpecializationId;
+use roc_can::abilities::{AbilitiesStore, SpecializationId};
+use roc_can::constraint::Constraints;
 use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
@@ -31,12 +32,15 @@ use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
+use roc_solve::ability::ObligationCache;
+use roc_solve::{Aliases, DerivedEnv, InferenceEnv, Pools};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
-    StorageSubs, Subs, Variable, VariableSubsSlice,
+    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, Rank,
+    RedundantMark, StorageSubs, Subs, SubsFmtContent, Variable, VariableSubsSlice,
 };
+use roc_types::types::Types;
 use std::collections::HashMap;
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder};
 
@@ -416,11 +420,13 @@ pub struct HostSpecializations<'a> {
     /// Separate array so we can search for membership quickly
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
-    storage_subs: StorageSubs,
+    /// For each symbol, what types to specialize it for, points into the storage_subs
+    annotations: std::vec::Vec<roc_can::def::Annotation>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<Variable>,
     /// Variables for an exposed alias
     exposed_aliases: std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
+    storage_subs: StorageSubs,
 }
 
 impl Default for HostSpecializations<'_> {
@@ -433,10 +439,15 @@ impl<'a> HostSpecializations<'a> {
     pub fn new() -> Self {
         Self {
             symbol_or_lambdas: std::vec::Vec::new(),
+            annotations: std::vec::Vec::new(),
             storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
             exposed_aliases: std::vec::Vec::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.symbol_or_lambdas.is_empty()
     }
 
     pub fn insert_host_exposed(
@@ -450,9 +461,15 @@ impl<'a> HostSpecializations<'a> {
 
         let mut host_exposed_aliases = std::vec::Vec::new();
 
-        if let Some(annotation) = opt_annotation {
-            host_exposed_aliases.extend(annotation.introduced_variables.host_exposed_aliases);
+        if let Some(annotation) = &opt_annotation {
+            host_exposed_aliases
+                .extend(annotation.introduced_variables.host_exposed_aliases.clone());
         }
+
+        let annotation = match opt_annotation {
+            Some(annotation) => annotation,
+            None => internal_error!("host-exposed definitions must have an annotation"),
+        };
 
         match self
             .symbol_or_lambdas
@@ -463,6 +480,7 @@ impl<'a> HostSpecializations<'a> {
                 self.symbol_or_lambdas.push(symbol_or_lambda);
                 self.types_to_specialize.push(variable);
                 self.exposed_aliases.push(host_exposed_aliases);
+                self.annotations.push(annotation);
             }
             Some(_) => {
                 // we assume that only one specialization of a function is directly exposed to the
@@ -479,12 +497,12 @@ impl<'a> HostSpecializations<'a> {
         self,
     ) -> (
         StorageSubs,
-        impl Iterator<Item = (LambdaName<'a>, Variable, std::vec::Vec<(Symbol, Variable)>)>,
+        impl Iterator<Item = (LambdaName<'a>, Variable, roc_can::def::Annotation)>,
     ) {
         let it1 = self.symbol_or_lambdas.into_iter();
 
         let it2 = self.types_to_specialize.into_iter();
-        let it3 = self.exposed_aliases.into_iter();
+        let it3 = self.annotations.into_iter();
 
         (
             self.storage_subs,
@@ -3051,8 +3069,111 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, variable, _host_exposed_aliases) in it {
-        specialize_external_help(env, procs, layout_cache, symbol, offset_variable(variable))
+    let mut types = Types::new();
+
+    for (symbol, ls_from_app, annotation) in it {
+        specialize_external_help(
+            env,
+            procs,
+            layout_cache,
+            symbol,
+            offset_variable(ls_from_app),
+        );
+
+        // the actual Function of this lambda set
+        let content_from_app = env.subs.get_without_compacting(ls_from_app).content;
+        let from_app = match content_from_app {
+            Content::LambdaSet(ls) => ls.ambient_function,
+            _ => ls_from_app,
+        };
+
+        // convert to Types
+        dbg!(&annotation.signature);
+        let type_id = types.from_old_type(&annotation.signature);
+
+        let derived_env = DerivedEnv {
+            derived_module: env.arena.alloc(Default::default()),
+            exposed_types: env.arena.alloc(Default::default()),
+        };
+
+        let mut pools = Pools::new(2);
+        let mut inference_env = InferenceEnv {
+            arena: env.arena,
+            constraints: env.arena.alloc(Constraints::new()),
+            function_kind: roc_solve::FunctionKind::LambdaSet,
+            derived_env: &derived_env,
+            subs: env.subs,
+            pools: &mut pools,
+            #[cfg(debug_assertions)]
+            checkmate: None,
+        };
+
+        let mut problems = vec![];
+        let mut abilities_store = AbilitiesStore::default();
+        let mut obligation_cache = ObligationCache::default();
+        let mut aliases = Aliases::default();
+
+        // add to subs
+        let from_platform = roc_solve::type_to_var(
+            &mut inference_env,
+            Rank::toplevel(),
+            &mut problems,
+            &mut abilities_store,
+            &mut obligation_cache,
+            &mut types,
+            &mut aliases,
+            type_id,
+        );
+
+        // ignore the lambda set of top-level functions
+        let from_platform = match env.subs.get_without_compacting(from_platform).content {
+            Content::Structure(FlatType::Func(_, _, r)) => r,
+            _ => from_platform,
+        };
+
+        // now run the lambda set numbering scheme
+        let mut layout_env =
+            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+        let hels = find_lambda_sets(&mut layout_env, from_platform);
+
+        dbg!(&hels);
+
+        // now unify
+
+        let content = env.subs.get_without_compacting(from_app).content;
+        dbg!(SubsFmtContent(&content, env.subs,));
+
+        let content = env.subs.get_without_compacting(from_platform).content;
+        dbg!(SubsFmtContent(&content, env.subs,));
+
+        let mut unify_env = roc_unify::Env::new(
+            env.subs,
+            #[cfg(debug_assertions)]
+            None,
+        );
+
+        let unified = roc_unify::unify::unify(
+            &mut unify_env,
+            from_platform,
+            from_app,
+            roc_solve_schema::UnificationMode::EQ,
+            roc_types::types::Polarity::Pos,
+        );
+
+        {
+            use roc_unify::unify::Unified::*;
+
+            match unified {
+                Success { .. } => { /* great */ }
+                Failure(..) => internal_error!("unification here should never fail"),
+            }
+        }
+
+        for (id, unified_variable, _) in hels {
+            let content = env.subs.get_without_compacting(unified_variable).content;
+
+            dbg!(SubsFmtContent(&content, env.subs,));
+        }
     }
 }
 
@@ -3164,7 +3285,7 @@ fn specialize_external_help<'a>(
 
                     let mut aliases = BumpMap::default();
 
-                    for (id, raw_function_layout) in extern_names {
+                    for (id, _, raw_function_layout) in extern_names {
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
@@ -9971,7 +10092,7 @@ impl LambdaSetId {
 fn find_lambda_sets<'a>(
     env: &mut crate::layout::Env<'a, '_>,
     initial: Variable,
-) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
+) -> Vec<'a, (LambdaSetId, Variable, RawFunctionLayout<'a>)> {
     let mut stack = bumpalo::collections::Vec::new_in(env.arena);
 
     // ignore the lambda set of top-level functions
@@ -9997,7 +10118,7 @@ fn find_lambda_sets<'a>(
             .value()
             .unwrap();
 
-        let key = (lambda_set_id, raw_function_layout);
+        let key = (lambda_set_id, variable, raw_function_layout);
         answer.push(key);
     }
 
