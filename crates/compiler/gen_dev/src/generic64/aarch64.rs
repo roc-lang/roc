@@ -455,6 +455,14 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ) {
         todo!("Loading returned complex symbols for AArch64");
     }
+
+    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
+
+    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
@@ -529,7 +537,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _fn_name: String,
         _dst: AArch64GeneralReg,
     ) {
-        todo!("calling functions literal for AArch64");
+        todo!("function pointer for AArch64");
+    }
+
+    #[inline(always)]
+    fn data_pointer(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _fn_name: String,
+        _dst: AArch64GeneralReg,
+    ) {
+        todo!("data pointer for AArch64");
     }
 
     #[inline(always)]

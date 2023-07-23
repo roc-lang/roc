@@ -458,6 +458,10 @@ trait Backend<'a> {
     /// Used for generating wrappers for malloc/realloc/free
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
+    // use for roc_panic
+    fn build_roc_setjmp(&mut self) -> &'a [u8];
+    fn build_roc_longjmp(&mut self) -> &'a [u8];
+
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     /// Returns the procedure bytes, its relocations, and the names of the refcounting functions it references.
     fn build_proc(
