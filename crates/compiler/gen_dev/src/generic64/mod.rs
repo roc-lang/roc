@@ -134,6 +134,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         sym: &Symbol,
         layout: &InLayout<'a>,
     );
+
+    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
+    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
 }
 
 pub enum CompareOperation {
@@ -232,6 +235,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String);
 
     fn function_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: GeneralReg,
+    );
+
+    fn data_pointer(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
         fn_name: String,
@@ -885,6 +895,22 @@ impl<
         let offset = ASM::tail_call(&mut out);
 
         (out.into_bump_slice(), offset)
+    }
+
+    fn build_roc_setjmp(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::setjmp(&mut out, &mut self.relocs);
+
+        out.into_bump_slice()
+    }
+
+    fn build_roc_longjmp(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::longjmp(&mut out, &mut self.relocs);
+
+        out.into_bump_slice()
     }
 
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String) {

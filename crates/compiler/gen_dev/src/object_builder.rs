@@ -30,6 +30,8 @@ pub fn build_module<'a, 'r>(
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
+    dbg!(&target);
+
     match target {
         Triple {
             architecture: TargetArch::X86_64,
@@ -118,6 +120,46 @@ pub fn build_module<'a, 'r>(
     }
 }
 
+fn generate_setlongjmp_buffer<'a, B: Backend<'a>>(
+    backend: &mut B,
+    output: &mut Object,
+) -> SymbolId {
+    let bss_section = output.section_id(StandardSection::UninitializedData);
+
+    dbg!(bss_section);
+
+    let symbol = Symbol {
+        name: b"setlongjmp_buffer".to_vec(),
+        value: 0,
+        size: 8 * core::mem::size_of::<u64>() as u64,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(bss_section),
+        flags: SymbolFlags::None,
+    };
+
+    dbg!(output.add_symbol(symbol))
+}
+
+fn generate_roc_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_setjmp".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+
+    let proc_id = output.add_symbol(proc_symbol);
+    let (proc_data, offset) = backend.build_wrapped_jmp();
+    let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
+}
+
 fn generate_wrapper<'a, B: Backend<'a>>(
     backend: &mut B,
     output: &mut Object,
@@ -178,6 +220,8 @@ fn build_object<'a, B: Backend<'a>>(
 ) -> Object<'a> {
     let data_section = output.section_id(StandardSection::Data);
 
+    dbg!("build object");
+
     let arena = backend.env().arena;
 
     /*
@@ -189,6 +233,8 @@ fn build_object<'a, B: Backend<'a>>(
         1,
     );
     */
+
+    let setlongjmp_buffer = generate_setlongjmp_buffer(&mut backend, &mut output);
 
     if backend.env().mode.generate_allocators() {
         generate_wrapper(

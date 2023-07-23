@@ -436,6 +436,90 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             }
         }
     }
+
+    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        use X86_64GeneralReg::*;
+        type ASM = X86_64Assembler;
+
+        // based on the musl libc setjmp implementation
+        //
+        // 000000000020237c <__setjmp>:
+        //   20237c:    48 89 1f                mov    QWORD PTR [rdi],rbx
+        //   20237f:    48 89 6f 08             mov    QWORD PTR [rdi+0x8],rbp
+        //   202383:    4c 89 67 10             mov    QWORD PTR [rdi+0x10],r12
+        //   202387:    4c 89 6f 18             mov    QWORD PTR [rdi+0x18],r13
+        //   20238b:    4c 89 77 20             mov    QWORD PTR [rdi+0x20],r14
+        //   20238f:    4c 89 7f 28             mov    QWORD PTR [rdi+0x28],r15
+        //   202393:    48 8d 54 24 08          lea    rdx,[rsp+0x8]
+        //   202398:    48 89 57 30             mov    QWORD PTR [rdi+0x30],rdx
+        //   20239c:    48 8b 14 24             mov    rdx,QWORD PTR [rsp]
+        //   2023a0:    48 89 57 38             mov    QWORD PTR [rdi+0x38],rdx
+        //   2023a4:    31 c0                   xor    eax,eax
+        //   2023a6:    c3                      ret
+
+        let mut offset = 0;
+
+        // move the argument to rdi
+        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RBX);
+        offset += 8;
+
+        // store the base pointer
+        ASM::mov_mem64_offset32_reg64(buf, RBP, offset, RBP);
+        offset += 8;
+
+        // store other non-volatile registers
+        for register in [R12, R13, R14, R15] {
+            ASM::mov_mem64_offset32_reg64(buf, RDI, offset, register);
+            offset += 8;
+        }
+
+        // not 100% sure on what this does. It calculates the address that the longjmp will jump
+        // to, so this just be right after the call to setjmp.
+        lea_reg64_offset8(buf, RDX, RSP, 0x8);
+
+        // store the location to later jump to
+        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RDX);
+        offset += 8;
+
+        // store the current stack pointer
+        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RSP);
+
+        // zero out eax, so we return 0i32 (we do a 64-bit xor for convenience)
+        ASM::xor_reg64_reg64_reg64(buf, RAX, RAX, RAX);
+
+        ASM::ret(buf)
+    }
+
+    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        use X86_64GeneralReg::*;
+        type ASM = X86_64Assembler;
+
+        //  202358:   31 c0                   xor    eax,eax
+        //  20235a:   83 fe 01                cmp    esi,0x1
+        //  20235d:   11 f0                   adc    eax,esi
+        //  20235f:   48 8b 1f                mov    rbx,QWORD PTR [rdi]
+        //  202362:   48 8b 6f 08             mov    rbp,QWORD PTR [rdi+0x8]
+        //  202366:   4c 8b 67 10             mov    r12,QWORD PTR [rdi+0x10]
+        //  20236a:   4c 8b 6f 18             mov    r13,QWORD PTR [rdi+0x18]
+        //  20236e:   4c 8b 77 20             mov    r14,QWORD PTR [rdi+0x20]
+        //  202372:   4c 8b 7f 28             mov    r15,QWORD PTR [rdi+0x28]
+        //  202376:   48 8b 67 30             mov    rsp,QWORD PTR [rdi+0x30]
+        //  20237a:   ff 67 38                jmp    QWORD PTR [rdi+0x38]
+
+        // make sure something nonzero is returned ?!
+        ASM::mov_reg64_imm64(buf, RAX, 0x1);
+
+        // move the values back into the registers
+        let mut offset = 0;
+        let registers = [RBX, RBP, R12, R13, R14, R15, RSP];
+
+        for dst in registers {
+            ASM::mov_reg64_mem64_offset32(buf, dst, RDI, offset);
+            offset += 8;
+        }
+
+        jmp_reg64_offset8(buf, RDI, offset as i8)
+    }
 }
 
 struct X64_64SystemVStoreArgs {
@@ -1023,6 +1107,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     ) {
         todo!("Loading returned complex symbols for X86_64");
     }
+
+    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
+
+    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
 }
 
 impl X86_64WindowsFastcall {
@@ -1234,6 +1326,21 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         lea_reg64(buf, dst);
 
         relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
+    }
+
+    #[inline(always)]
+    fn data_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: X86_64GeneralReg,
+    ) {
+        lea_reg64(buf, dst);
+
+        relocs.push(Relocation::LinkedData {
             offset: buf.len() as u64 - 4,
             name: fn_name,
         });
@@ -2610,6 +2717,21 @@ fn jmp_imm32(buf: &mut Vec<'_, u8>, imm: i32) {
     buf.extend(imm.to_le_bytes());
 }
 
+#[inline(always)]
+fn jmp_reg64_offset8(buf: &mut Vec<'_, u8>, base: X86_64GeneralReg, offset: i8) {
+    let rex = add_rm_extension(base, REX_W);
+
+    #[allow(clippy::unusual_byte_groupings)]
+    buf.extend([rex, 0xff, 0b01_100_000 | base as u8 % 8]);
+
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+
+    buf.extend(offset.to_le_bytes())
+}
+
 /// Jump near if not equal (ZF=0).
 #[inline(always)]
 fn jne_imm32(buf: &mut Vec<'_, u8>, imm: i32) {
@@ -2660,6 +2782,32 @@ fn lea_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
         0x00,
         0x00,
     ])
+}
+
+/// `LEA r64, m` -> Store effective address for m in register r64.
+#[inline(always)]
+fn lea_reg64_offset8(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    src: X86_64GeneralReg,
+    offset: i8,
+) {
+    let rex = add_rm_extension(src, REX_W);
+    let rex = add_reg_extension(dst, rex);
+
+    let dst_mod = dst as u8 % 8;
+    let src_mod = src as u8 % 8;
+
+    #[allow(clippy::unusual_byte_groupings)]
+    // the upper bits 0b01 of the mod_rm byte indicate 8-bit displacement
+    buf.extend([rex, 0x8d, 0b01_000_000 | (dst_mod << 3) | src_mod]);
+
+    // Using RSP or R12 requires a secondary index byte.
+    if src == X86_64GeneralReg::RSP || src == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+
+    buf.push(offset as u8);
 }
 
 fn raw_mov_reg_reg(
@@ -2897,6 +3045,16 @@ fn mov_reg_base_offset32(
         buf.push(0x24);
     }
     buf.extend(offset.to_le_bytes());
+}
+
+#[inline(always)]
+fn mov_reg64_offset32_reg64(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    todo!()
 }
 
 /// `MOV r64,r/m64` -> Move r/m64 to r64, where m64 references a base + offset.
@@ -3833,6 +3991,20 @@ mod tests {
     }
 
     #[test]
+    fn test_jmp_reg64_offset8() {
+        disassembler_test!(
+            jmp_reg64_offset8,
+            |base, offset| if offset < 0x10 {
+                format!("jmp qword ptr [{base} + {offset:x}]")
+            } else {
+                format!("jmp qword ptr [{base} + 0x{offset:x}]")
+            },
+            ALL_GENERAL_REGS,
+            [0x8, 0x10]
+        );
+    }
+
+    #[test]
     fn test_jne_imm32() {
         const INST_SIZE: i32 = 6;
         disassembler_test!(
@@ -3874,6 +4046,23 @@ mod tests {
             lea_reg64,
             |reg| format!("lea {reg}, [rip]"),
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_lea_reg64_offset32() {
+        disassembler_test!(
+            lea_reg64_offset8,
+            |dst, src, offset| {
+                if offset < 16 {
+                    format!("lea {dst}, [{src} + {offset:x}]")
+                } else {
+                    format!("lea {dst}, [{src} + 0x{offset:x}]")
+                }
+            },
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x8i8, 0x10i8]
         );
     }
 
