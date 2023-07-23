@@ -2535,7 +2535,7 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
-    pub host_exposed_annotations: VecMap<usize, crate::def::Annotation>,
+    pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
 
     pub function_bodies: Vec<Loc<FunctionDef>>,
     pub expressions: Vec<Loc<Expr>>,
@@ -2589,7 +2589,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
-        host_annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2637,7 +2637,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
-        host_annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2715,7 +2715,7 @@ impl Declarations {
         loc_expr: Loc<Expr>,
         expr_var: Variable,
         annotation: Option<Annotation>,
-        host_annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();

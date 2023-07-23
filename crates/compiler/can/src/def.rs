@@ -1656,7 +1656,9 @@ pub(crate) fn sort_can_defs_new(
                     };
 
                     let host_annotation = if exposed_symbols.contains(&symbol) {
-                        def.annotation.clone().map(|a| a.freshen(var_store))
+                        def.annotation
+                            .clone()
+                            .map(|a| (var_store.fresh(), a.freshen(var_store)))
                     } else {
                         None
                     };
@@ -1691,7 +1693,9 @@ pub(crate) fn sort_can_defs_new(
                     match def.loc_pattern.value {
                         Pattern::Identifier(symbol) => {
                             let host_annotation = if exposed_symbols.contains(&symbol) {
-                                def.annotation.clone().map(|a| a.freshen(var_store))
+                                def.annotation
+                                    .clone()
+                                    .map(|a| (var_store.fresh(), a.freshen(var_store)))
                             } else {
                                 None
                             };
@@ -1724,7 +1728,9 @@ pub(crate) fn sort_can_defs_new(
                             specializes,
                         } => {
                             let host_annotation = if exposed_symbols.contains(&symbol) {
-                                def.annotation.clone().map(|a| a.freshen(var_store))
+                                def.annotation
+                                    .clone()
+                                    .map(|a| (var_store.fresh(), a.freshen(var_store)))
                             } else {
                                 None
                             };
@@ -1795,7 +1801,9 @@ pub(crate) fn sort_can_defs_new(
                     };
 
                     let host_annotation = if exposed_symbols.contains(&symbol) {
-                        def.annotation.clone().map(|a| a.freshen(var_store))
+                        def.annotation
+                            .clone()
+                            .map(|a| (var_store.fresh(), a.freshen(var_store)))
                     } else {
                         None
                     };

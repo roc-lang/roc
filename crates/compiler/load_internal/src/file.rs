@@ -465,11 +465,6 @@ fn start_phase<'a>(
                         abilities_store,
                         expectations,
                     } = found_specializations;
-
-                    if !procs_base.host_specializations.is_empty() {
-                        dbg!(&procs_base.host_specializations);
-                    }
-
                     let our_exposed_types = state
                         .exposed_types
                         .get(&module_id)
@@ -506,10 +501,6 @@ fn start_phase<'a>(
                         .late_specializations
                         .remove(&module_id)
                         .unwrap();
-
-                    if !procs_base.host_specializations.is_empty() {
-                        dbg!(&procs_base.host_specializations);
-                    }
 
                     (
                         ident_ids,
@@ -5851,7 +5842,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        declarations.host_exposed_annotations.get(&index).cloned(),
                         expr_var,
                     );
                 }
@@ -5917,7 +5908,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        None,
                         expr_var,
                     );
                 }
@@ -5989,7 +5980,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        None,
                         expr_var,
                     );
                 }

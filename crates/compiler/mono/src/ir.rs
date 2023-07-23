@@ -421,7 +421,7 @@ pub struct HostSpecializations<'a> {
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
-    annotations: std::vec::Vec<roc_can::def::Annotation>,
+    annotations: std::vec::Vec<(Variable, roc_can::def::Annotation)>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<Variable>,
     /// Variables for an exposed alias
@@ -454,14 +454,14 @@ impl<'a> HostSpecializations<'a> {
         &mut self,
         env_subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
-        opt_annotation: Option<roc_can::def::Annotation>,
+        opt_annotation: Option<(Variable, roc_can::def::Annotation)>,
         variable: Variable,
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
 
         let mut host_exposed_aliases = std::vec::Vec::new();
 
-        if let Some(annotation) = &opt_annotation {
+        if let Some((_, annotation)) = &opt_annotation {
             host_exposed_aliases
                 .extend(annotation.introduced_variables.host_exposed_aliases.clone());
         }
@@ -497,12 +497,12 @@ impl<'a> HostSpecializations<'a> {
         self,
     ) -> (
         StorageSubs,
-        impl Iterator<Item = (LambdaName<'a>, Variable, roc_can::def::Annotation)>,
+        impl Iterator<Item = (LambdaName<'a>, Variable, Variable)>,
     ) {
         let it1 = self.symbol_or_lambdas.into_iter();
 
         let it2 = self.types_to_specialize.into_iter();
-        let it3 = self.annotations.into_iter();
+        let it3 = self.annotations.into_iter().map(|x| x.0);
 
         (
             self.storage_subs,
@@ -3069,9 +3069,8 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    let mut types = Types::new();
-
-    for (symbol, ls_from_app, annotation) in it {
+    for (symbol, ls_from_app, from_platform) in it {
+        dbg!(symbol);
         specialize_external_help(
             env,
             procs,
@@ -3080,56 +3079,7 @@ fn specialize_host_specializations<'a>(
             offset_variable(ls_from_app),
         );
 
-        // the actual Function of this lambda set
-        let content_from_app = env.subs.get_without_compacting(ls_from_app).content;
-        let from_app = match content_from_app {
-            Content::LambdaSet(ls) => ls.ambient_function,
-            _ => ls_from_app,
-        };
-
-        // convert to Types
-        dbg!(&annotation.signature);
-        let type_id = types.from_old_type(&annotation.signature);
-
-        let derived_env = DerivedEnv {
-            derived_module: env.arena.alloc(Default::default()),
-            exposed_types: env.arena.alloc(Default::default()),
-        };
-
-        let mut pools = Pools::new(2);
-        let mut inference_env = InferenceEnv {
-            arena: env.arena,
-            constraints: env.arena.alloc(Constraints::new()),
-            function_kind: roc_solve::FunctionKind::LambdaSet,
-            derived_env: &derived_env,
-            subs: env.subs,
-            pools: &mut pools,
-            #[cfg(debug_assertions)]
-            checkmate: None,
-        };
-
-        let mut problems = vec![];
-        let mut abilities_store = AbilitiesStore::default();
-        let mut obligation_cache = ObligationCache::default();
-        let mut aliases = Aliases::default();
-
-        // add to subs
-        let from_platform = roc_solve::type_to_var(
-            &mut inference_env,
-            Rank::toplevel(),
-            &mut problems,
-            &mut abilities_store,
-            &mut obligation_cache,
-            &mut types,
-            &mut aliases,
-            type_id,
-        );
-
-        // ignore the lambda set of top-level functions
-        let from_platform = match env.subs.get_without_compacting(from_platform).content {
-            Content::Structure(FlatType::Func(_, _, r)) => r,
-            _ => from_platform,
-        };
+        let from_app = offset_variable(ls_from_app);
 
         // now run the lambda set numbering scheme
         let mut layout_env =

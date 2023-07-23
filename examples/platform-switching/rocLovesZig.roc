@@ -3,6 +3,7 @@ app "rocLovesZig"
     imports []
     provides [main] to pf
 
+main : {} -> (Str -> Str)
 main = \{} -> 
     captureMe = Bool.true 
     \_input -> 
