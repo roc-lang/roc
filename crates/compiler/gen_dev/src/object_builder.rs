@@ -142,7 +142,7 @@ fn generate_setlongjmp_buffer<'a, B: Backend<'a>>(
     dbg!(output.add_symbol(symbol))
 }
 
-fn generate_roc_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+fn generate_roc_setlongjmp_buffer<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
     let text_section = output.section_id(StandardSection::Text);
     let proc_symbol = Symbol {
         name: b"roc_setjmp".to_vec(),
@@ -158,6 +158,42 @@ fn generate_roc_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object)
     let proc_id = output.add_symbol(proc_symbol);
     let (proc_data, offset) = backend.build_wrapped_jmp();
     let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
+}
+
+fn generate_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_setjmp".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let proc_data = backend.build_roc_setjmp();
+
+    output.add_symbol_data(proc_id, text_section, proc_data, 16);
+}
+
+fn generate_longjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_longjmp".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let proc_data = backend.build_roc_longjmp();
+
+    output.add_symbol_data(proc_id, text_section, proc_data, 16);
 }
 
 fn generate_wrapper<'a, B: Backend<'a>>(
@@ -234,7 +270,10 @@ fn build_object<'a, B: Backend<'a>>(
     );
     */
 
-    let setlongjmp_buffer = generate_setlongjmp_buffer(&mut backend, &mut output);
+    generate_setlongjmp_buffer(&mut backend, &mut output);
+
+    generate_setjmp(&mut backend, &mut output);
+    generate_longjmp(&mut backend, &mut output);
 
     if backend.env().mode.generate_allocators() {
         generate_wrapper(
@@ -574,6 +613,39 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
         host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
         is_erased: proc.is_erased,
     }
+}
+
+fn build_test_main<'a, B: Backend<'a>>(
+    output: &mut Object<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
+    backend: &mut B,
+    layout: ProcLayout<'a>,
+    proc: Proc<'a>,
+    exposed: Exposed,
+) {
+    let sym = proc.name.name();
+
+    let section_id = output.add_section(
+        output.segment_name(StandardSegment::Text).to_vec(),
+        &b".text.test_main",
+        SectionKind::Text,
+    );
+
+    let fn_name = "test_main";
+
+    let proc_symbol = Symbol {
+        name: fn_name.as_bytes().to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(section_id),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    procs.push((fn_name, section_id, proc_id, proc));
 }
 
 #[allow(clippy::enum_variant_names)]

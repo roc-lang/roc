@@ -919,6 +919,12 @@ impl<
         ASM::function_pointer(&mut self.buf, &mut self.relocs, fn_name, reg)
     }
 
+    fn build_data_pointer(&mut self, dst: &Symbol, data_name: String) {
+        let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+
+        ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg)
+    }
+
     fn build_fn_call(
         &mut self,
         dst: &Symbol,
