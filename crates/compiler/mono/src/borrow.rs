@@ -1069,6 +1069,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", op);
         }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 

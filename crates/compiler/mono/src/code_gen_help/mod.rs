@@ -6,8 +6,8 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, PassedFunction,
-    Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
+    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, Literal, ModifyRc,
+    PassedFunction, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, LayoutWrapper, Niche,
@@ -847,4 +847,90 @@ fn layout_needs_helper_proc<'a>(
         LayoutRepr::FunctionPointer(_) => false,
         LayoutRepr::Erased(_) => true,
     }
+}
+
+fn test_helper<'a>(
+    arena: &'a Bump,
+    layout_interner: &STLayoutInterner<'a>,
+    main_proc: &Proc<'a>,
+) -> Proc<'a> {
+    Proc {
+        name: (),
+        args: (),
+        body: (),
+        closure_data_layout: (),
+        ret_layout: (),
+        is_self_recursive: (),
+        host_exposed_layouts: (),
+        is_erased: (),
+    }
+}
+
+fn test_helper_body<'a>(
+    env: &CodeGenHelp,
+    ident_ids: &mut IdentIds,
+    layout_interner: &STLayoutInterner<'a>,
+    main_proc: &Proc<'a>,
+) -> Stmt<'a> {
+    // let buffer = SetLongJmpBuffer
+    let buffer_symbol = env.create_symbol(ident_ids, "buffer");
+    let buffer_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::SetLongJmpBuffer,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: &[],
+    });
+    let buffer_stmt = |next| Stmt::Let(buffer_symbol, buffer_expr, Layout::U64, next);
+
+    let is_longjmp_symbol = env.create_symbol(ident_ids, "is_longjmp");
+    let is_longjmp_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::SetJmp,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: &[buffer_symbol],
+    });
+    let is_longjmp_stmt = |next| Stmt::Let(is_longjmp_symbol, is_longjmp_expr, Layout::U64, next);
+
+    //    tag: u64,
+    //    error_msg: *mut RocStr,
+    //    value: MaybeUninit<T>,
+    let repr = LayoutRepr::Struct(env.arena.alloc([Layout::U64, Layout::U64, proc.ret_layout]));
+    let return_layout = layout_interner.insert_direct_no_semantic(repr);
+
+    // normal path, no panics
+    let else_branch_stmt = {
+        let result_symbol = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: (),
+                ret_layout: (),
+                arg_layouts: (),
+                specialization_id: (),
+            },
+            arguments: proc_arguments,
+        });
+
+        let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
+        let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
+        let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
+
+        let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
+        let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
+        let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+    };
+
+    // a longjmp/panic occured
+    let then_branch_stmt = {
+        //
+        todo!()
+    };
+
+    Stmt::if_then_else(
+        env.arena,
+        is_longjmp_symbol,
+        return_layout,
+        then_branch_stmt,
+        else_branch_stmt,
+    )
 }

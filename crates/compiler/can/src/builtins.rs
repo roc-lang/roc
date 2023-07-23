@@ -95,6 +95,10 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
 
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
+
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
                 LowLevel::StrFromFloat => unimplemented!(),

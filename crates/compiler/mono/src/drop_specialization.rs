@@ -1620,6 +1620,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 

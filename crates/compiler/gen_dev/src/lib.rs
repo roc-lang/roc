@@ -1658,6 +1658,23 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::SetJmp => self.build_fn_call(
+                sym,
+                String::from("roc_setjmp"),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::LongJmp => self.build_fn_call(
+                sym,
+                String::from("roc_longjmp"),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::SetLongJmpBuffer => {
+                self.build_data_pointer(sym, String::from("setlongjmp_buffer"))
+            }
             LowLevel::DictPseudoSeed => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DICT_PSEUDO_SEED.to_string(),
@@ -1960,6 +1977,7 @@ trait Backend<'a> {
     );
 
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String);
+    fn build_data_pointer(&mut self, dst: &Symbol, data_name: String);
 
     /// Move a returned value into `dst`
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
