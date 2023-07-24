@@ -21,7 +21,6 @@ mod test_gen_rs {
 
         let full_header = std::str::from_utf8(HEADER).unwrap().to_string() + "\n";
         assert_eq!(
-            generate_bindings(module),
             vec![File {
                 name: "mod.rs".to_string(),
                 content: full_header
@@ -40,9 +39,36 @@ mod test_gen_rs {
                         pub b: roc_std::I128,
                         pub a: u64,
                     }
+
+                    #[cfg(any(
+                        target_arch = "arm",
+                        target_arch = "aarch64",
+                        target_arch = "wasm32",
+                        target_arch = "x86",
+                        target_arch = "x86_64"
+                    ))]
+
+                    #[repr(C)]
+                    pub struct main {
+                        pub closure_data: (),
+                    }
+
+                    impl main {
+                        pub fn force_thunk(mut self, arg_0: ()) -> MyRcd {
+                            extern "C" {
+                                 fn roc__main_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut MyRcd);
+                            }
+
+                            let mut output = std::mem::MaybeUninit::uninit();
+                            let ptr = self.closure_data.as_mut_ptr();
+                            unsafe { roc__main_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
+                            unsafe { output.assume_init() }
+                        }
+                    }
                     "#
                     )
-            }]
+            }],
+            generate_bindings(module)
         );
     }
 
@@ -61,7 +87,6 @@ mod test_gen_rs {
 
         let full_header = std::str::from_utf8(HEADER).unwrap().to_string() + "\n";
         assert_eq!(
-            generate_bindings(module),
             vec![File {
                 name: "mod.rs".to_string(),
                 content: full_header
@@ -78,6 +103,32 @@ mod test_gen_rs {
                         pub x: Inner,
                         pub y: roc_std::RocStr,
                         pub z: roc_std::RocList<u8>,
+                    }
+
+                    #[cfg(any(
+                        target_arch = "arm",
+                        target_arch = "aarch64",
+                        target_arch = "wasm32",
+                        target_arch = "x86",
+                        target_arch = "x86_64"
+                    ))]
+
+                    #[repr(C)]
+                    pub struct main {
+                        pub closure_data: (),
+                    }
+
+                    impl main {
+                        pub fn force_thunk(mut self, arg_0: ()) -> Outer {
+                            extern "C" {
+                                 fn roc__main_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut Outer);
+                            }
+
+                            let mut output = std::mem::MaybeUninit::uninit();
+                            let ptr = self.closure_data.as_mut_ptr();
+                            unsafe { roc__main_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
+                            unsafe { output.assume_init() }
+                        }
                     }
 
                     #[cfg(any(
@@ -107,7 +158,8 @@ mod test_gen_rs {
                     }
                     "#
                     )
-            }]
+            }],
+            generate_bindings(module),
         );
     }
 
@@ -117,7 +169,6 @@ mod test_gen_rs {
 
         let full_header = std::str::from_utf8(HEADER).unwrap().to_string() + "\n";
         assert_eq!(
-            generate_bindings(module),
             vec![File {
                 name: "mod.rs".to_string(),
                 content: full_header
@@ -136,9 +187,36 @@ mod test_gen_rs {
                         pub b: roc_std::U128,
                         pub a: u64,
                     }
+
+                    #[cfg(any(
+                        target_arch = "arm",
+                        target_arch = "aarch64",
+                        target_arch = "wasm32",
+                        target_arch = "x86",
+                        target_arch = "x86_64"
+                    ))]
+
+                    #[repr(C)]
+                    pub struct main {
+                        pub closure_data: (),
+                    }
+
+                    impl main {
+                        pub fn force_thunk(mut self, arg_0: ()) -> R1 {
+                            extern "C" {
+                                 fn roc__main_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut R1);
+                            }
+
+                            let mut output = std::mem::MaybeUninit::uninit();
+                            let ptr = self.closure_data.as_mut_ptr();
+                            unsafe { roc__main_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
+                            unsafe { output.assume_init() }
+                        }
+                    }
                     "#
                     )
-            }]
+            }],
+            generate_bindings(module)
         );
     }
 
@@ -148,7 +226,6 @@ mod test_gen_rs {
 
         let full_header = std::str::from_utf8(HEADER).unwrap().to_string() + "\n";
         assert_eq!(
-            generate_bindings(module),
             vec![File {
                 name: "mod.rs".to_string(),
                 content: full_header
@@ -165,6 +242,32 @@ mod test_gen_rs {
                         pub x: R2,
                         pub y: roc_std::RocStr,
                         pub z: roc_std::RocList<u8>,
+                    }
+
+                    #[cfg(any(
+                        target_arch = "arm",
+                        target_arch = "aarch64",
+                        target_arch = "wasm32",
+                        target_arch = "x86",
+                        target_arch = "x86_64"
+                    ))]
+
+                    #[repr(C)]
+                    pub struct main {
+                        pub closure_data: (),
+                    }
+
+                    impl main {
+                        pub fn force_thunk(mut self, arg_0: ()) -> R1 {
+                            extern "C" {
+                                 fn roc__main_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut R1);
+                            }
+
+                            let mut output = std::mem::MaybeUninit::uninit();
+                            let ptr = self.closure_data.as_mut_ptr();
+                            unsafe { roc__main_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
+                            unsafe { output.assume_init() }
+                        }
                     }
 
                     #[cfg(any(
@@ -194,7 +297,8 @@ mod test_gen_rs {
                     }
                     "#
                     )
-            }]
+            }],
+            generate_bindings(module)
         );
     }
 
@@ -211,7 +315,6 @@ mod test_gen_rs {
 
         let full_header = std::str::from_utf8(HEADER).unwrap().to_string() + "\n";
         assert_eq!(
-            generate_bindings(module),
             vec![File {
                 name: "mod.rs".to_string(),
                 content: full_header
@@ -241,9 +344,36 @@ mod test_gen_rs {
                             }
                         }
                     }
+
+                    #[cfg(any(
+                        target_arch = "arm",
+                        target_arch = "aarch64",
+                        target_arch = "wasm32",
+                        target_arch = "x86",
+                        target_arch = "x86_64"
+                    ))]
+
+                    #[repr(C)]
+                    pub struct main {
+                        pub closure_data: (),
+                    }
+
+                    impl main {
+                        pub fn force_thunk(mut self, arg_0: ()) -> Enumeration {
+                            extern "C" {
+                                 fn roc__main_1_caller(arg_0: &(), closure_data: *mut u8, output: *mut Enumeration);
+                            }
+
+                            let mut output = std::mem::MaybeUninit::uninit();
+                            let ptr = self.closure_data.as_mut_ptr();
+                            unsafe { roc__main_1_caller(&arg_0, ptr, output.as_mut_ptr()) };
+                            unsafe { output.assume_init() }
+                        }
+                    }
                     "#
                     )
-            }]
+            }],
+            generate_bindings(module)
         );
     }
 }
