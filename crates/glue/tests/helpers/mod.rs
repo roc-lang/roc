@@ -1,11 +1,12 @@
+use cli_utils::helpers::{has_error, run_glue, run_roc, Out};
 use indoc::indoc;
 use roc_glue::load::{load_types, IgnoreErrors};
 use roc_glue::rust_glue;
 use roc_load::Threading;
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[allow(dead_code)]
 pub fn generate_bindings(decl_src: &str) -> Vec<roc_glue::types::File> {
@@ -80,4 +81,86 @@ pub fn root_dir() -> PathBuf {
     path.pop();
 
     path
+}
+
+#[allow(dead_code)]
+pub fn generate_glue_for<'a, I: IntoIterator<Item = &'a str>>(
+    platform_dir: &'a Path,
+    args: I,
+) -> Out {
+    let platform_module_path = platform_dir.join("platform.roc");
+    let glue_dir = platform_dir.join("test_glue");
+    let fixture_templates_dir = platform_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("fixture-templates");
+
+    // Copy the rust template from the templates directory into the fixture dir.
+    dircpy::CopyBuilder::new(fixture_templates_dir.join("rust"), platform_dir)
+        .overwrite(true) // overwrite any files that were already present
+        .run()
+        .unwrap();
+
+    // Delete the glue file to make sure we're actually regenerating it!
+    if glue_dir.exists() {
+        fs::remove_dir_all(&glue_dir)
+            .expect("Unable to remove test_glue dir in order to regenerate it in the test");
+    }
+
+    let rust_glue_spec = fixture_templates_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("src")
+        .join("RustGlue.roc");
+
+    // Generate a fresh test_glue for this platform
+    let glue_out = run_glue(
+        // converting these all to String avoids lifetime issues
+        std::iter::once("glue".to_string()).chain(
+            args.into_iter().map(|arg| arg.to_string()).chain([
+                rust_glue_spec.to_str().unwrap().to_string(),
+                glue_dir.to_str().unwrap().to_string(),
+                platform_module_path.to_str().unwrap().to_string(),
+            ]),
+        ),
+    );
+
+    if has_error(&glue_out.stderr) {
+        panic!(
+            "`roc glue` command had unexpected stderr: {}",
+            glue_out.stderr
+        );
+    }
+
+    assert!(glue_out.status.success(), "bad status {glue_out:?}");
+
+    glue_out
+}
+
+#[allow(dead_code)]
+pub fn run_app<'a, I: IntoIterator<Item = &'a str>>(app_file: &'a Path, args: I) -> Out {
+    // Generate test_glue for this platform
+    let compile_out = run_roc(
+        // converting these all to String avoids lifetime issues
+        args.into_iter()
+            .map(|arg| arg.to_string())
+            .chain([app_file.to_str().unwrap().to_string()]),
+        &[],
+        &[],
+    );
+
+    if has_error(&compile_out.stderr) {
+        panic!(
+            "`roc` command had unexpected stderr: {}",
+            compile_out.stderr
+        );
+    }
+
+    assert!(compile_out.status.success(), "bad status {compile_out:?}");
+
+    compile_out
 }
