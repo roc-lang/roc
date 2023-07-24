@@ -34,8 +34,8 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, 
-    RedundantMark, StorageSubs, Subs, Variable, VariableSubsSlice,
+    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder};
@@ -416,12 +416,10 @@ pub struct HostSpecializations<'a> {
     /// Separate array so we can search for membership quickly
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
-    /// For each symbol, what types to specialize it for, points into the storage_subs
-    annotations: std::vec::Vec<(Variable, roc_can::def::Annotation)>,
+    /// For each symbol, a variable that stores the unsolved (!) annotation
+    annotations: std::vec::Vec<Variable>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<Variable>,
-    /// Variables for an exposed alias
-    exposed_aliases: std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
     storage_subs: StorageSubs,
 }
 
@@ -438,7 +436,6 @@ impl<'a> HostSpecializations<'a> {
             annotations: std::vec::Vec::new(),
             storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
-            exposed_aliases: std::vec::Vec::new(),
         }
     }
 
@@ -455,15 +452,8 @@ impl<'a> HostSpecializations<'a> {
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
 
-        let mut host_exposed_aliases = std::vec::Vec::new();
-
-        if let Some((_, annotation)) = &opt_annotation {
-            host_exposed_aliases
-                .extend(annotation.introduced_variables.host_exposed_aliases.clone());
-        }
-
-        let annotation = match opt_annotation {
-            Some(annotation) => annotation,
+        let annotation_var = match opt_annotation {
+            Some((var, _)) => var,
             None => internal_error!("host-exposed definitions must have an annotation"),
         };
 
@@ -475,8 +465,7 @@ impl<'a> HostSpecializations<'a> {
             None => {
                 self.symbol_or_lambdas.push(symbol_or_lambda);
                 self.types_to_specialize.push(variable);
-                self.exposed_aliases.push(host_exposed_aliases);
-                self.annotations.push(annotation);
+                self.annotations.push(annotation_var);
             }
             Some(_) => {
                 // we assume that only one specialization of a function is directly exposed to the
@@ -485,8 +474,6 @@ impl<'a> HostSpecializations<'a> {
                 panic!("A host-exposed symbol can only be exposed once");
             }
         }
-
-        debug_assert_eq!(self.types_to_specialize.len(), self.exposed_aliases.len());
     }
 
     fn decompose(
@@ -498,7 +485,7 @@ impl<'a> HostSpecializations<'a> {
         let it1 = self.symbol_or_lambdas.into_iter();
 
         let it2 = self.types_to_specialize.into_iter();
-        let it3 = self.annotations.into_iter().map(|x| x.0);
+        let it3 = self.annotations.into_iter();
 
         (
             self.storage_subs,
@@ -5329,10 +5316,7 @@ pub fn with_hole<'a>(
                     );
 
                     if let Err(e) = inserted {
-                        return runtime_error(
-                            env,
-                            env.arena.alloc(format!("RuntimeError: {e:?}")),
-                        );
+                        return runtime_error(env, env.arena.alloc(format!("RuntimeError: {e:?}")));
                     }
                     drop(inserted);
 
