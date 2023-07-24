@@ -417,7 +417,7 @@ pub struct HostSpecializations<'a> {
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
     /// For each symbol, a variable that stores the unsolved (!) annotation
-    annotations: std::vec::Vec<Variable>,
+    annotations: std::vec::Vec<Option<Variable>>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<Variable>,
     storage_subs: StorageSubs,
@@ -447,7 +447,7 @@ impl<'a> HostSpecializations<'a> {
         &mut self,
         env_subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
-        annotation: Variable,
+        annotation: Option<Variable>,
         variable: Variable,
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
@@ -475,7 +475,7 @@ impl<'a> HostSpecializations<'a> {
         self,
     ) -> (
         StorageSubs,
-        impl Iterator<Item = (LambdaName<'a>, Variable, Variable)>,
+        impl Iterator<Item = (LambdaName<'a>, Variable, Option<Variable>)>,
     ) {
         let it1 = self.symbol_or_lambdas.into_iter();
 
@@ -3058,14 +3058,11 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, from_app, from_platform) in it {
+    for (symbol, from_app, opt_from_platform) in it {
         let from_app = offset_variable(from_app);
         let index = specialize_external_help(env, procs, layout_cache, symbol, from_app);
 
-        // Expect and ExpectFx
-        if from_platform == Variable::NULL {
-            continue;
-        }
+        let Some(from_platform) = opt_from_platform else { continue };
 
         // now run the lambda set numbering scheme
         let mut layout_env =

@@ -5646,7 +5646,6 @@ fn build_pending_specializations<'a>(
             .get(&index)
             .map(|(v, _)| v)
             .copied()
-            .expect("toplevel definitions have an annotation")
     };
 
     // Add modules' decls to Procs
@@ -5915,7 +5914,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        Variable::NULL,
+                        None,
                         expr_var,
                     );
                 }
@@ -5987,7 +5986,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        Variable::NULL,
+                        None,
                         expr_var,
                     );
                 }
