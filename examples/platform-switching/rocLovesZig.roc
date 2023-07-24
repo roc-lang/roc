@@ -3,11 +3,4 @@ app "rocLovesZig"
     imports []
     provides [main] to pf
 
-main : {} -> (Str -> Str)
-main = \{} -> 
-    captureMe = Bool.true 
-    \_input -> 
-        if captureMe then
-            "Roc <3 Zig!\n"
-        else
-            "Roc <3 Zig!\n"
+main = "Roc <3 Zig!\n"

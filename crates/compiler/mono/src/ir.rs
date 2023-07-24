@@ -447,15 +447,10 @@ impl<'a> HostSpecializations<'a> {
         &mut self,
         env_subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
-        opt_annotation: Option<(Variable, roc_can::def::Annotation)>,
+        annotation: Variable,
         variable: Variable,
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
-
-        let annotation_var = match opt_annotation {
-            Some((var, _)) => var,
-            None => internal_error!("host-exposed definitions must have an annotation"),
-        };
 
         match self
             .symbol_or_lambdas
@@ -465,7 +460,7 @@ impl<'a> HostSpecializations<'a> {
             None => {
                 self.symbol_or_lambdas.push(symbol_or_lambda);
                 self.types_to_specialize.push(variable);
-                self.annotations.push(annotation_var);
+                self.annotations.push(annotation);
             }
             Some(_) => {
                 // we assume that only one specialization of a function is directly exposed to the
@@ -3066,6 +3061,11 @@ fn specialize_host_specializations<'a>(
     for (symbol, from_app, from_platform) in it {
         let from_app = offset_variable(from_app);
         let index = specialize_external_help(env, procs, layout_cache, symbol, from_app);
+
+        // Expect and ExpectFx
+        if from_platform == Variable::NULL {
+            continue;
+        }
 
         // now run the lambda set numbering scheme
         let mut layout_env =
