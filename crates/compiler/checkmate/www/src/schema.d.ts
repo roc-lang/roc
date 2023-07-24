@@ -80,6 +80,10 @@ export type Content =
       [k: string]: unknown;
     }
   | {
+      type: "ErasedLambda";
+      [k: string]: unknown;
+    }
+  | {
       kind: AliasKind;
       name: Symbol;
       real_variable: Variable;
