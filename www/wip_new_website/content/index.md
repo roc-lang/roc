@@ -14,15 +14,16 @@ A work-in-progress programming language that aims to be fast, friendly, and func
 <section class="home-goals-container">
     <div class="home-goals-column">
       <h3 class="home-goals-title">Fast</h4>
-      <p class="home-goals-description">Roc aims to help you make delightful software, and delightful software feels snappy. The Roc compiler should run fast, and the programs it produces should also be able to run fast. The goal is not to make the fastest possible language, but it is a goal to generally outperform mainstream garbage-collected languages.<a class="home-goals-learn-more" href="/design_goals.html#fast">Learn more</a></p>
+      <p class="home-goals-description">Delightful software runs fast. The Roc compiler should run fast, and it should be able to produce programs that run fast too. The goal here is not to make the world's fastest possible language, but we benchmark against mainstream garbage-collected languages and aim to outperform them. (Currently we succeed in some benchmarks but not others.)<a class="home-goals-learn-more" href="/design_goals.html#fast">Learn more</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Friendly</h3>
-      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. This involves the set of tools Roc ships with, how helpful those tools are, as well as the values of the community of Roc programmers around the world.<a class="home-goals-learn-more" href="/design_goals.html#friendly">Learn more</a></p>
+      <h2 class="home-goals-title">Friendly</h2>
+      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. This involves the set of tools Roc ships with, how helpful those tools are, and also the spirit of the (currently small) community of Roc programmers around the world.<a class="home-goals-learn-more" href="/design_goals.html#friendly">Learn more</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Functional</h3>
-      <p class="home-goals-description">Roc is a purely functional programming language. All Roc values are semantically immutable constants, and all effects are asynchronous. These create helpful guarantees and can make testing effects faster and more reliable. <a class="home-goals-learn-more" href="/design_goals.html#functional">Learn more</a></p>
+      <p class="home-goals-description">Roc is a purely functional programming language. All Roc values are semantically immutable constants, and all effects are asynchronous. The language is built on a small set of simple primitives, which create helpful guarantees and make automated tests nicer to develop. <a class="home-goals-learn-more" href="/design_goals.html#functional">Learn more</a></p>
 </section>
 
 ## Try Roc
