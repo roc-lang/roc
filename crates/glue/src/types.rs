@@ -543,7 +543,7 @@ impl Types {
         self.add_anonymous_with_size_and_align(typ, size, align)
     }
 
-    pub fn add_anonymous_with_size_and_align<'a>(
+    pub fn add_anonymous_with_size_and_align(
         &mut self,
         typ: RocType,
         size: u32,
@@ -1351,7 +1351,7 @@ fn add_function_type<'a>(
 
     let fn_type_id = add_function(env, name, types, layout, |name| {
         RocType::Function(RocFn {
-            extern_name: fn_caller_name(&name, id),
+            extern_name: fn_caller_name(name, id),
             function_name: name.to_string(),
             args: arg_type_ids.clone(),
             lambda_set: lambda_set_type_id,
