@@ -5649,8 +5649,6 @@ fn build_pending_specializations<'a>(
 
         let is_host_exposed = exposed_to_host.top_level_values.contains_key(&symbol);
 
-        // TODO remove clones (with drain)
-        let annotation = declarations.annotations[index].clone();
         let body = declarations.expressions[index].clone();
 
         let tag = declarations.declarations[index];

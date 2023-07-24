@@ -2527,13 +2527,6 @@ pub fn constrain_decls(
 
         match tag {
             Value => {
-                constraint = add_host_annotation(
-                    types,
-                    constraints,
-                    declarations.host_exposed_annotations.get(&index),
-                    constraint,
-                );
-
                 constraint = constrain_value_def(
                     types,
                     constraints,
@@ -2542,15 +2535,15 @@ pub fn constrain_decls(
                     index,
                     constraint,
                 );
-            }
-            Function(function_def_index) => {
+
                 constraint = add_host_annotation(
                     types,
                     constraints,
                     declarations.host_exposed_annotations.get(&index),
                     constraint,
                 );
-
+            }
+            Function(function_def_index) => {
                 constraint = constrain_function_def(
                     types,
                     constraints,
@@ -2558,6 +2551,13 @@ pub fn constrain_decls(
                     declarations,
                     index,
                     function_def_index,
+                    constraint,
+                );
+
+                constraint = add_host_annotation(
+                    types,
+                    constraints,
+                    declarations.host_exposed_annotations.get(&index),
                     constraint,
                 );
             }

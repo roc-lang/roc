@@ -3776,7 +3776,6 @@ dependencies = [
  "roc_module",
  "roc_problem",
  "roc_region",
- "roc_solve",
  "roc_solve_schema",
  "roc_std",
  "roc_target",
