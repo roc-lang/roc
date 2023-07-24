@@ -99,7 +99,7 @@ impl Types {
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
-        mut entry_points: MutMap<Symbol, Variable>,
+        entry_points: MutMap<Symbol, Variable>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
         let mut env = Env::new(
@@ -111,23 +111,20 @@ impl Types {
             target,
         );
 
-        let variables: Vec<_> = entry_points.values().copied().collect();
-        for var in variables {
+        for (symbol, var) in entry_points.into_iter() {
             env.lambda_set_ids = env.find_lambda_sets(var);
+
             let id = env.add_toplevel_type(var, &mut types);
+            let name = symbol.as_str(env.interns).to_string();
 
-            let key = entry_points
-                .iter()
-                .find_map(|(k, v)| (*v == var).then_some((*k, id)));
-
-            if let Some((k, id)) = key {
-                let name = k.as_str(env.interns).to_string();
+            if is_function(env.subs, var) {
                 types.entry_points.push((name, id));
-                entry_points.remove(&k);
+            } else {
+                // This top-level value isn't a function, so we will end up code-genning a thunk
+                // for it. We need to represent that thunk explicitly in glue!
+                env.add_thunk_entry_point(&mut types, name, id);
             }
         }
-
-        debug_assert!(entry_points.is_empty());
 
         env.resolve_pending_recursive_types(&mut types);
 
@@ -540,6 +537,18 @@ impl Types {
         typ: RocType,
         layout: InLayout<'a>,
     ) -> TypeId {
+        let size = interner.stack_size(layout);
+        let align = interner.alignment_bytes(layout);
+
+        self.add_anonymous_with_size_and_align(typ, size, align)
+    }
+
+    pub fn add_anonymous_with_size_and_align<'a>(
+        &mut self,
+        typ: RocType,
+        size: u32,
+        align: u32,
+    ) -> TypeId {
         for (id, existing_type) in self.types.iter().enumerate() {
             if self.is_equivalent(&typ, existing_type) {
                 return TypeId(id);
@@ -552,9 +561,6 @@ impl Types {
         let id = TypeId(self.types.len());
 
         assert!(id.0 <= TypeId::MAX.0);
-
-        let size = interner.stack_size(layout);
-        let align = interner.alignment_bytes(layout);
 
         self.types.push(typ);
         self.sizes.push(size);
@@ -642,6 +648,16 @@ impl Types {
 
     pub fn target(&self) -> TargetInfo {
         self.target
+    }
+}
+
+/// Returns true iff this is either a function, or else a type alias for a function.
+/// (Opaque type wrappers around functions explicitly do *not* count!)
+fn is_function(subs: &Subs, var: Variable) -> bool {
+    match subs.get_content_without_compacting(var) {
+        Content::Structure(FlatType::Func(_, _, _)) => true,
+        Content::Alias(_, _, alias_var, AliasKind::Structural) => is_function(subs, *alias_var),
+        _ => false,
     }
 }
 
@@ -1196,6 +1212,35 @@ impl<'a> Env<'a> {
         }
     }
 
+    fn add_thunk_entry_point(
+        &mut self,
+        types: &mut Types,
+        name: String,
+        ret_type_id: TypeId,
+    ) -> TypeId {
+        let thunk_id = {
+            let typ = RocType::Function(RocFn {
+                // TODO investigate: is LambdaSetId(1) always correct here?
+                // It's supposed to be the LambdaSetId for this thunk,
+                // but what LambdaSetId should that be, if not 1?
+                extern_name: fn_caller_name(&name, LambdaSetId(1)),
+                function_name: name.clone(),
+                args: vec![Types::UNIT],
+                lambda_set: Types::UNIT,
+                ret: ret_type_id,
+                is_toplevel: true,
+            });
+
+            // A top-level thunk captures nothing and has no runtime representation.
+            types.add_anonymous_with_size_and_align(typ, 0, 0)
+        };
+
+        types.depends(thunk_id, ret_type_id);
+        types.entry_points.push((name, thunk_id));
+
+        thunk_id
+    }
+
     fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
         // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
         let pending = core::mem::take(&mut self.pending_recursive_types);
@@ -1254,6 +1299,10 @@ impl<'a> Env<'a> {
     }
 }
 
+fn fn_caller_name(name: impl Display, lambda_set_id: LambdaSetId) -> String {
+    format!("roc__{name}_{}_caller", lambda_set_id.0)
+}
+
 fn add_function_type<'a>(
     env: &mut Env<'a>,
     layout: InLayout<'a>,
@@ -1267,9 +1316,7 @@ fn add_function_type<'a>(
     let mut arg_type_ids = Vec::with_capacity(args.len());
 
     let name = format!("RocFunction_{closure_var:?}");
-
-    let id = env.lambda_set_ids.get(&closure_var).unwrap();
-    let extern_name = format!("roc__mainForHost_{}_caller", id.0);
+    let id = *env.lambda_set_ids.get(&closure_var).unwrap();
 
     for arg_var in args {
         let arg_layout = env
@@ -1304,8 +1351,8 @@ fn add_function_type<'a>(
 
     let fn_type_id = add_function(env, name, types, layout, |name| {
         RocType::Function(RocFn {
-            function_name: name,
-            extern_name,
+            extern_name: fn_caller_name(&name, id),
+            function_name: name.to_string(),
             args: arg_type_ids.clone(),
             lambda_set: lambda_set_type_id,
             ret: ret_type_id,
@@ -1780,17 +1827,11 @@ fn add_function<'a, F>(
     to_type: F,
 ) -> TypeId
 where
-    F: FnOnce(String) -> RocType,
+    F: FnOnce(&str) -> RocType,
 {
-    // let subs = env.subs;
-    // let arena = env.arena;
+    let roc_type = to_type(&name);
 
-    types.add_named(
-        &env.layout_cache.interner,
-        name.clone(),
-        to_type(name),
-        layout,
-    )
+    types.add_named(&env.layout_cache.interner, name, roc_type, layout)
 }
 
 fn add_struct<'a, I, L, F>(

@@ -1872,6 +1872,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
+typeName : Types, TypeId -> Str
 typeName = \types, id ->
     when Types.shape types id is
         Unit -> "()"
