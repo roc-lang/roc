@@ -1,13 +1,14 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
+use roc_can::abilities::SpecializationId;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, Literal, ModifyRc,
-    PassedFunction, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
+    BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, Literal,
+    ModifyRc, PassedFunction, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, LayoutWrapper, Niche,
@@ -850,27 +851,45 @@ fn layout_needs_helper_proc<'a>(
 }
 
 fn test_helper<'a>(
-    arena: &'a Bump,
-    layout_interner: &STLayoutInterner<'a>,
+    env: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    layout_interner: &mut STLayoutInterner<'a>,
     main_proc: &Proc<'a>,
 ) -> Proc<'a> {
+    let it = (0..main_proc.args.len()).map(|i| env.create_symbol(ident_ids, &format!("arg_{i}")));
+    let arguments = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+    let it = arguments
+        .iter()
+        .zip(main_proc.args.iter())
+        .map(|(s, (l, _))| (*l, *s));
+    let args = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+    let body = test_helper_body(env, ident_ids, layout_interner, main_proc, arguments);
+
+    let name = LambdaName::no_niche(env.create_symbol(ident_ids, "test_main"));
+
     Proc {
-        name: (),
-        args: (),
-        body: (),
-        closure_data_layout: (),
-        ret_layout: (),
-        is_self_recursive: (),
-        host_exposed_layouts: (),
-        is_erased: (),
+        name,
+        args,
+        body,
+        closure_data_layout: None,
+        ret_layout: main_proc.ret_layout,
+        is_self_recursive: main_proc.is_self_recursive,
+        host_exposed_layouts: HostExposedLayouts::HostExposed {
+            rigids: Default::default(),
+            aliases: Default::default(),
+        },
+        is_erased: false,
     }
 }
 
 fn test_helper_body<'a>(
-    env: &CodeGenHelp,
+    env: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
-    layout_interner: &STLayoutInterner<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     main_proc: &Proc<'a>,
+    arguments: &'a [Symbol],
 ) -> Stmt<'a> {
     // let buffer = SetLongJmpBuffer
     let buffer_symbol = env.create_symbol(ident_ids, "buffer");
@@ -896,24 +915,26 @@ fn test_helper_body<'a>(
     //    tag: u64,
     //    error_msg: *mut RocStr,
     //    value: MaybeUninit<T>,
-    let repr =
-        LayoutRepr::Struct(
-            env.arena
-                .alloc([Layout::U64, Layout::U64, main_proc.ret_layout]),
-        );
+    let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
+    let repr = LayoutRepr::Struct(env.arena.alloc(fields));
     let return_layout = layout_interner.insert_direct_no_semantic(repr);
 
     // normal path, no panics
-    let else_branch_stmt = {
-        let result_symbol = Expr::Call(Call {
+    let if_zero_stmt = {
+        let it = main_proc.args.iter().map(|(a, _)| *a);
+        let arg_layouts = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+        let result_symbol = env.create_symbol(ident_ids, "result");
+        let result_expr = Expr::Call(Call {
             call_type: CallType::ByName {
-                name: (),
-                ret_layout: (),
-                arg_layouts: (),
-                specialization_id: (),
+                name: main_proc.name,
+                ret_layout: main_proc.ret_layout,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
             },
-            arguments: proc_arguments,
+            arguments,
         });
+        let result = |next| Stmt::Let(result_symbol, result_expr, main_proc.ret_layout, next);
 
         let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
         let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
@@ -922,19 +943,106 @@ fn test_helper_body<'a>(
         let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
         let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
         let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+
+        // construct the record
+        let output_symbol = env.create_symbol(ident_ids, "output");
+        let fields = [ok_tag_symbol, msg_ptr_symbol, result_symbol];
+        let output_expr = Expr::Struct(env.arena.alloc(fields));
+        let output = |next| Stmt::Let(output_symbol, output_expr, Layout::U64, next);
+
+        let arena = env.arena;
+        result(arena.alloc(
+            //
+            ok_tag(arena.alloc(
+                //
+                msg_ptr(arena.alloc(
+                    //
+                    output(arena.alloc(
+                        //
+                        Stmt::Ret(output_symbol),
+                    )),
+                )),
+            )),
+        ))
     };
 
     // a longjmp/panic occured
-    let then_branch_stmt = {
-        //
-        todo!()
+    let if_nonzero_stmt = {
+        let alloca_symbol = env.create_symbol(ident_ids, "alloca");
+        let alloca_expr = Expr::Alloca {
+            element_layout: main_proc.ret_layout,
+            initializer: None,
+        };
+        let alloca = |next| Stmt::Let(alloca_symbol, alloca_expr, Layout::U64, next);
+
+        let load_symbol = env.create_symbol(ident_ids, "load");
+        let load_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrLoad,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: &[alloca_symbol],
+        });
+        let load = |next| Stmt::Let(load_symbol, load_expr, Layout::U64, next);
+
+        // is_longjmp_symbol will the pointer to the error message
+        let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
+        let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
+        let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
+
+        let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
+        let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
+        let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+
+        // construct the record
+        let output_symbol = env.create_symbol(ident_ids, "output");
+        let fields = [ok_tag_symbol, msg_ptr_symbol, load_symbol];
+        let output_expr = Expr::Struct(env.arena.alloc(fields));
+        let output = |next| Stmt::Let(output_symbol, output_expr, Layout::U64, next);
+
+        let arena = env.arena;
+        arena.alloc(alloca(arena.alloc(
+            //
+            load(arena.alloc(
+                //
+                ok_tag(arena.alloc(
+                    //
+                    msg_ptr(arena.alloc(
+                        //
+                        output(arena.alloc(
+                            //
+                            Stmt::Ret(output_symbol),
+                        )),
+                    )),
+                )),
+            )),
+        )))
     };
 
-    Stmt::if_then_else(
+    switch_if_zero_else(
         env.arena,
         is_longjmp_symbol,
         return_layout,
-        then_branch_stmt,
-        else_branch_stmt,
+        if_zero_stmt,
+        if_nonzero_stmt,
     )
+}
+
+fn switch_if_zero_else<'a>(
+    arena: &'a Bump,
+    condition_symbol: Symbol,
+    return_layout: InLayout<'a>,
+    then_branch_stmt: Stmt<'a>,
+    else_branch_stmt: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let then_branch = (0u64, BranchInfo::None, then_branch_stmt);
+    let else_branch = (BranchInfo::None, else_branch_stmt);
+
+    Stmt::Switch {
+        cond_symbol: condition_symbol,
+        cond_layout: Layout::U64,
+        branches: &*arena.alloc([then_branch]),
+        default_branch: else_branch,
+        ret_layout: return_layout,
+    }
 }
