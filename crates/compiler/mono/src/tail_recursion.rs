@@ -1114,6 +1114,7 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
             value.map(|v| v == needle).unwrap_or(false) || needle == *callee
         }
         Expr::ErasedLoad { symbol, field: _ } => needle == *symbol,
+        Expr::Alloca { initializer, .. } => &Some(needle) == initializer,
     }
 }
 

@@ -850,7 +850,7 @@ fn layout_needs_helper_proc<'a>(
     }
 }
 
-fn test_helper<'a>(
+pub fn test_helper<'a>(
     env: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -865,7 +865,21 @@ fn test_helper<'a>(
         .map(|(s, (l, _))| (*l, *s));
     let args = Vec::from_iter_in(it, env.arena).into_bump_slice();
 
-    let body = test_helper_body(env, ident_ids, layout_interner, main_proc, arguments);
+    //    tag: u64,
+    //    error_msg: *mut RocStr,
+    //    value: MaybeUninit<T>,
+    let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
+    let repr = LayoutRepr::Struct(env.arena.alloc(fields));
+    let output_layout = layout_interner.insert_direct_no_semantic(repr);
+
+    let body = test_helper_body(
+        env,
+        ident_ids,
+        layout_interner,
+        main_proc,
+        arguments,
+        output_layout,
+    );
 
     let name = LambdaName::no_niche(env.create_symbol(ident_ids, "test_main"));
 
@@ -874,7 +888,7 @@ fn test_helper<'a>(
         args,
         body,
         closure_data_layout: None,
-        ret_layout: main_proc.ret_layout,
+        ret_layout: output_layout,
         is_self_recursive: main_proc.is_self_recursive,
         host_exposed_layouts: HostExposedLayouts::HostExposed {
             rigids: Default::default(),
@@ -890,6 +904,7 @@ fn test_helper_body<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     main_proc: &Proc<'a>,
     arguments: &'a [Symbol],
+    output_layout: InLayout<'a>,
 ) -> Stmt<'a> {
     // let buffer = SetLongJmpBuffer
     let buffer_symbol = env.create_symbol(ident_ids, "buffer");
@@ -908,16 +923,9 @@ fn test_helper_body<'a>(
             op: LowLevel::SetJmp,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
-        arguments: &[buffer_symbol],
+        arguments: env.arena.alloc([buffer_symbol]),
     });
     let is_longjmp_stmt = |next| Stmt::Let(is_longjmp_symbol, is_longjmp_expr, Layout::U64, next);
-
-    //    tag: u64,
-    //    error_msg: *mut RocStr,
-    //    value: MaybeUninit<T>,
-    let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
-    let repr = LayoutRepr::Struct(env.arena.alloc(fields));
-    let return_layout = layout_interner.insert_direct_no_semantic(repr);
 
     // normal path, no panics
     let if_zero_stmt = {
@@ -945,10 +953,10 @@ fn test_helper_body<'a>(
         let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
 
         // construct the record
-        let output_symbol = env.create_symbol(ident_ids, "output");
+        let output_symbol = env.create_symbol(ident_ids, "output_ok");
         let fields = [ok_tag_symbol, msg_ptr_symbol, result_symbol];
         let output_expr = Expr::Struct(env.arena.alloc(fields));
-        let output = |next| Stmt::Let(output_symbol, output_expr, Layout::U64, next);
+        let output = |next| Stmt::Let(output_symbol, output_expr, output_layout, next);
 
         let arena = env.arena;
         result(arena.alloc(
@@ -981,31 +989,31 @@ fn test_helper_body<'a>(
                 op: LowLevel::PtrLoad,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: &[alloca_symbol],
+            arguments: env.arena.alloc([alloca_symbol]),
         });
         let load = |next| Stmt::Let(load_symbol, load_expr, Layout::U64, next);
 
         // is_longjmp_symbol will the pointer to the error message
-        let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
-        let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
-        let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
+        let err_tag_symbol = env.create_symbol(ident_ids, "err_tag");
+        let err_tag_expr = Expr::Literal(Literal::Int((1 as i128).to_be_bytes()));
+        let err_tag = |next| Stmt::Let(err_tag_symbol, err_tag_expr, Layout::U64, next);
 
         let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
         let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
         let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
 
         // construct the record
-        let output_symbol = env.create_symbol(ident_ids, "output");
-        let fields = [ok_tag_symbol, msg_ptr_symbol, load_symbol];
+        let output_symbol = env.create_symbol(ident_ids, "output_err");
+        let fields = [err_tag_symbol, msg_ptr_symbol, load_symbol];
         let output_expr = Expr::Struct(env.arena.alloc(fields));
-        let output = |next| Stmt::Let(output_symbol, output_expr, Layout::U64, next);
+        let output = |next| Stmt::Let(output_symbol, output_expr, output_layout, next);
 
         let arena = env.arena;
         arena.alloc(alloca(arena.alloc(
             //
             load(arena.alloc(
                 //
-                ok_tag(arena.alloc(
+                err_tag(arena.alloc(
                     //
                     msg_ptr(arena.alloc(
                         //
@@ -1019,13 +1027,19 @@ fn test_helper_body<'a>(
         )))
     };
 
-    switch_if_zero_else(
-        env.arena,
-        is_longjmp_symbol,
-        return_layout,
-        if_zero_stmt,
-        if_nonzero_stmt,
-    )
+    buffer_stmt(env.arena.alloc(
+        //
+        is_longjmp_stmt(env.arena.alloc(
+            //
+            switch_if_zero_else(
+                env.arena,
+                is_longjmp_symbol,
+                output_layout,
+                if_zero_stmt,
+                if_nonzero_stmt,
+            ),
+        )),
+    ))
 }
 
 fn switch_if_zero_else<'a>(

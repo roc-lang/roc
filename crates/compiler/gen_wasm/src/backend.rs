@@ -1144,6 +1144,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),
 
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => self.expr_alloca(*initializer, *element_layout, sym, storage),
+
             Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100, false))
             }
@@ -2138,6 +2143,48 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             Layout::BOOL,
             ret_storage,
         );
+    }
+
+    fn expr_alloca(
+        &mut self,
+        initializer: Option<Symbol>,
+        element_layout: InLayout<'a>,
+        ret_symbol: Symbol,
+        ret_storage: &StoredValue,
+    ) {
+        // Alloca : a -> Ptr a
+        let (size, alignment_bytes) = self
+            .layout_interner
+            .stack_size_and_alignment(element_layout);
+
+        let (frame_ptr, offset) = self
+            .storage
+            .allocate_anonymous_stack_memory(size, alignment_bytes);
+
+        // write the default value into the stack memory
+        if let Some(initializer) = initializer {
+            self.storage.copy_value_to_memory(
+                &mut self.code_builder,
+                frame_ptr,
+                offset,
+                initializer,
+            );
+        }
+
+        // create a local variable for the pointer
+        let ptr_local_id = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            ret_symbol,
+            ret_storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A pointer will always be an i32"),
+        };
+
+        self.code_builder.get_local(frame_ptr);
+        self.code_builder.i32_const(offset as i32);
+        self.code_builder.i32_add();
+        self.code_builder.set_local(ptr_local_id);
     }
 
     /// Generate a refcount helper procedure and return a pointer (table index) to it

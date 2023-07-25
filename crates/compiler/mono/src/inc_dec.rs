@@ -1123,6 +1123,9 @@ fn insert_refcount_operations_binding<'a>(
         Expr::Reset { .. } | Expr::ResetRef { .. } => {
             unreachable!("Reset(ref) should not exist at this point")
         }
+        Expr::Alloca { .. } => {
+            unreachable!("Alloca should not exist at this point")
+        }
     }
 }
 

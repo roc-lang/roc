@@ -186,6 +186,11 @@ impl<'a> LastSeenMap<'a> {
                     Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
                     Expr::EmptyArray => {}
                     Expr::RuntimeErrorFunction(_) => {}
+                    Expr::Alloca { initializer, .. } => {
+                        if let Some(initializer) = initializer {
+                            self.set_last_seen(*initializer, stmt);
+                        }
+                    }
                 }
                 self.scan_ast_help(following);
             }
@@ -898,6 +903,12 @@ trait Backend<'a> {
                 }
 
                 self.build_expr(sym, &new_expr, &Layout::BOOL)
+            }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                self.build_alloca(*sym, *initializer, *element_layout);
             }
             Expr::RuntimeErrorFunction(_) => todo!(),
         }
@@ -1620,7 +1631,7 @@ trait Backend<'a> {
             }
 
             LowLevel::Alloca => {
-                self.build_alloca(*sym, args[0], arg_layouts[0]);
+                self.build_alloca(*sym, Some(args[0]), arg_layouts[0]);
             }
 
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
@@ -2281,7 +2292,7 @@ trait Backend<'a> {
 
     fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol);
 
-    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>);
+    fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;

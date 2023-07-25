@@ -533,6 +533,16 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 self.check_sym_exists(symbol);
                 None
             }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                if let Some(initializer) = initializer {
+                    self.check_sym_exists(*initializer);
+                }
+
+                None
+            }
             Expr::RuntimeErrorFunction(_) => None,
         }
     }

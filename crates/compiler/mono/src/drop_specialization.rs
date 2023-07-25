@@ -247,6 +247,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     RuntimeErrorFunction(_)
                     | FunctionPointer { .. }
                     | GetTagId { .. }
+                    | Alloca { .. }
                     | EmptyArray
                     | NullPointer => { /* do nothing */ }
                 }

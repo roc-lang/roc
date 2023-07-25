@@ -13,7 +13,7 @@ use roc_module::symbol;
 use roc_module::symbol::Interns;
 use roc_mono::ir::{Call, CallSpecId, Expr, UpdateModeId};
 use roc_mono::ir::{Proc, ProcLayout, Stmt};
-use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, STLayoutInterner};
+use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, Niche, STLayoutInterner};
 use roc_target::TargetInfo;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
@@ -30,8 +30,6 @@ pub fn build_module<'a, 'r>(
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
-    dbg!(&target);
-
     match target {
         Triple {
             architecture: TargetArch::X86_64,
@@ -330,6 +328,24 @@ fn build_object<'a, B: Backend<'a>>(
             let exposed_proc = build_exposed_proc(&mut backend, &proc);
             let exposed_generic_proc = build_exposed_generic_proc(&mut backend, &proc);
 
+            //        ModuleId,
+            //        &mut STLayoutInterner<'a>,
+            //        &mut Interns,
+            //        &mut CodeGenHelp<'a>,
+            //        &mut Vec<'a, CallerProc<'a>>,
+
+            let (module_id, layout_interner, interns, code_gen_help, _) =
+                backend.module_interns_helpers_mut();
+
+            let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+
+            let test_helper = roc_mono::code_gen_help::test_helper(
+                code_gen_help,
+                ident_ids,
+                layout_interner,
+                &proc,
+            );
+
             #[cfg(debug_assertions)]
             {
                 let module_id = exposed_generic_proc.name.name().module_id();
@@ -340,6 +356,18 @@ fn build_object<'a, B: Backend<'a>>(
                     .unwrap();
                 module_id.register_debug_idents(ident_ids);
             }
+
+            println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+
+            build_proc_symbol(
+                &mut output,
+                &mut layout_ids,
+                &mut procs,
+                &mut backend,
+                layout,
+                test_helper,
+                Exposed::TestMain,
+            );
 
             build_proc_symbol(
                 &mut output,
@@ -615,44 +643,12 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
     }
 }
 
-fn build_test_main<'a, B: Backend<'a>>(
-    output: &mut Object<'a>,
-    layout_ids: &mut LayoutIds<'a>,
-    procs: &mut Vec<'a, (String, SectionId, SymbolId, Proc<'a>)>,
-    backend: &mut B,
-    layout: ProcLayout<'a>,
-    proc: Proc<'a>,
-    exposed: Exposed,
-) {
-    let sym = proc.name.name();
-
-    let section_id = output.add_section(
-        output.segment_name(StandardSegment::Text).to_vec(),
-        &b".text.test_main",
-        SectionKind::Text,
-    );
-
-    let fn_name = "test_main";
-
-    let proc_symbol = Symbol {
-        name: fn_name.as_bytes().to_vec(),
-        value: 0,
-        size: 0,
-        kind: SymbolKind::Text,
-        scope: SymbolScope::Linkage,
-        weak: false,
-        section: SymbolSection::Section(section_id),
-        flags: SymbolFlags::None,
-    };
-    let proc_id = output.add_symbol(proc_symbol);
-    procs.push((fn_name, section_id, proc_id, proc));
-}
-
 #[allow(clippy::enum_variant_names)]
 enum Exposed {
     ExposedGeneric,
     Exposed,
     NotExposed,
+    TestMain,
 }
 
 fn build_proc_symbol<'a, B: Backend<'a>>(
@@ -685,6 +681,7 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
             None,
             layout.result,
         ),
+        Exposed::TestMain => String::from("test_main"),
     };
 
     let proc_symbol = Symbol {
@@ -695,7 +692,7 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         // TODO: Depending on whether we are building a static or dynamic lib, this should change.
         // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
         scope: match exposed {
-            Exposed::ExposedGeneric | Exposed::Exposed => SymbolScope::Dynamic,
+            Exposed::ExposedGeneric | Exposed::Exposed | Exposed::TestMain => SymbolScope::Dynamic,
             Exposed::NotExposed => SymbolScope::Linkage,
         },
         weak: false,

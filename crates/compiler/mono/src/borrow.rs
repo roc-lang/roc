@@ -773,6 +773,19 @@ impl<'a> BorrowInfState<'a> {
                 // if the extracted value is owned, the structure must be too
                 self.if_is_owned_then_own(z, *x);
             }
+
+            Alloca { initializer, .. } => {
+                self.own_var(z);
+
+                let slice = match initializer {
+                    None => &[],
+                    Some(x) => std::slice::from_ref(x),
+                };
+
+                // if the used symbol is an argument to the current function,
+                // the function must take it as an owned parameter
+                self.own_args_if_param(slice);
+            }
         }
     }
 

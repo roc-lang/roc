@@ -1584,6 +1584,16 @@ fn expr_spec<'a>(
 
             builder.add_make_tuple(block, &[])
         }
+        Alloca { initializer, .. } => {
+            let initializer = &initializer.as_ref().map(|s| env.symbols[s]);
+            let values = match initializer {
+                Some(initializer) => std::slice::from_ref(initializer),
+                None => &[],
+            };
+
+            let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
+            builder.add_unknown_with(block, values, type_id)
+        }
     }
 }
 
