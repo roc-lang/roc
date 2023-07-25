@@ -266,6 +266,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
     ) {
+        dbg!(layout_interner.dbg(*ret_layout));
         let returns_via_pointer =
             X86_64SystemV::returns_via_arg_pointer(layout_interner, ret_layout);
 
@@ -276,7 +277,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             argument_offset: X86_64SystemV::SHADOW_SPACE_SIZE as i32 + 16,
         };
 
-        if returns_via_pointer {
+        if dbg!(returns_via_pointer) {
             storage_manager.ret_pointer_arg(X86_64SystemV::GENERAL_PARAM_REGS[0]);
         }
 
@@ -379,6 +380,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             }
             _ => {
                 // This is a large type returned via the arg pointer.
+                dbg!(sym);
                 storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
                 // Also set the return reg to the arg pointer.
                 storage_manager.load_to_specified_general_reg(

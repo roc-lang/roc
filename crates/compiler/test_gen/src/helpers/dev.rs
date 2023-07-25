@@ -267,7 +267,6 @@ macro_rules! assert_evals_to {
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
         use bumpalo::Bump;
-        use roc_gen_dev::run_jit_function_raw;
 
         let arena = Bump::new();
         let (main_fn_name, errors, lib) =
@@ -279,7 +278,29 @@ macro_rules! assert_evals_to {
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };
-        run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors)
+
+        unsafe {
+            let main: libloading::Symbol<unsafe extern "C" fn() -> $ty> = lib
+                .get(main_fn_name.as_bytes())
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
+                .expect("errored");
+
+            let result = main();
+
+            if !errors.is_empty() {
+                dbg!(&errors);
+
+                assert_eq!(
+                    errors,
+                    std::vec::Vec::new(),
+                    "Encountered errors: {:?}",
+                    errors
+                );
+            }
+
+            transform(result)
+        }
     };
 }
 
