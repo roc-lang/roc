@@ -185,6 +185,12 @@ pub enum OpCode {
     I64REINTERPRETF64 = 0xbd,
     F32REINTERPRETI32 = 0xbe,
     F64REINTERPRETI64 = 0xbf,
+
+    I32EXTEND8S = 0xc0,
+    I32EXTEND16S = 0xc1,
+    I64EXTEND8S = 0xc2,
+    I64EXTEND16S = 0xc3,
+    I64EXTEND32S = 0xc4,
 }
 
 pub const LOOKUP_TABLE: [Option<OpCode>; 256] = {
@@ -366,17 +372,28 @@ pub const LOOKUP_TABLE: [Option<OpCode>; 256] = {
     result[0xbe] = Some(F32REINTERPRETI32);
     result[0xbf] = Some(F64REINTERPRETI64);
 
+    result[0xc0] = Some(I32EXTEND8S);
+    result[0xc1] = Some(I32EXTEND16S);
+    result[0xc2] = Some(I64EXTEND8S);
+    result[0xc3] = Some(I64EXTEND16S);
+    result[0xc4] = Some(I64EXTEND32S);
+
     result
 };
 
 impl From<u8> for OpCode {
     fn from(value: u8) -> Self {
-        // invalid instruction bytes can be genuine because we don't support all instructions, and
-        // new ones get added or stabilized. It could also be a bug in the interpreter, e.g. some
-        // opcode does not move the instruction pointer correctly.
-        match LOOKUP_TABLE[value as usize] {
-            None => unreachable!("unsupported instruction byte {value:#x?}"),
-            Some(op) => op,
+        if false {
+            // considerably faster in practice
+            unsafe { std::mem::transmute(value) }
+        } else {
+            // invalid instruction bytes can be genuine because we don't support all instructions, and
+            // new ones get added or stabilized. It could also be a bug in the interpreter, e.g. some
+            // opcode does not move the instruction pointer correctly.
+            match LOOKUP_TABLE[value as usize] {
+                None => unreachable!("unsupported instruction byte {value:#x?}"),
+                Some(op) => op,
+            }
         }
     }
 }
@@ -468,9 +485,8 @@ fn immediates_for(op: OpCode) -> Result<OpImmediates, String> {
         | I64EXTENDUI32 | I64TRUNCSF32 | I64TRUNCUF32 | I64TRUNCSF64 | I64TRUNCUF64
         | F32CONVERTSI32 | F32CONVERTUI32 | F32CONVERTSI64 | F32CONVERTUI64 | F32DEMOTEF64
         | F64CONVERTSI32 | F64CONVERTUI32 | F64CONVERTSI64 | F64CONVERTUI64 | F64PROMOTEF32
-        | I32REINTERPRETF32 | I64REINTERPRETF64 | F32REINTERPRETI32 | F64REINTERPRETI64 => {
-            NoImmediate
-        }
+        | I32REINTERPRETF32 | I64REINTERPRETF64 | F32REINTERPRETI32 | F64REINTERPRETI64
+        | I32EXTEND8S | I32EXTEND16S | I64EXTEND8S | I64EXTEND16S | I64EXTEND32S => NoImmediate,
 
         // Catch-all in case of an invalid cast from u8 to OpCode while parsing binary
         // (rustc keeps this code, I verified in Compiler Explorer)
