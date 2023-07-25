@@ -465,7 +465,6 @@ fn start_phase<'a>(
                         abilities_store,
                         expectations,
                     } = found_specializations;
-
                     let our_exposed_types = state
                         .exposed_types
                         .get(&module_id)
@@ -5641,6 +5640,14 @@ fn build_pending_specializations<'a>(
 
     let layout_cache_snapshot = layout_cache.snapshot();
 
+    let get_host_annotation = |declarations: &Declarations, index: usize| {
+        declarations
+            .host_exposed_annotations
+            .get(&index)
+            .map(|(v, _)| v)
+            .copied()
+    };
+
     // Add modules' decls to Procs
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
@@ -5650,8 +5657,6 @@ fn build_pending_specializations<'a>(
 
         let is_host_exposed = exposed_to_host.top_level_values.contains_key(&symbol);
 
-        // TODO remove clones (with drain)
-        let annotation = declarations.annotations[index].clone();
         let body = declarations.expressions[index].clone();
 
         let tag = declarations.declarations[index];
@@ -5688,7 +5693,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        get_host_annotation(&declarations, index),
                         expr_var,
                     );
                 }
@@ -5768,7 +5773,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        get_host_annotation(&declarations, index),
                         expr_var,
                     );
                 }
@@ -5843,7 +5848,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        get_host_annotation(&declarations, index),
                         expr_var,
                     );
                 }
@@ -5909,7 +5914,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        None,
                         expr_var,
                     );
                 }
@@ -5981,7 +5986,7 @@ fn build_pending_specializations<'a>(
                     procs_base.host_specializations.insert_host_exposed(
                         mono_env.subs,
                         LambdaName::no_niche(symbol),
-                        annotation,
+                        None,
                         expr_var,
                     );
                 }

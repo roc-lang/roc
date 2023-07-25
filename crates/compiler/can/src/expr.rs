@@ -2535,6 +2535,8 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
+
     pub function_bodies: Vec<Loc<FunctionDef>>,
     pub expressions: Vec<Loc<Expr>>,
     pub destructs: Vec<DestructureDef>,
@@ -2556,6 +2558,7 @@ impl Declarations {
             variables: Vec::with_capacity(capacity),
             symbols: Vec::with_capacity(capacity),
             annotations: Vec::with_capacity(capacity),
+            host_exposed_annotations: VecMap::new(),
             function_bodies: Vec::with_capacity(capacity),
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
@@ -2586,6 +2589,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2608,6 +2612,11 @@ impl Declarations {
             Recursive::TailRecursive => DeclarationTag::TailRecursive(function_def_index),
         };
 
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
+
         self.declarations.push(tag);
         self.variables.push(expr_var);
         self.symbols.push(symbol);
@@ -2628,6 +2637,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2642,6 +2652,11 @@ impl Declarations {
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
         let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
 
         self.declarations
             .push(DeclarationTag::Function(function_def_index));
@@ -2700,9 +2715,15 @@ impl Declarations {
         loc_expr: Loc<Expr>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
+
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -2758,6 +2779,7 @@ impl Declarations {
                             def.expr_var,
                             def.annotation,
                             None,
+                            None,
                         );
                     }
 
@@ -2768,6 +2790,7 @@ impl Declarations {
                             def.expr_var,
                             def.annotation,
                             None,
+                            None,
                         );
                     }
                 },
@@ -2777,6 +2800,7 @@ impl Declarations {
                         def.loc_expr,
                         def.expr_var,
                         def.annotation,
+                        None,
                         None,
                     );
                 }

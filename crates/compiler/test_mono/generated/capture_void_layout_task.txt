@@ -14,7 +14,7 @@ procedure List.66 (#Attr.2, #Attr.3):
     let List.537 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.537;
 
-procedure List.80 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17):
+procedure List.80 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
     joinpoint List.527 List.439 List.440 List.441 List.442 List.443:
         let List.529 : Int1 = CallByName Num.22 List.442 List.443;
         if List.529 then
@@ -27,7 +27,7 @@ procedure List.80 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_g
             dec List.439;
             ret List.440;
     in
-    jump List.527 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
+    jump List.527 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
 
 procedure List.93 (List.436, List.437, List.438):
     let List.525 : U64 = 0i64;
@@ -156,16 +156,8 @@ procedure Test.80 (Test.81):
     ret Test.83;
 
 procedure Test.84 (Test.86, #Attr.12):
-    let Test.87 : U8 = GetTagId #Attr.12;
-    switch Test.87:
-        case 0:
-            let Test.85 : {} = CallByName Test.10 Test.86 #Attr.12;
-            ret Test.85;
-    
-        default:
-            let Test.85 : {} = CallByName Test.14 Test.86 #Attr.12;
-            ret Test.85;
-    
+    let Test.87 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Test.87
 
 procedure Test.0 ():
     let Test.35 : List [] = Array [];

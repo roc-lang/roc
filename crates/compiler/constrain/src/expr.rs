@@ -2472,6 +2472,26 @@ fn constrain_empty_record(
     constraints.equal_types(record_type_index, expected, Category::Record, region)
 }
 
+fn add_host_annotation(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    host_exposed_annotation: Option<&(Variable, roc_can::def::Annotation)>,
+    constraint: Constraint,
+) -> Constraint {
+    if let Some((var, ann)) = host_exposed_annotation {
+        let host_annotation = {
+            let type_index = types.from_old_type(&ann.signature);
+            constraints.push_type(types, type_index)
+        };
+
+        let store_constr = constraints.store(host_annotation, *var, file!(), line!());
+
+        constraints.and_constraint([store_constr, constraint])
+    } else {
+        constraint
+    }
+}
+
 /// Constrain top-level module declarations
 #[inline(always)]
 pub fn constrain_decls(
@@ -2498,6 +2518,7 @@ pub fn constrain_decls(
 
         use roc_can::expr::DeclarationTag::*;
         let tag = declarations.declarations[index];
+
         match tag {
             Value => {
                 constraint = constrain_value_def(
@@ -2508,6 +2529,77 @@ pub fn constrain_decls(
                     index,
                     constraint,
                 );
+
+                constraint = add_host_annotation(
+                    types,
+                    constraints,
+                    declarations.host_exposed_annotations.get(&index),
+                    constraint,
+                );
+            }
+            Function(function_def_index) => {
+                constraint = constrain_function_def(
+                    types,
+                    constraints,
+                    &mut env,
+                    declarations,
+                    index,
+                    function_def_index,
+                    constraint,
+                );
+
+                constraint = add_host_annotation(
+                    types,
+                    constraints,
+                    declarations.host_exposed_annotations.get(&index),
+                    constraint,
+                );
+            }
+            Recursive(_) | TailRecursive(_) => {
+                constraint = add_host_annotation(
+                    types,
+                    constraints,
+                    declarations.host_exposed_annotations.get(&index),
+                    constraint,
+                );
+
+                // for the type it does not matter that a recursive call is a tail call
+                constraint = constrain_recursive_declarations(
+                    types,
+                    constraints,
+                    &mut env,
+                    declarations,
+                    index..index + 1,
+                    constraint,
+                    IllegalCycleMark::empty(),
+                );
+            }
+            Destructure(destructure_def_index) => {
+                constraint = constrain_destructure_def(
+                    types,
+                    constraints,
+                    &mut env,
+                    declarations,
+                    index,
+                    destructure_def_index,
+                    constraint,
+                );
+            }
+            MutualRecursion { length, cycle_mark } => {
+                // the next `length` defs belong to this group
+                let length = length as usize;
+
+                constraint = constrain_recursive_declarations(
+                    types,
+                    constraints,
+                    &mut env,
+                    declarations,
+                    index + 1..index + 1 + length,
+                    constraint,
+                    cycle_mark,
+                );
+
+                index += length;
             }
             Expectation => {
                 let loc_expr = &declarations.expressions[index];
@@ -2564,56 +2656,6 @@ pub fn constrain_decls(
                     constraint,
                     Generalizable(false),
                 )
-            }
-            Function(function_def_index) => {
-                constraint = constrain_function_def(
-                    types,
-                    constraints,
-                    &mut env,
-                    declarations,
-                    index,
-                    function_def_index,
-                    constraint,
-                );
-            }
-            Recursive(_) | TailRecursive(_) => {
-                // for the type it does not matter that a recursive call is a tail call
-                constraint = constrain_recursive_declarations(
-                    types,
-                    constraints,
-                    &mut env,
-                    declarations,
-                    index..index + 1,
-                    constraint,
-                    IllegalCycleMark::empty(),
-                );
-            }
-            Destructure(destructure_def_index) => {
-                constraint = constrain_destructure_def(
-                    types,
-                    constraints,
-                    &mut env,
-                    declarations,
-                    index,
-                    destructure_def_index,
-                    constraint,
-                );
-            }
-            MutualRecursion { length, cycle_mark } => {
-                // the next `length` defs belong to this group
-                let length = length as usize;
-
-                constraint = constrain_recursive_declarations(
-                    types,
-                    constraints,
-                    &mut env,
-                    declarations,
-                    index + 1..index + 1 + length,
-                    constraint,
-                    cycle_mark,
-                );
-
-                index += length;
             }
         }
 

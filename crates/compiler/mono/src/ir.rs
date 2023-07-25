@@ -416,11 +416,11 @@ pub struct HostSpecializations<'a> {
     /// Separate array so we can search for membership quickly
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
-    storage_subs: StorageSubs,
+    /// For each symbol, a variable that stores the unsolved (!) annotation
+    annotations: std::vec::Vec<Option<Variable>>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<Variable>,
-    /// Variables for an exposed alias
-    exposed_aliases: std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
+    storage_subs: StorageSubs,
 }
 
 impl Default for HostSpecializations<'_> {
@@ -433,26 +433,24 @@ impl<'a> HostSpecializations<'a> {
     pub fn new() -> Self {
         Self {
             symbol_or_lambdas: std::vec::Vec::new(),
+            annotations: std::vec::Vec::new(),
             storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
-            exposed_aliases: std::vec::Vec::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.symbol_or_lambdas.is_empty()
     }
 
     pub fn insert_host_exposed(
         &mut self,
         env_subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
-        opt_annotation: Option<roc_can::def::Annotation>,
+        annotation: Option<Variable>,
         variable: Variable,
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
-
-        let mut host_exposed_aliases = std::vec::Vec::new();
-
-        if let Some(annotation) = opt_annotation {
-            host_exposed_aliases.extend(annotation.introduced_variables.host_exposed_aliases);
-        }
 
         match self
             .symbol_or_lambdas
@@ -462,7 +460,7 @@ impl<'a> HostSpecializations<'a> {
             None => {
                 self.symbol_or_lambdas.push(symbol_or_lambda);
                 self.types_to_specialize.push(variable);
-                self.exposed_aliases.push(host_exposed_aliases);
+                self.annotations.push(annotation);
             }
             Some(_) => {
                 // we assume that only one specialization of a function is directly exposed to the
@@ -471,20 +469,18 @@ impl<'a> HostSpecializations<'a> {
                 panic!("A host-exposed symbol can only be exposed once");
             }
         }
-
-        debug_assert_eq!(self.types_to_specialize.len(), self.exposed_aliases.len());
     }
 
     fn decompose(
         self,
     ) -> (
         StorageSubs,
-        impl Iterator<Item = (LambdaName<'a>, Variable, std::vec::Vec<(Symbol, Variable)>)>,
+        impl Iterator<Item = (LambdaName<'a>, Variable, Option<Variable>)>,
     ) {
         let it1 = self.symbol_or_lambdas.into_iter();
 
         let it2 = self.types_to_specialize.into_iter();
-        let it3 = self.exposed_aliases.into_iter();
+        let it3 = self.annotations.into_iter();
 
         (
             self.storage_subs,
@@ -735,31 +731,42 @@ impl<'a> Specialized<'a> {
         }
     }
 
-    fn insert_specialized(&mut self, symbol: Symbol, layout: ProcLayout<'a>, proc: Proc<'a>) {
+    fn insert_specialized(
+        &mut self,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        proc: Proc<'a>,
+    ) -> SpecializedIndex {
         for (i, s) in self.symbols.iter().enumerate() {
             if *s == symbol && self.proc_layouts[i] == layout {
                 match &self.procedures[i] {
                     InProgressProc::InProgress => {
                         self.procedures[i] = InProgressProc::Done(proc);
-                        return;
+                        return SpecializedIndex(i);
                     }
                     InProgressProc::Done(_) => {
                         // overwrite existing! this is important in practice
                         // TODO investigate why we generate the wrong proc in some cases and then
                         // correct later
                         self.procedures[i] = InProgressProc::Done(proc);
-                        return;
+                        return SpecializedIndex(i);
                     }
                 }
             }
         }
 
         // the key/layout combo was not found; insert it
+        let i = self.symbols.len();
+
         self.symbols.push(symbol);
         self.proc_layouts.push(layout);
         self.procedures.push(InProgressProc::Done(proc));
+
+        SpecializedIndex(i)
     }
 }
+
+struct SpecializedIndex(usize);
 
 /// Uniquely determines the specialization of a polymorphic (non-proc) value symbol.
 /// Two specializations are equivalent if their [`SpecializationMark`]s are equal.
@@ -3051,8 +3058,81 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, variable, _host_exposed_aliases) in it {
-        specialize_external_help(env, procs, layout_cache, symbol, offset_variable(variable))
+    for (symbol, from_app, opt_from_platform) in it {
+        let from_app = offset_variable(from_app);
+        let index = specialize_external_help(env, procs, layout_cache, symbol, from_app);
+
+        let Some(from_platform) = opt_from_platform else { continue };
+
+        // now run the lambda set numbering scheme
+        let mut layout_env =
+            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+        let hels = find_lambda_sets(&mut layout_env, from_platform);
+
+        // now unify
+        let mut unify_env = roc_unify::Env::new(
+            env.subs,
+            #[cfg(debug_assertions)]
+            None,
+        );
+
+        let unified = roc_unify::unify::unify(
+            &mut unify_env,
+            from_platform,
+            from_app,
+            roc_solve_schema::UnificationMode::EQ,
+            roc_types::types::Polarity::Pos,
+        );
+
+        {
+            use roc_unify::unify::Unified::*;
+
+            match unified {
+                Success { .. } => { /* great */ }
+                Failure(..) => internal_error!("unification here should never fail"),
+            }
+        }
+
+        let mut aliases = BumpMap::default();
+
+        for (id, _, raw_function_layout) in hels {
+            let symbol = env.unique_symbol();
+            let lambda_name = LambdaName::no_niche(symbol);
+
+            let (key, (top_level, proc)) = generate_host_exposed_function(
+                env,
+                procs,
+                layout_cache,
+                lambda_name,
+                raw_function_layout,
+            );
+
+            procs
+                .specialized
+                .insert_specialized(symbol, top_level, proc);
+
+            let hels = HostExposedLambdaSet {
+                id,
+                symbol,
+                proc_layout: top_level,
+                raw_function_layout,
+            };
+
+            aliases.insert(key, hels);
+        }
+
+        let in_progress = &mut procs.specialized.procedures[index.0];
+        let InProgressProc::Done(proc) = in_progress else { unreachable!() };
+
+        match &mut proc.host_exposed_layouts {
+            HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
+            hep @ HostExposedLayouts::NotHostExposed => {
+                *hep = HostExposedLayouts::HostExposed {
+                    aliases,
+                    rigids: Default::default(),
+                };
+            }
+        }
     }
 }
 
@@ -3077,7 +3157,7 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(env, procs, layout_cache, symbol, imported_variable)
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable);
         }
     }
 }
@@ -3088,7 +3168,7 @@ fn specialize_external_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     name: LambdaName<'a>,
     variable: Variable,
-) {
+) -> SpecializedIndex {
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
         None => {
@@ -3100,7 +3180,7 @@ fn specialize_external_help<'a>(
         specialize_variable(env, procs, name, layout_cache, variable, partial_proc_id);
 
     match specialization_result {
-        Ok((mut proc, layout)) => {
+        Ok((proc, layout)) => {
             let top_level = ProcLayout::from_raw_named(env.arena, name, layout);
 
             if procs.is_module_thunk(name.name()) {
@@ -3147,64 +3227,11 @@ fn specialize_external_help<'a>(
                         }
                     }
                 }
-
-                // Now, let's generate the host-exposed lambda set wrappers from the type of the
-                // host-exported function.
-                {
-                    let extern_names = {
-                        let mut layout_env = layout::Env::from_components(
-                            layout_cache,
-                            env.subs,
-                            env.arena,
-                            env.target_info,
-                        );
-
-                        find_lambda_sets(&mut layout_env, variable)
-                    };
-
-                    let mut aliases = BumpMap::default();
-
-                    for (id, raw_function_layout) in extern_names {
-                        let symbol = env.unique_symbol();
-                        let lambda_name = LambdaName::no_niche(symbol);
-
-                        let (key, (top_level, proc)) = generate_host_exposed_function(
-                            env,
-                            procs,
-                            layout_cache,
-                            lambda_name,
-                            raw_function_layout,
-                        );
-
-                        procs
-                            .specialized
-                            .insert_specialized(symbol, top_level, proc);
-
-                        let hels = HostExposedLambdaSet {
-                            id,
-                            symbol,
-                            proc_layout: top_level,
-                            raw_function_layout,
-                        };
-
-                        aliases.insert(key, hels);
-                    }
-
-                    match &mut proc.host_exposed_layouts {
-                        HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
-                        hep @ HostExposedLayouts::NotHostExposed => {
-                            *hep = HostExposedLayouts::HostExposed {
-                                aliases,
-                                rigids: Default::default(),
-                            };
-                        }
-                    }
-                }
             }
 
             procs
                 .specialized
-                .insert_specialized(name.name(), top_level, proc);
+                .insert_specialized(name.name(), top_level, proc)
         }
         Err(SpecializeFailure { attempted_layout }) => {
             let proc = generate_runtime_error_function(env, name, attempted_layout);
@@ -3213,7 +3240,7 @@ fn specialize_external_help<'a>(
 
             procs
                 .specialized
-                .insert_specialized(name.name(), top_level, proc);
+                .insert_specialized(name.name(), top_level, proc)
         }
     }
 }
@@ -5286,10 +5313,7 @@ pub fn with_hole<'a>(
                     );
 
                     if let Err(e) = inserted {
-                        return runtime_error(
-                            env,
-                            env.arena.alloc(format!("RuntimeError: {:?}", e,)),
-                        );
+                        return runtime_error(env, env.arena.alloc(format!("RuntimeError: {e:?}")));
                     }
                     drop(inserted);
 
@@ -9971,7 +9995,7 @@ impl LambdaSetId {
 fn find_lambda_sets<'a>(
     env: &mut crate::layout::Env<'a, '_>,
     initial: Variable,
-) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
+) -> Vec<'a, (LambdaSetId, Variable, RawFunctionLayout<'a>)> {
     let mut stack = bumpalo::collections::Vec::new_in(env.arena);
 
     // ignore the lambda set of top-level functions
@@ -9997,7 +10021,7 @@ fn find_lambda_sets<'a>(
             .value()
             .unwrap();
 
-        let key = (lambda_set_id, raw_function_layout);
+        let key = (lambda_set_id, variable, raw_function_layout);
         answer.push(key);
     }
 
