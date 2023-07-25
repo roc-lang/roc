@@ -122,7 +122,7 @@ fn generate_setlongjmp_buffer<'a, B: Backend<'a>>(
     backend: &mut B,
     output: &mut Object,
 ) -> SymbolId {
-    let bss_section = output.section_id(StandardSection::UninitializedData);
+    let bss_section = output.section_id(StandardSection::Data);
 
     dbg!(bss_section);
 
@@ -131,13 +131,16 @@ fn generate_setlongjmp_buffer<'a, B: Backend<'a>>(
         value: 0,
         size: 8 * core::mem::size_of::<u64>() as u64,
         kind: SymbolKind::Data,
-        scope: SymbolScope::Linkage,
+        scope: SymbolScope::Dynamic,
         weak: false,
         section: SymbolSection::Section(bss_section),
         flags: SymbolFlags::None,
     };
 
-    dbg!(output.add_symbol(symbol))
+    let symbol_id = output.add_symbol(symbol);
+    let section_offset = output.add_symbol_data(symbol_id, bss_section, &[0; 64], 8);
+
+    symbol_id
 }
 
 fn generate_roc_setlongjmp_buffer<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {

@@ -2,10 +2,13 @@ use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
+use roc_mono::ir::CrashTag;
 use roc_mono::ir::SingleEntryPoint;
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_solve::FunctionKind;
+use roc_std::RocStr;
+use std::mem::MaybeUninit;
 use tempfile::tempdir;
 
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
@@ -245,6 +248,56 @@ pub fn helper(
     (main_fn_name, delayed_errors, lib)
 }
 
+#[repr(C)]
+pub struct RocCallResult<T> {
+    pub tag: u64,
+    pub error_msg: *mut RocStr,
+    pub value: MaybeUninit<T>,
+}
+
+impl<T> RocCallResult<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            tag: 0,
+            error_msg: std::ptr::null_mut(),
+            value: MaybeUninit::new(value),
+        }
+    }
+}
+
+impl<T: Default> Default for RocCallResult<T> {
+    fn default() -> Self {
+        Self {
+            tag: 0,
+            error_msg: std::ptr::null_mut(),
+            value: MaybeUninit::new(Default::default()),
+        }
+    }
+}
+
+impl<T> RocCallResult<T> {
+    pub fn into_result(self) -> Result<T, (String, CrashTag)> {
+        match self.tag {
+            0 => Ok(unsafe { self.value.assume_init() }),
+            n => Err({
+                let msg: &RocStr = unsafe { &*self.error_msg };
+                let tag = (n - 1) as u32;
+                let tag = tag
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("received illegal tag: {tag}"));
+
+                (msg.as_str().to_owned(), tag)
+            }),
+        }
+    }
+}
+
+impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
+    fn from(call_result: RocCallResult<T>) -> Self {
+        call_result.into_result()
+    }
+}
+
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
@@ -267,27 +320,41 @@ macro_rules! assert_evals_to {
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
         use bumpalo::Bump;
+        use $crate::helpers::dev::RocCallResult;
 
         let arena = Bump::new();
-        let (main_fn_name, errors, lib) =
+        let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
-        let transform = |success| {
-            let expected = $expected;
-            #[allow(clippy::redundant_closure_call)]
-            let given = $transform(success);
-            assert_eq!(&given, &expected);
-        };
+        //        let transform = |success| {
+        //            let expected = $expected;
+        //            #[allow(clippy::redundant_closure_call)]
+        //            let given = $transform(success);
+        //            assert_eq!(&given, &expected);
+        //        };
+
+        let main_fn_name = "test_main";
+
+        // type Main = unsafe extern "C" fn(*mut RocCallResult<$ty>);
+        type Main = unsafe extern "C" fn(&mut [u8]);
 
         unsafe {
-            let main: libloading::Symbol<unsafe extern "C" fn() -> $ty> = lib
+            let main: libloading::Symbol<Main> = lib
                 .get(main_fn_name.as_bytes())
                 .ok()
                 .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
                 .expect("errored");
 
-            let result = main();
+            // let mut result = std::mem::MaybeUninit::uninit();
+            // main(result.as_mut_ptr());
+            // let result = result.assume_init();
+            let mut memory = [0u8; 64];
+            let result = main(&mut memory);
 
+            dbg!(memory);
+            panic!();
+
+            /*
             if !errors.is_empty() {
                 dbg!(&errors);
 
@@ -299,7 +366,11 @@ macro_rules! assert_evals_to {
                 );
             }
 
-            transform(result)
+            match result.into_result() {
+                Ok(value) => transform(value),
+                Err((msg, _tag)) => panic!("roc_panic: {msg}"),
+            }
+            */
         }
     };
 }

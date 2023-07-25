@@ -466,7 +466,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         offset += 8;
 
         // store the base pointer
-        ASM::mov_mem64_offset32_reg64(buf, RBP, offset, RBP);
+        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RBP);
         offset += 8;
 
         // store other non-volatile registers
