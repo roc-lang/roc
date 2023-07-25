@@ -45,7 +45,7 @@ impl PoolStr {
             PoolStr {
                 first_node_id: NodeId {
                     index: 0,
-                    _phantom: PhantomData::default(),
+                    _phantom: PhantomData,
                 },
                 len: 0,
             }
