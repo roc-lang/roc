@@ -1172,7 +1172,7 @@ fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<Executab
     Ok(ExecutableFile::OnDisk(temp_dir, app_path_buf))
 }
 
-#[cfg(all(target_family = "windows"))]
+#[cfg(target_family = "windows")]
 fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;

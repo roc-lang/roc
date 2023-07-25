@@ -72,7 +72,7 @@ impl<'a, T: 'a + Sized> PoolVec<T> {
             PoolVec {
                 first_node_id: NodeId {
                     index: 0,
-                    _phantom: PhantomData::default(),
+                    _phantom: PhantomData,
                 },
                 len: 0,
             }
@@ -179,7 +179,7 @@ where
                 // Advance the node pointer to the next node in the current page
                 self.current_node_id = NodeId {
                     index: index + 1,
-                    _phantom: PhantomData::default(),
+                    _phantom: PhantomData,
                 };
                 self.len_remaining = len_remaining - 1;
 
@@ -237,7 +237,7 @@ where
                 // Advance the node pointer to the next node in the current page
                 self.current_node_id = NodeId {
                     index: index + 1,
-                    _phantom: PhantomData::default(),
+                    _phantom: PhantomData,
                 };
                 self.len_remaining = len_remaining - 1;
 
@@ -288,7 +288,7 @@ impl<T> Iterator for PoolVecIterNodeIds<T> {
                 // Advance the node pointer to the next node in the current page
                 self.current_node_id = NodeId {
                     index: index + 1,
-                    _phantom: PhantomData::default(),
+                    _phantom: PhantomData,
                 };
                 self.len_remaining = len_remaining - 1;
 

@@ -5,7 +5,7 @@ use indoc::indoc;
 #[cfg(target_os = "linux")]
 static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
-#[cfg(all(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn build_host() {
     use roc_build::program::build_and_preprocess_host;
     use roc_linker::preprocessed_host_filename;
