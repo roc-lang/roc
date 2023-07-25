@@ -1,4 +1,5 @@
-#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::missing_safety_doc, clippy::redundant_clone)]
+// TODO try removing allow clippy::redundant_clone if we're on rust 1.71 or later
 
 #[macro_use]
 extern crate pretty_assertions;
