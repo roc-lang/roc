@@ -2479,20 +2479,14 @@ fn add_host_annotation(
     constraint: Constraint,
 ) -> Constraint {
     if let Some((var, ann)) = host_exposed_annotation {
-        let expected_bool = {
+        let host_annotation = {
             let type_index = types.from_old_type(&ann.signature);
-            let ann_type = constraints.push_type(types, type_index);
-            constraints.push_expected_type(Expected::ForReason(
-                Reason::ExpectCondition,
-                ann_type,
-                Region::zero(),
-            ))
+            constraints.push_type(types, type_index)
         };
 
-        let new =
-            constraints.equal_types_var(*var, expected_bool, Category::Unknown, Region::zero());
+        let store_constr = constraints.store(host_annotation, *var, file!(), line!());
 
-        constraints.and_constraint([new, constraint])
+        constraints.and_constraint([store_constr, constraint])
     } else {
         constraint
     }
