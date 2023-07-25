@@ -101,8 +101,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
     // Insert asset urls & sidebar links
     let template_html = assets
         .raw_template_html
-        .replace("<!-- search.js -->", "/search.js")
-        .replace("<!-- styles.css -->", "/styles.css")
+        .replace("<!-- search.js -->", "search.js")
+        .replace("<!-- styles.css -->", "styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
             "<!-- Prefetch links -->",
@@ -110,7 +110,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 .docs_by_module
                 .iter()
                 .map(|(_, module)| {
-                    let href = module_link_url(module.name.as_str());
+                    let href = module.name.as_str();
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -118,6 +118,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 .join("\n    ")
                 .as_str(),
         )
+        .replace("<!-- base -->", &base_url())
         .replace(
             "<!-- Module links -->",
             render_sidebar(loaded_module.docs_by_module.values()).as_str(),
@@ -185,10 +186,6 @@ pub fn generate_docs_html(root_file: PathBuf) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn module_link_url(module_name: &str) -> String {
-    format!("{}{}", base_url(), module_name)
-}
-
 fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
@@ -200,12 +197,11 @@ fn render_package_index(root_module: &LoadedModule) -> String {
     for module in root_module.docs_by_module.values() {
         // The anchor tag containing the module link
         let mut link_buf = String::new();
-        let href = module_link_url(module.name.as_str());
 
         push_html(
             &mut link_buf,
             "a",
-            vec![("href", href.as_str())],
+            vec![("href", module.name.as_str())],
             module.name.as_str(),
         );
 
@@ -232,16 +228,12 @@ fn render_module_documentation(
     all_exposed_symbols: &VecSet<Symbol>,
 ) -> String {
     let mut buf = String::new();
+    let module_name = module.name.as_str();
 
     push_html(&mut buf, "h2", vec![("class", "module-name")], {
         let mut link_buf = String::new();
 
-        push_html(
-            &mut link_buf,
-            "a",
-            vec![("href", "/#")],
-            module.name.as_str(),
-        );
+        push_html(&mut link_buf, "a", vec![("href", "/#")], module_name);
 
         link_buf
     });
@@ -253,12 +245,12 @@ fn render_module_documentation(
                 if all_exposed_symbols.contains(&doc_def.symbol) {
                     buf.push_str("<section>");
 
-                    let name = doc_def.name.as_str();
-                    let href = format!("#{name}");
+                    let def_name = doc_def.name.as_str();
+                    let href = format!("{module_name}#{def_name}");
                     let mut content = String::new();
 
                     push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
-                    push_html(&mut content, "strong", vec![], name);
+                    push_html(&mut content, "strong", vec![], def_name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -275,7 +267,7 @@ fn render_module_documentation(
                     push_html(
                         &mut buf,
                         "h3",
-                        vec![("id", name), ("class", "entry-name")],
+                        vec![("id", def_name), ("class", "entry-name")],
                         content.as_str(),
                     );
 
@@ -397,13 +389,13 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     let mut buf = String::new();
 
     for module in modules {
-        let href = module_link_url(module.name.as_str());
+        let href = module.name.as_str();
         let mut sidebar_entry_content = String::new();
 
         push_html(
             &mut sidebar_entry_content,
             "a",
-            vec![("class", "sidebar-module-link"), ("href", &href)],
+            vec![("class", "sidebar-module-link"), ("href", href)],
             module.name.as_str(),
         );
 
@@ -415,7 +407,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
                     if module.exposed_symbols.contains(&doc_def.symbol) {
                         let mut entry_href = String::new();
 
-                        entry_href.push_str(href.as_str());
+                        entry_href.push_str(href);
                         entry_href.push('#');
                         entry_href.push_str(doc_def.name.as_str());
 
