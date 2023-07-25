@@ -1351,7 +1351,13 @@ fn add_function_type<'a>(
 
     let fn_type_id = add_function(env, name, types, layout, |name| {
         RocType::Function(RocFn {
-            extern_name: fn_caller_name(name, id),
+            // TODO the following gives the wrong answer, which causes
+            // the "return-function" glue test to fail. So for now,
+            // we're hardcoding this to mainForHost, which means glue
+            // will give the incorrect answer if you use a name other than
+            // mainForHost. This should be fixed!
+            // extern_name: fn_caller_name(name, id),
+            extern_name: format!("roc__mainForHost_{}_caller", id.0),
             function_name: name.to_string(),
             args: arg_type_ids.clone(),
             lambda_set: lambda_set_type_id,
