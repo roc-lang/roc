@@ -1,7 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
-use roc_can::abilities::SpecializationId;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
@@ -856,6 +855,8 @@ pub fn test_helper<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     main_proc: &Proc<'a>,
 ) -> Proc<'a> {
+    let name = LambdaName::no_niche(env.create_symbol(ident_ids, "test_main"));
+
     let it = (0..main_proc.args.len()).map(|i| env.create_symbol(ident_ids, &format!("arg_{i}")));
     let arguments = Vec::from_iter_in(it, env.arena).into_bump_slice();
 
@@ -871,17 +872,7 @@ pub fn test_helper<'a>(
     let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
     let repr = LayoutRepr::Struct(env.arena.alloc(fields));
     let output_layout = layout_interner.insert_direct_no_semantic(repr);
-
-    let body = test_helper_body(
-        env,
-        ident_ids,
-        layout_interner,
-        main_proc,
-        arguments,
-        output_layout,
-    );
-
-    let name = LambdaName::no_niche(env.create_symbol(ident_ids, "test_main"));
+    let body = test_helper_body(env, ident_ids, main_proc, arguments, output_layout);
 
     Proc {
         name,
@@ -901,7 +892,6 @@ pub fn test_helper<'a>(
 fn test_helper_body<'a>(
     env: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
-    layout_interner: &mut STLayoutInterner<'a>,
     main_proc: &Proc<'a>,
     arguments: &'a [Symbol],
     output_layout: InLayout<'a>,
@@ -945,11 +935,11 @@ fn test_helper_body<'a>(
         let result = |next| Stmt::Let(result_symbol, result_expr, main_proc.ret_layout, next);
 
         let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
-        let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_ne_bytes()));
+        let ok_tag_expr = Expr::Literal(Literal::Int((0i128).to_ne_bytes()));
         let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
 
         let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
-        let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_ne_bytes()));
+        let msg_ptr_expr = Expr::Literal(Literal::Int((0i128).to_ne_bytes()));
         let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
 
         // construct the record
@@ -993,19 +983,14 @@ fn test_helper_body<'a>(
         });
         let load = |next| Stmt::Let(load_symbol, load_expr, main_proc.ret_layout, next);
 
-        // is_longjmp_symbol will the pointer to the error message
         let err_tag_symbol = env.create_symbol(ident_ids, "err_tag");
-        let err_tag_expr = Expr::Literal(Literal::Int((1 as i128).to_ne_bytes()));
+        let err_tag_expr = Expr::Literal(Literal::Int((1i128).to_ne_bytes()));
         let err_tag = |next| Stmt::Let(err_tag_symbol, err_tag_expr, Layout::U64, next);
-
-        // let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
-        // let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_ne_bytes()));
-        // let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
-        let msg_ptr_symbol = is_longjmp_symbol;
 
         // construct the record
         let output_symbol = env.create_symbol(ident_ids, "output_err");
-        let fields = [err_tag_symbol, msg_ptr_symbol, load_symbol];
+        // is_longjmp_symbol is a pointer to the error message
+        let fields = [err_tag_symbol, is_longjmp_symbol, load_symbol];
         let output_expr = Expr::Struct(env.arena.alloc(fields));
         let output = |next| Stmt::Let(output_symbol, output_expr, output_layout, next);
 
@@ -1016,13 +1001,10 @@ fn test_helper_body<'a>(
                 //
                 err_tag(arena.alloc(
                     //
-                    // msg_ptr(arena.alloc(
-                    //
                     output(arena.alloc(
                         //
                         Stmt::Ret(output_symbol),
                     )),
-                    // )),
                 )),
             )),
         )))

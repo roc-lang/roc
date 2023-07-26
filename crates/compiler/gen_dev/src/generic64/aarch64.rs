@@ -456,15 +456,15 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         todo!("Loading returned complex symbols for AArch64");
     }
 
-    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn setjmp(_buf: &mut Vec<'_, u8>) {
         todo!()
     }
 
-    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn longjmp(_buf: &mut Vec<'_, u8>) {
         todo!()
     }
 
-    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
         todo!()
     }
 }

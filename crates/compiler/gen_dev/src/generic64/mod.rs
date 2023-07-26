@@ -135,8 +135,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         layout: &InLayout<'a>,
     );
 
-    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
-    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
+    fn setjmp(buf: &mut Vec<'_, u8>);
+    fn longjmp(buf: &mut Vec<'_, u8>);
     fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
 }
 
@@ -904,7 +904,7 @@ impl<
     fn build_roc_setjmp(&mut self) -> &'a [u8] {
         let mut out = bumpalo::vec![in self.env.arena];
 
-        CC::setjmp(&mut out, &mut self.relocs);
+        CC::setjmp(&mut out);
 
         out.into_bump_slice()
     }
@@ -912,7 +912,7 @@ impl<
     fn build_roc_longjmp(&mut self) -> &'a [u8] {
         let mut out = bumpalo::vec![in self.env.arena];
 
-        CC::longjmp(&mut out, &mut self.relocs);
+        CC::longjmp(&mut out);
 
         out.into_bump_slice()
     }
@@ -3082,8 +3082,9 @@ impl<
         if let Some(value) = value {
             self.build_ptr_store(sym, ptr, value, element_layout);
         } else {
-            // this will claim uninitialized memory!
-            self.storage_manager.claim_pointer_stack_area(sym);
+            // this is now a pointer to uninitialized memory!
+            let r = self.storage_manager.claim_general_reg(&mut self.buf, &sym);
+            ASM::mov_reg64_reg64(&mut self.buf, r, ptr_reg);
         }
     }
 

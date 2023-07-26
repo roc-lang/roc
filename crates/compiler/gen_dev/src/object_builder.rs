@@ -13,7 +13,7 @@ use roc_module::symbol;
 use roc_module::symbol::Interns;
 use roc_mono::ir::{Call, CallSpecId, Expr, UpdateModeId};
 use roc_mono::ir::{Proc, ProcLayout, Stmt};
-use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, Niche, STLayoutInterner};
+use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, STLayoutInterner};
 use roc_target::TargetInfo;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
@@ -197,8 +197,6 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
 
     for r in relocs {
         let relocation = match r {
-            Relocation::LocalData { offset, .. } => unreachable!(),
-            Relocation::LinkedFunction { offset, .. } => unreachable!(),
             Relocation::LinkedData { offset, name } => {
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     write::Relocation {
@@ -213,7 +211,11 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                     internal_error!("failed to find data symbol for {:?}", name);
                 }
             }
-            Relocation::JmpToReturn { offset, .. } => unreachable!(),
+            Relocation::LocalData { .. }
+            | Relocation::LinkedFunction { .. }
+            | Relocation::JmpToReturn { .. } => {
+                unreachable!("not currently created by build_roc_panic")
+            }
         };
 
         output.add_relocation(text_section, relocation).unwrap();
@@ -384,7 +386,7 @@ fn build_object<'a, B: Backend<'a>>(
                 module_id.register_debug_idents(ident_ids);
             }
 
-            println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+            // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
 
             build_proc_symbol(
                 &mut output,

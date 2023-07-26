@@ -1686,8 +1686,7 @@ trait Backend<'a> {
                 ret_layout,
             ),
             LowLevel::SetLongJmpBuffer => {
-                let ptr_to_the_thing =
-                    self.build_data_pointer(sym, String::from("setlongjmp_buffer"));
+                self.build_data_pointer(sym, String::from("setlongjmp_buffer"));
             }
             LowLevel::DictPseudoSeed => self.build_fn_call(
                 sym,
