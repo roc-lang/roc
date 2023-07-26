@@ -137,6 +137,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
     fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
 }
 
 pub enum CompareOperation {
@@ -913,6 +914,16 @@ impl<
         out.into_bump_slice()
     }
 
+    fn build_roc_panic(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::roc_panic(&mut out, &mut self.relocs);
+
+        dbg!(&self.relocs);
+
+        out.into_bump_slice()
+    }
+
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String) {
         let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
@@ -922,7 +933,11 @@ impl<
     fn build_data_pointer(&mut self, dst: &Symbol, data_name: String) {
         let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
-        ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg)
+        // now, this gives a pointer to the value
+        ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg);
+
+        // dereference
+        ASM::mov_reg64_mem64_offset32(&mut self.buf, reg, reg, 0);
     }
 
     fn build_fn_call(
@@ -3040,7 +3055,6 @@ impl<
     }
 
     fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>) {
-        dbg!(sym, value, element_layout);
         // 1. acquire some stack space
         let element_width = self.interner().stack_size(element_layout);
         let allocation = self.debug_symbol("stack_allocation");

@@ -975,7 +975,7 @@ fn overflow_frees_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn undefined_variable() {
     assert_evals_to!(
@@ -986,6 +986,24 @@ fn undefined_variable() {
                  else
                      y + z
                  "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = "Roc failed with message: ")]
+fn a_crash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            if Bool.true then
+                crash "a crash"
+            else
+                0u64
+            "#
         ),
         3,
         i64

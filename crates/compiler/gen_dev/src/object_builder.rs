@@ -118,13 +118,8 @@ pub fn build_module<'a, 'r>(
     }
 }
 
-fn generate_setlongjmp_buffer<'a, B: Backend<'a>>(
-    backend: &mut B,
-    output: &mut Object,
-) -> SymbolId {
+fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
     let bss_section = output.section_id(StandardSection::Data);
-
-    dbg!(bss_section);
 
     let symbol = Symbol {
         name: b"setlongjmp_buffer".to_vec(),
@@ -138,27 +133,9 @@ fn generate_setlongjmp_buffer<'a, B: Backend<'a>>(
     };
 
     let symbol_id = output.add_symbol(symbol);
-    let section_offset = output.add_symbol_data(symbol_id, bss_section, &[0; 64], 8);
+    output.add_symbol_data(symbol_id, bss_section, &[0xAA; 64], 8);
 
     symbol_id
-}
-
-fn generate_roc_setlongjmp_buffer<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
-    let text_section = output.section_id(StandardSection::Text);
-    let proc_symbol = Symbol {
-        name: b"roc_setjmp".to_vec(),
-        value: 0,
-        size: 0,
-        kind: SymbolKind::Text,
-        scope: SymbolScope::Dynamic,
-        weak: false,
-        section: SymbolSection::Section(text_section),
-        flags: SymbolFlags::None,
-    };
-
-    let proc_id = output.add_symbol(proc_symbol);
-    let (proc_data, offset) = backend.build_wrapped_jmp();
-    let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
 }
 
 fn generate_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
@@ -193,6 +170,25 @@ fn generate_longjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
     };
     let proc_id = output.add_symbol(proc_symbol);
     let proc_data = backend.build_roc_longjmp();
+
+    output.add_symbol_data(proc_id, text_section, proc_data, 16);
+}
+
+// a roc_panic to be used in tests; relies on setjmp/longjmp
+fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_panic".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let proc_data = backend.build_roc_panic();
 
     output.add_symbol_data(proc_id, text_section, proc_data, 16);
 }
@@ -257,8 +253,6 @@ fn build_object<'a, B: Backend<'a>>(
 ) -> Object<'a> {
     let data_section = output.section_id(StandardSection::Data);
 
-    dbg!("build object");
-
     let arena = backend.env().arena;
 
     /*
@@ -271,8 +265,9 @@ fn build_object<'a, B: Backend<'a>>(
     );
     */
 
-    generate_setlongjmp_buffer(&mut backend, &mut output);
+    define_setlongjmp_buffer(&mut output);
 
+    generate_roc_panic(&mut backend, &mut output);
     generate_setjmp(&mut backend, &mut output);
     generate_longjmp(&mut backend, &mut output);
 
@@ -295,12 +290,14 @@ fn build_object<'a, B: Backend<'a>>(
             "roc_dealloc".into(),
             "free".into(),
         );
-        generate_wrapper(
-            &mut backend,
-            &mut output,
-            "roc_panic".into(),
-            "roc_builtins.utils.test_panic".into(),
-        );
+
+        //        generate_wrapper(
+        //            &mut backend,
+        //            &mut output,
+        //            "roc_panic".into(),
+        //            "roc_builtins.utils.test_panic".into(),
+        //        );
+
         // Extra symbols only required on unix systems.
         if matches!(output.format(), BinaryFormat::Elf | BinaryFormat::MachO) {
             generate_wrapper(
@@ -360,7 +357,7 @@ fn build_object<'a, B: Backend<'a>>(
                 module_id.register_debug_idents(ident_ids);
             }
 
-            println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+            // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
 
             build_proc_symbol(
                 &mut output,

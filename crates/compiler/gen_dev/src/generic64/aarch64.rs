@@ -463,6 +463,10 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
         todo!()
     }
+
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
