@@ -704,7 +704,6 @@ impl<
             }
         } else {
             // This is a single element struct. Just copy the single field to the stack.
-            dbg!(sym, layout);
             debug_assert_eq!(fields.len(), 1);
             self.copy_symbol_to_stack_offset(
                 layout_interner,
@@ -816,7 +815,6 @@ impl<
                     self.copy_to_stack_offset(buf, size, from_offset, to_offset)
                 }
                 Builtin::Str | Builtin::List(_) => {
-                    dbg!(sym);
                     let (from_offset, size) = self.stack_offset_and_size(sym);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
                     self.copy_to_stack_offset(buf, size, from_offset, to_offset)

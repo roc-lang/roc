@@ -437,7 +437,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         }
     }
 
-    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn setjmp(buf: &mut Vec<'_, u8>) {
         use X86_64GeneralReg::*;
         type ASM = X86_64Assembler;
 
@@ -491,7 +491,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         ASM::ret(buf)
     }
 
-    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn longjmp(buf: &mut Vec<'_, u8>) {
         use X86_64GeneralReg::*;
         type ASM = X86_64Assembler;
 
@@ -544,7 +544,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             ASM::mov_mem64_offset32_reg64(buf, RSI, offset, R9);
         }
 
-        Self::longjmp(buf, relocs)
+        Self::longjmp(buf)
     }
 }
 
@@ -1134,15 +1134,15 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         todo!("Loading returned complex symbols for X86_64");
     }
 
-    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn setjmp(_buf: &mut Vec<'_, u8>) {
         todo!()
     }
 
-    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn longjmp(_buf: &mut Vec<'_, u8>) {
         todo!()
     }
 
-    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
         todo!()
     }
 }
@@ -2752,7 +2752,7 @@ fn jmp_reg64_offset8(buf: &mut Vec<'_, u8>, base: X86_64GeneralReg, offset: i8) 
     let rex = add_rm_extension(base, REX_W);
 
     #[allow(clippy::unusual_byte_groupings)]
-    buf.extend([rex, 0xff, 0b01_100_000 | base as u8 % 8]);
+    buf.extend([rex, 0xff, 0b01_100_000 | (base as u8 % 8)]);
 
     // Using RSP or R12 requires a secondary index byte.
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
@@ -3075,16 +3075,6 @@ fn mov_reg_base_offset32(
         buf.push(0x24);
     }
     buf.extend(offset.to_le_bytes());
-}
-
-#[inline(always)]
-fn mov_reg64_offset32_reg64(
-    buf: &mut Vec<'_, u8>,
-    dst: X86_64GeneralReg,
-    offset: i32,
-    src: X86_64GeneralReg,
-) {
-    todo!()
 }
 
 /// `MOV r64,r/m64` -> Move r/m64 to r64, where m64 references a base + offset.

@@ -135,8 +135,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         layout: &InLayout<'a>,
     );
 
-    fn setjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
-    fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
+    fn setjmp(buf: &mut Vec<'_, u8>);
+    fn longjmp(buf: &mut Vec<'_, u8>);
     fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
 }
 
@@ -904,7 +904,7 @@ impl<
     fn build_roc_setjmp(&mut self) -> &'a [u8] {
         let mut out = bumpalo::vec![in self.env.arena];
 
-        CC::setjmp(&mut out, &mut self.relocs);
+        CC::setjmp(&mut out);
 
         out.into_bump_slice()
     }
@@ -912,7 +912,7 @@ impl<
     fn build_roc_longjmp(&mut self) -> &'a [u8] {
         let mut out = bumpalo::vec![in self.env.arena];
 
-        CC::longjmp(&mut out, &mut self.relocs);
+        CC::longjmp(&mut out);
 
         out.into_bump_slice()
     }
