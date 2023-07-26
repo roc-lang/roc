@@ -266,7 +266,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
     ) {
-        dbg!(layout_interner.dbg(*ret_layout));
         let returns_via_pointer =
             X86_64SystemV::returns_via_arg_pointer(layout_interner, ret_layout);
 
@@ -277,7 +276,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             argument_offset: X86_64SystemV::SHADOW_SPACE_SIZE as i32 + 16,
         };
 
-        if dbg!(returns_via_pointer) {
+        if returns_via_pointer {
             storage_manager.ret_pointer_arg(X86_64SystemV::GENERAL_PARAM_REGS[0]);
         }
 
@@ -380,7 +379,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             }
             _ => {
                 // This is a large type returned via the arg pointer.
-                dbg!(sym);
                 storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
                 // Also set the return reg to the arg pointer.
                 storage_manager.load_to_specified_general_reg(
@@ -521,6 +519,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         }
 
         jmp_reg64_offset8(buf, RDI, offset as i8)
+    }
+
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        use X86_64GeneralReg::*;
+        type ASM = X86_64Assembler;
+
+        ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
+        ASM::mov_reg64_imm64(buf, RSI, 42);
+
+        // Call function and generate reloc.
+        ASM::call(buf, relocs, String::from("roc_longjmp"));
     }
 }
 
@@ -1115,6 +1124,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     fn longjmp(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
+
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
         todo!()
     }
 }

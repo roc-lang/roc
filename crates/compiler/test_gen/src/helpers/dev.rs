@@ -248,6 +248,7 @@ pub fn helper(
     (main_fn_name, delayed_errors, lib)
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct RocCallResult<T> {
     pub tag: u64,
@@ -326,17 +327,16 @@ macro_rules! assert_evals_to {
         let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
-        //        let transform = |success| {
-        //            let expected = $expected;
-        //            #[allow(clippy::redundant_closure_call)]
-        //            let given = $transform(success);
-        //            assert_eq!(&given, &expected);
-        //        };
+        let transform = |success| {
+            let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
+            let given = $transform(success);
+            assert_eq!(&given, &expected, "output is different");
+        };
 
         let main_fn_name = "test_main";
 
-        // type Main = unsafe extern "C" fn(*mut RocCallResult<$ty>);
-        type Main = unsafe extern "C" fn(&mut [u8]);
+        type Main = unsafe extern "C" fn(*mut RocCallResult<$ty>);
 
         unsafe {
             let main: libloading::Symbol<Main> = lib
@@ -345,16 +345,10 @@ macro_rules! assert_evals_to {
                 .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
                 .expect("errored");
 
-            // let mut result = std::mem::MaybeUninit::uninit();
-            // main(result.as_mut_ptr());
-            // let result = result.assume_init();
-            let mut memory = [0u8; 64];
-            let result = main(&mut memory);
+            let mut result = std::mem::MaybeUninit::uninit();
+            main(result.as_mut_ptr());
+            let result = result.assume_init();
 
-            dbg!(memory);
-            panic!();
-
-            /*
             if !errors.is_empty() {
                 dbg!(&errors);
 
@@ -366,11 +360,12 @@ macro_rules! assert_evals_to {
                 );
             }
 
+            dbg!(&result);
+
             match result.into_result() {
                 Ok(value) => transform(value),
                 Err((msg, _tag)) => panic!("roc_panic: {msg}"),
             }
-            */
         }
     };
 }

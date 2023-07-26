@@ -466,6 +466,7 @@ trait Backend<'a> {
     // use for roc_panic
     fn build_roc_setjmp(&mut self) -> &'a [u8];
     fn build_roc_longjmp(&mut self) -> &'a [u8];
+    fn build_roc_panic(&mut self) -> &'a [u8];
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     /// Returns the procedure bytes, its relocations, and the names of the refcounting functions it references.
@@ -1680,7 +1681,8 @@ trait Backend<'a> {
                 ret_layout,
             ),
             LowLevel::SetLongJmpBuffer => {
-                self.build_data_pointer(sym, String::from("setlongjmp_buffer"))
+                let ptr_to_the_thing =
+                    self.build_data_pointer(sym, String::from("setlongjmp_buffer"));
             }
             LowLevel::DictPseudoSeed => self.build_fn_call(
                 sym,
