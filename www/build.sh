@@ -70,6 +70,7 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   mkdir www/build/tutorial
 
   cargo build --release --bin roc
+
   roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
@@ -82,6 +83,7 @@ else
   ls | grep "roc_nightly.*tar.gz" | xargs rm
   # simplify dir name
   mv roc_nightly* roc_nightly
+
   roc='./roc_nightly/roc'
 
   echo 'Building tutorial.html from tutorial.md...'
