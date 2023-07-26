@@ -2872,8 +2872,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 DecRef(symbol) => {
                     let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-                    let lay = layout_interner.get_repr(layout);
-                    match lay {
+                    match layout_interner.get_repr(layout) {
                         LayoutRepr::Builtin(Builtin::Str) => todo!(),
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
@@ -2883,9 +2882,9 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
 
-                        _ if lay.is_refcounted() => {
+                        other_layout if other_layout.is_refcounted(layout_interner) => {
                             if value.is_pointer_value() {
-                                let value_ptr = match lay {
+                                let value_ptr = match other_layout {
                                     LayoutRepr::Union(union_layout)
                                         if union_layout
                                             .stores_tag_id_in_pointer(env.target_info) =>

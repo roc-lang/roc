@@ -228,7 +228,7 @@ pub trait LayoutInterner<'a>: Sized {
     }
 
     fn is_refcounted(&self, layout: InLayout<'a>) -> bool {
-        self.get_repr(layout).is_refcounted()
+        self.get_repr(layout).is_refcounted(self)
     }
 
     fn is_nullable(&self, layout: InLayout<'a>) -> bool {
