@@ -70,6 +70,7 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   mkdir www/build/tutorial
 
   cargo build --release --bin roc
+
   roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
@@ -82,6 +83,7 @@ else
   ls | grep "roc_nightly.*tar.gz" | xargs rm
   # simplify dir name
   mv roc_nightly* roc_nightly
+
   roc='./roc_nightly/roc'
 
   echo 'Building tutorial.html from tutorial.md...'
@@ -115,8 +117,6 @@ rm -rf ./downloaded-basic-cli
 
 BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
 mkdir -p $BASIC_CLI_PACKAGE_DIR
-mv generated-docs/index.html $BASIC_CLI_PACKAGE_DIR
-rm generated-docs/*.* # we already copied over the *.js and *.css files earlier for the builtins, so just drop these.
 mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
 # set up docs for basic-cli 0.3.2
