@@ -945,11 +945,11 @@ fn test_helper_body<'a>(
         let result = |next| Stmt::Let(result_symbol, result_expr, main_proc.ret_layout, next);
 
         let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
-        let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
+        let ok_tag_expr = Expr::Literal(Literal::Int((0 as i128).to_ne_bytes()));
         let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
 
         let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
-        let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
+        let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_ne_bytes()));
         let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
 
         // construct the record
@@ -991,16 +991,17 @@ fn test_helper_body<'a>(
             },
             arguments: env.arena.alloc([alloca_symbol]),
         });
-        let load = |next| Stmt::Let(load_symbol, load_expr, Layout::U64, next);
+        let load = |next| Stmt::Let(load_symbol, load_expr, main_proc.ret_layout, next);
 
         // is_longjmp_symbol will the pointer to the error message
         let err_tag_symbol = env.create_symbol(ident_ids, "err_tag");
-        let err_tag_expr = Expr::Literal(Literal::Int((1 as i128).to_be_bytes()));
+        let err_tag_expr = Expr::Literal(Literal::Int((1 as i128).to_ne_bytes()));
         let err_tag = |next| Stmt::Let(err_tag_symbol, err_tag_expr, Layout::U64, next);
 
-        let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
-        let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_be_bytes()));
-        let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+        // let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
+        // let msg_ptr_expr = Expr::Literal(Literal::Int((0 as i128).to_ne_bytes()));
+        // let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+        let msg_ptr_symbol = is_longjmp_symbol;
 
         // construct the record
         let output_symbol = env.create_symbol(ident_ids, "output_err");
@@ -1015,13 +1016,13 @@ fn test_helper_body<'a>(
                 //
                 err_tag(arena.alloc(
                     //
-                    msg_ptr(arena.alloc(
+                    // msg_ptr(arena.alloc(
+                    //
+                    output(arena.alloc(
                         //
-                        output(arena.alloc(
-                            //
-                            Stmt::Ret(output_symbol),
-                        )),
+                        Stmt::Ret(output_symbol),
                     )),
+                    // )),
                 )),
             )),
         )))
