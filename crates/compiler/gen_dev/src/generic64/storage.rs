@@ -808,8 +808,15 @@ impl<
                         }
                     }
                 }
-                Builtin::Decimal => todo!(),
+                Builtin::Decimal => {
+                    let (from_offset, size) = self.stack_offset_and_size(sym);
+                    debug_assert_eq!(from_offset % 8, 0);
+                    debug_assert_eq!(size % 8, 0);
+                    debug_assert_eq!(size, layout_interner.stack_size(*layout));
+                    self.copy_to_stack_offset(buf, size, from_offset, to_offset)
+                }
                 Builtin::Str | Builtin::List(_) => {
+                    dbg!(sym);
                     let (from_offset, size) = self.stack_offset_and_size(sym);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
                     self.copy_to_stack_offset(buf, size, from_offset, to_offset)

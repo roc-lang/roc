@@ -725,6 +725,9 @@ impl<
     fn interner(&self) -> &STLayoutInterner<'a> {
         self.layout_interner
     }
+    fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
+        &mut self.relocs
+    }
     fn module_interns_helpers_mut(
         &mut self,
     ) -> (
@@ -914,14 +917,16 @@ impl<
         out.into_bump_slice()
     }
 
-    fn build_roc_panic(&mut self) -> &'a [u8] {
+    fn build_roc_panic(&mut self) -> (&'a [u8], Vec<'a, Relocation>) {
         let mut out = bumpalo::vec![in self.env.arena];
+
+        let before = self.relocs.len();
 
         CC::roc_panic(&mut out, &mut self.relocs);
 
-        dbg!(&self.relocs);
+        let relocs = self.relocs.split_off(before);
 
-        out.into_bump_slice()
+        (out.into_bump_slice(), relocs)
     }
 
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String) {
@@ -4262,7 +4267,18 @@ impl<
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
                         // can we treat this as 2 u64's?
-                        todo!()
+                        storage_manager.with_tmp_general_reg(
+                            buf,
+                            |storage_manager, buf, tmp_reg| {
+                                let base_offset = storage_manager.claim_stack_area(&dst, 16);
+
+                                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
+                                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
+                                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                            },
+                        );
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
@@ -4300,6 +4316,15 @@ impl<
                 }
                 Builtin::Decimal => {
                     // same as 128-bit integer
+                    storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                        let base_offset = storage_manager.claim_stack_area(&dst, 16);
+
+                        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
+                        ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
+                        ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                    });
                 }
                 Builtin::Str | Builtin::List(_) => {
                     storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {

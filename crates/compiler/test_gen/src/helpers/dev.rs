@@ -360,11 +360,9 @@ macro_rules! assert_evals_to {
                 );
             }
 
-            dbg!(&result);
-
             match result.into_result() {
                 Ok(value) => transform(value),
-                Err((msg, _tag)) => panic!("roc_panic: {msg}"),
+                Err((msg, _tag)) => panic!("Roc failed with message: {msg}"),
             }
         }
     };

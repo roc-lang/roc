@@ -482,7 +482,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         offset += 8;
 
         // store the current stack pointer
-        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RSP);
+        ASM::mov_reg64_mem64_offset32(buf, RDX, RSP, 0);
+        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RDX);
 
         // zero out eax, so we return 0i32 (we do a 64-bit xor for convenience)
         ASM::xor_reg64_reg64_reg64(buf, RAX, RAX, RAX);
@@ -507,7 +508,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         //  20237a:   ff 67 38                jmp    QWORD PTR [rdi+0x38]
 
         // make sure something nonzero is returned ?!
-        ASM::mov_reg64_imm64(buf, RAX, 0x1);
+        ASM::mov_reg64_reg64(buf, RAX, RSI);
 
         // move the values back into the registers
         let mut offset = 0;
@@ -525,11 +526,25 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         use X86_64GeneralReg::*;
         type ASM = X86_64Assembler;
 
-        ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
-        ASM::mov_reg64_imm64(buf, RSI, 42);
+        // move the first argument to roc_panic (a *RocStr) into r8
+        ASM::mov_reg64_imm64(buf, R8, 8);
+        ASM::add_reg64_reg64_reg64(buf, R8, R8, RSP);
 
-        // Call function and generate reloc.
-        ASM::call(buf, relocs, String::from("roc_longjmp"));
+        // the setlongjmp_buffer
+        ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
+        ASM::mov_reg64_mem64_offset32(buf, RDI, RDI, 0);
+
+        // the value to return from the longjmp. It is a pointer to the last 3 words of the setlongjmp_buffer
+        // they represent the errore message.
+        ASM::mov_reg64_imm64(buf, RSI, 0x40);
+        ASM::add_reg64_reg64_reg64(buf, RSI, RSI, RDI);
+
+        for offset in [0, 8, 16] {
+            ASM::mov_reg64_mem64_offset32(buf, R9, R8, offset);
+            ASM::mov_mem64_offset32_reg64(buf, RSI, offset, R9);
+        }
+
+        Self::longjmp(buf, relocs)
     }
 }
 

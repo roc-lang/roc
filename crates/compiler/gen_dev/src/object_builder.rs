@@ -121,10 +121,13 @@ pub fn build_module<'a, 'r>(
 fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
     let bss_section = output.section_id(StandardSection::Data);
 
+    // 8 registers + 3 words for a RocStr
+    const SIZE: usize = (8 + 3) * core::mem::size_of::<u64>();
+
     let symbol = Symbol {
         name: b"setlongjmp_buffer".to_vec(),
         value: 0,
-        size: 8 * core::mem::size_of::<u64>() as u64,
+        size: SIZE as u64,
         kind: SymbolKind::Data,
         scope: SymbolScope::Dynamic,
         weak: false,
@@ -133,7 +136,7 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
     };
 
     let symbol_id = output.add_symbol(symbol);
-    output.add_symbol_data(symbol_id, bss_section, &[0xAA; 64], 8);
+    output.add_symbol_data(symbol_id, bss_section, &[0x00; SIZE], 8);
 
     symbol_id
 }
@@ -188,9 +191,33 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
         flags: SymbolFlags::None,
     };
     let proc_id = output.add_symbol(proc_symbol);
-    let proc_data = backend.build_roc_panic();
+    let (proc_data, relocs) = backend.build_roc_panic();
 
-    output.add_symbol_data(proc_id, text_section, proc_data, 16);
+    let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
+
+    for r in relocs {
+        let relocation = match r {
+            Relocation::LocalData { offset, .. } => unreachable!(),
+            Relocation::LinkedFunction { offset, .. } => unreachable!(),
+            Relocation::LinkedData { offset, name } => {
+                if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
+                    write::Relocation {
+                        offset: offset + proc_offset,
+                        size: 32,
+                        kind: RelocationKind::GotRelative,
+                        encoding: RelocationEncoding::Generic,
+                        symbol: sym_id,
+                        addend: -4,
+                    }
+                } else {
+                    internal_error!("failed to find data symbol for {:?}", name);
+                }
+            }
+            Relocation::JmpToReturn { offset, .. } => unreachable!(),
+        };
+
+        output.add_relocation(text_section, relocation).unwrap();
+    }
 }
 
 fn generate_wrapper<'a, B: Backend<'a>>(
@@ -357,7 +384,7 @@ fn build_object<'a, B: Backend<'a>>(
                 module_id.register_debug_idents(ident_ids);
             }
 
-            // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+            println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
 
             build_proc_symbol(
                 &mut output,
