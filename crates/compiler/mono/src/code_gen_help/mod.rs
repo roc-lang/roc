@@ -872,7 +872,14 @@ pub fn test_helper<'a>(
     let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
     let repr = LayoutRepr::Struct(env.arena.alloc(fields));
     let output_layout = layout_interner.insert_direct_no_semantic(repr);
-    let body = test_helper_body(env, ident_ids, main_proc, arguments, output_layout);
+    let body = test_helper_body(
+        env,
+        ident_ids,
+        layout_interner,
+        main_proc,
+        arguments,
+        output_layout,
+    );
 
     Proc {
         name,
@@ -892,6 +899,7 @@ pub fn test_helper<'a>(
 fn test_helper_body<'a>(
     env: &CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
+    layout_interner: &mut STLayoutInterner<'a>,
     main_proc: &Proc<'a>,
     arguments: &'a [Symbol],
     output_layout: InLayout<'a>,
@@ -907,15 +915,34 @@ fn test_helper_body<'a>(
     });
     let buffer_stmt = |next| Stmt::Let(buffer_symbol, buffer_expr, Layout::U64, next);
 
-    let is_longjmp_symbol = env.create_symbol(ident_ids, "is_longjmp");
-    let is_longjmp_expr = Expr::Call(Call {
+    let field_layouts = env.arena.alloc([Layout::U64, Layout::U64]);
+    let ret_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Struct(field_layouts));
+
+    let setjmp_symbol = env.create_symbol(ident_ids, "setjmp");
+    let setjmp_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
             op: LowLevel::SetJmp,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: env.arena.alloc([buffer_symbol]),
     });
+    let setjmp_stmt = |next| Stmt::Let(setjmp_symbol, setjmp_expr, ret_layout, next);
+
+    let is_longjmp_symbol = env.create_symbol(ident_ids, "is_longjmp");
+    let is_longjmp_expr = Expr::StructAtIndex {
+        index: 0,
+        field_layouts,
+        structure: setjmp_symbol,
+    };
     let is_longjmp_stmt = |next| Stmt::Let(is_longjmp_symbol, is_longjmp_expr, Layout::U64, next);
+
+    let tag_symbol = env.create_symbol(ident_ids, "tag");
+    let tag_expr = Expr::StructAtIndex {
+        index: 1,
+        field_layouts,
+        structure: setjmp_symbol,
+    };
+    let tag_stmt = |next| Stmt::Let(tag_symbol, tag_expr, Layout::U64, next);
 
     // normal path, no panics
     let if_zero_stmt = {
@@ -983,14 +1010,10 @@ fn test_helper_body<'a>(
         });
         let load = |next| Stmt::Let(load_symbol, load_expr, main_proc.ret_layout, next);
 
-        let err_tag_symbol = env.create_symbol(ident_ids, "err_tag");
-        let err_tag_expr = Expr::Literal(Literal::Int((1i128).to_ne_bytes()));
-        let err_tag = |next| Stmt::Let(err_tag_symbol, err_tag_expr, Layout::U64, next);
-
         // construct the record
         let output_symbol = env.create_symbol(ident_ids, "output_err");
         // is_longjmp_symbol is a pointer to the error message
-        let fields = [err_tag_symbol, is_longjmp_symbol, load_symbol];
+        let fields = [tag_symbol, is_longjmp_symbol, load_symbol];
         let output_expr = Expr::Struct(env.arena.alloc(fields));
         let output = |next| Stmt::Let(output_symbol, output_expr, output_layout, next);
 
@@ -999,12 +1022,9 @@ fn test_helper_body<'a>(
             //
             load(arena.alloc(
                 //
-                err_tag(arena.alloc(
+                output(arena.alloc(
                     //
-                    output(arena.alloc(
-                        //
-                        Stmt::Ret(output_symbol),
-                    )),
+                    Stmt::Ret(output_symbol),
                 )),
             )),
         )))
@@ -1012,15 +1032,21 @@ fn test_helper_body<'a>(
 
     buffer_stmt(env.arena.alloc(
         //
-        is_longjmp_stmt(env.arena.alloc(
+        setjmp_stmt(env.arena.alloc(
             //
-            switch_if_zero_else(
-                env.arena,
-                is_longjmp_symbol,
-                output_layout,
-                if_zero_stmt,
-                if_nonzero_stmt,
-            ),
+            is_longjmp_stmt(env.arena.alloc(
+                //
+                tag_stmt(env.arena.alloc(
+                    //
+                    switch_if_zero_else(
+                        env.arena,
+                        is_longjmp_symbol,
+                        output_layout,
+                        if_zero_stmt,
+                        if_nonzero_stmt,
+                    ),
+                )),
+            )),
         )),
     ))
 }

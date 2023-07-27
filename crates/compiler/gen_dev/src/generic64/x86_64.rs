@@ -485,7 +485,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         ASM::mov_reg64_mem64_offset32(buf, RDX, RSP, 0);
         ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RDX);
 
-        // zero out eax, so we return 0i32 (we do a 64-bit xor for convenience)
+        // zero out eax, so we return 0 (we do a 64-bit xor for convenience)
         ASM::xor_reg64_reg64_reg64(buf, RAX, RAX, RAX);
 
         ASM::ret(buf)
@@ -527,8 +527,11 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         type ASM = X86_64Assembler;
 
         // move the first argument to roc_panic (a *RocStr) into r8
-        ASM::mov_reg64_imm64(buf, R8, 8);
-        ASM::add_reg64_reg64_reg64(buf, R8, R8, RSP);
+        ASM::add_reg64_reg64_imm32(buf, R8, RSP, 8);
+
+        // move the crash tag into the second return register. We add 1 to it because the 0 value
+        // is already used for "no crash occurred"
+        ASM::add_reg64_reg64_imm32(buf, RDX, RDI, 1);
 
         // the setlongjmp_buffer
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
