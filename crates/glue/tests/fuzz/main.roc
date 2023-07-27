@@ -30,10 +30,13 @@ main : Task {} U32
 main =
     args <- Arg.list |> Task.await
 
-    when List.get args 1 is
-        Ok "Str" -> gen [] "Str"
-        Ok "List Str" -> gen [] "List Str"
-        _ -> crash "unrecognized fuzzer args"
+    mainRetType =
+        when List.get args 1 is
+            Ok "Str" -> "Str"
+            Ok "List Str" -> "List Str"
+            _ -> crash "unrecognized fuzzer args"
+
+    gen [] mainRetType
 
 
 gen : List Str, Str -> Task {} U32
@@ -131,10 +134,10 @@ genVal = \type ->
 
 combineArgs : List Val, Str -> { roc : Str, rust : Str, expected : Str, mainForHostExpected : Str }
 combineArgs = \vals, mainRetType ->
-    (mainRocVal, mainForHostExpected) =
+    (mainRocVal, rustExpected) =
         when mainRetType is
             "Str" -> ("\"\"", "roc_std::RocStr::empty()")
-            "List Str" -> ("[]", "roc_std::RocList::empty()")
+            "List Str" -> ("[]", "roc_std::RocList::<roc_std::RocStr>::empty()")
             _ -> crash "unsupported mainRetType \(mainRetType)"
 
     init = {
@@ -142,11 +145,11 @@ combineArgs = \vals, mainRetType ->
         rust: "",
         expected: "",
         index: 0,
-        mainForHostExpected,
+        mainForHostExpected: rustExpected,
     }
 
     answer =
-        List.walk vals init \{ roc, rust, expected, index }, val ->
+        List.walk vals init \{ roc, rust, expected, index, mainForHostExpected }, val ->
             indexStr = Num.toStr index
             next =
                 when val is
@@ -162,11 +165,12 @@ combineArgs = \vals, mainRetType ->
                 roc: "\(roc)\n    |> \(next.roc)",
                 rust: if Str.isEmpty rust then next.rust else ", \(next.rust)",
                 index: index + 1,
+                mainForHostExpected,
             }
 
     {
         roc: "\(answer.roc)\n\n    answer",
         rust: answer.rust,
-        expected: "\(answer.expected)\n\n    answer" # MISSING COMMA - add a comma to fix!
+        expected: "\(answer.expected)\n\n    answer",
         mainForHostExpected: answer.mainForHostExpected,
      }
