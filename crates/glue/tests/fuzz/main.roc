@@ -6,31 +6,46 @@ app "fuzz-glue"
         pf.Task.{ Task },
         pf.File,
         pf.Path,
+        pf.Arg,
         "static/app-template.roc" as appTemplate : Str,
         "static/platform-template.roc" as platformTemplate : Str,
         "static/host-template.rs" as hostTemplate : Str,
+        "static/host.c" as hostC : Str,
+        "static/build.rs" as buildRs : Str,
+        "static/Cargo.toml" as cargoToml : Str,
     ]
     provides [main] to pf
 
-generatedAppPath = "generated/app.roc"
-generatedPlatformPath = "generated/platform.roc"
-generatedHostPath = "generated/src/lib.rs"
+genAppPath = "generated/app.roc"
+genPlatPath = "generated/platform.roc"
+genHostLibPath = "generated/src/lib.rs"
 expectedPath = "generated/expected.txt"
+
+# TODO just cp all this stuff over
+genCargoTomlPath = "generated/Cargo.toml"
+genHostCPath = "generated/host.c"
+genBuildRsPath = "generated/build.rs"
 
 main : Task {} U32
 main =
-    mainArgTypes = [] # TODO generate
-    mainRetType = "Str" # TODO generate
+    args <- Arg.list |> Task.await
 
+    when List.get args 1 is
+        Ok "Str" -> gen [] "Str"
+        Ok "List Str" -> gen [] "List Str"
+        _ -> crash "unrecognized fuzzer args"
+
+
+gen : List Str, Str -> Task {} U32
+gen = \mainArgTypes, mainRetType ->
     # TODO rm -rf generated/
     # TODO mkdir -p generated/src/
 
     mainArgVals = List.map mainArgTypes genVal # TODO randomly generate
-    mainRetVal = genVal mainRetType # TODO randomly generate
 
     # Actually use all the arguments to determine the return value,
     # so we have some way to tell if they made it through correctly.
-    { roc: mainBody, rust, expected } = combineArgs mainArgVals
+    { roc: mainBody, rust, expected, mainForHostExpected } = combineArgs mainArgVals mainRetType
 
     mainType =
         if List.isEmpty mainArgTypes then
@@ -56,43 +71,50 @@ main =
             |> Str.concat " -> main "
             |> Str.concat (Str.joinWith argStrings " ")
 
+    genAppContent =
+        appTemplate
+        |> Str.replaceFirst "# {{ mainType }}" mainType
+        |> Result.withDefault "{{ mainType }} not found"
+        |> Str.replaceFirst "# {{ mainBody }}" mainBody
+        |> Result.withDefault "{{ mainBody }} not found"
+
+    genPlatContent =
+        platformTemplate
+        |> Str.replaceFirst "# {{ mainType }}" mainType
+        |> Result.withDefault "{{ mainType }} not found"
+        |> Str.replaceFirst "# {{ mainForHostType }}" mainType
+        |> Result.withDefault "{{ mainForHostType }} not found"
+        |> Str.replaceFirst "# {{ mainForHostBody }}" mainForHostBody
+        |> Result.withDefault "{{ mainForHostBody }} not found"
+
+    genHostContent =
+        hostTemplate
+        |> Str.replaceFirst "// {{ mainForHostArgs }}" rust
+        |> Result.withDefault "{{ mainForHostArgs }} not found"
+        |> Str.replaceFirst "// {{ mainForHostExpected }}" mainForHostExpected
+        |> Result.withDefault "{{ mainForHostExpected }} not found"
+
     task =
-        {} <-
-            content =
-                appTemplate
-                |> Str.replaceFirst "# {{ mainType }}" mainType
-                |> Result.withDefault "{{ mainType }} not found"
-                |> Str.replaceFirst "# {{ mainBody }}" mainBody
-                |> Result.withDefault "{{ mainBody }} not found"
+        {} <- File.writeUtf8 (Path.fromStr genAppPath) genAppContent |> Task.await
+        {} <- File.writeUtf8 (Path.fromStr genPlatPath) genPlatContent |> Task.await
+        {} <- File.writeUtf8 (Path.fromStr expectedPath) expected |> Task.await
+        {} <- File.writeUtf8 (Path.fromStr genHostLibPath) genHostContent |> Task.await
+        {} <- File.writeUtf8 (Path.fromStr genHostCPath) hostC |> Task.await
+        {} <- File.writeUtf8 (Path.fromStr genBuildRsPath) buildRs |> Task.await
+        {} <- File.writeUtf8 (Path.fromStr genCargoTomlPath) cargoToml |> Task.await
 
-            File.writeUtf8 (Path.fromStr generatedAppPath) content |> Task.await
+        Stdout.line "Generated \(genAppPath) and \(genPlatPath) and \(expectedPath)"
 
-        {} <-
-            content =
-                platformTemplate
-                |> Str.replaceFirst "# {{ mainForHostType }}" mainType
-                |> Str.replaceFirst "# {{ mainForHostBody }}" mainForHostBody
-
-            File.writeUtf8 (Path.fromStr generatedPlatformPath) content |> Task.await
-
-        {} <-
-            hostTemplate
-            |> Str.replaceFirst "// {{ mainForHostArgs }}" rust
-            |> File.writeUtf8 (Path.fromStr generatedHostPath)
-            |> Task.await
-
-        {} <-
-            expected
-            |> File.writeUtf8 (Path.fromStr expectedPath)
-            |> Task.await
-
-        Stdout.line "Generated \(generatedAppPath) and \(generatedPlatformPath) and \(expectedPath)"
-
-    result <- Task.attempt
+    result <- Task.attempt task
 
     when result is
         Ok {} -> Task.succeed {}
-        Err (FileWriteErr _) ->
+        Err (FileWriteErr path NotFound) ->
+            pathStr = Path.display path
+            {} <- Stderr.line "One of the file writes got a NotFound error on path \(pathStr) while generating fuzz templates" |> Task.await
+
+            Task.fail 1
+        Err (FileWriteErr _ _) ->
             {} <- Stderr.line "One of the file writes errored while generating fuzz templates" |> Task.await
 
             Task.fail 1
@@ -107,13 +129,20 @@ genVal = \type ->
         "Str" -> Str "\"a string\""
         _ -> crash "Unrecognized type string: \"\(type)\""
 
-combineArgs : List Val -> { roc : Str, rust : Str, expected : Str }
-combineArgs = \vals ->
+combineArgs : List Val, Str -> { roc : Str, rust : Str, expected : Str, mainForHostExpected : Str }
+combineArgs = \vals, mainRetType ->
+    (mainRocVal, mainForHostExpected) =
+        when mainRetType is
+            "Str" -> ("\"\"", "roc_std::RocStr::empty()")
+            "List Str" -> ("[]", "roc_std::RocList::empty()")
+            _ -> crash "unsupported mainRetType \(mainRetType)"
+
     init = {
-        roc: "answer = \n     \"\"",
+        roc: "answer = \n         \(mainRocVal)",
         rust: "",
         expected: "",
         index: 0,
+        mainForHostExpected,
     }
 
     answer =
@@ -136,7 +165,8 @@ combineArgs = \vals ->
             }
 
     {
-        roc: answer.roc,
+        roc: "\(answer.roc)\n\n    answer",
         rust: answer.rust,
-        expected: "\(answer.expected)\n\n    answer"
+        expected: "\(answer.expected)\n\n    answer" # MISSING COMMA - add a comma to fix!
+        mainForHostExpected: answer.mainForHostExpected,
      }
