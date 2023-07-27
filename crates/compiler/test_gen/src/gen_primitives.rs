@@ -994,7 +994,7 @@ fn undefined_variable() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-#[should_panic(expected = "Roc failed with message: a crash")]
+#[should_panic(expected = "User crash with message: \"a crash\"")]
 fn a_crash() {
     assert_evals_to!(
         indoc!(
