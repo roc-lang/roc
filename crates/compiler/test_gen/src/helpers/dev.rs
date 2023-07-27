@@ -362,7 +362,14 @@ macro_rules! assert_evals_to {
 
             match result.into_result() {
                 Ok(value) => transform(value),
-                Err((msg, _tag)) => panic!("Roc failed with message: {msg}"),
+                Err((msg, tag)) => {
+                    use roc_mono::ir::CrashTag;
+
+                    match tag {
+                        CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+                        CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+                    }
+                }
             }
         }
     };
