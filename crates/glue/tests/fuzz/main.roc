@@ -7,6 +7,7 @@ app "fuzz-glue"
         pf.File,
         pf.Path,
         pf.Arg,
+        pf.Command,
         Random.{ Generator },
         "static/app-template.roc" as appTemplate : Str,
         "static/platform-template.roc" as platformTemplate : Str,
@@ -38,7 +39,7 @@ genArgsAndResult =
     args, ret <- Random.map2 (Random.list genType 12) genType
     (args, ret)
 
-main : Task {} U32
+main : Task {} U32 # TODO Return I32 after upgrading basic-cli
 main =
     # We expect 1 CLI arg, namely the RNG seed
     cliArgs <- Arg.list |> Task.await
@@ -57,26 +58,74 @@ main =
         else
             "tests"
 
-    Stdout.line "\(countStr) randomly-generated \(pluralized) ran."
+    Stdout.line "\(countStr) randomly-generated \(pluralized) passed."
 
-loop : { seed: Random.Seed, count : U64 } -> Task [Step { seed : Random.Seed, count : U64 }, Done U64] U32
+loop : { seed : Random.Seed, count : U64 } -> Task [Step { seed : Random.Seed, count : U64 }, Done U64] U32
 loop = \{ seed, count } ->
     # Randomly generate main's arguments and return type from the provided seed
     ((mainArgs, mainRetType), nextSeed) = Random.step seed genArgsAndResult
 
     {} <- gen mainArgs mainRetType |> Task.await
 
-    checkFailed = Bool.false # TODO
+    glueOut <-
+        Command.new "roc"
+        |> Command.arg "glue"
+        |> Command.arg "../../src/RustGlue.roc"
+        |> Command.arg "generated/glue/"
+        |> Command.arg "generated/platform.roc"
+        |> Command.output
+        |> Task.await
 
-    if checkFailed then
+    # Fail if `roc glue` failed
+    {} <-
+        Task.fromResult glueOut.status
+        |> Task.onFail (onSpawnFail "roc glue" glueOut.stderr)
+        |> Task.await
+
+    appOut <-
+        Command.new "roc"
+        |> Command.arg "dev"
+        |> Command.arg "generated/app.roc"
+        |> Command.output
+        |> Task.await
+
+    # Fail if `roc dev` failed
+    {} <-
+        Task.fromResult glueOut.status
+        |> Task.onFail (onSpawnFail "roc dev generated/app.roc" appOut.stderr)
+        |> Task.await
+
+    if (Str.fromUtf8 appOut.stdout == Ok "Assertion passed!\n") && (Str.fromUtf8 appOut.stderr == Ok "🔨 Rebuilding platform...\n") then
+        # Continue fuzzing forever!!!
+        Task.succeed (Step { seed: nextSeed, count: count + 1 })
+    else
+        stdoutStr = Str.fromUtf8 appOut.stdout |> Result.withDefault "<bad utf8>" # TODO Str.fromUtf8Lossy
+        stderrStr = Str.fromUtf8 appOut.stderr |> Result.withDefault "<bad utf8>" # TODO Str.fromUtf8Lossy
+        {} <- Stdout.line "Test failed with stdout: \"\(stdoutStr)\" and stderr \"\(stderrStr)\"" |> Task.await
         seedStr = Num.toStr (Random.seedToU64 seed)
 
         {} <- Stdout.line "To reproduce this failed test, pass this seed: \(seedStr)" |> Task.await
 
         Task.succeed (Done count)
-    else
-        # Continue fuzzing forever!!!
-        Task.succeed (Step { seed: nextSeed, count: count + 1 })
+
+onSpawnFail : Str, List U8 -> (_ -> Task * U32) # TODO "_" should be Command.Error once this lands: https://github.com/roc-lang/basic-cli/pull/91
+onSpawnFail = \cmdName, stderrUtf8 -> \err ->
+        (exitCode, msg) =
+            when err is
+                ExitCode code ->
+                    codeStr = Num.toStr code
+                    (Num.toU32 code, "exited with code \(codeStr)")
+
+                KilledBySignal ->
+                    (1, "was killed by a signal")
+
+                IOError ioErrStr ->
+                    (1, "encountered an I/O error: \"\(ioErrStr)\"")
+
+        stderrStr = Str.fromUtf8 stderrUtf8 |> Result.withDefault "<invalid UTF-8>" # TODO use Str.fromUtf8Lossy once that exists
+
+        {} <- Stdout.line "`\(cmdName)` \(msg). Its stderr was:\n\n\(stderrStr)" |> Task.await
+        Task.fail exitCode
 
 gen : List Str, Str -> Task {} U32
 gen = \mainArgTypes, mainRetType ->
@@ -172,6 +221,7 @@ gen = \mainArgTypes, mainRetType ->
             {} <- Stderr.line "One of the file writes got a NotFound error on path \(pathStr) while generating fuzz templates" |> Task.await
 
             Task.fail 1
+
         Err (FileWriteErr _ _) ->
             {} <- Stderr.line "One of the file writes errored while generating fuzz templates" |> Task.await
 
@@ -228,7 +278,6 @@ valToStrHelp = \buf, val ->
 
             Str.concat buf str
 
-
 genHelp : List Val, Str -> { roc : Str, rust : Str, expected : Str }
 genHelp = \vals, mainRetType ->
     initialRocVal =
@@ -270,4 +319,4 @@ genHelp = \vals, mainRetType ->
         roc: "\(answer.roc)\n\n    answer",
         rust: answer.rust,
         expected: rustExpected,
-     }
+    }
