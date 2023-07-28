@@ -47,19 +47,36 @@ main =
         List.get cliArgs 1
         |> Result.try Str.toU64
         |> Result.withDefault defaultSeed
-
-    seedStr = Num.toStr seed
-    {} <- Stdout.line "Generating from seed \(seedStr)" |> Task.await
-
-    # Randomly generate main's arguments and return type from the provided seed
-    (mainArgs, mainRetType) =
-        seed
         |> Random.seed
-        |> Random.step genArgsAndResult
-        |> .0
 
-    gen mainArgs mainRetType
+    count <- Task.loop { seed, count: 0 } loop |> Task.await
+    countStr = Num.toStr count
+    pluralized =
+        if count == 1 then
+            "test"
+        else
+            "tests"
 
+    Stdout.line "\(countStr) randomly-generated \(pluralized) ran."
+
+loop : { seed: Random.Seed, count : U64 } -> Task [Step { seed : Random.Seed, count : U64 }, Done U64] U32
+loop = \{ seed, count } ->
+    # Randomly generate main's arguments and return type from the provided seed
+    ((mainArgs, mainRetType), nextSeed) = Random.step seed genArgsAndResult
+
+    {} <- gen mainArgs mainRetType |> Task.await
+
+    checkFailed = Bool.false # TODO
+
+    if checkFailed then
+        seedStr = Num.toStr (Random.seedToU64 seed)
+
+        {} <- Stdout.line "To reproduce this failed test, pass this seed: \(seedStr)" |> Task.await
+
+        Task.succeed (Done count)
+    else
+        # Continue fuzzing forever!!!
+        Task.succeed (Step { seed: nextSeed, count: count + 1 })
 
 gen : List Str, Str -> Task {} U32
 gen = \mainArgTypes, mainRetType ->
@@ -144,7 +161,7 @@ gen = \mainArgTypes, mainRetType ->
         {} <- File.writeUtf8 (Path.fromStr genBuildRsPath) buildRs |> Task.await
         {} <- File.writeUtf8 (Path.fromStr genCargoTomlPath) cargoToml |> Task.await
 
-        Stdout.line "Generated \(genAppPath) and \(genPlatPath)"
+        Stdout.line "✅ main : \(mainType)"
 
     result <- Task.attempt task
 

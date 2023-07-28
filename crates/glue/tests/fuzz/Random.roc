@@ -11,6 +11,7 @@ interface Random
         i32,
         u32,
         seed,
+        seedToU64,
         step,
         list,
         constant,
@@ -40,6 +41,9 @@ Seed := U32 # TODO use a 64-bit seed and change algorithms accordingly
 ## This is an alias for [seed32].
 seed : U64 -> Seed
 seed = \num -> @Seed (Num.toU32 num)
+
+seedToU64 : Seed -> U64
+seedToU64 = \@Seed num -> Num.toU64 num # TODO drop this cast when Seed stores U64
 
 ## Generate a [Generation] from a state
 step : Seed, Generator val -> (val, Seed)
