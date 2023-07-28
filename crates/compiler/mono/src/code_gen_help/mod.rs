@@ -991,7 +991,7 @@ fn test_helper_body<'a>(
         ))
     };
 
-    // a longjmp/panic occured
+    // a longjmp/panic occurred
     let if_nonzero_stmt = {
         let alloca_symbol = env.create_symbol(ident_ids, "alloca");
         let alloca_expr = Expr::Alloca {
