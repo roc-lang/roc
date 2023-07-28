@@ -20,6 +20,7 @@ interface Random
         printableAscii,
         printableAsciiByte,
         unicodeScalar,
+        uniform,
     ]
     imports []
 
@@ -187,6 +188,51 @@ expect
     (num4, _) = step (seed 24680) (u32 7 5)
 
     num1 == 1234567 && num2 == 0 && num3 == 4294967295 && num4 == 6
+
+## Generate one of the elements in the "nonempty list" (an element plus a [List] of additional elements),
+## with a uniform distribution of probability for picking any one of them.
+uniform : a, List a -> Generator a
+uniform = \default, elems ->
+    @Generator \s1 ->
+        # We explicitly want the index to potentially be
+        # out of bounds by 1 (so, the length of the list)
+        # so that we can include the default value in the
+        # uniform distribution.
+        (index, s2) = step s1 (u32 0 (List.len elems |> Num.toU32)) # TODO switch from u32 to u64, and from Num.toU32 to Num.toU64
+
+        answer =
+            elems
+            |> List.get (Num.toNat index)
+            |> Result.withDefault default
+
+        (answer, s2)
+
+## uniform, independent seeds
+expect
+    (val1, _) = step (seed 12345) (uniform 1 [2, 3, 4, 5])
+    (val2, _) = step (seed 54321) (uniform 1 [2, 3, 4, 5])
+    (val3, _) = step (seed 24680) (uniform 1 [2, 3, 4, 5])
+
+    val1 == 4 && val2 == 1 && val3 == 1
+
+## uniform, chained seeds
+expect
+    s0 = seed 42134
+
+    (val1, s1) = step s0 (uniform "foo" ["bar", "baz", "blah"])
+    (val2, s2) = step s1 (uniform "foo" ["bar", "baz", "blah"])
+    (val3, _) = step s2 (uniform "foo" ["bar", "baz", "blah"])
+
+    val1 == "blah" && val2 == "foo" && val3 == "bar"
+
+## uniform, limits
+expect
+    (val1, _) = step (seed 12345) (uniform "blah" [])
+    (val2, _) = step (seed 54321) (uniform "blah" [])
+    (val3, _) = step (seed 54321) (uniform "blah" [])
+
+    val1 == "blah" && val2 == "blah" && val3 == "blah"
+
 
 # ### Helpers for the above functions
 

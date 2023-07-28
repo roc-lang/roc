@@ -7,6 +7,7 @@ app "fuzz-glue"
         pf.File,
         pf.Path,
         pf.Arg,
+        Random,
         "static/app-template.roc" as appTemplate : Str,
         "static/platform-template.roc" as platformTemplate : Str,
         "static/host-template.rs" as hostTemplate : Str,
@@ -26,15 +27,21 @@ genCargoTomlPath = "generated/Cargo.toml"
 genHostCPath = "generated/host.c"
 genBuildRsPath = "generated/build.rs"
 
+defaultSeed : U64
+defaultSeed = 1234567
+
 main : Task {} U32
 main =
     args <- Arg.list |> Task.await
 
-    mainRetType =
-        when List.get args 1 is
-            Ok "Str" -> "Str"
-            Ok "List Str" -> "List Str"
-            _ -> crash "unrecognized fuzzer args"
+    generator = Random.uniform "Str" ["List Str"]
+
+    (mainRetType, _) =
+        List.get args 1
+        |> Result.try Str.toU64
+        |> Result.withDefault defaultSeed
+        |> Random.seed
+        |> Random.step generator
 
     gen [] mainRetType
 
