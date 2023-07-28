@@ -285,12 +285,33 @@ impl<T> RocCallResult<T> {
                 let tag = (n - 1) as u32;
                 let tag = tag
                     .try_into()
-                    .unwrap_or_else(|_| panic!("received illegal tag: {tag}"));
+                    .unwrap_or_else(|_| panic!("received illegal tag: {tag} {msg}"));
 
                 (msg.as_str().to_owned(), tag)
             }),
         }
     }
+}
+
+fn get_test_main_fn<T>(
+    lib: &libloading::Library,
+) -> libloading::Symbol<unsafe extern "C" fn() -> RocCallResult<T>> {
+    let main_fn_name = "test_main";
+
+    unsafe {
+        lib.get(main_fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{main_fn_name}`"))
+            .expect("errored")
+    }
+}
+
+pub(crate) fn run_test_main<T>(lib: &libloading::Library) -> Result<T, (String, CrashTag)> {
+    let main = get_test_main_fn::<T>(lib);
+
+    let result = unsafe { main() };
+
+    result.into_result()
 }
 
 impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
@@ -321,54 +342,37 @@ macro_rules! assert_evals_to {
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
         use bumpalo::Bump;
-        use $crate::helpers::dev::RocCallResult;
 
         let arena = Bump::new();
         let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
-        let transform = |success| {
-            let expected = $expected;
-            #[allow(clippy::redundant_closure_call)]
-            let given = $transform(success);
-            assert_eq!(&given, &expected, "output is different");
-        };
+        let result = $crate::helpers::dev::run_test_main::<$ty>(&lib);
 
-        let main_fn_name = "test_main";
+        if !errors.is_empty() {
+            dbg!(&errors);
 
-        type Main = unsafe extern "C" fn(*mut RocCallResult<$ty>);
+            assert_eq!(
+                errors,
+                std::vec::Vec::new(),
+                "Encountered errors: {:?}",
+                errors
+            );
+        }
 
-        unsafe {
-            let main: libloading::Symbol<Main> = lib
-                .get(main_fn_name.as_bytes())
-                .ok()
-                .ok_or(format!("Unable to JIT compile `{}`", main_fn_name))
-                .expect("errored");
-
-            let mut result = std::mem::MaybeUninit::uninit();
-            main(result.as_mut_ptr());
-            let result = result.assume_init();
-
-            if !errors.is_empty() {
-                dbg!(&errors);
-
-                assert_eq!(
-                    errors,
-                    std::vec::Vec::new(),
-                    "Encountered errors: {:?}",
-                    errors
-                );
+        match result {
+            Ok(value) => {
+                let expected = $expected;
+                #[allow(clippy::redundant_closure_call)]
+                let given = $transform(value);
+                assert_eq!(&given, &expected, "output is different");
             }
+            Err((msg, tag)) => {
+                use roc_mono::ir::CrashTag;
 
-            match result.into_result() {
-                Ok(value) => transform(value),
-                Err((msg, tag)) => {
-                    use roc_mono::ir::CrashTag;
-
-                    match tag {
-                        CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
-                        CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
-                    }
+                match tag {
+                    CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+                    CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
                 }
             }
         }

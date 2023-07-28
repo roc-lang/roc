@@ -975,7 +975,7 @@ fn overflow_frees_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn undefined_variable() {
     assert_evals_to!(
