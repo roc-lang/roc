@@ -28,7 +28,7 @@ view = \htmlContent ->
                 text htmlContent,
             ],
             footer [] [
-                text "Made by people who like to make nice things. © 2022"
+                text "Made by people who like to make nice things. © 2023"
             ]
         ],
         script [src "/site.js"] [],

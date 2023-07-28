@@ -51,11 +51,8 @@ cargo --version
 export ROC_DOCS_URL_ROOT=/builtins
 
 cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
-mv generated-docs/*.js www/build # move all .js files to build/
-mv generated-docs/*.css www/build
-mv generated-docs/*.svg www/build
 
-mv generated-docs/ www/build/builtins # move all the rest to build/builtins/
+mv generated-docs/ www/build/builtins # move everything to build/builtins/
 
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
