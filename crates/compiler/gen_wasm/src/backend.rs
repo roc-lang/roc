@@ -2158,10 +2158,15 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
+        let layout_repr = self.layout_interner.runtime_representation(layout);
+        let same_layout =
+            |layout| self.layout_interner.runtime_representation(layout) == layout_repr;
         let proc_index = self
             .proc_lookup
             .iter()
-            .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
+            .position(|lookup| {
+                lookup.name == proc_symbol && same_layout(lookup.layout.arguments[0])
+            })
             .unwrap();
 
         self.fn_index_offset + proc_index as u32
