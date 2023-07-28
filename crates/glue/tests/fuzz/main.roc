@@ -20,7 +20,6 @@ app "fuzz-glue"
 genAppPath = "generated/app.roc"
 genPlatPath = "generated/platform.roc"
 genHostLibPath = "generated/src/lib.rs"
-expectedPath = "generated/expected.txt"
 
 # TODO just cp all this stuff over
 genCargoTomlPath = "generated/Cargo.toml"
@@ -71,7 +70,7 @@ gen = \mainArgTypes, mainRetType ->
 
     # Actually use all the arguments to determine the return value,
     # so we have some way to tell if they made it through correctly.
-    { roc: mainBody, rust, expected, mainForHostExpected } = combineArgs mainArgVals mainRetType
+    { roc: mainBody, rust, expected } = genHelp mainArgVals mainRetType
 
     mainType =
         if List.isEmpty mainArgTypes then
@@ -134,19 +133,18 @@ gen = \mainArgTypes, mainRetType ->
         hostTemplate
         |> Str.replaceFirst "// {{ mainForHostArgs }}" rust
         |> Result.withDefault "{{ mainForHostArgs }} not found"
-        |> Str.replaceFirst "// {{ mainForHostExpected }}" mainForHostExpected
+        |> Str.replaceFirst "// {{ mainForHostExpected }}" expected
         |> Result.withDefault "{{ mainForHostExpected }} not found"
 
     task =
         {} <- File.writeUtf8 (Path.fromStr genAppPath) genAppContent |> Task.await
         {} <- File.writeUtf8 (Path.fromStr genPlatPath) genPlatContent |> Task.await
-        {} <- File.writeUtf8 (Path.fromStr expectedPath) expected |> Task.await
         {} <- File.writeUtf8 (Path.fromStr genHostLibPath) genHostContent |> Task.await
         {} <- File.writeUtf8 (Path.fromStr genHostCPath) hostC |> Task.await
         {} <- File.writeUtf8 (Path.fromStr genBuildRsPath) buildRs |> Task.await
         {} <- File.writeUtf8 (Path.fromStr genCargoTomlPath) cargoToml |> Task.await
 
-        Stdout.line "Generated \(genAppPath) and \(genPlatPath) and \(expectedPath)"
+        Stdout.line "Generated \(genAppPath) and \(genPlatPath)"
 
     result <- Task.attempt task
 
@@ -193,52 +191,66 @@ valToRustVal = \val ->
 
                 "roc_std::RocList::from([\(elemsStr)])"
 
-combineArgs : List Val, Str -> { roc : Str, rust : Str, expected : Str, mainForHostExpected : Str }
-combineArgs = \vals, mainRetType ->
-    (mainRocVal, rustExpected) =
+valToStr : Val -> Str
+valToStr = \val -> valToStrHelp "" val
+
+valToStrHelp : Str, Val -> Str
+valToStrHelp = \buf, val ->
+    when val is
+        Str str ->
+            Str.concat buf str
+
+        List vals ->
+            str = List.walk vals "" \accum, elem ->
+                elemStr = valToStr elem
+
+                if Str.isEmpty accum then
+                    elemStr
+                else
+                    accum |> Str.concat ", \(elemStr)"
+
+            Str.concat buf str
+
+
+genHelp : List Val, Str -> { roc : Str, rust : Str, expected : Str }
+genHelp = \vals, mainRetType ->
+    initialRocVal =
         when mainRetType is
-            "Str" -> ("\"\"", "roc_std::RocStr::empty()")
-            "List Str" -> ("[]", "roc_std::RocList::<roc_std::RocStr>::empty()")
+            "Str" -> "\"\""
+            "List Str" -> "[]"
             _ -> crash "unsupported mainRetType \(mainRetType)"
 
     init = {
-        roc: "answer = \n        \(mainRocVal)",
+        roc: "answer = \n        \(initialRocVal)",
         rust: "",
         expected: "",
         index: 0,
-        mainForHostExpected: rustExpected,
     }
 
     answer =
-        List.walk vals init \{ roc, rust, expected, index, mainForHostExpected }, val ->
+        List.walk vals init \{ roc, rust, expected, index }, val ->
             indexStr = Num.toStr index
-            next =
-                when val is
-                    Str str ->
-                        {
-                            roc: "Str.concat arg\(indexStr)",
-                            expected: expected |> Str.concat str,
-                        }
-
-                    List _ ->
-                        {
-                            roc: "Str.concat (Str.joinWith arg\(indexStr) \", \")",
-                            expected: expected |> Str.concat "TODO concat list here",
-                        }
-
             rustStr = valToRustVal val
+            nextRoc =
+                when val is
+                    Str _ -> "Str.concat arg\(indexStr)"
+                    List _ -> "Str.concat (Str.joinWith arg\(indexStr) \", \")"
 
             {
-                expected: next.expected,
-                roc: "\(roc)\n        |> \(next.roc)",
-                rust: if Str.isEmpty rust then rustStr else "\(rust), \(rustStr)",
+                expected: expected |> Str.concat (valToStr val),
+                roc: "\(roc)\n        |> \(nextRoc)",
+                rust: if Str.isEmpty rust then rustStr else "\(rust),\n        \(rustStr)",
                 index: index + 1,
-                mainForHostExpected,
             }
+
+    rustExpected =
+        when mainRetType is
+            "Str" -> "roc_std::RocStr::from(\"\(answer.expected)\")"
+            "List Str" -> "roc_std::RocList::<roc_std::RocStr>::empty()" # TODO
+            _ -> crash "unsupported mainRetType \(mainRetType)"
 
     {
         roc: "\(answer.roc)\n\n    answer",
         rust: answer.rust,
-        expected: "\(answer.expected)\n\n    answer",
-        mainForHostExpected: answer.mainForHostExpected,
+        expected: rustExpected,
      }
