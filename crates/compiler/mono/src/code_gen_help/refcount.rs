@@ -1046,23 +1046,22 @@ fn refcount_list<'a>(
     let modify_list = modify_refcount_stmt(Pointer::ToData(data_pointer));
 
     let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
-    let modify_elems_and_list =
-        if is_relevant_op && layout_interner.get_repr(elem_layout).is_refcounted() {
-            refcount_list_elems(
-                root,
-                ident_ids,
-                ctx,
-                layout_interner,
-                elem_layout,
-                LAYOUT_UNIT,
-                ptr_layout,
-                len,
-                first_element_pointer,
-                modify_list,
-            )
-        } else {
-            modify_list
-        };
+    let modify_elems_and_list = if is_relevant_op && layout_interner.is_refcounted(elem_layout) {
+        refcount_list_elems(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            elem_layout,
+            LAYOUT_UNIT,
+            ptr_layout,
+            len,
+            first_element_pointer,
+            modify_list,
+        )
+    } else {
+        modify_list
+    };
 
     //
     // JoinPoint for slice vs list

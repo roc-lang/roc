@@ -2872,8 +2872,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 DecRef(symbol) => {
                     let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-                    let lay = layout_interner.get_repr(layout);
-                    match lay {
+                    match layout_interner.runtime_representation(layout) {
                         LayoutRepr::Builtin(Builtin::Str) => todo!(),
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
@@ -2883,16 +2882,19 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
 
-                        _ if lay.is_refcounted() => {
+                        other_layout if other_layout.is_refcounted(layout_interner) => {
                             if value.is_pointer_value() {
-                                let value_ptr = match lay {
-                                    LayoutRepr::Union(union_layout)
-                                        if union_layout
-                                            .stores_tag_id_in_pointer(env.target_info) =>
-                                    {
-                                        tag_pointer_clear_tag_id(env, value.into_pointer_value())
+                                let clear_tag_id = match other_layout {
+                                    LayoutRepr::Union(union_layout) => {
+                                        union_layout.stores_tag_id_in_pointer(env.target_info)
                                     }
-                                    _ => value.into_pointer_value(),
+                                    _ => false,
+                                };
+
+                                let value_ptr = if clear_tag_id {
+                                    tag_pointer_clear_tag_id(env, value.into_pointer_value())
+                                } else {
+                                    value.into_pointer_value()
                                 };
 
                                 let then_block = env.context.append_basic_block(parent, "then");
@@ -2945,7 +2947,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     debug_assert!(value.is_pointer_value());
                     let value = value.into_pointer_value();
 
-                    let clear_tag_id = match layout_interner.chase_recursive(layout) {
+                    let clear_tag_id = match layout_interner.runtime_representation(layout) {
                         LayoutRepr::Union(union) => union.stores_tag_id_in_pointer(env.target_info),
                         _ => false,
                     };

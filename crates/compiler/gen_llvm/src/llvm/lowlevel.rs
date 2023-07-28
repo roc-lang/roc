@@ -1354,7 +1354,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 "cast_to_i8_ptr",
             );
 
-            let value_ptr = match layout_interner.get_repr(data_layout) {
+            let value_ptr = match layout_interner.runtime_representation(data_layout) {
                 LayoutRepr::Union(union_layout)
                     if union_layout.stores_tag_id_in_pointer(env.target_info) =>
                 {
