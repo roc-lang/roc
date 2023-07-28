@@ -7,7 +7,7 @@ app "fuzz-glue"
         pf.File,
         pf.Path,
         pf.Arg,
-        Random,
+        Random.{ Generator },
         "static/app-template.roc" as appTemplate : Str,
         "static/platform-template.roc" as platformTemplate : Str,
         "static/host-template.rs" as hostTemplate : Str,
@@ -30,20 +30,36 @@ genBuildRsPath = "generated/build.rs"
 defaultSeed : U64
 defaultSeed = 1234567
 
+genType : Generator Str
+genType =
+    Random.uniform "Str" ["List Str"]
+
+genArgsAndResult : Generator (List Str, Str)
+genArgsAndResult =
+    args, ret <- Random.map2 (Random.list genType 12) genType
+    (args, ret)
+
 main : Task {} U32
 main =
-    args <- Arg.list |> Task.await
+    # We expect 1 CLI arg, namely the RNG seed
+    cliArgs <- Arg.list |> Task.await
 
-    generator = Random.uniform "Str" ["List Str"]
-
-    (mainRetType, _) =
-        List.get args 1
+    seed =
+        List.get cliArgs 1
         |> Result.try Str.toU64
         |> Result.withDefault defaultSeed
-        |> Random.seed
-        |> Random.step generator
 
-    gen [] mainRetType
+    seedStr = Num.toStr seed
+    {} <- Stdout.line "Generating from seed \(seedStr)" |> Task.await
+
+    # Randomly generate main's arguments and return type from the provided seed
+    (mainArgs, mainRetType) =
+        seed
+        |> Random.seed
+        |> Random.step genArgsAndResult
+        |> .0
+
+    gen mainArgs mainRetType
 
 
 gen : List Str, Str -> Task {} U32
@@ -51,7 +67,7 @@ gen = \mainArgTypes, mainRetType ->
     # TODO rm -rf generated/
     # TODO mkdir -p generated/src/
 
-    mainArgVals = List.map mainArgTypes genVal # TODO randomly generate
+    mainArgVals = List.map mainArgTypes genVal
 
     # Actually use all the arguments to determine the return value,
     # so we have some way to tell if they made it through correctly.
@@ -64,6 +80,21 @@ gen = \mainArgTypes, mainRetType ->
             mainArgTypes
             |> Str.joinWith ", "
             |> Str.concat " -> \(mainRetType)"
+
+    mainLambda =
+        if List.isEmpty mainArgTypes then
+            ""
+        else
+            # Declare all the arguments
+            argStrings =
+                List.mapWithIndex mainArgTypes \_arg, index ->
+                    indexStr = Num.toStr index
+                    "arg\(indexStr)"
+
+            # e.g. `\arg0, arg1, arg2 ->`
+            "\\"
+            |> Str.concat (Str.joinWith argStrings ", ")
+            |> Str.concat " ->"
 
     mainForHostBody =
         if List.isEmpty mainArgTypes then
@@ -87,6 +118,8 @@ gen = \mainArgTypes, mainRetType ->
         |> Result.withDefault "{{ mainType }} not found"
         |> Str.replaceFirst "# {{ mainBody }}" mainBody
         |> Result.withDefault "{{ mainBody }} not found"
+        |> Str.replaceFirst "# {{ mainLambda }}" mainLambda
+        |> Result.withDefault "{{ mainLambda }} not found"
 
     genPlatContent =
         platformTemplate
@@ -130,14 +163,35 @@ gen = \mainArgTypes, mainRetType ->
             Task.fail 1
 
 Val : [
-    Str Str
+    Str Str,
+    List (List Val),
 ]
 
 genVal : Str -> Val
 genVal = \type ->
+    # TODO randomly generate these values
     when type is
-        "Str" -> Str "\"a string\""
-        _ -> crash "Unrecognized type string: \"\(type)\""
+        "Str" -> Str "a string"
+        "List Str" -> List [Str "a string elem", Str "another string elem"]
+        _ -> crash "Unrecognized val type string: \"\(type)\""
+
+valToRustVal : Val -> Str
+valToRustVal = \val ->
+    when val is
+        Str str -> "roc_std::RocStr::from(\"\(str)\")"
+        List list ->
+            if List.isEmpty list then
+                "roc_std::RocList::<RocStr>::empty()"
+            else
+                elemsStr = List.walk list "" \accum, elem ->
+                    valStr = valToRustVal elem
+
+                    if Str.isEmpty accum then
+                        valStr
+                    else
+                        "\(accum), \(valStr)"
+
+                "roc_std::RocList::from([\(elemsStr)])"
 
 combineArgs : List Val, Str -> { roc : Str, rust : Str, expected : Str, mainForHostExpected : Str }
 combineArgs = \vals, mainRetType ->
@@ -148,7 +202,7 @@ combineArgs = \vals, mainRetType ->
             _ -> crash "unsupported mainRetType \(mainRetType)"
 
     init = {
-        roc: "answer = \n         \(mainRocVal)",
+        roc: "answer = \n        \(mainRocVal)",
         rust: "",
         expected: "",
         index: 0,
@@ -163,14 +217,21 @@ combineArgs = \vals, mainRetType ->
                     Str str ->
                         {
                             roc: "Str.concat arg\(indexStr)",
-                            rust: "\"\(str)\"",
                             expected: expected |> Str.concat str,
                         }
 
+                    List _ ->
+                        {
+                            roc: "Str.concat (Str.joinWith arg\(indexStr) \", \")",
+                            expected: expected |> Str.concat "TODO concat list here",
+                        }
+
+            rustStr = valToRustVal val
+
             {
                 expected: next.expected,
-                roc: "\(roc)\n    |> \(next.roc)",
-                rust: if Str.isEmpty rust then next.rust else ", \(next.rust)",
+                roc: "\(roc)\n        |> \(next.roc)",
+                rust: if Str.isEmpty rust then rustStr else "\(rust), \(rustStr)",
                 index: index + 1,
                 mainForHostExpected,
             }

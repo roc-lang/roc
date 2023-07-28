@@ -4,5 +4,5 @@ app "app"
     provides [main] to pf
 
 main : # {{ mainType }}
-main =
+main = # {{ mainLambda }}
     # {{ mainBody }}

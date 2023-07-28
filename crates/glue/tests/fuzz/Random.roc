@@ -16,6 +16,7 @@ interface Random
         constant,
         str,
         map,
+        map2,
         andThen,
         printableAscii,
         printableAsciiByte,
@@ -51,6 +52,16 @@ map = \@Generator gen, transform ->
         b = transform a
 
         (b, s2)
+
+map2 : Generator a, Generator b, (a, b -> c) -> Generator c
+map2 = \@Generator genA, @Generator genB, transform ->
+    @Generator \s1 ->
+        (a, s2) = genA s1
+        (b, s3) = genB s2
+
+        c = transform a b
+
+        (c, s3)
 
 andThen : Generator a, (a -> Generator b) -> Generator b
 andThen = \@Generator gen1, transform ->
