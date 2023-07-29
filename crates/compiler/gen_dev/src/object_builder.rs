@@ -320,13 +320,6 @@ fn build_object<'a, B: Backend<'a>>(
             "free".into(),
         );
 
-        //        generate_wrapper(
-        //            &mut backend,
-        //            &mut output,
-        //            "roc_panic".into(),
-        //            "roc_builtins.utils.test_panic".into(),
-        //        );
-
         // Extra symbols only required on unix systems.
         if matches!(output.format(), BinaryFormat::Elf | BinaryFormat::MachO) {
             generate_wrapper(
@@ -356,12 +349,6 @@ fn build_object<'a, B: Backend<'a>>(
         if backend.env().exposed_to_host.contains(&sym) {
             let exposed_proc = build_exposed_proc(&mut backend, &proc);
             let exposed_generic_proc = build_exposed_generic_proc(&mut backend, &proc);
-
-            //        ModuleId,
-            //        &mut STLayoutInterner<'a>,
-            //        &mut Interns,
-            //        &mut CodeGenHelp<'a>,
-            //        &mut Vec<'a, CallerProc<'a>>,
 
             let (module_id, layout_interner, interns, code_gen_help, _) =
                 backend.module_interns_helpers_mut();
