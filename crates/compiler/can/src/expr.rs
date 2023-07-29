@@ -2376,14 +2376,13 @@ fn flatten_str_literal<'a>(
     }
 }
 
-/// Comments and newlines are disallowed inside interpolation
+/// Comments, newlines, and nested interpolation are disallowed inside interpolation
 pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
         // These definitely contain neither comments nor newlines, so they are valid
         ast::Expr::Var { .. }
         | ast::Expr::SingleQuote(_)
         | ast::Expr::Str(StrLiteral::PlainLine(_))
-        | ast::Expr::Str(StrLiteral::Line(_))
         | ast::Expr::Float(_)
         | ast::Expr::Num(_)
         | ast::Expr::NonBase10Int { .. }
@@ -2405,6 +2404,16 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
         // These can contain subexpressions, so we need to recursively check those
+        ast::Expr::Str(StrLiteral::Line(segments)) => {
+            segments.iter().all(|segment| match segment {
+                ast::StrSegment::EscapedChar(_)
+                | ast::StrSegment::Unicode(_)
+                | ast::StrSegment::Plaintext(_) => true,
+                // Disallow nested interpolation. Alternatively, we could allow it but require
+                // a comment above it apologizing to the next person who has to read the code.
+                ast::StrSegment::Interpolated(_) => false,
+            })
+        }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
             ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
             | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
