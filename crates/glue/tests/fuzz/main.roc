@@ -30,11 +30,43 @@ genBuildRsPath = "generated/build.rs"
 defaultSeed : U64
 defaultSeed = 1234567
 
-genType : Generator Str
-genType =
-    Random.uniform "Str" ["List Str"]
 
-genArgsAndResult : Generator (List Str, Str)
+Type : [
+    Str,
+    U8,
+    I8,
+    U16,
+    I16,
+    U32,
+    I32,
+    U64,
+    I64,
+    U128,
+    I128,
+    ListStr,
+]
+
+typeToRocStr : Type -> Str
+typeToRocStr = \type ->
+    when type is
+        Str -> "Str"
+        U8 -> "U8"
+        I8 -> "I8"
+        U16 -> "U16"
+        I16 -> "I16"
+        U32 -> "U32"
+        I32 -> "I32"
+        U64 -> "U64"
+        I64 -> "I64"
+        U128 -> "U128"
+        I128 -> "I128"
+        ListStr -> "List Str"
+
+genType : Generator Type
+genType =
+    Random.uniform Str [U8, I8, U16, I16, U32, I32, U64, I64, U128, I128, ListStr]
+
+genArgsAndResult : Generator (List Type, Type)
 genArgsAndResult =
     args, ret <- Random.map2 (Random.list genType 12) genType
     (args, ret)
@@ -128,24 +160,26 @@ onSpawnFail = \cmdName, stderrUtf8 -> \err ->
     {} <- Stdout.line "`\(cmdName)` \(msg). Its stderr was:\n\n\(stderrStr)" |> Task.await
     Task.fail exitCode
 
-gen : List Str, Str -> Task Str U32
+gen : List Type, Type -> Task Str U32
 gen = \mainArgTypes, mainRetType ->
     # TODO rm -rf generated/
     # TODO mkdir -p generated/src/
 
-    mainArgVals = List.map mainArgTypes genVal
+    mainArgVals = List.map mainArgTypes valFromType
 
     # Actually use all the arguments to determine the return value,
     # so we have some way to tell if they made it through correctly.
     { roc: mainBody, rust, expected } = genHelp mainArgVals mainRetType
 
+    mainRetTypeStr = typeToRocStr mainRetType
     mainType =
         if List.isEmpty mainArgTypes then
-            mainRetType
+            mainRetTypeStr
         else
             mainArgTypes
+            |> List.map typeToRocStr
             |> Str.joinWith ", "
-            |> Str.concat " -> \(mainRetType)"
+            |> Str.concat " -> \(mainRetTypeStr)"
 
     mainLambda =
         if List.isEmpty mainArgTypes then
@@ -230,21 +264,50 @@ gen = \mainArgTypes, mainRetType ->
 
 Val : [
     Str Str,
+    U8 U8,
+    I8 I8,
+    U16 U16,
+    I16 I16,
+    U32 U32,
+    I32 I32,
+    U64 U64,
+    I64 I64,
+    U128 U128,
+    I128 I128,
     List (List Val),
 ]
 
-genVal : Str -> Val
-genVal = \type ->
+valFromType : Type -> Val
+valFromType = \type ->
     # TODO randomly generate these values
     when type is
-        "Str" -> Str "a string"
-        "List Str" -> List [Str "a string elem", Str "another string elem"]
-        _ -> crash "Unrecognized val type string: \"\(type)\""
+        Str -> Str "a string"
+        U8 -> U8 8
+        I8 -> I8 -19
+        U16 -> U16 1234
+        I16 -> I16 -4321
+        U32 -> U32 2344567
+        I32 -> I32 -2345982
+        U64 -> U64 2435082345203450
+        I64 -> I64 -72435082345203450
+        U128 -> U128 12811290341234109324103249123409132049
+        I128 -> I128 -8128112903412341093241032491234091329
+        ListStr -> List [Str "a string elem", Str "another string elem"]
 
 valToRustVal : Val -> Str
 valToRustVal = \val ->
     when val is
         Str str -> "roc_std::RocStr::from(\"\(str)\")"
+        U8 num -> Num.toStr num
+        I8 num -> Num.toStr num
+        U16 num -> Num.toStr num
+        I16 num -> Num.toStr num
+        U32 num -> Num.toStr num
+        I32 num -> Num.toStr num
+        U64 num -> Num.toStr num
+        I64 num -> Num.toStr num
+        U128 num -> Num.toStr num
+        I128 num -> Num.toStr num
         List list ->
             if List.isEmpty list then
                 "roc_std::RocList::<RocStr>::empty()"
@@ -265,9 +328,17 @@ valToStr = \val -> valToStrHelp "" val
 valToStrHelp : Str, Val -> Str
 valToStrHelp = \buf, val ->
     when val is
-        Str str ->
-            Str.concat buf str
-
+        Str str -> Str.concat buf str
+        U8 num -> Str.concat buf (Num.toStr num)
+        I8 num -> Str.concat buf (Num.toStr num)
+        U16 num -> Str.concat buf (Num.toStr num)
+        I16 num -> Str.concat buf (Num.toStr num)
+        U32 num -> Str.concat buf (Num.toStr num)
+        I32 num -> Str.concat buf (Num.toStr num)
+        U64 num -> Str.concat buf (Num.toStr num)
+        I64 num -> Str.concat buf (Num.toStr num)
+        U128 num -> Str.concat buf (Num.toStr num)
+        I128 num -> Str.concat buf (Num.toStr num)
         List vals ->
             str = List.walk vals "" \accum, elem ->
                 elemStr = valToStr elem
@@ -279,7 +350,7 @@ valToStrHelp = \buf, val ->
 
             Str.concat buf str
 
-genHelp : List Val, Str -> { roc : Str, rust : Str, expected : Str }
+genHelp : List Val, Type -> { roc : Str, rust : Str, expected : Str }
 genHelp = \vals, mainRetType ->
     init = {
         roc: "answer = \n        \"\"",
@@ -295,6 +366,7 @@ genHelp = \vals, mainRetType ->
             nextRoc =
                 when val is
                     Str _ -> "Str.concat arg\(indexStr)"
+                    U8 _ | I8 _ | U16 _ | I16 _ | U32 _ | I32 _ | U64 _ | I64 _ | U128 _ | I128 _ -> "Str.concat (Num.toStr arg\(indexStr))"
                     List _ -> "Str.concat (Str.joinWith arg\(indexStr) \", \")"
 
             {
@@ -306,15 +378,24 @@ genHelp = \vals, mainRetType ->
 
     rocAnswer =
         when mainRetType is
-            "Str" -> "answer"
-            "List Str" -> "[answer]"
-            _ -> crash "unsupported mainRetType \(mainRetType)"
+            Str -> "answer"
+            U8 -> "Num.toU8 (Str.countUtf8Bytes answer)"
+            I8 -> "Num.toI8 (Str.countUtf8Bytes answer)"
+            U16 -> "Num.toU16 (Str.countUtf8Bytes answer)"
+            I16 -> "Num.toI16 (Str.countUtf8Bytes answer)"
+            U32 -> "Num.toU32 (Str.countUtf8Bytes answer)"
+            I32 -> "Num.toI32 (Str.countUtf8Bytes answer)"
+            U64 -> "Num.toU64 (Str.countUtf8Bytes answer)"
+            I64 -> "Num.toI64 (Str.countUtf8Bytes answer)"
+            U128 -> "Num.toU128 (Str.countUtf8Bytes answer)"
+            I128 -> "Num.toI128 (Str.countUtf8Bytes answer)"
+            ListStr -> "[answer]"
 
     rustExpected =
         when mainRetType is
-            "Str" -> "roc_std::RocStr::from(\"\(answer.expected)\")"
-            "List Str" -> "roc_std::RocList::<roc_std::RocStr>::from([roc_std::RocStr::from(\"\(answer.expected)\")])"
-            _ -> crash "unsupported mainRetType \(mainRetType)"
+            Str -> "roc_std::RocStr::from(\"\(answer.expected)\")"
+            U8 | I8 | U16 | I16 | U32 | I32 | U64 | I64 | U128 | I128 -> "answer"
+            ListStr -> "roc_std::RocList::<roc_std::RocStr>::from([roc_std::RocStr::from(\"\(answer.expected)\")])"
 
     {
         roc: "\(answer.roc)\n\n    \(rocAnswer)",
