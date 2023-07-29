@@ -18,7 +18,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
@@ -2376,11 +2376,106 @@ fn flatten_str_literal<'a>(
     }
 }
 
+/// Comments and newlines are disallowed inside interpolation
 pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
-        ast::Expr::Var { .. } => true,
-        ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
-        _ => false,
+        // These definitely contain neither comments nor newlines, so they are valid
+        ast::Expr::Var { .. }
+        | ast::Expr::SingleQuote(_)
+        | ast::Expr::Str(StrLiteral::PlainLine(_))
+        | ast::Expr::Str(StrLiteral::Line(_))
+        | ast::Expr::Float(_)
+        | ast::Expr::Num(_)
+        | ast::Expr::NonBase10Int { .. }
+        | ast::Expr::AccessorFunction(_)
+        | ast::Expr::Crash
+        | ast::Expr::Underscore(_)
+        | ast::Expr::MalformedIdent(_, _)
+        | ast::Expr::Tag(_)
+        | ast::Expr::OpaqueRef(_)
+        | ast::Expr::MalformedClosure => true,
+        // Newlines are disallowed inside interpolation, and these all require newlines
+        ast::Expr::Dbg(_, _)
+        | ast::Expr::Defs(_, _)
+        | ast::Expr::Expect(_, _)
+        | ast::Expr::When(_, _)
+        | ast::Expr::Backpassing(_, _, _)
+        | ast::Expr::IngestedFile(_, _)
+        | ast::Expr::SpaceBefore(_, _)
+        | ast::Expr::Str(StrLiteral::Block(_))
+        | ast::Expr::SpaceAfter(_, _) => false,
+        // These can contain subexpressions, so we need to recursively check those
+        ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
+            ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+            }
+            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
+        }),
+        ast::Expr::Tuple(fields) => fields
+            .iter()
+            .all(|loc_field| is_valid_interpolation(&loc_field.value)),
+        ast::Expr::MultipleRecordBuilders(loc_expr)
+        | ast::Expr::UnappliedRecordBuilder(loc_expr)
+        | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
+        | ast::Expr::UnaryOp(loc_expr, _)
+        | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
+        ast::Expr::TupleAccess(sub_expr, _)
+        | ast::Expr::ParensAround(sub_expr)
+        | ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
+        ast::Expr::Apply(loc_expr, args, _called_via) => {
+            is_valid_interpolation(&loc_expr.value)
+                && args
+                    .iter()
+                    .all(|loc_arg| is_valid_interpolation(&loc_arg.value))
+        }
+        ast::Expr::BinOps(loc_exprs, loc_expr) => {
+            is_valid_interpolation(&loc_expr.value)
+                && loc_exprs
+                    .iter()
+                    .all(|(loc_expr, _binop)| is_valid_interpolation(&loc_expr.value))
+        }
+        ast::Expr::If(branches, final_branch) => {
+            is_valid_interpolation(&final_branch.value)
+                && branches.iter().all(|(loc_before, loc_after)| {
+                    is_valid_interpolation(&loc_before.value)
+                        && is_valid_interpolation(&loc_after.value)
+                })
+        }
+        ast::Expr::List(elems) => elems
+            .iter()
+            .all(|loc_expr| is_valid_interpolation(&loc_expr.value)),
+        ast::Expr::RecordUpdate { update, fields } => {
+            is_valid_interpolation(&update.value)
+                && fields.iter().all(|loc_field| match loc_field.value {
+                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+                    }
+                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::SpaceBefore(_, _)
+                    | ast::AssignedField::SpaceAfter(_, _) => false,
+                })
+        }
+        ast::Expr::RecordBuilder(fields) => fields.iter().all(|loc_field| match loc_field.value {
+            ast::RecordBuilderField::Value(_label, comments, loc_expr) => {
+                comments.is_empty() && is_valid_interpolation(&loc_expr.value)
+            }
+            ast::RecordBuilderField::ApplyValue(
+                _label,
+                comments_before,
+                comments_after,
+                loc_expr,
+            ) => {
+                comments_before.is_empty()
+                    && comments_after.is_empty()
+                    && is_valid_interpolation(&loc_expr.value)
+            }
+            ast::RecordBuilderField::Malformed(_) | ast::RecordBuilderField::LabelOnly(_) => true,
+            ast::RecordBuilderField::SpaceBefore(_, _)
+            | ast::RecordBuilderField::SpaceAfter(_, _) => false,
+        }),
     }
 }
 
