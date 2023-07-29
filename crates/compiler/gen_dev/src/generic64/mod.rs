@@ -919,12 +919,9 @@ impl<
 
     fn build_roc_panic(&mut self) -> (&'a [u8], Vec<'a, Relocation>) {
         let mut out = bumpalo::vec![in self.env.arena];
+        let mut relocs = bumpalo::vec![in self.env.arena];
 
-        let before = self.relocs.len();
-
-        CC::roc_panic(&mut out, &mut self.relocs);
-
-        let relocs = self.relocs.split_off(before);
+        CC::roc_panic(&mut out, &mut relocs);
 
         (out.into_bump_slice(), relocs)
     }
