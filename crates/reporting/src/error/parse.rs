@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, ESingleQuote, FileError, PList, SyntaxError};
+use roc_parse::parser::{ENumber, EPattern, ESingleQuote, FileError, PList, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -600,8 +600,8 @@ fn to_expr_report<'a>(
 
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
 
-        &EExpr::Number(ENumber::End, pos) => {
-            to_malformed_number_literal_report(alloc, lines, filename, pos)
+        EExpr::Number(ENumber::End, pos) => {
+            to_malformed_number_literal_report(alloc, lines, filename, *pos)
         }
 
         EExpr::Ability(err, pos) => to_ability_def_report(alloc, lines, filename, err, *pos),
@@ -670,7 +670,43 @@ fn to_expr_report<'a>(
         EExpr::Dbg(e_expect, _position) => {
             to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
         }
-        _ => todo!("unhandled parse error: {:?}", parse_problem),
+        EExpr::TrailingOperator(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::End(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::Dot(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::Access(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::UnaryNot(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::UnaryNegate(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::Pattern(EPattern::IndentEnd(pos), _) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+            let snippet = alloc.region_with_subregion(lines.convert_region(surroundings), region);
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a pattern, but I got stuck here:"),
+                snippet,
+                alloc.concat([
+                    alloc.reflow(r"Looks like the indentation ends prematurely here. "),
+                    alloc.reflow(r"Did you mean to have another expression after this line?"),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INDENT ENDS AFTER PATTERN".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        EExpr::Pattern(_, _) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::IndentDefBody(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::IndentEquals(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::IndentAnnotation(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::Equals(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::DoubleColon(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::MalformedPattern(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::BackpassComma(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::Underscore(_) => todo!("Unhandled parse error: {:?}", parse_problem),
+        EExpr::Crash(_) => todo!("Unhandled parse error: {:?}", parse_problem),
     }
 }
 
@@ -1833,8 +1869,6 @@ fn to_pattern_report<'a>(
     parse_problem: &roc_parse::parser::EPattern<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EPattern;
-
     match parse_problem {
         EPattern::Start(pos) => {
             let surroundings = Region::new(start, *pos);
