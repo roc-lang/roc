@@ -157,7 +157,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 let region = loc_expr.region;
                 let new_lines = Vec::from_iter_in(
                     lines
-                        .into_iter()
+                        .iter()
                         .map(|segments| desugar_str_segments(arena, segments)),
                     arena,
                 );
@@ -472,7 +472,7 @@ fn desugar_str_segments<'a>(
     segments: &'a [StrSegment<'a>],
 ) -> &'a [StrSegment<'a>] {
     Vec::from_iter_in(
-        segments.into_iter().map(|segment| match segment {
+        segments.iter().map(|segment| match segment {
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => {
                 *segment
             }
