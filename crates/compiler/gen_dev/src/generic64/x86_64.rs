@@ -457,33 +457,25 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         //   2023a4:    31 c0                   xor    eax,eax
         //   2023a6:    c3                      ret
 
-        let mut offset = 0;
+        let env = RDI;
 
-        // move the argument to rdi
-        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RBX);
-        offset += 8;
+        // store caller-saved (i.e. non-volatile) registers
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x00, RBX);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x08, RBP);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x10, R12);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x18, R13);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x20, R14);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x28, R15);
 
-        // store the base pointer
-        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RBP);
-        offset += 8;
-
-        // store other non-volatile registers
-        for register in [R12, R13, R14, R15] {
-            ASM::mov_mem64_offset32_reg64(buf, RDI, offset, register);
-            offset += 8;
-        }
-
-        // not 100% sure on what this does. It calculates the address that the longjmp will jump
-        // to, so this just be right after the call to setjmp.
+        // go one value up (as if setjmp wasn't called)
         lea_reg64_offset8(buf, RDX, RSP, 0x8);
 
-        // store the location to later jump to
-        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RDX);
-        offset += 8;
+        // store the new stack pointer
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x30, RDX);
 
-        // store the current stack pointer
+        // store the address we'll resume at
         ASM::mov_reg64_mem64_offset32(buf, RDX, RSP, 0);
-        ASM::mov_mem64_offset32_reg64(buf, RDI, offset, RDX);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x38, RDX);
 
         // zero out eax, so we return 0 (we do a 64-bit xor for convenience)
         ASM::xor_reg64_reg64_reg64(buf, RAX, RAX, RAX);
@@ -510,16 +502,19 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         // make sure something nonzero is returned ?!
         ASM::mov_reg64_reg64(buf, RAX, RSI);
 
-        // move the values back into the registers
-        let mut offset = 0;
-        let registers = [RBX, RBP, R12, R13, R14, R15, RSP];
+        // load the caller-saved registers
+        let env = RDI;
+        ASM::mov_reg64_mem64_offset32(buf, RBX, env, 0x00);
+        ASM::mov_reg64_mem64_offset32(buf, RBP, env, 0x08);
+        ASM::mov_reg64_mem64_offset32(buf, R12, env, 0x10);
+        ASM::mov_reg64_mem64_offset32(buf, R13, env, 0x18);
+        ASM::mov_reg64_mem64_offset32(buf, R14, env, 0x20);
+        ASM::mov_reg64_mem64_offset32(buf, R15, env, 0x28);
 
-        for dst in registers {
-            ASM::mov_reg64_mem64_offset32(buf, dst, RDI, offset);
-            offset += 8;
-        }
+        // value of rsp before the setjmp call
+        ASM::mov_reg64_mem64_offset32(buf, RSP, env, 0x30);
 
-        jmp_reg64_offset8(buf, RDI, offset as i8)
+        jmp_reg64_offset8(buf, env, 0x38)
     }
 
     fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
@@ -1137,16 +1132,137 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         todo!("Loading returned complex symbols for X86_64");
     }
 
-    fn setjmp(_buf: &mut Vec<'_, u8>) {
-        todo!()
+    fn setjmp(buf: &mut Vec<'_, u8>) {
+        use X86_64GeneralReg::*;
+        type ASM = X86_64Assembler;
+
+        // input:
+        //
+        // rcx: pointer to the jmp_buf
+        // rdx: stack pointer
+
+        // mingw_getsp:
+        //     lea rax [ rsp + 8 ]
+        //     ret
+        //
+        // _setjmp:
+        //     mov [rcx + 0x00] rdx
+        //     mov [rcx + 0x08] rbx
+        //     mov [rcx + 0x18] rbp # note 0x10 is not used yet!
+        //     mov [rcx + 0x20] rsi
+        //     mov [rcx + 0x28] rdi
+        //     mov [rcx + 0x30] r12
+        //     mov [rcx + 0x38] r13
+        //     mov [rcx + 0x40] r14
+        //     mov [rcx + 0x48] r15
+        //     lea r8 [rsp + 0x08]
+        //     mov [rcx + 0x10] r8
+        //     mov r8 [rsp]
+        //     mov [rcx + 0x50] r8
+        //
+        //     stmxcsr [rcx + 0x58]
+        //     fnstcw word ptr [rcx + 0x5C]
+        //
+        //     mobdxq xmmword ptr [rcx + 0x60], xmm6
+        //     mobdxq xmmword ptr [rcx + 0x70], xmm7
+        //     mobdxq xmmword ptr [rcx + 0x80], xmm8
+        //     mobdxq xmmword ptr [rcx + 0x90], xmm9
+        //     mobdxq xmmword ptr [rcx + 0xa0], xmm10
+        //     mobdxq xmmword ptr [rcx + 0xb0], xmm11
+        //     mobdxq xmmword ptr [rcx + 0xc0], xmm12
+        //     mobdxq xmmword ptr [rcx + 0xd0], xmm13
+        //     mobdxq xmmword ptr [rcx + 0xe0], xmm14
+        //     mobdxq xmmword ptr [rcx + 0xf0], xmm15
+        //
+        //     xor eax, eax
+        //     ret
+
+        let env = RCX;
+        debug_assert_eq!(env, Self::GENERAL_PARAM_REGS[0]);
+
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x00, RDX);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x08, RBX);
+        // NOTE: 0x10 is unused here!
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x18, RBP);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x20, RSI);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x28, RDI);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x30, R12);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x38, R13);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x40, R14);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x48, R15);
+
+        // go one value up (as if setjmp wasn't called)
+        lea_reg64_offset8(buf, R8, RSP, 0x8);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x10, R8);
+
+        // store the current stack pointer
+        ASM::mov_reg64_mem64_offset32(buf, R8, RSP, 0);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x50, R8);
+
+        // zero out eax, so we return 0 (we do a 64-bit xor for convenience)
+        ASM::xor_reg64_reg64_reg64(buf, RAX, RAX, RAX);
+
+        // now the windows implementation goes on to store xmm registers and sse2 stuff.
+        // we skip that for now
+
+        ASM::ret(buf)
     }
 
     fn longjmp(_buf: &mut Vec<'_, u8>) {
-        todo!()
+        // do nothing, longjmp is part of roc_panic
     }
 
-    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
-        todo!()
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        use X86_64GeneralReg::*;
+        type ASM = X86_64Assembler;
+
+        // a *const RocStr
+        let roc_str_ptr = RCX;
+        debug_assert_eq!(roc_str_ptr, Self::GENERAL_PARAM_REGS[0]);
+
+        // a 32-bit integer
+        let panic_tag = RDX;
+        debug_assert_eq!(panic_tag, Self::GENERAL_PARAM_REGS[1]);
+
+        // the setlongjmp_buffer
+        let env = R8;
+        ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), env);
+        ASM::mov_reg64_mem64_offset32(buf, env, env, 0);
+
+        // move the roc_str bytes into the setlongjmp_buffer
+        for offset in [0, 8, 16] {
+            ASM::mov_reg64_mem64_offset32(buf, R9, RCX, offset);
+            ASM::mov_mem64_offset32_reg64(buf, env, 0x58 + offset, R9);
+        }
+
+        // now, time to move all the registers back to how they were
+        ASM::mov_reg64_mem64_offset32(buf, RDX, env, 0x00);
+        ASM::mov_reg64_mem64_offset32(buf, RBX, env, 0x08);
+        // again 0x10 is skipped here
+        ASM::mov_reg64_mem64_offset32(buf, RBP, env, 0x18);
+        ASM::mov_reg64_mem64_offset32(buf, RSI, env, 0x20);
+        ASM::mov_reg64_mem64_offset32(buf, RDI, env, 0x28);
+        ASM::mov_reg64_mem64_offset32(buf, R12, env, 0x30);
+        ASM::mov_reg64_mem64_offset32(buf, R13, env, 0x38);
+        ASM::mov_reg64_mem64_offset32(buf, R14, env, 0x40);
+        ASM::mov_reg64_mem64_offset32(buf, R15, env, 0x48);
+
+        // value of rsp before setjmp call
+        ASM::mov_reg64_mem64_offset32(buf, RSP, env, 0x10);
+
+        // set up the return values. The windows fastcall calling convention has only one return
+        // register, and we need to return two values, so we use some space in the setlongjmp_buffer
+
+        // a pointer to the error message
+        ASM::mov_reg64_imm64(buf, R9, 0x58);
+        ASM::add_reg64_reg64_reg64(buf, R9, R9, env);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x70, R9);
+
+        // the panic_tag; 1 is added to differentiate from 0 (which indicates success)
+        ASM::add_reg64_reg64_imm32(buf, RDX, RDX, 1);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x70, RDX);
+
+        jmp_reg64_offset8(buf, env, 0x50)
     }
 }
 
