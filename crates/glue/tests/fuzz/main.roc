@@ -105,7 +105,7 @@ loop = \{ seed, count } ->
         {} <- Stdout.line "❌ main : \(mainType)\nTest failed with stdout: \"\(stdoutStr)\" and stderr \"\(stderrStr)\"" |> Task.await
         seedStr = Num.toStr (Random.seedToU64 seed)
 
-        {} <- Stdout.line "To reproduce this failed test, pass this seed: \(seedStr)" |> Task.await
+        {} <- Stdout.line "\nThe generated files which failed the test can be found in: generated/\n\nTo reproduce this failed test, pass this seed: \(seedStr)" |> Task.await
 
         Task.succeed (Done count)
 
@@ -281,14 +281,8 @@ valToStrHelp = \buf, val ->
 
 genHelp : List Val, Str -> { roc : Str, rust : Str, expected : Str }
 genHelp = \vals, mainRetType ->
-    initialRocVal =
-        when mainRetType is
-            "Str" -> "\"\""
-            "List Str" -> "[]"
-            _ -> crash "unsupported mainRetType \(mainRetType)"
-
     init = {
-        roc: "answer = \n        \(initialRocVal)",
+        roc: "answer = \n        \"\"",
         rust: "",
         expected: "",
         index: 0,
@@ -310,14 +304,20 @@ genHelp = \vals, mainRetType ->
                 index: index + 1,
             }
 
+    rocAnswer =
+        when mainRetType is
+            "Str" -> "answer"
+            "List Str" -> "[answer]"
+            _ -> crash "unsupported mainRetType \(mainRetType)"
+
     rustExpected =
         when mainRetType is
             "Str" -> "roc_std::RocStr::from(\"\(answer.expected)\")"
-            "List Str" -> "roc_std::RocList::<roc_std::RocStr>::empty()" # TODO
+            "List Str" -> "roc_std::RocList::<roc_std::RocStr>::from([roc_std::RocStr::from(\"\(answer.expected)\")])"
             _ -> crash "unsupported mainRetType \(mainRetType)"
 
     {
-        roc: "\(answer.roc)\n\n    answer",
+        roc: "\(answer.roc)\n\n    \(rocAnswer)",
         rust: answer.rust,
         expected: rustExpected,
     }
