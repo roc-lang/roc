@@ -1322,3 +1322,79 @@ fn ordered_tag_union_memory_layout() {
         r#"Height 1 { column: 3, line: 2 } : Node"#,
     );
 }
+
+#[test]
+fn interpolation_with_nested_strings() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Str.joinWith ["a", "b", "c"] ", ") bar"
+            "#
+        ),
+        r#""foo a, b, c bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_num_to_str() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Num.toStr Num.maxI8) bar"
+            "#
+        ),
+        r#""foo 127 bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_operator_desugaring() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Num.toStr (1 + 2)) bar"
+            "#
+        ),
+        r#""foo 3 bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_nested_interpolation() {
+    expect_failure(
+        indoc!(
+            r#"
+            "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+            "#
+        ),
+        indoc!(
+            r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This string interpolation is invalid:
+
+                4│      "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                String interpolation cannot contain newlines, comments, or nested
+                interpolations.
+
+                You can learn more about string interpolation at
+                <https://www.roc-lang.org/tutorial#string-interpolation>
+
+
+                Enter an expression to evaluate, or a definition (like x = 1) to use in future expressions.
+
+                Unless there was a compile-time error, expressions get automatically named so you can refer to them later.
+                For example, if you see # val1 after an output, you can now refer to that expression as val1 in future expressions.
+
+                Tips:
+
+                  - ctrl-v + ctrl-j makes a newline
+
+                  - :q to quit
+
+                  - :help"#
+        ),
+    );
+}
