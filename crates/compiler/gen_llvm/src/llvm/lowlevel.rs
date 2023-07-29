@@ -30,8 +30,8 @@ use crate::llvm::{
     },
     build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
-        entry_block_alloca_zerofill, function_value_by_func_spec, load_roc_value,
-        roc_function_call, tag_pointer_clear_tag_id, BuilderExt, FuncBorrowSpec, RocReturn,
+        function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
+        BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
@@ -1329,16 +1329,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             arguments!(ptr);
 
             tag_pointer_clear_tag_id(env, ptr.into_pointer_value()).into()
-        }
-
-        Alloca => {
-            arguments!(initial_value);
-
-            let ptr = entry_block_alloca_zerofill(env, initial_value.get_type(), "stack_value");
-
-            env.builder.build_store(ptr, initial_value);
-
-            ptr.into()
         }
 
         RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr => {

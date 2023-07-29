@@ -1626,10 +1626,6 @@ trait Backend<'a> {
                 self.build_ptr_clear_tag_id(*sym, args[0]);
             }
 
-            LowLevel::Alloca => {
-                self.build_alloca(*sym, Some(args[0]), arg_layouts[0]);
-            }
-
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF_RC_PTR.to_string(),

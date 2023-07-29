@@ -1992,42 +1992,6 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(-4); // 11111111...1100
                 backend.code_builder.i32_and();
             }
-            Alloca => {
-                // Alloca : a -> Ptr a
-                let arg = self.arguments[0];
-                let arg_layout = backend.storage.symbol_layouts.get(&arg).unwrap();
-
-                let (size, alignment_bytes) = backend
-                    .layout_interner
-                    .stack_size_and_alignment(*arg_layout);
-
-                let (frame_ptr, offset) = backend
-                    .storage
-                    .allocate_anonymous_stack_memory(size, alignment_bytes);
-
-                // write the default value into the stack memory
-                backend.storage.copy_value_to_memory(
-                    &mut backend.code_builder,
-                    frame_ptr,
-                    offset,
-                    arg,
-                );
-
-                // create a local variable for the pointer
-                let ptr_local_id = match backend.storage.ensure_value_has_local(
-                    &mut backend.code_builder,
-                    self.ret_symbol,
-                    self.ret_storage.clone(),
-                ) {
-                    StoredValue::Local { local_id, .. } => local_id,
-                    _ => internal_error!("A pointer will always be an i32"),
-                };
-
-                backend.code_builder.get_local(frame_ptr);
-                backend.code_builder.i32_const(offset as i32);
-                backend.code_builder.i32_add();
-                backend.code_builder.set_local(ptr_local_id);
-            }
 
             Hash => todo!("{:?}", self.lowlevel),
 

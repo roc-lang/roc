@@ -1615,7 +1615,6 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         PtrStore => RC::NoRc,
         PtrLoad => RC::NoRc,
         PtrCast => RC::NoRc,
-        Alloca => RC::NoRc,
 
         PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
