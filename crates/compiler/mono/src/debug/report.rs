@@ -513,6 +513,7 @@ fn format_use_kind(use_kind: UseKind) -> &'static str {
         },
         UseKind::Erased => "erasure",
         UseKind::FunctionPointer => "function pointer",
+        UseKind::Alloca => "alloca initializer",
     }
 }
 

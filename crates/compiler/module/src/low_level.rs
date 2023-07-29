@@ -131,6 +131,9 @@ pub enum LowLevel {
     UnboxExpr,
     Unreachable,
     DictPseudoSeed,
+    SetJmp,
+    LongJmp,
+    SetLongJmpBuffer,
 }
 
 macro_rules! higher_order {
@@ -240,6 +243,10 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
+
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),

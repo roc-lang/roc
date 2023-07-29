@@ -1600,6 +1600,24 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
             get_tag_id(env, layout_interner, parent, union_layout, argument).into()
         }
+
+        Alloca {
+            initializer,
+            element_layout,
+        } => {
+            let element_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(*element_layout),
+            );
+            let ptr = entry_block_alloca_zerofill(env, element_type, "stack_value");
+
+            if let Some(initializer) = initializer {
+                env.builder.build_store(ptr, scope.load_symbol(initializer));
+            }
+
+            ptr.into()
+        }
     }
 }
 

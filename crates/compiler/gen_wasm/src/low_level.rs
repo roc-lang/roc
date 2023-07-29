@@ -2048,6 +2048,10 @@ impl<'a> LowLevelCall<'a> {
                 StoredValue::StackMemory { .. } => { /* do nothing */ }
             },
             DictPseudoSeed => self.load_args_and_call_zig(backend, bitcode::UTILS_DICT_PSEUDO_SEED),
+
+            SetJmp | LongJmp | SetLongJmpBuffer => {
+                unreachable!("only inserted in dev backend codegen")
+            }
         }
     }
 
