@@ -1078,6 +1078,12 @@ fn link_macos(
             // "--gc-sections",
             "-arch",
             &arch,
+            // Suppress warnings, because otherwise it prints:
+            //
+            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
+            //
+            // We can't disable that option without breaking either x64 mac or ARM mac
+            "-w",
             "-macos_version_min",
             &get_macos_version(),
         ])
