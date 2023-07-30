@@ -1846,7 +1846,7 @@ pub struct HigherOrderLowLevel<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReuseToken {
     pub symbol: Symbol,
-    pub update_tag_id: bool,
+    pub can_reuse_tag_id: bool,
     pub update_mode: UpdateModeId,
     pub original_symbol: Option<Symbol>,
 }

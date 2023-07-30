@@ -1092,7 +1092,25 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             tag_id,
             reuse,
         } => {
-            let reuse_ptr = reuse.map(|ru| scope.load_symbol(&ru.0.symbol).into_pointer_value());
+            let reuse = match reuse {
+                Some((token, mask)) => {
+                    let ptr = scope.load_symbol(&token.symbol).into_pointer_value();
+
+                    let reuse_tag = ReuseTag {
+                        ptr,
+                        // TODO this should really be token.can_reuse_tag_id,
+                        can_reuse_tag_id: true,
+                        can_reuse_argument_mask: *mask,
+                    };
+
+                    if reuse_tag.can_reuse_all(arguments.len()) {
+                        return ptr.into();
+                    } else {
+                        Some(reuse_tag)
+                    }
+                }
+                None => None,
+            };
 
             build_tag(
                 env,
@@ -1101,7 +1119,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 union_layout,
                 *tag_id,
                 arguments,
-                reuse_ptr,
+                reuse,
                 parent,
             )
         }
@@ -1612,7 +1630,7 @@ fn build_wrapped_tag<'a, 'ctx>(
     arguments: &[Symbol],
     tag_field_layouts: &[InLayout<'a>],
     tags: &[&[InLayout<'a>]],
-    reuse_allocation: Option<PointerValue<'ctx>>,
+    reuse_allocation: Option<ReuseTag<'ctx>>,
     parent: FunctionValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
@@ -1625,7 +1643,7 @@ fn build_wrapped_tag<'a, 'ctx>(
     let union_struct_type = struct_type_from_union_layout(env, layout_interner, union_layout);
 
     // Create the struct_type
-    let raw_data_ptr = allocate_tag(
+    let (performed_reuse, raw_data_ptr) = allocate_tag(
         env,
         layout_interner,
         parent,
@@ -1634,6 +1652,11 @@ fn build_wrapped_tag<'a, 'ctx>(
         tags,
     );
     let struct_type = env.context.struct_type(&field_types, false);
+
+    let reuse_field_mask = reuse_allocation.and_then(|token| match token.can_reuse_argument_mask {
+        0 => None,
+        n => Some(n),
+    });
 
     if union_layout.stores_tag_id_as_data(env.target_info) {
         let tag_id_ptr = builder
@@ -1674,13 +1697,44 @@ fn build_wrapped_tag<'a, 'ctx>(
 
         raw_data_ptr.into()
     } else {
-        struct_pointer_from_fields(
-            env,
-            layout_interner,
-            struct_type,
-            raw_data_ptr,
-            field_values.into_iter().enumerate(),
-        );
+        if let Some(mask) = reuse_field_mask {
+            let then_block = env.context.append_basic_block(parent, "reuse_fields");
+            let else_block = env.context.append_basic_block(parent, "dont_reuse_fields");
+            let cont_block = env.context.append_basic_block(parent, "cont");
+
+            env.builder
+                .build_conditional_branch(performed_reuse, then_block, else_block);
+
+            {
+                env.builder.position_at_end(then_block);
+
+                let it = field_values
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|(i, _)| mask & (1 << i) == 0);
+
+                struct_pointer_from_fields(env, layout_interner, struct_type, raw_data_ptr, it);
+
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            {
+                env.builder.position_at_end(else_block);
+
+                let it = field_values.into_iter().enumerate();
+
+                struct_pointer_from_fields(env, layout_interner, struct_type, raw_data_ptr, it);
+
+                env.builder.build_unconditional_branch(cont_block);
+            }
+
+            env.builder.position_at_end(cont_block);
+        } else {
+            // no reuse of fields
+            let it = field_values.into_iter().enumerate();
+            struct_pointer_from_fields(env, layout_interner, struct_type, raw_data_ptr, it);
+        }
 
         tag_pointer_set_tag_id(env, tag_id, raw_data_ptr).into()
     }
@@ -1772,7 +1826,7 @@ fn build_tag<'a, 'ctx>(
     union_layout: &UnionLayout<'a>,
     tag_id: TagIdIntType,
     arguments: &[Symbol],
-    reuse_allocation: Option<PointerValue<'ctx>>,
+    reuse_allocation: Option<ReuseTag<'ctx>>,
     parent: FunctionValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let union_size = union_layout.number_of_tags();
@@ -1903,7 +1957,7 @@ fn build_tag<'a, 'ctx>(
             debug_assert!(union_size == 2);
 
             // Create the struct_type
-            let data_ptr = allocate_tag(
+            let (_performed_reuse, data_ptr) = allocate_tag(
                 env,
                 layout_interner,
                 parent,
@@ -2017,18 +2071,33 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
         .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReuseTag<'ctx> {
+    ptr: PointerValue<'ctx>,
+    // is the tag id the same?
+    can_reuse_tag_id: bool,
+    // 1 if reuse, 0 if not
+    can_reuse_argument_mask: u64,
+}
+
+impl ReuseTag<'_> {
+    fn can_reuse_all(&self, n: usize) -> bool {
+        self.can_reuse_tag_id && self.can_reuse_argument_mask.trailing_ones() == n as u32
+    }
+}
+
 fn allocate_tag<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
-    reuse_allocation: Option<PointerValue<'ctx>>,
+    reuse_allocation: Option<ReuseTag<'ctx>>,
     union_layout: &UnionLayout<'a>,
     tags: &[&[InLayout<'a>]],
-) -> PointerValue<'ctx> {
+) -> (IntValue<'ctx>, PointerValue<'ctx>) {
     match reuse_allocation {
-        Some(ptr) => {
+        Some(reuse) => {
             // check if its a null pointer
-            let is_null_ptr = env.builder.build_is_null(ptr, "is_null_ptr");
+            let is_null_ptr = env.builder.build_is_null(reuse.ptr, "is_null_ptr");
             let ctx = env.context;
             let then_block = ctx.append_basic_block(parent, "then_allocate_fresh");
             let else_block = ctx.append_basic_block(parent, "else_reuse");
@@ -2052,7 +2121,7 @@ fn allocate_tag<'a, 'ctx>(
             let reuse_ptr = {
                 env.builder.position_at_end(else_block);
 
-                let cleared = tag_pointer_clear_tag_id(env, ptr);
+                let cleared = tag_pointer_clear_tag_id(env, reuse.ptr);
 
                 env.builder.build_unconditional_branch(cont_block);
 
@@ -2061,19 +2130,33 @@ fn allocate_tag<'a, 'ctx>(
 
             {
                 env.builder.position_at_end(cont_block);
-                let phi = env.builder.build_phi(raw_ptr.get_type(), "branch");
 
+                let phi = env.builder.build_phi(raw_ptr.get_type(), "ptr");
                 phi.add_incoming(&[(&raw_ptr, then_block), (&reuse_ptr, else_block)]);
+                let ptr = phi.as_basic_value().into_pointer_value();
 
-                phi.as_basic_value().into_pointer_value()
+                let bool_true = env.context.bool_type().const_int(true as u64, false);
+                let bool_false = env.context.bool_type().const_int(false as u64, false);
+
+                let phi = env.builder.build_phi(env.context.bool_type(), "did_reuse");
+                phi.add_incoming(&[(&bool_false, then_block), (&bool_true, else_block)]);
+                let performed_reuse = phi.as_basic_value().into_int_value();
+
+                (performed_reuse, ptr)
             }
         }
-        None => reserve_with_refcount_union_as_block_of_memory(
-            env,
-            layout_interner,
-            *union_layout,
-            tags,
-        ),
+        None => {
+            let bool_false = env.context.bool_type().const_int(false as u64, false);
+
+            let ptr = reserve_with_refcount_union_as_block_of_memory(
+                env,
+                layout_interner,
+                *union_layout,
+                tags,
+            );
+
+            (bool_false, ptr)
+        }
     }
 }
 

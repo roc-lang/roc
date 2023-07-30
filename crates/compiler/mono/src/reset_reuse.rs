@@ -529,7 +529,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         symbol: reuse_symbol,
                                         update_mode: update_mode_ids.next_id(),
                                         // for now, always overwrite the tag ID just to be sure
-                                        update_tag_id: true,
+                                        can_reuse_tag_id: false,
                                         original_symbol: Some(symbol),
                                     };
 
@@ -830,7 +830,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         symbol: Symbol::new(home, ident_ids.gen_unique()),
                                         update_mode: update_mode_ids.next_id(),
                                         // for now, always overwrite the tag ID just to be sure
-                                        update_tag_id: true,
+                                        can_reuse_tag_id: false,
                                         original_symbol: token.token.original_symbol,
                                     },
                                     inlayout: token.inlayout,
