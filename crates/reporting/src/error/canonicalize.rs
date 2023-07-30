@@ -557,7 +557,7 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This string interpolation is invalid:"),
                 alloc.region(lines.convert_region(region)),
-                alloc.reflow(r"String interpolation cannot contain newlines, comments, or nested interpolations."),
+                alloc.reflow(r"String interpolations cannot contain newlines or other interpolations."),
                 alloc.reflow(r"You can learn more about string interpolation at <https://www.roc-lang.org/tutorial#string-interpolation>"),
             ]);
 

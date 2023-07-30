@@ -1376,8 +1376,7 @@ fn interpolation_with_nested_interpolation() {
                 4│      "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                String interpolation cannot contain newlines, comments, or nested
-                interpolations.
+                String interpolations cannot contain newlines or other interpolations.
 
                 You can learn more about string interpolation at
                 <https://www.roc-lang.org/tutorial#string-interpolation>
