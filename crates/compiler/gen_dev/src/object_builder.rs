@@ -75,6 +75,27 @@ pub fn build_module<'a, 'r>(
             )
         }
         Triple {
+            architecture: TargetArch::X86_64,
+            binary_format: TargetBF::Coff,
+            ..
+        } if cfg!(feature = "target-x86_64") => {
+            let backend = new_backend_64bit::<
+                x86_64::X86_64GeneralReg,
+                x86_64::X86_64FloatReg,
+                x86_64::X86_64Assembler,
+                x86_64::X86_64WindowsFastcall,
+            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            build_object(
+                procedures, 
+                backend, 
+                Object::new(
+                    BinaryFormat::Coff, 
+                    Architecture::X86_64, 
+                    Endianness::Little
+                ),
+            )
+        }
+        Triple {
             architecture: TargetArch::Aarch64(_),
             binary_format: TargetBF::Elf,
             ..
@@ -122,7 +143,8 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
     let bss_section = output.section_id(StandardSection::Data);
 
     // 8 registers + 3 words for a RocStr
-    const SIZE: usize = (8 + 3) * core::mem::size_of::<u64>();
+    // TODO 50 is the wrong size here, look at implementation and put correct value in here
+    const SIZE: usize = (8 + 50) * core::mem::size_of::<u64>();
 
     let symbol = Symbol {
         name: b"setlongjmp_buffer".to_vec(),
@@ -334,6 +356,15 @@ fn build_object<'a, B: Backend<'a>>(
                 &mut output,
                 "roc_shm_open".into(),
                 "shm_open".into(),
+            );
+        } else if matches!(output.format(), BinaryFormat::Coff) {
+            // TODO figure out why this symbol is required, it should not be required
+            // Without this it does not build on Windows
+            generate_wrapper(
+                &mut backend,
+                &mut output,
+                "roc_getppid".into(),
+                "malloc".into(),
             );
         }
     }
