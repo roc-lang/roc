@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use crate::borrow::Ownership;
 use crate::ir::{
     Call, CallType, Expr, JoinPointId, Param, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
@@ -128,7 +127,6 @@ fn make_tail_recursive<'a>(
         args.iter().map(|(layout, symbol, _)| Param {
             symbol: *symbol,
             layout: *layout,
-            ownership: Ownership::Borrowed,
         }),
         arena,
     )
@@ -726,7 +724,6 @@ impl<'a> TrmcEnv<'a> {
 
             let param = Param {
                 symbol: *old_symbol,
-                ownership: Ownership::Owned,
                 layout: *layout,
             };
             joinpoint_parameters.push(param);
@@ -775,14 +772,12 @@ impl<'a> TrmcEnv<'a> {
 
         let param = Param {
             symbol: hole_symbol,
-            ownership: Ownership::Owned,
             layout: ptr_return_layout,
         };
         joinpoint_parameters.push(param);
 
         let param = Param {
             symbol: head_symbol,
-            ownership: Ownership::Owned,
             layout: ptr_return_layout,
         };
         joinpoint_parameters.push(param);
