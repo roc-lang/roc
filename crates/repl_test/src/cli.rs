@@ -3,7 +3,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
-use roc_repl_cli::repl_state::TIPS;
 use roc_repl_cli::{SHORT_INSTRUCTIONS, WELCOME_MESSAGE};
 use roc_test_utils::assert_multiline_str_eq;
 
@@ -153,22 +152,7 @@ pub fn expect_failure(input: &str, expected: &str) {
     match out.stdout.find(ERROR_MESSAGE_START) {
         Some(index) => {
             assert_multiline_str_eq!("", out.stderr.as_str());
-
-            // For some unknown reason, in the non-wasm tests, if there's a syntax error
-            // (e.g. in the nested string interpolation test), it prints the tips at the end.
-            // This doesn't happen in the actual CLI repl or in the wasm tests.
-            //
-            // Ideally we'd figure out why that's happening and stop it from happening,
-            // but since it only happens in the CLI tests, in the meantime this is an acceptable fix.
-            let tips_index = out
-                .stdout
-                .rfind(std::str::from_utf8(&strip_ansi_escapes::strip(TIPS).unwrap()).unwrap())
-                .unwrap_or(out.stdout.len());
-
-            assert_multiline_str_eq!(
-                expected.trim_end(),
-                out.stdout[index..tips_index].trim_end()
-            );
+            assert_multiline_str_eq!(expected, &out.stdout[index..]);
             assert!(out.status.success());
         }
         None => {
