@@ -36,7 +36,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                         joinpoint Test.238 #Derived_gen.166:
                             let Test.232 : Int1 = false;
                             let #Derived_gen.10 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                            let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.166 UpdateModeId { id: 56 } TagId(1) #Derived_gen.10 Test.18 Test.19 Test.17 Test.232;
+                            let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.166 UpdateModeId { id: 56 } TagId(1) #Derived_gen.10 Test.18* Test.19* Test.17* Test.232;
                             let #Derived_gen.11 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = UnionFieldPtrAtIndex (Id 1) (Index 0) Test.231;
                             let #Derived_gen.12 : {} = lowlevel PtrStore #Derived_gen.6 Test.231;
                             jump #Derived_gen.5 Test.16 Test.10 Test.11 #Derived_gen.11 #Derived_gen.7;
@@ -67,7 +67,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                         let Test.185 : Int1 = false;
                                         let Test.184 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.190 UpdateModeId { id: 84 } TagId(1) Test.26 Test.18 Test.19 Test.17 Test.185;
                                         let Test.182 : Int1 = true;
-                                        let Test.181 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.189 UpdateModeId { id: 83 } TagId(1) Test.183 Test.25 Test.184 Test.24 Test.182;
+                                        let Test.181 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.189 UpdateModeId { id: 83 } TagId(1) Test.183 Test.25* Test.184 Test.24* Test.182;
                                         let #Derived_gen.14 : {} = lowlevel PtrStore #Derived_gen.6 Test.181;
                                         let #Derived_gen.13 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad #Derived_gen.7;
                                         ret #Derived_gen.13;
@@ -205,7 +205,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                             joinpoint Test.176 #Derived_gen.288:
                                 let Test.170 : Int1 = false;
                                 let #Derived_gen.21 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.288 UpdateModeId { id: 196 } TagId(1) Test.16 Test.18 #Derived_gen.21 Test.17 Test.170;
+                                let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.288 UpdateModeId { id: 196 } TagId(1) Test.16* Test.18* #Derived_gen.21 Test.17* Test.170;
                                 let #Derived_gen.22 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = UnionFieldPtrAtIndex (Id 1) (Index 2) Test.169;
                                 let #Derived_gen.23 : {} = lowlevel PtrStore #Derived_gen.6 Test.169;
                                 jump #Derived_gen.5 Test.19 Test.10 Test.11 #Derived_gen.22 #Derived_gen.7;
@@ -387,7 +387,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                                 jump Test.176 #Derived_gen.118;
                         else
                             let Test.116 : Int1 = false;
-                            let Test.115 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.118 UpdateModeId { id: 1 } TagId(1) Test.16 Test.11 Test.19 Test.10 Test.116;
+                            let Test.115 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.118 UpdateModeId { id: 1 } TagId(1) Test.16* Test.11 Test.19* Test.10 Test.116;
                             let #Derived_gen.33 : {} = lowlevel PtrStore #Derived_gen.6 Test.115;
                             let #Derived_gen.32 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad #Derived_gen.7;
                             ret #Derived_gen.32;
@@ -411,7 +411,7 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                     if Test.247 then
                         let Test.249 : Int1 = true;
                         let #Derived_gen.34 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                        let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) #Derived_gen.34 Test.98 Test.99 Test.97 Test.249;
+                        let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) #Derived_gen.34 Test.98* Test.99* Test.97* Test.249;
                         let #Derived_gen.35 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = UnionFieldPtrAtIndex (Id 1) (Index 0) Test.248;
                         let #Derived_gen.36 : {} = lowlevel PtrStore #Derived_gen.6 Test.248;
                         jump #Derived_gen.5 Test.96 Test.10 Test.11 #Derived_gen.35 #Derived_gen.7;
@@ -420,13 +420,13 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                         if Test.243 then
                             let Test.245 : Int1 = true;
                             let #Derived_gen.37 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                            let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96 Test.98 #Derived_gen.37 Test.97 Test.245;
+                            let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96* Test.98* #Derived_gen.37 Test.97* Test.245;
                             let #Derived_gen.38 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = UnionFieldPtrAtIndex (Id 1) (Index 2) Test.244;
                             let #Derived_gen.39 : {} = lowlevel PtrStore #Derived_gen.6 Test.244;
                             jump #Derived_gen.5 Test.99 Test.10 Test.11 #Derived_gen.38 #Derived_gen.7;
                         else
                             let Test.242 : Int1 = true;
-                            let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96 Test.11 Test.99 Test.10 Test.242;
+                            let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96* Test.11 Test.99* Test.10 Test.242;
                             let #Derived_gen.41 : {} = lowlevel PtrStore #Derived_gen.6 Test.241;
                             let #Derived_gen.40 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad #Derived_gen.7;
                             ret #Derived_gen.40;

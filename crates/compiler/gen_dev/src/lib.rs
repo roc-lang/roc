@@ -142,7 +142,7 @@ impl<'a> LastSeenMap<'a> {
                         arguments, reuse, ..
                     } => {
                         if let Some(ru) = reuse {
-                            self.set_last_seen(ru.symbol, stmt);
+                            self.set_last_seen(ru.0.symbol, stmt);
                         }
 
                         for sym in *arguments {
@@ -846,7 +846,7 @@ trait Backend<'a> {
                 reuse,
             } => {
                 self.load_literal_symbols(arguments);
-                let reuse = reuse.map(|ru| ru.symbol);
+                let reuse = reuse.map(|ru| ru.0.symbol);
                 self.tag(sym, arguments, tag_layout, *tag_id, reuse);
             }
             Expr::NullPointer => {

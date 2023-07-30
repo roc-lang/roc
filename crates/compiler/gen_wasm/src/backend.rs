@@ -1106,7 +1106,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 arguments,
                 reuse,
             } => {
-                let reuse = reuse.map(|ru| ru.symbol);
+                let reuse = reuse.map(|ru| ru.0.symbol);
                 self.expr_tag(union_layout, *tag_id, arguments, sym, storage, reuse)
             }
 

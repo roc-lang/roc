@@ -1092,7 +1092,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             tag_id,
             reuse,
         } => {
-            let reuse_ptr = reuse.map(|ru| scope.load_symbol(&ru.symbol).into_pointer_value());
+            let reuse_ptr = reuse.map(|ru| scope.load_symbol(&ru.0.symbol).into_pointer_value());
 
             build_tag(
                 env,

@@ -1848,6 +1848,7 @@ pub struct ReuseToken {
     pub symbol: Symbol,
     pub update_tag_id: bool,
     pub update_mode: UpdateModeId,
+    pub original_symbol: Option<Symbol>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1870,7 +1871,7 @@ pub enum Expr<'a> {
         tag_layout: UnionLayout<'a>,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
-        reuse: Option<ReuseToken>,
+        reuse: Option<(ReuseToken, u64)>,
     },
     Struct(&'a [Symbol]),
     NullPointer,
@@ -2037,7 +2038,7 @@ impl<'a> Expr<'a> {
             Tag {
                 tag_id,
                 arguments,
-                reuse: Some(reuse_token),
+                reuse: Some((reuse_token, reuse_specialisation_mask)),
                 ..
             } => {
                 let doc_tag = alloc
@@ -2045,7 +2046,14 @@ impl<'a> Expr<'a> {
                     .append(alloc.text(tag_id.to_string()))
                     .append(")");
 
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
+                let it = arguments.iter().enumerate().map(|(index, s)| {
+                    // We mark reused arguments with a star.
+                    if (reuse_specialisation_mask & (1 << index)) != 0 {
+                        symbol_to_doc(alloc, *s, pretty).append("*")
+                    } else {
+                        symbol_to_doc(alloc, *s, pretty)
+                    }
+                });
 
                 alloc
                     .text("Reuse ")
@@ -7771,10 +7779,10 @@ fn substitute_in_expr<'a>(
             );
 
             let reuse = match *reuse {
-                Some(mut ru) => match substitute(subs, ru.symbol) {
+                Some(mut ru) => match substitute(subs, ru.0.symbol) {
                     Some(s) => {
                         did_change = true;
-                        ru.symbol = s;
+                        ru.0.symbol = s;
                         Some(ru)
                     }
                     None => Some(ru),

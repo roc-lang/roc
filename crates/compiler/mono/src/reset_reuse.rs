@@ -157,6 +157,37 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         inlayout: layout_info,
                                     }) => {
                                         if layout_info == layout {
+                                            let reuse_specialisation_mask = match reuse_token
+                                                .original_symbol
+                                                .and_then(|original_symbol| {
+                                                    environment
+                                                        .get_symbol_tag_child(&original_symbol)
+                                                }) {
+                                                // The original symbol has the same tag as the new allocation.
+                                                // If we have arguments that match the original children, we can skip setting their value.
+                                                Some((original_tag, original_children))
+                                                    if (original_tag == *tag_id) =>
+                                                {
+                                                    arguments.iter().enumerate().fold(
+                                                        0,
+                                                        |mask, (index, argument)| {
+                                                            match original_children
+                                                                .get(&(index as u64))
+                                                            {
+                                                                Some(original_symbol)
+                                                                    if *original_symbol
+                                                                        == *argument =>
+                                                                {
+                                                                    mask | (1 << index)
+                                                                }
+                                                                _ => mask,
+                                                            }
+                                                        },
+                                                    )
+                                                }
+                                                _ => 0,
+                                            };
+
                                             // The reuse token layout is the same, we can use it without casting.
                                             (
                                                 None,
@@ -164,7 +195,10 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                                     tag_layout: *tag_layout,
                                                     tag_id: *tag_id,
                                                     arguments,
-                                                    reuse: Some(reuse_token),
+                                                    reuse: Some((
+                                                        reuse_token,
+                                                        reuse_specialisation_mask,
+                                                    )),
                                                 },
                                             )
                                         } else {
@@ -190,7 +224,11 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                                     tag_layout: *tag_layout,
                                                     tag_id: *tag_id,
                                                     arguments,
-                                                    reuse: Some(reuse_token),
+                                                    reuse: Some((
+                                                        reuse_token,
+                                                        // If the layout is not the same, the fields can't be either.
+                                                        0,
+                                                    )),
                                                 },
                                             )
                                         }
@@ -203,6 +241,15 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                             // We cannot reuse this tag id because it's a null pointer.
                             Reuse::Nonreusable => (None, expr.clone()),
                         }
+                    }
+                    Expr::UnionAtIndex {
+                        structure,
+                        tag_id,
+                        union_layout: _,
+                        index,
+                    } => {
+                        environment.add_symbol_tag_child(*structure, *tag_id, *index, *binding);
+                        (None, expr.clone())
                     }
                     _ => (None, expr.clone()),
                 };
@@ -483,6 +530,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         update_mode: update_mode_ids.next_id(),
                                         // for now, always overwrite the tag ID just to be sure
                                         update_tag_id: true,
+                                        original_symbol: Some(symbol),
                                     };
 
                                     let owned_layout = **layout;
@@ -706,37 +754,73 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 (first_pass_environment, first_pass_remainder)
             };
 
-            let max_reuse_tokens =
-                match first_pass_remainder_environment.get_jump_reuse_tokens(*joinpoint_id) {
-                    Some(all_reuse_maps) => {
-                        let all_token_layouts = all_reuse_maps
+            let max_reuse_tokens = match first_pass_remainder_environment
+                .get_jump_reuse_tokens(*joinpoint_id)
+            {
+                Some(all_reuse_maps) => {
+                    let all_token_layouts = all_reuse_maps
+                        .iter()
+                        .flat_map(|reuse_map| reuse_map.keys())
+                        // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
+                        .collect::<MutSet<_>>()
+                        .into_iter();
+                    let reuse_layouts_max_tokens = all_token_layouts.map(|token_layout| {
+                        // We get the tokens from the jump with the most tokens for this token layout.
+                        // So we have an inlayout for each token. And can cast when needed.
+
+                        let token_inlayouts = all_reuse_maps
                             .iter()
-                            .flat_map(|reuse_map| reuse_map.keys())
-                            // PERF: replace this collect with an unique iterator. To make sure every layout is only used once.
-                            .collect::<MutSet<_>>()
-                            .into_iter();
-                        let reuse_layouts_max_tokens = all_token_layouts.map(|token_layout| {
-                            // We get the tokens from the jump with the most tokens for this token layout.
-                            // So we have an inlayout for each token. And can cast when needed.
-                            let max_token_inlayouts = all_reuse_maps
-                                .iter()
-                                .filter_map(|reuse_map| reuse_map.get(token_layout))
-                                .max_by_key(|tokens| tokens.len())
-                                .expect("all layouts should be in at least one of the reuse maps");
-                            (token_layout, max_token_inlayouts)
-                        });
-                        Vec::from_iter_in(reuse_layouts_max_tokens, arena)
-                    }
-                    // Normally the remainder should always have jumps and this would not be None,
-                    // But for testing this might not be the case, so default to no available reuse tokens.
-                    None => Vec::new_in(arena),
-                };
+                            .filter_map(|reuse_map| reuse_map.get(token_layout))
+                            .collect_in::<Vec<_>>(arena);
+                        let max_token_inlayouts = token_inlayouts
+                            .iter()
+                            .max_by_key(|tokens| tokens.len())
+                            .expect("all layouts should be in at least one of the reuse maps");
+
+                        // We update the known original symbol for each token.
+                        // We move from right to left, as the rightmost tokens are consumed first and matched.
+                        let corrected_max_token_inlayouts = max_token_inlayouts
+                            .iter()
+                            .copied()
+                            .rev()
+                            .enumerate()
+                            .map(|(index, mut token)| {
+                                if let Some(max_original_symbol) = token.token.original_symbol {
+                                    if !token_inlayouts.iter().all(|token_inlayout| {
+                                        token_inlayout.get(token_inlayout.len() - index).map_or(
+                                            // If other jumps don't have a token for this layout, they will pass a null pointer which won't break reuse specialization.
+                                            true,
+                                            |other_token| {
+                                                other_token.token.original_symbol.map_or(
+                                                    // If other jumps have a token for this layout, their original symbol has to match. If they have no original_symbol, it didn't match before.
+                                                    false,
+                                                    |og_symbol| og_symbol == max_original_symbol,
+                                                )
+                                            },
+                                        )
+                                    }) {
+                                        token.token.original_symbol = None;
+                                    }
+                                }
+                                token
+                            });
+
+                        (
+                            *token_layout,
+                            corrected_max_token_inlayouts.collect_in::<Vec<_>>(arena),
+                        )
+                    });
+                    Vec::from_iter_in(reuse_layouts_max_tokens, arena)
+                }
+                // Normally the remainder should always have jumps and this would not be None,
+                // But for testing this might not be the case, so default to no available reuse tokens.
+                None => Vec::new_in(arena),
+            };
 
             let (first_pass_body_environment, first_pass_body, used_reuse_tokens) = {
                 // For each possibly available reuse token, create a reuse token to add to the join point environment.
                 let max_reuse_token_symbols = max_reuse_tokens
                     .iter()
-                    .copied()
                     .map(|(token_layout, tokens)| {
                         (
                             *token_layout,
@@ -747,6 +831,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         update_mode: update_mode_ids.next_id(),
                                         // for now, always overwrite the tag ID just to be sure
                                         update_tag_id: true,
+                                        original_symbol: token.token.original_symbol,
                                     },
                                     inlayout: token.inlayout,
                                 }),
@@ -1181,7 +1266,8 @@ enum JoinPointReuseTokens<'a> {
 #[derive(Clone)]
 struct ReuseEnvironment<'a> {
     target_info: TargetInfo,
-    symbol_tags: MutMap<Symbol, Tag>,
+    // A map containing known tags for a symbol, and any indexed symbols.
+    symbol_tags: MutMap<Symbol, (Tag, MutMap<u64, Symbol>)>,
     non_unique_symbols: MutSet<Symbol>,
     reuse_tokens: ReuseTokens<'a>,
     symbol_layouts: SymbolLayout<'a>,
@@ -1197,14 +1283,27 @@ impl<'a> ReuseEnvironment<'a> {
      Used to optimize reuse of unions that are know to have a null pointer.
     */
     fn add_symbol_tag(&mut self, symbol: Symbol, tag: Tag) {
-        self.symbol_tags.insert(symbol, tag);
+        self.symbol_tags.insert(symbol, (tag, MutMap::default()));
+    }
+
+    /**
+     Add a known child symbol for a layout.
+    */
+    fn add_symbol_tag_child(&mut self, symbol: Symbol, tag: Tag, index: u64, child: Symbol) {
+        let current_tag = self
+            .symbol_tags
+            .entry(symbol)
+            .or_insert((tag, MutMap::default()));
+        current_tag.1.insert(index, child);
     }
 
     /**
     Retrieve the known tag for a layout.
      */
-    fn get_symbol_tag(&self, symbol: &Symbol) -> Option<Tag> {
-        self.symbol_tags.get(symbol).copied()
+    fn get_symbol_tag_child(&self, symbol: &Symbol) -> Option<(Tag, &MutMap<u64, Symbol>)> {
+        self.symbol_tags
+            .get(symbol)
+            .map(|(tag, children)| (*tag, children))
     }
 
     /**
@@ -1344,9 +1443,10 @@ fn symbol_layout_reusability<'a>(
     layout: &InLayout<'a>,
 ) -> Reuse<'a> {
     match layout_interner.get_repr(*layout) {
-        LayoutRepr::Union(union_layout) => {
-            can_reuse_union_layout_tag(union_layout, environment.get_symbol_tag(symbol))
-        }
+        LayoutRepr::Union(union_layout) => can_reuse_union_layout_tag(
+            union_layout,
+            environment.get_symbol_tag_child(symbol).map(|(tag, _)| tag),
+        ),
         // Strings literals are constants.
         // Arrays are probably given to functions and reused there. Little use to reuse them here.
         _ => Reuse::Nonreusable,

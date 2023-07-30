@@ -427,7 +427,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     .interner
                     .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
 
-                if let Some(reuse_token) = reuse {
+                if let Some((reuse_token, _)) = reuse {
                     self.check_sym_layout(reuse_token.symbol, interned_layout, UseKind::TagReuse);
                 }
 
