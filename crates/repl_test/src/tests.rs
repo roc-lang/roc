@@ -1359,6 +1359,9 @@ fn interpolation_with_operator_desugaring() {
     );
 }
 
+// This test doesn't work on wasm because wasm expects <span>s, but
+// the point of the test is the string interpolation behavior.
+#[cfg(not(feature = "wasm"))]
 #[test]
 fn interpolation_with_nested_interpolation() {
     expect_failure(
