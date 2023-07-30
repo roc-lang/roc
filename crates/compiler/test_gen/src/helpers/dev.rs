@@ -215,8 +215,10 @@ pub fn helper(
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
+    // TODO make this an envrionment variable
     if false {
-        std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+        let file_path = std::env::temp_dir().join("app.o");
+        std::fs::copy(&app_o_file, file_path).unwrap();
     }
 
     let (mut child, dylib_path) = link(
