@@ -86,13 +86,9 @@ pub fn build_module<'a, 'r>(
                 x86_64::X86_64WindowsFastcall,
             >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
-                procedures, 
-                backend, 
-                Object::new(
-                    BinaryFormat::Coff, 
-                    Architecture::X86_64, 
-                    Endianness::Little
-                ),
+                procedures,
+                backend,
+                Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
             )
         }
         Triple {
