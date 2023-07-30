@@ -546,6 +546,60 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 }
 
+fn copy_symbol_to_stack<'a, CC>(
+    buf: &mut Vec<'a, u8>,
+    storage_manager: &mut X86_64StorageManager<'a, '_, CC>,
+    sym: Symbol,
+    tmp_reg: X86_64GeneralReg,
+    stack_offset: i32,
+) -> u32
+where
+    CC: CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler>,
+{
+    type ASM = X86_64Assembler;
+
+    let mut copied = 0;
+    let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+
+    if size - copied >= 8 {
+        for _ in (0..(size - copied)).step_by(8) {
+            ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
+            ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
+
+            copied += 8;
+        }
+    }
+
+    if size - copied >= 4 {
+        for _ in (0..(size - copied)).step_by(4) {
+            ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
+            ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
+
+            copied += 4;
+        }
+    }
+
+    if size - copied >= 2 {
+        for _ in (0..(size - copied)).step_by(2) {
+            ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
+            ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
+
+            copied += 2;
+        }
+    }
+
+    if size - copied >= 1 {
+        for _ in (0..(size - copied)).step_by(1) {
+            ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
+            ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
+
+            copied += 1;
+        }
+    }
+
+    size
+}
+
 struct X64_64SystemVStoreArgs {
     general_i: usize,
     float_i: usize,
@@ -567,6 +621,9 @@ impl X64_64SystemVStoreArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        // we use the return register as a temporary register; it will be overwritten anyway
+        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
@@ -599,21 +656,10 @@ impl X64_64SystemVStoreArgs {
             _ if layout_interner.stack_size(in_layout) > 16 => {
                 // TODO: Double check this.
                 // Just copy onto the stack.
-                // Use return reg as buffer because it will be empty right now.
-                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                debug_assert_eq!(base_offset % 8, 0);
-                for i in (0..size as i32).step_by(8) {
-                    X86_64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[0],
-                        base_offset + i,
-                    );
-                    X86_64Assembler::mov_stack32_reg64(
-                        buf,
-                        self.tmp_stack_offset + i,
-                        Self::GENERAL_RETURN_REGS[0],
-                    );
-                }
+                let stack_offset = self.tmp_stack_offset;
+
+                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+
                 self.tmp_stack_offset += size as i32;
             }
             LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
@@ -624,67 +670,16 @@ impl X64_64SystemVStoreArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                // for now, just also store this on the stack
-                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                debug_assert_eq!(base_offset % 8, 0);
-                for i in (0..size as i32).step_by(8) {
-                    X86_64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[0],
-                        base_offset + i,
-                    );
-                    X86_64Assembler::mov_stack32_reg64(
-                        buf,
-                        self.tmp_stack_offset + i,
-                        Self::GENERAL_RETURN_REGS[0],
-                    );
-                }
+                let stack_offset = self.tmp_stack_offset;
+
+                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+
                 self.tmp_stack_offset += size as i32;
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                type ASM = X86_64Assembler;
-
-                let tmp_reg = Self::GENERAL_RETURN_REGS[0];
                 let stack_offset = self.tmp_stack_offset;
 
-                let mut copied = 0;
-                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-
-                if size - copied >= 8 {
-                    for _ in (0..(size - copied)).step_by(8) {
-                        ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 8;
-                    }
-                }
-
-                if size - copied >= 4 {
-                    for _ in (0..(size - copied)).step_by(4) {
-                        ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 4;
-                    }
-                }
-
-                if size - copied >= 2 {
-                    for _ in (0..(size - copied)).step_by(2) {
-                        ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 2;
-                    }
-                }
-
-                if size - copied >= 1 {
-                    for _ in (0..(size - copied)).step_by(1) {
-                        ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 1;
-                    }
-                }
+                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
@@ -767,6 +762,9 @@ impl X64_64WindowsFastCallStoreArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        // we use the return register as a temporary register; it will be overwritten anyway
+        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
@@ -797,23 +795,11 @@ impl X64_64WindowsFastCallStoreArgs {
             }
             _ if layout_interner.stack_size(in_layout) == 0 => {}
             _ if layout_interner.stack_size(in_layout) > 16 => {
-                // TODO: Double check this.
-                // Just copy onto the stack.
-                // Use return reg as buffer because it will be empty right now.
-                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                debug_assert_eq!(base_offset % 8, 0);
-                for i in (0..size as i32).step_by(8) {
-                    X86_64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[0],
-                        base_offset + i,
-                    );
-                    X86_64Assembler::mov_stack32_reg64(
-                        buf,
-                        self.tmp_stack_offset + i,
-                        Self::GENERAL_RETURN_REGS[0],
-                    );
-                }
+                // for now, just copy onto the stack.
+                let stack_offset = self.tmp_stack_offset;
+
+                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+
                 self.tmp_stack_offset += size as i32;
             }
             LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
@@ -825,66 +811,16 @@ impl X64_64WindowsFastCallStoreArgs {
             ),
             LayoutRepr::Struct { .. } => {
                 // for now, just also store this on the stack
-                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-                debug_assert_eq!(base_offset % 8, 0);
-                for i in (0..size as i32).step_by(8) {
-                    X86_64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[0],
-                        base_offset + i,
-                    );
-                    X86_64Assembler::mov_stack32_reg64(
-                        buf,
-                        self.tmp_stack_offset + i,
-                        Self::GENERAL_RETURN_REGS[0],
-                    );
-                }
+                let stack_offset = self.tmp_stack_offset;
+
+                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+
                 self.tmp_stack_offset += size as i32;
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                type ASM = X86_64Assembler;
-
-                let tmp_reg = Self::GENERAL_RETURN_REGS[0];
                 let stack_offset = self.tmp_stack_offset;
 
-                let mut copied = 0;
-                let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
-
-                if size - copied >= 8 {
-                    for _ in (0..(size - copied)).step_by(8) {
-                        ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 8;
-                    }
-                }
-
-                if size - copied >= 4 {
-                    for _ in (0..(size - copied)).step_by(4) {
-                        ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 4;
-                    }
-                }
-
-                if size - copied >= 2 {
-                    for _ in (0..(size - copied)).step_by(2) {
-                        ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 2;
-                    }
-                }
-
-                if size - copied >= 1 {
-                    for _ in (0..(size - copied)).step_by(1) {
-                        ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
-                        ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
-
-                        copied += 1;
-                    }
-                }
+                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
