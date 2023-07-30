@@ -751,8 +751,10 @@ struct X64_64WindowsFastCallStoreArgs {
 }
 
 impl X64_64WindowsFastCallStoreArgs {
-    const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] = X86_64WindowsFastcall::GENERAL_PARAM_REGS;
-    const GENERAL_RETURN_REGS: &'static [X86_64GeneralReg] = X86_64WindowsFastcall::GENERAL_RETURN_REGS;
+    const GENERAL_PARAM_REGS: &'static [X86_64GeneralReg] =
+        X86_64WindowsFastcall::GENERAL_PARAM_REGS;
+    const GENERAL_RETURN_REGS: &'static [X86_64GeneralReg] =
+        X86_64WindowsFastcall::GENERAL_RETURN_REGS;
 
     const FLOAT_PARAM_REGS: &'static [X86_64FloatReg] = X86_64WindowsFastcall::FLOAT_PARAM_REGS;
     const FLOAT_RETURN_REGS: &'static [X86_64FloatReg] = X86_64WindowsFastcall::FLOAT_RETURN_REGS;
@@ -1031,7 +1033,6 @@ impl X64_64SystemVLoadArgs {
         }
     }
 }
-
 
 struct X64_64WindowsFastCallLoadArgs {
     general_i: usize,
@@ -1351,7 +1352,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         let mut general_i = 0;
 
         if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
-
             // Save space on the stack for the result we will be return.
             let base_offset =
                 storage_manager.claim_stack_area(dst, layout_interner.stack_size(*ret_layout));
@@ -1378,7 +1378,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         }
 
         storage_manager.update_fn_call_stack_size(state.tmp_stack_offset as u32);
-        
+
         // let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         // let mut general_registers_used = 0;
         // let mut float_registers_used = 0;
@@ -1435,7 +1435,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         //                 }
         //             }
         //         }
-                
+
         //         _ if layout_interner.stack_size(*layout) == 0 => {}
         //         x => {
         //             todo!("calling with arg type, {:?}", x);
@@ -1679,7 +1679,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         // register, and we need to return two values, so we use some space in the setlongjmp_buffer
         let result_pointer = R9;
         ASM::mov_reg64_mem64_offset32(buf, result_pointer, env, 0x58);
-        
+
         // a pointer to the error message
         ASM::mov_reg64_imm64(buf, R10, 0x60);
         ASM::add_reg64_reg64_reg64(buf, R10, R10, env);
@@ -1687,7 +1687,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
 
         // write a pointer to the error message into result_pointer
         ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R10);
-        
+
         // the panic_tag; 1 is added to differentiate from 0 (which indicates success)
         ASM::add_reg64_reg64_imm32(buf, R10, RDX, 1);
 
