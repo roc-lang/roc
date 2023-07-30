@@ -1689,7 +1689,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R10);
 
         // the panic_tag; 1 is added to differentiate from 0 (which indicates success)
-        ASM::add_reg64_reg64_imm32(buf, R10, RDX, 1);
+        ASM::add_reg64_reg64_imm32(buf, R10, panic_tag, 1);
 
         // write the panic tag into the result_pointer
         ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x08, R10);
