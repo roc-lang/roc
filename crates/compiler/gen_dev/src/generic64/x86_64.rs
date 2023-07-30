@@ -1683,7 +1683,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         // a pointer to the error message
         ASM::mov_reg64_imm64(buf, R10, 0x60);
         ASM::add_reg64_reg64_reg64(buf, R10, R10, env);
-        ASM::mov_mem64_offset32_reg64(buf, env, 0x70, R10);
 
         // write a pointer to the error message into result_pointer
         ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R10);
