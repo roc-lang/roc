@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use crate::borrow::Ownership;
 use crate::ir::erased::{build_erased_function, ResolvedErasedLambda};
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
@@ -1460,14 +1459,12 @@ pub struct JoinPointId(pub Symbol);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
-    pub ownership: Ownership,
     pub layout: InLayout<'a>,
 }
 
 impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
-        ownership: Ownership::Owned,
         layout: Layout::UNIT,
     };
 }
@@ -4710,7 +4707,6 @@ pub fn with_hole<'a>(
                         let param = Param {
                             symbol: assigned,
                             layout,
-                            ownership: Ownership::Owned,
                         };
 
                         Stmt::Join {
@@ -4775,7 +4771,6 @@ pub fn with_hole<'a>(
             let param = Param {
                 symbol: assigned,
                 layout,
-                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -9444,7 +9439,6 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -9682,7 +9676,6 @@ fn union_lambda_set_to_switch<'a>(
             let param = Param {
                 symbol: assigned,
                 layout: return_layout,
-                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -9849,7 +9842,6 @@ fn enum_lambda_set_to_switch<'a>(
             let param = Param {
                 symbol: assigned,
                 layout: return_layout,
-                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -9949,7 +9941,6 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        ownership: Ownership::Owned,
     };
 
     Stmt::Join {

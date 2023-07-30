@@ -2,10 +2,7 @@ use bumpalo::{collections::Vec as AVec, Bump};
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_types::subs::Variable;
 
-use crate::{
-    borrow::Ownership,
-    layout::{FunctionPointer, InLayout, LambdaName, Layout, LayoutCache, LayoutRepr},
-};
+use crate::layout::{FunctionPointer, InLayout, LambdaName, Layout, LayoutCache, LayoutRepr};
 
 use super::{
     boxed, with_hole, BranchInfo, Call, CallType, CapturedSymbols, Env, ErasedField, Expr,
@@ -233,7 +230,6 @@ pub fn call_erased_function<'a>(
         let param = Param {
             symbol: call_result_symbol,
             layout: f_ret,
-            ownership: Ownership::Owned,
         };
 
         let remainder = let_f_value(

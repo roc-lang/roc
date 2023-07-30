@@ -7,7 +7,6 @@ use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
 
-use crate::borrow::Ownership;
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
@@ -974,14 +973,12 @@ fn refcount_list<'a>(
     let data_pointer = root.create_symbol(ident_ids, "data_pointer");
     let param_data_pointer = Param {
         symbol: data_pointer,
-        ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
 
     let first_element_pointer = root.create_symbol(ident_ids, "first_element_pointer");
     let param_first_element_pointer = Param {
         symbol: first_element_pointer,
-        ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
 
@@ -1166,7 +1163,6 @@ fn refcount_list_elems<'a>(
     let addr = root.create_symbol(ident_ids, "addr");
     let param_addr = Param {
         symbol: addr,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
@@ -1852,7 +1848,6 @@ fn refcount_union_tailrec<'a>(
 
         let jp_param = Param {
             symbol: next_ptr,
-            ownership: Ownership::Borrowed,
             layout,
         };
 
@@ -1873,7 +1868,6 @@ fn refcount_union_tailrec<'a>(
     let union_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
-        ownership: Ownership::Borrowed,
         layout: union_layout,
     };
 
