@@ -283,7 +283,10 @@ impl<T> RocCallResult<T> {
         match self.tag {
             0 => Ok(unsafe { self.value.assume_init() }),
             n => Err({
-                let msg: &RocStr = unsafe { &*self.error_msg };
+                let mut msg = RocStr::default();
+
+                unsafe { std::ptr::swap(&mut msg, self.error_msg) };
+
                 let tag = (n - 1) as u32;
                 let tag = tag
                     .try_into()
