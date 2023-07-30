@@ -1380,22 +1380,7 @@ fn interpolation_with_nested_interpolation() {
 
                 You can learn more about string interpolation at
                 <https://www.roc-lang.org/tutorial#string-interpolation>
-
-
-                Enter an expression to evaluate, or a definition (like x = 1) to use in future expressions.
-
-                Unless there was a compile-time error, expressions get automatically named so you can refer to them later.
-                For example, if you see # val1 after an output, you can now refer to that expression as val1 in future expressions.
-
-                Tips:
-
-                  - ctrl-v + ctrl-j makes a newline
-
-                  - :q to quit
-
-                  - :help"#
+            "#
         ),
-        // TODO figure out why the tests prints the repl help text at the end, but only after syntax errors or something?
-        // In the actual repl this doesn't happen, only in the test.
     );
 }
