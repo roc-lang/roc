@@ -21,8 +21,8 @@ main = \url ->
         Task.ok "Not Found: \(path)"
 
 validateToken : Url -> Task Str []
-validateToken = \_url ->
-    # params = Url.queryParams url
+validateToken = \url ->
+    params = Url.queryParams url
 
     task =
         clientSecret <-
@@ -30,27 +30,21 @@ validateToken = \_url ->
             |> Task.mapErr \VarNotFound -> MissingSecretId
             |> Task.await
 
-        # dbg clientSecret
-
         # TODO causes some sort of signal, e.g. segfault, on repeated requests
-        # clientId <-
-        #     Dict.get params "clientId"
-        #     |> Result.mapErr \KeyNotFound -> MissingClientId
-        #     |> Task.awaitResult
+        clientId <-
+            Dict.get params "clientId"
+            |> Result.mapErr \KeyNotFound -> MissingClientId
+            |> Task.awaitResult
 
         {
             method: Get,
-            headers: [basicAuthHeader "" clientSecret],
+            headers: [basicAuthHeader clientId clientSecret],
             # url: "\(baseUrl)/introspect",
             url: "http://example.com",
             body: Http.emptyBody,
             timeout: NoTimeout,
         }
         |> Http.send
-        # |> Task.mapErr \err ->
-        #     dbg clientSecret
-        #     dbg err
-        #     err
 
     result <- Task.attempt task
 
