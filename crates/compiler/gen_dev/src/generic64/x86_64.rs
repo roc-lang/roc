@@ -1447,8 +1447,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
 
         // a *const RocStr
         let roc_str_ptr = R11;
-        ASM::mov_reg64_imm64(buf, roc_str_ptr, 16 + 24); // 24 is width of a rocstr
-        ASM::add_reg64_reg64_reg64(buf, roc_str_ptr, roc_str_ptr, RSP);
+        ASM::add_reg64_reg64_imm32(buf, roc_str_ptr, RSP, 16 + 24); // 24 is width of a rocstr
 
         // a 32-bit integer
         let panic_tag = RCX;
