@@ -215,27 +215,19 @@ gen = \mainArgTypes, mainRetType ->
     genAppContent =
         appTemplate
         |> Str.replaceFirst "# {{ mainType }}" mainType
-        |> Result.withDefault "{{ mainType }} not found"
         |> Str.replaceFirst "# {{ mainBody }}" mainBody
-        |> Result.withDefault "{{ mainBody }} not found"
         |> Str.replaceFirst "# {{ mainLambda }}" mainLambda
-        |> Result.withDefault "{{ mainLambda }} not found"
 
     genPlatContent =
         platformTemplate
         |> Str.replaceFirst "# {{ mainType }}" mainType
-        |> Result.withDefault "{{ mainType }} not found"
         |> Str.replaceFirst "# {{ mainForHostType }}" mainType
-        |> Result.withDefault "{{ mainForHostType }} not found"
         |> Str.replaceFirst "# {{ mainForHostBody }}" mainForHostBody
-        |> Result.withDefault "{{ mainForHostBody }} not found"
 
     genHostContent =
         hostTemplate
         |> Str.replaceFirst "// {{ mainForHostArgs }}" rust
-        |> Result.withDefault "{{ mainForHostArgs }} not found"
         |> Str.replaceFirst "// {{ mainForHostExpected }}" expected
-        |> Result.withDefault "{{ mainForHostExpected }} not found"
 
     task =
         {} <- File.writeUtf8 (Path.fromStr genAppPath) genAppContent |> Task.await
