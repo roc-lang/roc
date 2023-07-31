@@ -1246,7 +1246,7 @@ enum DecOrReuse {
 fn fields_need_no_refcounting(interner: &STLayoutInterner, field_layouts: &[InLayout]) -> bool {
     !field_layouts.iter().any(|x| {
         let x = interner.get_repr(*x);
-        x.is_refcounted() || x.contains_refcounted(interner)
+        x.is_refcounted(interner) || x.contains_refcounted(interner)
     })
 }
 
@@ -1763,7 +1763,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
         // if none of the fields are or contain anything refcounted, just move on
         if !field_layouts.iter().any(|x| {
             let x = layout_interner.get_repr(*x);
-            x.is_refcounted() || x.contains_refcounted(layout_interner)
+            x.is_refcounted(layout_interner) || x.contains_refcounted(layout_interner)
         }) {
             continue;
         }

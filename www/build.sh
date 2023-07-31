@@ -51,11 +51,8 @@ cargo --version
 export ROC_DOCS_URL_ROOT=/builtins
 
 cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
-mv generated-docs/*.js www/build # move all .js files to build/
-mv generated-docs/*.css www/build
-mv generated-docs/*.svg www/build
 
-mv generated-docs/ www/build/builtins # move all the rest to build/builtins/
+mv generated-docs/ www/build/builtins # move everything to build/builtins/
 
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
@@ -70,6 +67,7 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   mkdir www/build/tutorial
 
   cargo build --release --bin roc
+
   roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
@@ -82,6 +80,7 @@ else
   ls | grep "roc_nightly.*tar.gz" | xargs rm
   # simplify dir name
   mv roc_nightly* roc_nightly
+
   roc='./roc_nightly/roc'
 
   echo 'Building tutorial.html from tutorial.md...'
@@ -115,8 +114,6 @@ rm -rf ./downloaded-basic-cli
 
 BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
 mkdir -p $BASIC_CLI_PACKAGE_DIR
-mv generated-docs/index.html $BASIC_CLI_PACKAGE_DIR
-rm generated-docs/*.* # we already copied over the *.js and *.css files earlier for the builtins, so just drop these.
 mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
 # set up docs for basic-cli 0.3.2

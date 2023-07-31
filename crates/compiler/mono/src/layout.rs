@@ -2843,7 +2843,10 @@ impl<'a> LayoutRepr<'a> {
         }
     }
 
-    pub fn is_refcounted(&self) -> bool {
+    pub fn is_refcounted<I>(&self, interner: &I) -> bool
+    where
+        I: LayoutInterner<'a>,
+    {
         use self::Builtin::*;
         use LayoutRepr::*;
 
@@ -2857,6 +2860,8 @@ impl<'a> LayoutRepr<'a> {
             Builtin(List(_)) | Builtin(Str) => true,
 
             Erased(_) => true,
+
+            LambdaSet(lambda_set) => interner.is_refcounted(lambda_set.runtime_representation()),
 
             _ => false,
         }

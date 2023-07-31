@@ -1728,6 +1728,26 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.value_store
                     .push(Value::F64(f64::from_ne_bytes(x.to_ne_bytes())));
             }
+            I32EXTEND8S => {
+                let x = self.value_store.pop_i32()?;
+                self.value_store.push(Value::I32(x as i8 as i32));
+            }
+            I32EXTEND16S => {
+                let x = self.value_store.pop_i32()?;
+                self.value_store.push(Value::I32(x as i16 as i32));
+            }
+            I64EXTEND8S => {
+                let x = self.value_store.pop_i64()?;
+                self.value_store.push(Value::I64(x as i8 as i64));
+            }
+            I64EXTEND16S => {
+                let x = self.value_store.pop_i64()?;
+                self.value_store.push(Value::I64(x as i16 as i64));
+            }
+            I64EXTEND32S => {
+                let x = self.value_store.pop_i64()?;
+                self.value_store.push(Value::I64(x as i32 as i64));
+            }
         }
 
         if let Some(debug_string) = &self.debug_string {
