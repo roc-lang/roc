@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { AllEvents, Variable } from "../schema";
 import { Engine } from "../engine/engine";
 import EventList from "./EventList";
@@ -29,7 +29,9 @@ export default function Ui({ events }: UiProps): JSX.Element {
   });
 
   engine.stepTo(engine.lastEventIndex());
-  const subs = engine.subs.snapshot();
+  const subs = engine.subsSnapshot();
+
+  const [epoch, setEpoch] = useState(subs.epoch);
 
   return (
     <div
@@ -46,6 +48,7 @@ export default function Ui({ events }: UiProps): JSX.Element {
           toggleVariableVis={(variable: Variable) =>
             ee.emit("toggleVariable", variable)
           }
+          currentEpoch={epoch}
         />
       </div>
       <div className="flex-1 min-h-[50%] h-full">

@@ -6,9 +6,10 @@ import {
   makeRevertVariable,
   RollbackChange,
   Subs,
+  SubsSnapshot,
 } from "./subs";
 
-export type EventIndex = number & { __eventIndex: never };
+export type EventEpoch = number & { __eventIndex: never };
 
 function* flattenEvents(events: Event[]): Generator<Event> {
   for (const event of events) {
@@ -29,25 +30,25 @@ function* flattenEvents(events: Event[]): Generator<Event> {
 
 function getFlatEvents(events: Event[]): {
   flatEvents: Event[];
-  map: Map<Event, EventIndex>;
+  map: Map<Event, EventEpoch>;
 } {
-  const map = new Map<Event, EventIndex>();
+  const map = new Map<Event, EventEpoch>();
   const flatEvents = Array.from(flattenEvents(events));
   let i = 0;
   for (const event of flatEvents) {
-    map.set(event, i as EventIndex);
+    map.set(event, i as EventEpoch);
     i++;
   }
   return { flatEvents, map };
 }
 
 export class Engine {
-  #eventIndexMap: Map<Event, EventIndex>;
+  #eventIndexMap: Map<Event, EventEpoch>;
   #events: Event[];
   #subs: Subs = Subs.new();
-  #reverseEvents: Map<EventIndex, RollbackChange> = new Map();
+  #reverseEvents: Map<EventEpoch, RollbackChange> = new Map();
 
-  #nextIndexForward: EventIndex = 0 as EventIndex;
+  #nextIndexForward: EventEpoch = 0 as EventEpoch;
 
   constructor(events: Event[]) {
     const { flatEvents, map } = getFlatEvents(events);
@@ -55,7 +56,7 @@ export class Engine {
     this.#events = flatEvents;
   }
 
-  getEventIndex(event: Event): EventIndex {
+  getEventIndex(event: Event): EventEpoch {
     const index = this.#eventIndexMap.get(event);
     if (index === undefined) {
       throw new Error("Event not found");
@@ -63,18 +64,22 @@ export class Engine {
     return index;
   }
 
-  get step(): EventIndex {
+  get step(): EventEpoch {
     return this.#nextIndexForward;
   }
 
-  stepTo(eventIndex: EventIndex): void {
+  stepTo(eventIndex: EventEpoch): void {
     while (this.#nextIndexForward <= eventIndex) {
       this.stepForward(this.#nextIndexForward);
       ++this.#nextIndexForward;
     }
-    while (this.#nextIndexForward > eventIndex) {
+    while (this.#nextIndexForward > eventIndex + 1) {
       --this.#nextIndexForward;
       this.stepBackward(this.#nextIndexForward);
+    }
+
+    if (this.#nextIndexForward !== eventIndex + 1) {
+      throw new Error("Invalid event index");
     }
   }
 
@@ -82,11 +87,17 @@ export class Engine {
     return this.#subs;
   }
 
-  lastEventIndex(): EventIndex {
-    return (this.#events.length - 1) as EventIndex;
+  subsSnapshot(): SubsSnapshot {
+    return this.#subs.snapshot({
+      epoch: (this.#nextIndexForward - 1) as EventEpoch,
+    });
   }
 
-  private stepForward(eventIndex: EventIndex): void {
+  lastEventIndex(): EventEpoch {
+    return (this.#events.length - 1) as EventEpoch;
+  }
+
+  private stepForward(eventIndex: EventEpoch): void {
     const event = this.#events[eventIndex];
     if (!isApplicable(event)) {
       return;
@@ -107,7 +118,7 @@ export class Engine {
     this.#subs.apply(event);
   }
 
-  private stepBackward(eventIndex: EventIndex): void {
+  private stepBackward(eventIndex: EventEpoch): void {
     const event = this.#events[eventIndex];
     if (!isApplicable(event)) {
       return;
