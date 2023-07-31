@@ -14,9 +14,15 @@ export interface VariableNodeProps {
     variable: Variable;
     addSubVariableLink: AddSubVariableLink;
   };
+  targetPosition?: Position;
+  sourcePosition?: Position;
 }
 
-export default function VariableNode({ data }: VariableNodeProps): JSX.Element {
+export default function VariableNode({
+  data,
+  targetPosition,
+  sourcePosition,
+}: VariableNodeProps): JSX.Element {
   const { variable, subs, addSubVariableLink } = data;
 
   const desc = subs.get_root(variable);
@@ -52,12 +58,20 @@ export default function VariableNode({ data }: VariableNodeProps): JSX.Element {
         "text-center font-mono"
       )}
     >
-      <Handle type="target" position={Position.Top} isConnectable={false} />
+      <Handle
+        type="target"
+        position={targetPosition ?? Position.Top}
+        isConnectable={false}
+      />
       <div>
         <VariableElPretty variable={variable} subs={subs} />
       </div>
       {expandedContent}
-      <Handle type="source" position={Position.Bottom} isConnectable={false} />
+      <Handle
+        type="source"
+        position={sourcePosition ?? Position.Bottom}
+        isConnectable={false}
+      />
     </div>
   );
 }

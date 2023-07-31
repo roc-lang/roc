@@ -24,8 +24,8 @@ export default function Ui({ events }: UiProps): JSX.Element {
   ee.on("toggleVariable", (variable: Variable) => {
     toggleVariableHandlers.forEach((handler) => handler(variable));
   });
-  ee.on("keydown", (key: string) => {
-    keydownHandlers.forEach((handler) => handler(key));
+  ee.on("keydown", async (key: string) => {
+    await Promise.all(keydownHandlers.map((handler) => handler(key)));
   });
 
   engine.stepTo(engine.lastEventIndex());

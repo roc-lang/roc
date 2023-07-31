@@ -1,4 +1,7 @@
-import Dagre from "@dagrejs/dagre";
+import ELK, {
+  type ElkNode,
+  type LayoutOptions,
+} from "elkjs/lib/elk.bundled.js";
 import ReactFlow, {
   Node,
   Edge,
@@ -14,6 +17,7 @@ import ReactFlow, {
   NodeTypes,
   useStore,
   ReactFlowState,
+  Position,
 } from "reactflow";
 import { useCallback, useEffect, useState } from "react";
 import { Variable } from "../../schema";
@@ -30,9 +34,41 @@ export interface VariablesGraphProps {
   onKeydown: (handler: KeydownHandler) => void;
 }
 
-type GraphDirection = "TB" | "BT" | "LR" | "RL";
+enum GraphDirection {
+  LeftRight,
+  TopBottom,
+}
 
-const DEFAULT_DIRECTION: GraphDirection = "TB";
+const DEFAULT_DIRECTION: GraphDirection = GraphDirection.TopBottom;
+
+function directionToElkDirection(direction: GraphDirection): string {
+  switch (direction) {
+    case GraphDirection.TopBottom:
+      return "DOWN";
+    case GraphDirection.LeftRight:
+      return "RIGHT";
+  }
+}
+
+function horizontalDirectionality(direction: GraphDirection): boolean {
+  switch (direction) {
+    case GraphDirection.TopBottom:
+      return false;
+    case GraphDirection.LeftRight:
+      return true;
+  }
+}
+
+function directionalityToPositions(direction: GraphDirection): {
+  targetPosition: Position;
+  sourcePosition: Position;
+} {
+  const isHorizontal = horizontalDirectionality(direction);
+  return {
+    targetPosition: isHorizontal ? Position.Left : Position.Top,
+    sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
+  };
+}
 
 interface LayoutedElements {
   nodes: Node[];
@@ -43,47 +79,88 @@ interface ComputeLayoutedElementsProps extends LayoutedElements {
   direction: GraphDirection;
 }
 
-function computeLayoutedElements({
+// Elk has a *huge* amount of options to configure. To see everything you can
+// tweak check out:
+//
+// - https://www.eclipse.org/elk/reference/algorithms.html
+// - https://www.eclipse.org/elk/reference/options.html
+const elkOptions: LayoutOptions = {
+  "elk.algorithm": "layered",
+  "elk.layered.spacing.nodeNodeBetweenLayers": "100",
+  "elk.spacing.nodeNode": "80",
+};
+
+async function computeLayoutedElements({
   nodes,
   edges,
   direction,
-}: ComputeLayoutedElementsProps): LayoutedElements {
+}: ComputeLayoutedElementsProps): Promise<LayoutedElements> {
   if (nodes.length === 0) {
-    return {
+    return Promise.resolve({
       nodes: [],
       edges: [],
-    };
+    });
   }
 
-  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction });
+  const isHorizontal = horizontalDirectionality(direction);
 
-  edges.forEach((edge) => g.setEdge(edge.source, edge.target));
-  nodes.forEach((node) => g.setNode(node.id, node));
+  const elk = new ELK();
+  const graph: ElkNode = {
+    id: "root",
+    layoutOptions: {
+      ...elkOptions,
+      "elk.direction": directionToElkDirection(direction),
+    },
+    //@ts-ignore
+    children: nodes.map((node) => ({
+      ...node,
+      // Adjust the target and source handle positions based on the layout
+      // direction.
+      targetPosition: isHorizontal ? "left" : "top",
+      sourcePosition: isHorizontal ? "right" : "bottom",
 
-  Dagre.layout(g);
-
-  const result = {
-    nodes: nodes.map((node) => {
-      const { x, y } = g.node(node.id);
-
-      return { ...node, position: { x, y } };
-    }),
-    edges,
+      // Hardcode a width and height for elk to use when layouting.
+      //width: 150,
+      //height: 50,
+    })),
+    //@ts-ignore
+    edges: edges,
   };
-  return result;
+
+  const layoutedGraph = await elk.layout(graph);
+
+  if (!layoutedGraph.children || !layoutedGraph.edges) {
+    throw new Error("Elk did not return a valid graph");
+  }
+
+  return {
+    //@ts-ignore
+    nodes: layoutedGraph.children.map((node) => ({
+      ...node,
+      // React Flow expects a position property on the node instead of `x`
+      // and `y` fields.
+      position: { x: node.x, y: node.y },
+    })),
+    //@ts-ignore
+    edges: layoutedGraph.edges,
+  };
 }
 
 const NODE_TYPES: NodeTypes = {
   variable: VariableNode,
 };
 
-function newVariable(id: string, data: VariableNodeProps["data"]): Node {
+function newVariable(
+  id: string,
+  data: VariableNodeProps["data"],
+  direction: GraphDirection
+): Node {
   return {
     id,
     position: { x: 0, y: 0 },
     type: "variable",
     data,
+    ...directionalityToPositions(direction),
   };
 }
 
@@ -121,18 +198,22 @@ const nodesSetInViewSelector = (state: ReactFlowState) =>
     (node) => node.width && node.height
   );
 
-// Does positioning of the nodes in the graph.
-function useRedoLayout({ direction }: { direction: GraphDirection }) {
+type RedoLayoutFn = () => Promise<void>;
+function useRedoLayout({
+  direction,
+}: {
+  direction: GraphDirection;
+}): RedoLayoutFn {
   const nodeCount = useStore(nodeCountSelector);
   const nodesInitialized = useStore(nodesSetInViewSelector);
   const { getNodes, setNodes, getEdges } = useReactFlow();
   const instance = useReactFlow();
 
-  return useCallback(() => {
+  return useCallback(async () => {
     if (!nodeCount || !nodesInitialized) {
       return;
     }
-    const { nodes } = computeLayoutedElements({
+    const { nodes } = await computeLayoutedElements({
       nodes: getNodes(),
       edges: getEdges(),
       direction,
@@ -157,8 +238,48 @@ function useAutoLayout({ direction }: { direction: GraphDirection }) {
   const redoLayout = useRedoLayout({ direction });
 
   useEffect(() => {
-    redoLayout();
+    // This wrapping is of course redundant, but exercised for the purpose of
+    // explicitness.
+    async function inner() {
+      await redoLayout();
+    }
+    inner();
   }, [direction, redoLayout]);
+}
+
+function useKeydown({
+  direction,
+  onKeydown,
+  setDirection,
+}: {
+  direction: GraphDirection;
+  setDirection: React.Dispatch<React.SetStateAction<GraphDirection>>;
+  onKeydown: (handler: KeydownHandler) => void;
+}) {
+  const redoLayout = useRedoLayout({ direction });
+
+  const keyDownHandler = useCallback(
+    async (key: string) => {
+      switch (key) {
+        case "c": {
+          await redoLayout();
+          break;
+        }
+        case "j": {
+          setDirection(GraphDirection.TopBottom);
+          break;
+        }
+        case "l": {
+          setDirection(GraphDirection.LeftRight);
+          break;
+        }
+      }
+    },
+    [redoLayout, setDirection]
+  );
+  onKeydown(async (key) => {
+    await keyDownHandler(key);
+  });
 }
 
 function Graph({
@@ -175,8 +296,8 @@ function Graph({
     edges: initialEdges,
   });
 
-  const redoLayout = useRedoLayout({ direction });
   useAutoLayout({ direction });
+  useKeydown({ direction, onKeydown, setDirection });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setElements(({ nodes, edges }) => {
@@ -205,11 +326,15 @@ function Graph({
 
       setElements(({ nodes, edges }) => {
         const optNewNode = addNodeChange(
-          newVariable(to, {
-            subs,
-            variable: subLinkN,
-            addSubVariableLink,
-          }),
+          newVariable(
+            to,
+            {
+              subs,
+              variable: subLinkN,
+              addSubVariableLink,
+            },
+            direction
+          ),
           nodes
         );
         const newNodes = optNewNode
@@ -227,7 +352,7 @@ function Graph({
         return { nodes: newNodes, edges: newEdges };
       });
     },
-    [subs]
+    [direction, subs]
   );
 
   const addNode = useCallback(
@@ -237,11 +362,15 @@ function Graph({
 
       setElements(({ nodes, edges }) => {
         const optNewNode = addNodeChange(
-          newVariable(variable, {
-            subs,
-            variable: variableN,
-            addSubVariableLink,
-          }),
+          newVariable(
+            variable,
+            {
+              subs,
+              variable: variableN,
+              addSubVariableLink,
+            },
+            direction
+          ),
           nodes
         );
         const newNodes = optNewNode
@@ -251,17 +380,10 @@ function Graph({
         return { nodes: newNodes, edges: edges };
       });
     },
-    [subs, addSubVariableLink]
+    [subs, addSubVariableLink, direction]
   );
 
   onVariable(addNode);
-  onKeydown((key) => {
-    switch (key) {
-      case "c": {
-        redoLayout();
-      }
-    }
-  });
 
   return (
     <ReactFlow
@@ -302,8 +424,8 @@ function DirectionPanel({
   const commonStyle = "rounded cursor-pointer text-2xl select-none";
 
   const dirs: { dir: GraphDirection; text: string }[] = [
-    { dir: "TB", text: "⬇️" },
-    { dir: "LR", text: "➡️" },
+    { dir: GraphDirection.TopBottom, text: "⬇️" },
+    { dir: GraphDirection.LeftRight, text: "➡️" },
   ];
 
   return (
