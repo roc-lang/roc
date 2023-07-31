@@ -31,7 +31,8 @@ export default function Ui({ events }: UiProps): JSX.Element {
   engine.stepTo(engine.lastEventIndex());
   const subs = engine.subsSnapshot();
 
-  const [epoch, setEpoch] = useState(subs.epoch);
+  // _setEpoch to be used in the future!
+  const [epoch, _setEpoch] = useState(subs.epoch);
 
   return (
     <div

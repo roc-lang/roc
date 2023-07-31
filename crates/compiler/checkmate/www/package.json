@@ -16,6 +16,7 @@
     "build": "build:codegen && react-scripts build",
     "build:codegen": "node ./scripts/gen_schema_dts.js",
     "check": "tsc",
+    "lint": "eslint src/ scripts/",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
