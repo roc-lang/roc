@@ -31,7 +31,7 @@ import VariableNode, {
 import { SubsSnapshot } from "../../engine/subs";
 import { KeydownHandler } from "../Events";
 import { TypedEmitter } from "tiny-typed-emitter";
-import EpochCell from "../Common/EpochCell";
+import EpochCell, { EpochCellView } from "../Common/EpochCell";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
@@ -447,7 +447,7 @@ function Graph({
       }}
     >
       <Panel position="top-left">
-        <EpochCell epoch={subs.epoch}></EpochCell>
+        <EpochCell view={EpochCellView.Graph} epoch={subs.epoch}></EpochCell>
       </Panel>
       <Panel position="top-right">
         <LayoutPanel

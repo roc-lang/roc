@@ -4,7 +4,7 @@ import { EventEpoch } from "../engine/engine";
 import { lastSubEvent } from "../engine/event_util";
 import { UnificationMode, Event } from "../schema";
 import { Refine } from "../utils/refine";
-import EpochCell from "./Common/EpochCell";
+import EpochCell, { EpochCellView } from "./Common/EpochCell";
 import { CommonProps } from "./EventItem/types";
 import { VariableEl } from "./EventItem/Variable";
 
@@ -97,7 +97,7 @@ function Unification(props: UnificationProps): JSX.Element {
     if (!containsCurrentEpoch) return null;
     return (
       <EpochCell
-        noLeadingText
+        view={EpochCellView.Events}
         epoch={currentEpoch}
         className="inline-block align-middle mr-2"
       ></EpochCell>
