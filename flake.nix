@@ -112,6 +112,7 @@
         aliases = ''
           alias clippy='cargo clippy --workspace --tests --release -- --deny warnings'
           alias fmt='cargo fmt --all'
+          alias fmtc='cargo fmt --all -- --check'
         '';
 
       in {
