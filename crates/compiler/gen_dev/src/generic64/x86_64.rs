@@ -944,8 +944,7 @@ impl X64_64SystemVLoadArgs {
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
-        if self.general_i < X86_64SystemV::GENERAL_PARAM_REGS.len() {
-            let reg = X86_64SystemV::GENERAL_PARAM_REGS[self.general_i];
+        if let Some(reg) = X86_64SystemV::GENERAL_PARAM_REGS.get(self.general_i) {
             storage_manager.general_reg_arg(&sym, reg);
             self.general_i += 1;
         } else {
@@ -959,8 +958,7 @@ impl X64_64SystemVLoadArgs {
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
         sym: Symbol,
     ) {
-        if self.float_i < X86_64SystemV::FLOAT_PARAM_REGS.len() {
-            let reg = X86_64SystemV::FLOAT_PARAM_REGS[self.float_i];
+        if let Some(reg) = X86_64SystemV::FLOAT_PARAM_REGS.get(self.float_i) {
             storage_manager.float_reg_arg(&sym, reg);
             self.float_i += 1;
         } else {
@@ -1031,8 +1029,7 @@ impl X64_64WindowsFastCallLoadArgs {
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64WindowsFastcall>,
         sym: Symbol,
     ) {
-        if self.general_i < X86_64WindowsFastcall::GENERAL_PARAM_REGS.len() {
-            let reg = X86_64WindowsFastcall::GENERAL_PARAM_REGS[self.general_i];
+        if let Some(reg) = X86_64WindowsFastcall::GENERAL_PARAM_REGS.get(self.general_i) {
             storage_manager.general_reg_arg(&sym, reg);
             self.general_i += 1;
         } else {
@@ -1046,8 +1043,7 @@ impl X64_64WindowsFastCallLoadArgs {
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64WindowsFastcall>,
         sym: Symbol,
     ) {
-        if self.float_i < X86_64WindowsFastcall::FLOAT_PARAM_REGS.len() {
-            let reg = X86_64WindowsFastcall::FLOAT_PARAM_REGS[self.float_i];
+        if let Some(reg) = X86_64WindowsFastcall::FLOAT_PARAM_REGS.get(self.float_i) {
             storage_manager.float_reg_arg(&sym, reg);
             self.float_i += 1;
         } else {
