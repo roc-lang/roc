@@ -666,7 +666,7 @@ replaceEachHelp = \buf, haystack, needle, flower ->
             |> Str.concat flower
             |> replaceEachHelp after needle flower
 
-        Err NotFound -> buf
+        Err NotFound -> Str.concat buf haystack
 
 expect Str.replaceEach "abXdeXghi" "X" "_" == "ab_de_ghi"
 expect Str.replaceEach "abcdefg" "nothing" "_" == "abcdefg"
