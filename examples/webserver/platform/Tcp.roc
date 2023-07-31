@@ -24,7 +24,7 @@ ConnectErr : InternalTcp.ConnectErr
 ## Represents errors that can occur when performing a [Task] with a [Stream].
 StreamErr : InternalTcp.StreamErr
 
-## Opens a TCP connection to a remote host and perform a [Task] with it. 
+## Opens a TCP connection to a remote host and perform a [Task] with it.
 ##
 ## ```
 ## # Connect to localhost:8080 and send "Hi from Roc!"
@@ -84,7 +84,7 @@ readUpTo = \bytesToRead, stream ->
     |> InternalTask.fromEffect
     |> Task.mapErr TcpReadErr
 
-## Read an exact number of bytes or fail. 
+## Read an exact number of bytes or fail.
 ##
 ## ```
 ## File.readExactly 64 stream
@@ -109,7 +109,7 @@ readExactly = \bytesToRead, stream ->
         )
     |> InternalTask.fromEffect
 
-## Read until a delimiter or EOF is reached. 
+## Read until a delimiter or EOF is reached.
 ##
 ## ```
 ## # Read until null terminator
@@ -127,7 +127,7 @@ readUntil = \byte, stream ->
     |> InternalTask.fromEffect
     |> Task.mapErr TcpReadErr
 
-## Read until a newline or EOF is reached. 
+## Read until a newline or EOF is reached.
 ##
 ## ```
 ## # Read a line and then print it to `stdout`

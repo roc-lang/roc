@@ -1,4 +1,5 @@
-use roc_std::RocStr;
+use roc_fn::roc_fn;
+use roc_std::{RocResult, RocStr};
 use std::cell::RefCell;
 use std::os::raw::c_void;
 
@@ -6,8 +7,6 @@ mod http_client;
 mod request_handling;
 mod server;
 mod signal_handling;
-
-use signal_handling::{longjmp, SETJMP_ENV, SIGNAL_CAUGHT};
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
@@ -19,7 +18,7 @@ pub extern "C" fn rust_main() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     let c_ptr = libc::malloc(size);
-    eprintln!("+0x{:x} <- alloc({size})", c_ptr as usize);
+    // eprintln!("+0x{:x} <- alloc({size})", c_ptr as usize);
 
     return c_ptr;
 }
@@ -32,10 +31,10 @@ pub unsafe extern "C" fn roc_realloc(
     _alignment: u32,
 ) -> *mut c_void {
     let answer_ptr = libc::realloc(c_ptr, new_size);
-    eprintln!(
-        "~Ox{:x} <- realloc(0x{:x}, {new_size})",
-        answer_ptr as usize, c_ptr as usize,
-    );
+    // eprintln!(
+    //     "~Ox{:x} <- realloc(0x{:x}, {new_size})",
+    //     answer_ptr as usize, c_ptr as usize,
+    // );
     return answer_ptr;
 }
 
@@ -89,11 +88,9 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     //     }
     // }
 
-    eprintln!("-0x{:x} <- dealloc", c_ptr as usize);
-    let answer = libc::free(c_ptr);
+    // eprintln!("-0x{:x} <- dealloc", c_ptr as usize);
+    // libc::free(c_ptr);
     // eprintln!("Done calling libc::free()");
-
-    answer
 }
 
 thread_local! {
@@ -102,18 +99,7 @@ thread_local! {
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_panic(msg: RocStr) {
-    // Set the last caught signal to 0, so we don't mistake this for a signal.
-    SIGNAL_CAUGHT.with(|val| {
-        *val.borrow_mut() = 0;
-    });
-
-    ROC_CRASH_MSG.with(|val| {
-        *val.borrow_mut() = msg;
-    });
-
-    SETJMP_ENV.with(|env| {
-        longjmp(env.borrow_mut().as_mut_ptr().cast(), 1);
-    });
+    panic!("The Roc app crashed with: {}", msg.as_str());
 }
 
 #[no_mangle]
@@ -263,3 +249,16 @@ pub unsafe extern "C" fn roc_getppid() -> libc::pid_t {
 
 //     format!("\u{001B}[36m{module_name}\u{001B}[39m.{fn_name}")
 // }
+
+#[roc_fn(name = "sendRequest")]
+fn send_req(roc_request: &roc_app::Request) -> roc_app::Response {
+    http_client::send_req(roc_request)
+}
+
+#[roc_fn(name = "envVar")]
+fn env_var(roc_str: &RocStr) -> RocResult<RocStr, ()> {
+    match std::env::var_os(roc_str.as_str()) {
+        Some(os_str) => RocResult::ok(RocStr::from(os_str.to_string_lossy().to_string().as_str())),
+        None => RocResult::err(()),
+    }
+}

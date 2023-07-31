@@ -1,13 +1,8 @@
+use roc_app::Metadata;
+use roc_std::{RocList, RocStr};
 use std::{iter::FromIterator, time::Duration};
 
-use roc_app::Metadata;
-use roc_fn::roc_fn;
-use roc_std::{RocList, RocStr};
-
-#[roc_fn(name = "sendRequest")]
-fn send_req(roc_request: &roc_app::Request) -> roc_app::Response {
-    // #[no_mangle]
-    // pub extern "C" fn roc_fx_sendRequest(roc_request: &roc_app::Request) -> roc_app::Response {
+pub fn send_req(roc_request: &roc_app::Request) -> roc_app::Response {
     let mut builder = reqwest::blocking::ClientBuilder::new();
 
     if roc_request.timeout.discriminant()

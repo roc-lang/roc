@@ -4,6 +4,7 @@ interface Task
         ok,
         err,
         await,
+        awaitResult,
         map,
         mapErr,
         onErr,
@@ -113,7 +114,7 @@ attempt = \task, transform ->
 ## ```
 ## # Prints "Hello World!\n" to standard output.
 ## {} <- Stdout.write "Hello "|> Task.await
-## {} <- Stdout.srite "World!\n"|> Task.await
+## {} <- Stdout.write "World!\n"|> Task.await
 ##
 ## Task.ok {}
 ## ```
@@ -187,6 +188,14 @@ fromResult : Result a b -> Task a b
 fromResult = \result ->
     when result is
         Ok a -> ok a
+        Err b -> err b
+
+## Shorthand for calling [Task.fromResult] on a [Result], and then
+## [Task.await] on that [Task].
+awaitResult : Result a err, (a -> Task c err) -> Task c err
+awaitResult = \result, transform ->
+    when result is
+        Ok a -> transform a
         Err b -> err b
 
 ## Apply a task to another task applicatively. This can be used with

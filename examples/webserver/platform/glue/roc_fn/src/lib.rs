@@ -10,20 +10,25 @@ use syn::{parse_macro_input, AttributeArgs, Ident, ItemFn, Lit, Meta, NestedMeta
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 struct HostedFn {
     name: &'static str,
-    arg_types: &'static [(&'static str, &'static str)],
+    arg_types: &'static [&'static str],
     ret_type: &'static str,
 }
 
 const ROC_HOSTED_FNS: &[HostedFn] = &[
     HostedFn {
         name: "sendRequest",
-        arg_types: &[("roc_request", "&roc_app::Request")],
+        arg_types: &["&roc_app::Request"],
         ret_type: "roc_app::Response",
     },
     HostedFn {
         name: "tcpConnect",
-        arg_types: &[("host", "&RocStr"), ("port", "u16")],
+        arg_types: &["&roc_std::RocStr", "u16"],
         ret_type: "roc_app::ConnectResult",
+    },
+    HostedFn {
+        name: "envVar",
+        arg_types: &["&roc_std::RocStr"],
+        ret_type: "roc_std::RocResult<RocStr, ()>",
     },
 ];
 
@@ -63,20 +68,20 @@ pub fn roc_fn(args: TokenStream, input: TokenStream) -> TokenStream {
 
     // Generate the appropriate arg names and types, and return type,
     // using the types that were in the .roc file as the source of truth.
-    let arg_names: Vec<_> = hosted_fn
-        .arg_types
-        .iter()
-        .map(|(arg_name, _)| Ident::new(arg_name, Span::call_site()))
-        .collect();
+    let arg_names = (0..hosted_fn.arg_types.len())
+        .into_iter()
+        .map(|index| Ident::new(&format!("arg{index}"), Span::call_site()))
+        .collect::<Vec<_>>();
 
     let arg_types: Vec<_> = hosted_fn
         .arg_types
         .iter()
-        .map(|(arg_name, arg_type)| {
+        .zip(arg_names.iter())
+        .map(|(arg_type, arg_name)| {
             let arg_type = arg_type
                 .parse::<proc_macro2::TokenStream>()
                 .expect("Failed to parse argument type");
-            let arg_name = Ident::new(arg_name, Span::call_site());
+
             quote! { #arg_name: #arg_type }
         })
         .collect();

@@ -39,7 +39,7 @@ impl<T> RocList<T> {
         mem::align_of::<T>().max(mem::align_of::<Storage>()) as u32
     }
 
-    pub fn empty() -> Self {
+    pub const fn empty() -> Self {
         Self {
             elements: None,
             length: 0,

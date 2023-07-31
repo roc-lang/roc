@@ -7,7 +7,9 @@ interface Url
         appendParam,
         hasQuery,
         hasFragment,
+        path,
         query,
+        queryParams,
         fragment,
         reserve,
         withQuery,
@@ -77,7 +79,7 @@ toStr = \@Url str -> str
 
 ## [Percent-encodes](https://en.wikipedia.org/wiki/Percent-encoding) a
 ## [path component](https://en.wikipedia.org/wiki/Uniform_Resource_Identifier#Syntax)
-## and appends to the end of the URL's path. 
+## and appends to the end of the URL's path.
 ##
 ## This will be appended before any queries and fragments. If the given path string begins with `/` and the URL already ends with `/`, one
 ## will be ignored. This avoids turning a single slash into a double slash. If either the given URL or the given string is empty, no `/` will be added.
@@ -228,7 +230,7 @@ percentEncode = \input ->
 
                     Str.concat output suffix
 
-## Adds a [Str] query parameter to the end of the [Url]. 
+## Adds a [Str] query parameter to the end of the [Url].
 ##
 ## The key and value both get [percent-encoded](https://en.wikipedia.org/wiki/Percent-encoding).
 ##
@@ -280,10 +282,10 @@ appendParam = \@Url urlStr, key, value ->
     |> @Url
 
 ## Replaces the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part
-## after the `?`, if it has one, but before any `#` it might have. 
+## after the `?`, if it has one, but before any `#` it might have.
 ##
 ## Passing `""` removes the `?` (if there was one).
-## 
+##
 ## ```
 ## # Gives https://example.com?newQuery=thisRightHere#stuff
 ## Url.fromStr "https://example.com?key1=val1&key2=val2#stuff"
@@ -327,7 +329,7 @@ withQuery = \@Url urlStr, queryStr ->
         |> @Url
 
 ## Returns the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
-## the `?`, if it has one, but before any `#` it might have. 
+## the `?`, if it has one, but before any `#` it might have.
 ##
 ## Returns `""` if the URL has no query.
 ##
@@ -352,6 +354,53 @@ query = \@Url urlStr ->
         Ok { after } -> after
         Err NotFound -> ""
 
+queryParams : Url -> Dict Str Str
+queryParams = \url ->
+    query url
+    |> Str.split "&"
+    |> List.walk (Dict.empty {}) \dict, pair ->
+        when Str.splitFirst pair "=" is
+            Ok { before, after } -> Dict.insert dict before after
+            Err NotFound -> Dict.insert dict pair ""
+
+## Returns the URL's [path](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
+## the scheme and authority (e.g. `https://`) but before any `?` or `#` it might have.
+##
+## Returns `""` if the URL has no path.
+##
+## ```
+## # Gives "example.com/"
+## Url.fromStr "https://example.com/?key1=val1&key2=val2&key3=val3#stuff"
+## |> Url.path
+## ```
+##
+## ```
+## # Gives "/foo/"
+## Url.fromStr "/foo/?key1=val1&key2=val2&key3=val3#stuff"
+## |> Url.path
+## ```
+path : Url -> Str
+path = \@Url urlStr ->
+    withoutAuthority =
+        when Str.splitFirst urlStr ":" is
+            Ok { after } ->
+                when Str.splitFirst after "//" is
+                    # Only drop the `//` if it's right after the `://` like in `https://`
+                    # (so, `before` is empty) - otherwise, the `//` is part of the path!
+                    Ok { before, after: afterSlashes } if Str.isEmpty before -> afterSlashes
+                    _ -> after
+
+            # There's no `//` and also no `:` so this must be a path-only URL, e.g. "/foo?bar=baz#blah"
+            Err NotFound -> urlStr
+
+    # Drop the query and/or fragment
+    when Str.splitLast withoutAuthority "?" is
+        Ok { before } -> before
+        Err NotFound ->
+            when Str.splitLast withoutAuthority "#" is
+                Ok { before } -> before
+                Err NotFound -> withoutAuthority
+
 ## Returns [Bool.true] if the URL has a `?` in it.
 ##
 ## ```
@@ -372,7 +421,7 @@ hasQuery = \@Url urlStr ->
     |> List.contains (Num.toU8 '?')
 
 ## Returns the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
-## the `#`, if it has one. 
+## the `#`, if it has one.
 ##
 ## Returns `""` if the URL has no fragment.
 ##
@@ -392,7 +441,7 @@ fragment = \@Url urlStr ->
         Ok { after } -> after
         Err NotFound -> ""
 
-## Replaces the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax). 
+## Replaces the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax).
 ##
 ## If the URL didn't have a fragment, adds one. Passing `""` removes the fragment.
 ##

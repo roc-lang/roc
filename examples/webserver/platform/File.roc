@@ -8,7 +8,7 @@ ReadErr : InternalFile.ReadErr
 ## Tag union of possible errors when writing a file or directory.
 WriteErr : InternalFile.WriteErr
 
-## Write data to a file. 
+## Write data to a file.
 ##
 ## First encode a `val` using a given `fmt` which implements the ability [Encode.EncoderFormatting](https://www.roc-lang.org/builtins/Encode#EncoderFormatting).
 ##
@@ -64,7 +64,7 @@ writeUtf8 : Path, Str -> Task {} [FileWriteErr Path WriteErr]
 writeUtf8 = \path, str ->
     toWriteTask path \bytes -> Effect.fileWriteUtf8 bytes str
 
-## Deletes a file from the filesystem. 
+## Deletes a file from the filesystem.
 ##
 ## Performs a [`DeleteFile`](https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-deletefile)
 ## on Windows and [`unlink`](https://en.wikipedia.org/wiki/Unlink_(Unix)) on

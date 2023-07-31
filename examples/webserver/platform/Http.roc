@@ -16,6 +16,7 @@ interface Http
         defaultRequest,
         errorToString,
         send,
+        getUtf8,
     ]
     imports [Effect, InternalTask, Task.{ Task }, InternalHttp]
 
@@ -61,13 +62,12 @@ defaultRequest = {
     timeout: NoTimeout,
 }
 
-## An HTTP header for configuring requests. 
-## 
+## An HTTP header for configuring requests.
+##
 ## See common headers [here](https://en.wikipedia.org/wiki/List_of_HTTP_header_fields).
 ##
 header : Str, Str -> Header
-header =
-    Header
+header = \key, val -> { key, val }
 
 ## An empty HTTP request [Body].
 emptyBody : Body
@@ -168,3 +168,7 @@ send = \req ->
     Effect.sendRequest (Box.box req)
     |> Effect.map handleStringResponse
     |> InternalTask.fromEffect
+
+getUtf8 : Str -> Task Str Error
+getUtf8 = \url ->
+    send { defaultRequest & url }

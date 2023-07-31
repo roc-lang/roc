@@ -12,7 +12,7 @@ Request : {
 
 Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
 
-Header : [Header Str Str]
+Header : { key : Str, val : Str }
 
 # Name is distinguished from the Timeout tag used in Response and Error
 TimeoutConfig : [TimeoutMilliseconds U64, NoTimeout]

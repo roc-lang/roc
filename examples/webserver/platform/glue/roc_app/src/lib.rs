@@ -8,8 +8,6 @@ mod tcp_glue;
 
 pub use glue::*;
 
-use core::alloc::Layout;
-use core::mem::MaybeUninit;
 use roc_std::{RocDict, RocList, RocResult, RocStr};
 use std::borrow::{Borrow, Cow};
 use std::ffi::OsStr;
@@ -24,12 +22,13 @@ use file_glue::WriteErr;
 
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct RocFunction_84 {
+pub struct RocFunction_89 {
     closure_data: roc_std::RocList<u8>,
+    _discriminant: u8,
 }
 
-impl RocFunction_84 {
-    pub fn force_thunk(mut self, arg0: ()) -> roc_std::RocStr {
+impl RocFunction_89 {
+    pub fn force_thunk(self) -> roc_std::RocStr {
         extern "C" {
             fn roc__mainForHost_0_caller(
                 arg0: *const (),
@@ -38,39 +37,49 @@ impl RocFunction_84 {
             );
         }
 
-        let mut output = std::mem::MaybeUninit::uninit();
-        let ptr = &mut self.closure_data as *mut _ as *mut u8;
+        dbg!(self.closure_data.len());
 
-        unsafe { roc__mainForHost_0_caller(&arg0, ptr, output.as_mut_ptr()) };
+        let mut output = core::mem::MaybeUninit::uninit();
+        let closure_ptr =
+            (&mut core::mem::ManuallyDrop::new(self.closure_data)) as *mut _ as *mut u8;
 
-        // ownership of the closure is transferred back to roc
-        core::mem::forget(self.closure_data);
+        unsafe {
+            roc__mainForHost_0_caller(&(), closure_ptr, output.as_mut_ptr());
 
-        unsafe { output.assume_init() }
+            output.assume_init()
+        }
     }
 }
 
-pub fn mainForHost(arg0: &roc_std::RocStr) -> RocFunction_84 {
+#[no_mangle]
+pub fn mainForHost(arg0: roc_std::RocStr) -> RocFunction_89 {
     extern "C" {
-        fn roc__mainForHost_1_exposed_generic(_: *mut RocFunction_84, _: &roc_std::RocStr);
+        fn roc__mainForHost_1_exposed_generic(
+            _: *mut RocFunction_89,
+            _: &mut core::mem::ManuallyDrop<roc_std::RocStr>,
+        );
     }
 
-    let mut ret = std::mem::MaybeUninit::uninit();
+    let mut ret = core::mem::MaybeUninit::uninit();
 
-    unsafe { roc__mainForHost_1_exposed_generic(ret.as_mut_ptr(), arg0) };
+    unsafe {
+        roc__mainForHost_1_exposed_generic(
+            ret.as_mut_ptr(),
+            &mut core::mem::ManuallyDrop::new(arg0),
+        );
 
-    unsafe { ret.assume_init() }
+        ret.assume_init()
+    }
 }
 
-pub fn main(roc_str: &RocStr) -> roc_std::RocStr {
+pub fn main(roc_str: RocStr) -> roc_std::RocStr {
     let task = mainForHost(roc_str);
 
-    task.force_thunk(())
+    task.force_thunk()
 }
 
 #[no_mangle]
 pub extern "C" fn roc_fx_envDict() -> RocDict<RocStr, RocStr> {
-    // TODO: can we be more efficient about reusing the String's memory for RocStr?
     std::env::vars_os()
         .map(|(key, val)| {
             (
@@ -83,19 +92,9 @@ pub extern "C" fn roc_fx_envDict() -> RocDict<RocStr, RocStr> {
 
 #[no_mangle]
 pub extern "C" fn roc_fx_args() -> RocList<RocStr> {
-    // TODO: can we be more efficient about reusing the String's memory for RocStr?
     std::env::args_os()
         .map(|os_str| RocStr::from(os_str.to_string_lossy().borrow()))
         .collect()
-}
-
-#[no_mangle]
-pub extern "C" fn roc_fx_envVar(roc_str: &RocStr) -> RocResult<RocStr, ()> {
-    // TODO: can we be more efficient about reusing the String's memory for RocStr?
-    match std::env::var_os(roc_str.as_str()) {
-        Some(os_str) => RocResult::ok(RocStr::from(os_str.to_string_lossy().borrow())),
-        None => RocResult::err(()),
-    }
 }
 
 #[no_mangle]
