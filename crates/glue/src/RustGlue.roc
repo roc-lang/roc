@@ -131,10 +131,20 @@ generateEntryPoints = \buf, types ->
 
 generateEntryPoint : Str, Types, Str, TypeId -> Str
 generateEntryPoint = \buf, types, name, id ->
+    returnTypeId : TypeId
+    returnTypeId = when Types.shape types id is
+        Function rocFn -> rocFn.ret
+        _ -> id
+
+    return : [ Sized TypeId, Unsized TypeId ]
+    return =
+        when Types.shape types returnTypeId is
+            Unsized | Function _ -> Unsized returnTypeId
+            _ -> Sized returnTypeId
+
     ret =
-        when Types.shape types id is
-            Function rocFn -> typeName types rocFn.ret
-            _ -> typeName types id
+        when return is
+            Sized retId | Unsized retId -> typeName types retId
 
     publicSignature =
         when Types.shape types id is
@@ -151,6 +161,11 @@ generateEntryPoint = \buf, types, name, id ->
             _ ->
                 "() -> \(ret)"
 
+    retTypeStr =
+        when return is
+            Unsized _ -> "*mut std::mem::MaybeUninit<u8>"
+            Sized retId -> "*mut \(typeName types retId)"
+
     externSignature =
         when Types.shape types id is
             Function rocFn ->
@@ -163,10 +178,10 @@ generateEntryPoint = \buf, types, name, id ->
                         else
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
-                "(_: *mut std::mem::MaybeUninit<u8>, \(arguments))"
+                "(_: \(retTypeStr), \(arguments))"
 
             _ ->
-                "(_: *mut std::mem::MaybeUninit<u8>)"
+                "(_: \(retTypeStr))"
 
     externArguments =
         when Types.shape types id is
@@ -182,6 +197,33 @@ generateEntryPoint = \buf, types, name, id ->
             _ ->
                 ""
 
+    retExpr =
+        when return is
+            Unsized _ ->
+                """
+                    unsafe {
+                        let size = roc__mainForHost_1_exposed_size() as usize;
+                        let mut closure_data = roc_std::RocList::with_capacity(size);
+
+                        roc__\(name)_1_exposed_generic(closure_data.as_mut_ptr(), \(externArguments));
+
+                        \(ret) { closure_data }
+                    }
+
+                    \(ret) { closure_data }
+                """
+
+            Sized _ ->
+                """
+                    let mut return_value = std::mem::MaybeUninit::uninit();
+
+                    unsafe {
+                        roc__\(name)_1_exposed_generic(return_value.as_mut_ptr(), \(externArguments));
+
+                        return_value.assume_init()
+                    }
+                """
+
     """
     \(buf)
 
@@ -191,14 +233,7 @@ generateEntryPoint = \buf, types, name, id ->
             fn roc__\(name)_1_exposed_size() -> i64;
         }
 
-        unsafe {
-            let size = roc__mainForHost_1_exposed_size() as usize;
-            let mut closure_data = roc_std::RocList::with_capacity(size);
-
-            roc__\(name)_1_exposed_generic(closure_data.as_mut_ptr(), \(externArguments));
-
-            \(ret) { closure_data }
-        }
+    \(retExpr)
     }
     """
 
