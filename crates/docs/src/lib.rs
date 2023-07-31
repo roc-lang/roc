@@ -25,8 +25,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
     let loaded_module = load_module_for_docs(root_file);
 
     // TODO get these from the platform's source file rather than hardcoding them!
+    // github.com/roc-lang/roc/issues/5712
     let package_name = "Documentation".to_string();
-    let version = String::new();
 
     // Clear out the generated-docs dir (we'll create a fresh one at the end)
     if build_dir.exists() {
@@ -143,8 +143,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 page_title(package_name.as_str(), "").as_str(),
             )
             .replace(
-                "<!-- Package Name and Version -->",
-                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+                "<!-- Package Name -->",
+                render_name_link(package_name.as_str()).as_str(),
             )
             .replace(
                 "<!-- Module Docs -->",
@@ -170,8 +170,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 page_title(package_name.as_str(), module_name).as_str(),
             )
             .replace(
-                "<!-- Package Name and Version -->",
-                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+                "<!-- Package Name -->",
+                render_name_link(package_name.as_str()).as_str(),
             )
             .replace(
                 "<!-- Module Docs -->",
@@ -354,33 +354,23 @@ fn base_url() -> String {
     }
 }
 
-fn render_name_and_version(name: &str, version: &str) -> String {
+// TODO render version as well
+fn render_name_link(name: &str) -> String {
     let mut buf = String::new();
-    let mut url_str = base_url();
-
-    url_str.push_str(name);
 
     push_html(&mut buf, "h1", vec![("class", "pkg-full-name")], {
         let mut link_buf = String::new();
 
-        push_html(&mut link_buf, "a", vec![("href", url_str.as_str())], name);
+        // link to root (= docs overview page)
+        push_html(
+            &mut link_buf,
+            "a",
+            vec![("href", base_url().as_str())],
+            name,
+        );
 
         link_buf
     });
-
-    let mut versions_url_str = base_url();
-
-    versions_url_str.push('/');
-    versions_url_str.push_str(name);
-    versions_url_str.push('/');
-    versions_url_str.push_str(version);
-
-    push_html(
-        &mut buf,
-        "a",
-        vec![("class", "version"), ("href", versions_url_str.as_str())],
-        version,
-    );
 
     buf
 }
