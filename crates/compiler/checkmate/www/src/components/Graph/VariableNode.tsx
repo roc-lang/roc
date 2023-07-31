@@ -5,14 +5,22 @@ import { assertExhaustive } from "../../utils/exhaustive";
 import { contentStyles } from "../Content";
 import { VariableElPretty } from "../Common/Variable";
 import { SubsSnapshot, TypeDescriptor } from "../../engine/subs";
+import { useEffect, useState } from "react";
+import { TypedEmitter } from "tiny-typed-emitter";
 
 type AddSubVariableLink = (from: Variable, subVariable: Variable) => void;
+
+export interface VariableMessageEvents {
+  focus: (variable: Variable) => void;
+}
 
 export interface VariableNodeProps {
   data: {
     subs: SubsSnapshot;
     variable: Variable;
     addSubVariableLink: AddSubVariableLink;
+    isOutlined: boolean;
+    ee: TypedEmitter<VariableMessageEvents>;
   };
   targetPosition?: Position;
   sourcePosition?: Position;
@@ -23,7 +31,33 @@ export default function VariableNode({
   targetPosition,
   sourcePosition,
 }: VariableNodeProps): JSX.Element {
-  const { variable, subs, addSubVariableLink } = data;
+  const {
+    variable,
+    subs,
+    addSubVariableLink,
+    isOutlined: isOutlinedProp,
+    ee: eeProp,
+  } = data;
+
+  const [isOutlined, setIsOutlined] = useState(isOutlinedProp);
+
+  useEffect(() => {
+    eeProp.on("focus", (focusVar: Variable) => {
+      if (focusVar !== variable) return;
+      setIsOutlined(true);
+    });
+  }, [eeProp, variable]);
+
+  useEffect(() => {
+    if (!isOutlined) return;
+    const timer = setTimeout(() => {
+      setIsOutlined(false);
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isOutlined]);
 
   const desc = subs.get_root(variable);
   const styles = contentStyles(desc);
@@ -54,7 +88,8 @@ export default function VariableNode({
     <div
       className={clsx(
         styles.bg,
-        "bg-opacity-50 py-2 px-4 rounded-lg border",
+        "bg-opacity-50 py-2 px-4 rounded-lg border transition ease-in-out duration-700",
+        isOutlined && "ring-2 ring-blue-500",
         "text-center font-mono"
       )}
     >

@@ -19,14 +19,18 @@ import ReactFlow, {
   ReactFlowState,
   Position,
 } from "reactflow";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Variable } from "../../schema";
 
 import "reactflow/dist/style.css";
 import clsx from "clsx";
-import VariableNode, { VariableNodeProps } from "./VariableNode";
+import VariableNode, {
+  VariableMessageEvents,
+  VariableNodeProps,
+} from "./VariableNode";
 import { SubsSnapshot } from "../../engine/subs";
 import { KeydownHandler } from "../Events";
+import { TypedEmitter } from "tiny-typed-emitter";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
@@ -34,36 +38,10 @@ export interface VariablesGraphProps {
   onKeydown: (handler: KeydownHandler) => void;
 }
 
-enum GraphDirection {
-  LeftRight,
-  TopBottom,
-}
-
-const DEFAULT_DIRECTION: GraphDirection = GraphDirection.TopBottom;
-
-function directionToElkDirection(direction: GraphDirection): string {
-  switch (direction) {
-    case GraphDirection.TopBottom:
-      return "DOWN";
-    case GraphDirection.LeftRight:
-      return "RIGHT";
-  }
-}
-
-function horizontalDirectionality(direction: GraphDirection): boolean {
-  switch (direction) {
-    case GraphDirection.TopBottom:
-      return false;
-    case GraphDirection.LeftRight:
-      return true;
-  }
-}
-
-function directionalityToPositions(direction: GraphDirection): {
+function horizontalityToPositions(isHorizontal: boolean): {
   targetPosition: Position;
   sourcePosition: Position;
 } {
-  const isHorizontal = horizontalDirectionality(direction);
   return {
     targetPosition: isHorizontal ? Position.Left : Position.Top,
     sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
@@ -75,17 +53,69 @@ interface LayoutedElements {
   edges: Edge[];
 }
 
-interface ComputeLayoutedElementsProps extends LayoutedElements {
-  direction: GraphDirection;
-}
+const LAYOUT_CONFIG_DOWN = {
+  keypress: "j",
+  emoji: "⬇️",
+  elkLayoutOptions: {
+    "elk.algorithm": "layered",
+    "elk.direction": "DOWN",
+  },
+  isHorizontal: false,
+} as const;
+const LAYOUT_CONFIG_RIGHT = {
+  keypress: "l",
+  emoji: "➡️",
+  elkLayoutOptions: {
+    "elk.algorithm": "layered",
+    "elk.direction": "RIGHT",
+  },
+  isHorizontal: true,
+} as const;
+const LAYOUT_CONFIG_RADIAL = {
+  keypress: "r",
+  emoji: "🌐",
+  elkLayoutOptions: {
+    "elk.algorithm": "radial",
+  },
+  isHorizontal: false,
+} as const;
+const LAYOUT_CONFIG_FORCE = {
+  keypress: "f",
+  emoji: "🧲",
+  elkLayoutOptions: {
+    "elk.algorithm": "force",
+  },
+  isHorizontal: false,
+} as const;
+
+type LayoutConfiguration =
+  | typeof LAYOUT_CONFIG_DOWN
+  | typeof LAYOUT_CONFIG_RIGHT
+  | typeof LAYOUT_CONFIG_RADIAL
+  | typeof LAYOUT_CONFIG_FORCE;
+
+const LAYOUT_CONFIGURATIONS: LayoutConfiguration[] = [
+  LAYOUT_CONFIG_DOWN,
+  LAYOUT_CONFIG_RIGHT,
+  LAYOUT_CONFIG_RADIAL,
+  LAYOUT_CONFIG_FORCE,
+];
+
+type ComputeElkLayoutOptions = Pick<
+  LayoutConfiguration,
+  "elkLayoutOptions" | "isHorizontal"
+>;
+
+interface ComputeLayoutedElementsProps
+  extends LayoutedElements,
+    ComputeElkLayoutOptions {}
 
 // Elk has a *huge* amount of options to configure. To see everything you can
 // tweak check out:
 //
 // - https://www.eclipse.org/elk/reference/algorithms.html
 // - https://www.eclipse.org/elk/reference/options.html
-const elkOptions: LayoutOptions = {
-  "elk.algorithm": "layered",
+const baseElkOptions: LayoutOptions = {
   "elk.layered.spacing.nodeNodeBetweenLayers": "100",
   "elk.spacing.nodeNode": "80",
 };
@@ -93,7 +123,8 @@ const elkOptions: LayoutOptions = {
 async function computeLayoutedElements({
   nodes,
   edges,
-  direction,
+  elkLayoutOptions,
+  isHorizontal,
 }: ComputeLayoutedElementsProps): Promise<LayoutedElements> {
   if (nodes.length === 0) {
     return Promise.resolve({
@@ -102,14 +133,12 @@ async function computeLayoutedElements({
     });
   }
 
-  const isHorizontal = horizontalDirectionality(direction);
-
   const elk = new ELK();
   const graph: ElkNode = {
     id: "root",
     layoutOptions: {
-      ...elkOptions,
-      "elk.direction": directionToElkDirection(direction),
+      ...baseElkOptions,
+      ...elkLayoutOptions,
     },
     //@ts-ignore
     children: nodes.map((node) => ({
@@ -150,17 +179,20 @@ const NODE_TYPES: NodeTypes = {
   variable: VariableNode,
 };
 
+type VariableNodeData = VariableNodeProps["data"];
+type RFVariableNode = Node<VariableNodeData>;
+
 function newVariable(
   id: string,
-  data: VariableNodeProps["data"],
-  direction: GraphDirection
-): Node {
+  data: VariableNodeData,
+  isHorizontal: boolean
+): RFVariableNode {
   return {
     id,
     position: { x: 0, y: 0 },
     type: "variable",
     data,
-    ...directionalityToPositions(direction),
+    ...horizontalityToPositions(isHorizontal),
   };
 }
 
@@ -199,11 +231,7 @@ const nodesSetInViewSelector = (state: ReactFlowState) =>
   );
 
 type RedoLayoutFn = () => Promise<void>;
-function useRedoLayout({
-  direction,
-}: {
-  direction: GraphDirection;
-}): RedoLayoutFn {
+function useRedoLayout(options: ComputeElkLayoutOptions): RedoLayoutFn {
   const nodeCount = useStore(nodeCountSelector);
   const nodesInitialized = useStore(nodesSetInViewSelector);
   const { getNodes, setNodes, getEdges } = useReactFlow();
@@ -216,7 +244,7 @@ function useRedoLayout({
     const { nodes } = await computeLayoutedElements({
       nodes: getNodes(),
       edges: getEdges(),
-      direction,
+      ...options,
     });
     setNodes(nodes);
     window.requestAnimationFrame(() => {
@@ -227,15 +255,15 @@ function useRedoLayout({
     nodesInitialized,
     getNodes,
     getEdges,
-    direction,
+    options,
     setNodes,
     instance,
   ]);
 }
 
 // Does positioning of the nodes in the graph.
-function useAutoLayout({ direction }: { direction: GraphDirection }) {
-  const redoLayout = useRedoLayout({ direction });
+function useAutoLayout(options: ComputeElkLayoutOptions) {
+  const redoLayout = useRedoLayout(options);
 
   useEffect(() => {
     // This wrapping is of course redundant, but exercised for the purpose of
@@ -244,38 +272,40 @@ function useAutoLayout({ direction }: { direction: GraphDirection }) {
       await redoLayout();
     }
     inner();
-  }, [direction, redoLayout]);
+  }, [redoLayout]);
 }
 
 function useKeydown({
-  direction,
+  layoutConfig,
+  setLayoutConfig,
   onKeydown,
-  setDirection,
 }: {
-  direction: GraphDirection;
-  setDirection: React.Dispatch<React.SetStateAction<GraphDirection>>;
+  layoutConfig: LayoutConfiguration;
+  setLayoutConfig: React.Dispatch<React.SetStateAction<LayoutConfiguration>>;
   onKeydown: (handler: KeydownHandler) => void;
 }) {
-  const redoLayout = useRedoLayout({ direction });
+  const redoLayout = useRedoLayout(layoutConfig);
 
   const keyDownHandler = useCallback(
     async (key: string) => {
       switch (key) {
         case "c": {
           await redoLayout();
-          break;
+          return;
         }
-        case "j": {
-          setDirection(GraphDirection.TopBottom);
-          break;
-        }
-        case "l": {
-          setDirection(GraphDirection.LeftRight);
+        default: {
           break;
         }
       }
+
+      for (const config of LAYOUT_CONFIGURATIONS) {
+        if (key === config.keypress) {
+          setLayoutConfig(config);
+          return;
+        }
+      }
     },
-    [redoLayout, setDirection]
+    [redoLayout, setLayoutConfig]
   );
   onKeydown(async (key) => {
     await keyDownHandler(key);
@@ -290,14 +320,21 @@ function Graph({
   const initialNodes: Node[] = [];
   const initialEdges: Edge[] = [];
 
-  const [direction, setDirection] = useState(DEFAULT_DIRECTION);
+  const ee = useRef(new TypedEmitter<VariableMessageEvents>());
+
+  const [layoutConfig, setLayoutConfig] =
+    useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
   const [elements, setElements] = useState<LayoutedElements>({
     nodes: initialNodes,
     edges: initialEdges,
   });
 
-  useAutoLayout({ direction });
-  useKeydown({ direction, onKeydown, setDirection });
+  useAutoLayout(layoutConfig);
+  useKeydown({
+    layoutConfig,
+    setLayoutConfig,
+    onKeydown,
+  });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setElements(({ nodes, edges }) => {
@@ -332,8 +369,10 @@ function Graph({
               subs,
               variable: subLinkN,
               addSubVariableLink,
+              isOutlined: true,
+              ee: ee.current,
             },
-            direction
+            layoutConfig.isHorizontal
           ),
           nodes
         );
@@ -351,8 +390,10 @@ function Graph({
 
         return { nodes: newNodes, edges: newEdges };
       });
+
+      ee.current.emit("focus", subLinkN);
     },
-    [direction, subs]
+    [layoutConfig, subs]
   );
 
   const addNode = useCallback(
@@ -368,8 +409,10 @@ function Graph({
               subs,
               variable: variableN,
               addSubVariableLink,
+              isOutlined: true,
+              ee: ee.current,
             },
-            direction
+            layoutConfig.isHorizontal
           ),
           nodes
         );
@@ -379,8 +422,10 @@ function Graph({
 
         return { nodes: newNodes, edges: edges };
       });
+
+      ee.current.emit("focus", variableN);
     },
-    [subs, addSubVariableLink, direction]
+    [subs, addSubVariableLink, layoutConfig]
   );
 
   onVariable(addNode);
@@ -401,9 +446,9 @@ function Graph({
       }}
     >
       <Panel position="top-right">
-        <DirectionPanel
-          direction={direction}
-          onChange={(e) => setDirection(e)}
+        <LayoutPanel
+          layoutConfig={layoutConfig}
+          setLayoutConfig={setLayoutConfig}
         />
       </Panel>
 
@@ -412,37 +457,32 @@ function Graph({
   );
 }
 
-interface DirectionPanelProps {
-  direction: GraphDirection;
-  onChange: (direction: GraphDirection) => void;
+interface LayoutPanelProps {
+  layoutConfig: LayoutConfiguration;
+  setLayoutConfig: React.Dispatch<React.SetStateAction<LayoutConfiguration>>;
 }
 
-function DirectionPanel({
-  direction,
-  onChange,
-}: DirectionPanelProps): JSX.Element {
+function LayoutPanel({
+  layoutConfig,
+  setLayoutConfig,
+}: LayoutPanelProps): JSX.Element {
   const commonStyle = "rounded cursor-pointer text-2xl select-none";
-
-  const dirs: { dir: GraphDirection; text: string }[] = [
-    { dir: GraphDirection.TopBottom, text: "⬇️" },
-    { dir: GraphDirection.LeftRight, text: "➡️" },
-  ];
 
   return (
     <>
-      {dirs.map(({ dir, text }, i) => (
+      {LAYOUT_CONFIGURATIONS.map((config, i) => (
         <span
           key={i}
           className={clsx(
             commonStyle,
             i !== 0 ? "ml-2" : "",
-            dir !== direction ? "opacity-50" : ""
+            config !== layoutConfig ? "opacity-50" : ""
           )}
           onClick={() => {
-            onChange(dir);
+            setLayoutConfig(config);
           }}
         >
-          {text}
+          {config.emoji}
         </span>
       ))}
     </>
