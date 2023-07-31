@@ -12,8 +12,10 @@ import ReactFlow, {
   applyEdgeChanges,
   Panel,
   NodeTypes,
+  useStore,
+  ReactFlowState,
 } from "reactflow";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Variable } from "../../schema";
 
 import "reactflow/dist/style.css";
@@ -105,12 +107,65 @@ function addEdgeChange(edge: Edge, existingEdges: Edge[]): EdgeChange | null {
   };
 }
 
+// Auto-layout logic due in part to the `feldera/dbsp` project, licensed under
+// the MIT license.
+//
+// The source code for the original project can be found at
+//   https://github.com/feldera/dbsp/blob/585a1926a6d3a0f8176dc80db5e906ec7d095400/web-ui/src/streaming/builder/hooks/useAutoLayout.ts#L215
+// and its license at
+//   https://github.com/feldera/dbsp/blob/585a1926a6d3a0f8176dc80db5e906ec7d095400/LICENSE
+const nodeCountSelector = (state: ReactFlowState) =>
+  state.nodeInternals.size + state.edges.length;
+const nodesSetInViewSelector = (state: ReactFlowState) =>
+  Array.from(state.nodeInternals.values()).every(
+    (node) => node.width && node.height
+  );
+
+// Does positioning of the nodes in the graph.
+function useRedoLayout({ direction }: { direction: GraphDirection }) {
+  const nodeCount = useStore(nodeCountSelector);
+  const nodesInitialized = useStore(nodesSetInViewSelector);
+  const { getNodes, setNodes, getEdges } = useReactFlow();
+  const instance = useReactFlow();
+
+  return useCallback(() => {
+    if (!nodeCount || !nodesInitialized) {
+      return;
+    }
+    const { nodes } = computeLayoutedElements({
+      nodes: getNodes(),
+      edges: getEdges(),
+      direction,
+    });
+    setNodes(nodes);
+    window.requestAnimationFrame(() => {
+      instance.fitView();
+    });
+  }, [
+    nodeCount,
+    nodesInitialized,
+    getNodes,
+    getEdges,
+    direction,
+    setNodes,
+    instance,
+  ]);
+}
+
+// Does positioning of the nodes in the graph.
+function useAutoLayout({ direction }: { direction: GraphDirection }) {
+  const redoLayout = useRedoLayout({ direction });
+
+  useEffect(() => {
+    redoLayout();
+  }, [direction, redoLayout]);
+}
+
 function Graph({
   subs,
   onVariable,
   onKeydown,
 }: VariablesGraphProps): JSX.Element {
-  const instance = useReactFlow();
   const initialNodes: Node[] = [];
   const initialEdges: Edge[] = [];
 
@@ -120,27 +175,8 @@ function Graph({
     edges: initialEdges,
   });
 
-  const refit = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      instance.fitView();
-    });
-  }, [instance]);
-
-  const onLayoutChange = useCallback(
-    (newDirection: GraphDirection) => {
-      setDirection(newDirection);
-
-      setElements(({ nodes, edges }) => {
-        return computeLayoutedElements({
-          direction: newDirection,
-          nodes,
-          edges,
-        });
-      });
-      refit();
-    },
-    [refit]
-  );
+  const redoLayout = useRedoLayout({ direction });
+  useAutoLayout({ direction });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setElements(({ nodes, edges }) => {
@@ -188,16 +224,10 @@ function Graph({
           ? applyEdgeChanges([optNewEdge], edges)
           : edges;
 
-        return computeLayoutedElements({
-          direction: "TB",
-          nodes: newNodes,
-          edges: newEdges,
-        });
+        return { nodes: newNodes, edges: newEdges };
       });
-
-      refit();
     },
-    [subs, refit]
+    [subs]
   );
 
   const addNode = useCallback(
@@ -218,23 +248,17 @@ function Graph({
           ? applyNodeChanges([optNewNode], nodes)
           : nodes;
 
-        return computeLayoutedElements({
-          direction: "TB",
-          nodes: newNodes,
-          edges,
-        });
+        return { nodes: newNodes, edges: edges };
       });
-
-      refit();
     },
-    [subs, refit, addSubVariableLink]
+    [subs, addSubVariableLink]
   );
 
   onVariable(addNode);
   onKeydown((key) => {
     switch (key) {
       case "c": {
-        onLayoutChange(direction);
+        redoLayout();
       }
     }
   });
@@ -257,7 +281,7 @@ function Graph({
       <Panel position="top-right">
         <DirectionPanel
           direction={direction}
-          onChange={(e) => onLayoutChange(e)}
+          onChange={(e) => setDirection(e)}
         />
       </Panel>
 
@@ -279,7 +303,7 @@ function DirectionPanel({
 
   const dirs: { dir: GraphDirection; text: string }[] = [
     { dir: "TB", text: "⬇️" },
-    //{ dir: "LR", text: "➡️" },
+    { dir: "LR", text: "➡️" },
   ];
 
   return (
