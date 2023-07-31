@@ -25,6 +25,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
     let loaded_module = load_module_for_docs(root_file);
 
     // TODO get these from the platform's source file rather than hardcoding them!
+    // github.com/roc-lang/roc/issues/5712
     let package_name = "Documentation".to_string();
 
     // Clear out the generated-docs dir (we'll create a fresh one at the end)
@@ -353,6 +354,7 @@ fn base_url() -> String {
     }
 }
 
+// TODO render version as well
 fn render_name_link(name: &str) -> String {
     let mut buf = String::new();
 
