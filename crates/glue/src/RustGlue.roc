@@ -131,6 +131,11 @@ generateEntryPoints = \buf, types ->
 
 generateEntryPoint : Str, Types, Str, TypeId -> Str
 generateEntryPoint = \buf, types, name, id ->
+    ret =
+        when Types.shape types id is
+            Function rocFn -> typeName types rocFn.ret
+            _ -> typeName types id
+
     publicSignature =
         when Types.shape types id is
             Function rocFn ->
@@ -141,12 +146,9 @@ generateEntryPoint = \buf, types, name, id ->
 
                         "arg\(indexStr): \(type)"
 
-                ret = typeName types rocFn.ret
-
                 "(\(arguments)) -> \(ret)"
 
             _ ->
-                ret = typeName types id
                 "() -> \(ret)"
 
     externSignature =
@@ -161,12 +163,10 @@ generateEntryPoint = \buf, types, name, id ->
                         else
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
-                ret = typeName types rocFn.ret
-                "(_: *mut \(ret), \(arguments))"
+                "(_: *mut std::mem::MaybeUninit<u8>, \(arguments))"
 
             _ ->
-                ret = typeName types id
-                "(_: *mut \(ret))"
+                "(_: *mut std::mem::MaybeUninit<u8>)"
 
     externArguments =
         when Types.shape types id is
@@ -188,14 +188,16 @@ generateEntryPoint = \buf, types, name, id ->
     pub fn \(name)\(publicSignature) {
         extern "C" {
             fn roc__\(name)_1_exposed_generic\(externSignature);
+            fn roc__\(name)_1_exposed_size() -> i64;
         }
 
-        let mut ret = core::mem::MaybeUninit::uninit();
-
         unsafe {
-            roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
+            let size = roc__mainForHost_1_exposed_size() as usize;
+            let mut closure_data = roc_std::RocList::with_capacity(size);
 
-            ret.assume_init()
+            roc__\(name)_1_exposed_generic(closure_data.as_mut_ptr(), \(externArguments));
+
+            \(ret) { closure_data }
         }
     }
     """
@@ -261,11 +263,14 @@ generateFunction = \buf, types, rocFn ->
             }
 
             let mut output = core::mem::MaybeUninit::uninit();
-            let closure_ptr =
-                (&mut core::mem::ManuallyDrop::new(self.closure_data)) as *mut _ as *mut u8;
+            let mut closure_data = core::mem::ManuallyDrop::new(self.closure_data);
+            let closure_ptr = closure_data.as_mut_slice() as *mut _ as *mut u8;
 
             unsafe {
                 \(externName)(\(externCallArguments), closure_ptr, output.as_mut_ptr());
+
+                // Manually drop the closure data now that we're done with it.
+                core::mem::ManuallyDrop::into_inner(closure_data);
 
                 output.assume_init()
             }
@@ -1876,7 +1881,7 @@ typeName : Types, TypeId -> Str
 typeName = \types, id ->
     when Types.shape types id is
         Unit -> "()"
-        Unsized -> "roc_std::RocList<u8>"
+        Unsized -> "roc_std::RocList<std::mem::MaybeUninit<u8>>"
         EmptyTagUnion -> "std::convert::Infallible"
         RocStr -> "roc_std::RocStr"
         Bool -> "bool"
