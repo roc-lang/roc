@@ -23,8 +23,7 @@ use file_glue::WriteErr;
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct RocFunction_89 {
-    closure_data: roc_std::RocList<u8>,
-    _discriminant: u8,
+    closure_data: roc_std::RocList<std::mem::MaybeUninit<u8>>,
 }
 
 impl RocFunction_89 {
@@ -36,8 +35,6 @@ impl RocFunction_89 {
                 output: *mut roc_std::RocStr,
             );
         }
-
-        dbg!(self.closure_data.len());
 
         let mut output = core::mem::MaybeUninit::uninit();
         let closure_ptr =
