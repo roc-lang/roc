@@ -247,6 +247,7 @@ fn specialize_drops_stmt<'a, 'i>(
                     RuntimeErrorFunction(_)
                     | FunctionPointer { .. }
                     | GetTagId { .. }
+                    | Alloca { .. }
                     | EmptyArray
                     | NullPointer => { /* do nothing */ }
                 }
@@ -1614,12 +1615,13 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         PtrStore => RC::NoRc,
         PtrLoad => RC::NoRc,
         PtrCast => RC::NoRc,
-        Alloca => RC::NoRc,
 
         PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 

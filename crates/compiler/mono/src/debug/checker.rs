@@ -30,6 +30,7 @@ pub enum UseKind {
     ErasedMake(ErasedField),
     Erased,
     FunctionPointer,
+    Alloca,
 }
 
 pub enum ProblemKind<'a> {
@@ -522,6 +523,17 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 update_mode: _,
             } => {
                 self.check_sym_exists(symbol);
+                None
+            }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                if let Some(initializer) = initializer {
+                    self.check_sym_exists(*initializer);
+                    self.check_sym_layout(*initializer, *element_layout, UseKind::Alloca);
+                }
+
                 None
             }
             Expr::RuntimeErrorFunction(_) => None,

@@ -3007,11 +3007,17 @@ impl<
         ASM::and_reg64_reg64_reg64(buf, sym_reg, sym_reg, ptr_reg);
     }
 
-    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
+    fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>) {
         // 1. acquire some stack space
         let element_width = self.interner().stack_size(element_layout);
         let allocation = self.debug_symbol("stack_allocation");
         let ptr = self.debug_symbol("ptr");
+
+        if element_width == 0 {
+            self.storage_manager.claim_pointer_stack_area(sym);
+            return;
+        }
+
         let base_offset = self
             .storage_manager
             .claim_stack_area(&allocation, element_width);
@@ -3021,7 +3027,13 @@ impl<
         ASM::mov_reg64_reg64(&mut self.buf, ptr_reg, CC::BASE_PTR_REG);
         ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, base_offset);
 
-        self.build_ptr_store(sym, ptr, value, element_layout);
+        if let Some(value) = value {
+            self.build_ptr_store(sym, ptr, value, element_layout);
+        } else {
+            // this is now a pointer to uninitialized memory!
+            let r = self.storage_manager.claim_general_reg(&mut self.buf, &sym);
+            ASM::mov_reg64_reg64(&mut self.buf, r, ptr_reg);
+        }
     }
 
     fn expr_box(

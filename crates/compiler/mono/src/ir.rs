@@ -329,7 +329,7 @@ pub enum HostExposedLayouts<'a> {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfRecursive {
     NotSelfRecursive,
     SelfRecursive(JoinPointId),
@@ -1924,6 +1924,11 @@ pub enum Expr<'a> {
         lambda_name: LambdaName<'a>,
     },
 
+    Alloca {
+        element_layout: InLayout<'a>,
+        initializer: Option<Symbol>,
+    },
+
     Reset {
         symbol: Symbol,
         update_mode: UpdateModeId,
@@ -2142,7 +2147,7 @@ impl<'a> Expr<'a> {
                 structure,
                 index,
                 ..
-            } => text!(alloc, "UnionAtIndex (Id {}) (Index {}) ", tag_id, index)
+            } => text!(alloc, "UnionAtIndex (Id {tag_id}) (Index {index}) ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
             UnionFieldPtrAtIndex {
@@ -2150,13 +2155,15 @@ impl<'a> Expr<'a> {
                 structure,
                 index,
                 ..
-            } => text!(
-                alloc,
-                "UnionFieldPtrAtIndex (Id {}) (Index {}) ",
-                tag_id,
-                index
-            )
-            .append(symbol_to_doc(alloc, *structure, pretty)),
+            } => text!(alloc, "UnionFieldPtrAtIndex (Id {tag_id}) (Index {index}) ",)
+                .append(symbol_to_doc(alloc, *structure, pretty)),
+
+            Alloca { initializer, .. } => match initializer {
+                Some(initializer) => {
+                    text!(alloc, "Alloca ").append(symbol_to_doc(alloc, *initializer, pretty))
+                }
+                None => text!(alloc, "Alloca <uninitialized>"),
+            },
         }
     }
 
@@ -7932,6 +7939,17 @@ fn substitute_in_expr<'a>(
                 tag_id: *tag_id,
                 index: *index,
                 union_layout: *union_layout,
+            }),
+            None => None,
+        },
+
+        Alloca {
+            element_layout,
+            initializer,
+        } => match substitute(subs, (*initializer)?) {
+            Some(initializer) => Some(Alloca {
+                element_layout: *element_layout,
+                initializer: Some(initializer),
             }),
             None => None,
         },

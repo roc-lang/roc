@@ -1138,6 +1138,11 @@ fn insert_refcount_operations_binding<'a>(
         Expr::Reset { .. } | Expr::ResetRef { .. } => {
             unreachable!("Reset(ref) should not exist at this point")
         }
+        Expr::Alloca { initializer, .. } => {
+            let new_let = new_let!(stmt);
+
+            inc_owned!(initializer.as_ref().copied().into_iter(), new_let)
+        }
     }
 }
 
@@ -1364,7 +1369,10 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         PtrStore => arena.alloc_slice_copy(&[owned, owned]),
         PtrLoad => arena.alloc_slice_copy(&[owned]),
         PtrCast => arena.alloc_slice_copy(&[owned]),
-        Alloca => arena.alloc_slice_copy(&[owned]),
+
+        SetJmp | LongJmp | SetLongJmpBuffer => {
+            unreachable!("only inserted in dev backend codegen")
+        }
 
         PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {

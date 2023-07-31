@@ -741,15 +741,10 @@ impl<'a> TrmcEnv<'a> {
             .interner
             .insert_direct_no_semantic(LayoutRepr::Ptr(return_layout));
 
-        let call = Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::Alloca,
-                update_mode: UpdateModeId::BACKEND_DUMMY,
-            },
-            arguments: arena.alloc([null_symbol]),
+        let ptr_null = Expr::Alloca {
+            initializer: Some(null_symbol),
+            element_layout: return_layout,
         };
-
-        let ptr_null = Expr::Call(call);
         let let_ptr = |next| Stmt::Let(initial_ptr_symbol, ptr_null, ptr_return_layout, next);
 
         let joinpoint_id = JoinPointId(env.named_unique_symbol("trmc"));
@@ -1109,6 +1104,7 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
             value.map(|v| v == needle).unwrap_or(false) || needle == *callee
         }
         Expr::ErasedLoad { symbol, field: _ } => needle == *symbol,
+        Expr::Alloca { initializer, .. } => &Some(needle) == initializer,
     }
 }
 
