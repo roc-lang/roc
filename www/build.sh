@@ -100,29 +100,38 @@ cp -r www/wip_new_website/static/site.css www/build/wip
 rm -rf roc_nightly roc_releases.json
 
 echo 'Generating CLI example platform docs...'
-# Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# "/packages/basic-cli/" rather than "/builtins/"
-export ROC_DOCS_URL_ROOT=/packages/basic-cli
-
-rm -rf ./downloaded-basic-cli
-
-git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
-
-cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
-
-rm -rf ./downloaded-basic-cli
 
 BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
 mkdir -p $BASIC_CLI_PACKAGE_DIR
-mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
-# set up docs for basic-cli 0.3.2
-BASIC_CLI_DIR_0_3_2=$BASIC_CLI_PACKAGE_DIR/0.3.2
-mkdir -p $BASIC_CLI_DIR_0_3_2
-curl -fL --output $BASIC_CLI_DIR_0_3_2/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/0.3.2/docs.tar.gz
-tar -xf $BASIC_CLI_DIR_0_3_2/docs.tar.gz -C $BASIC_CLI_DIR_0_3_2/
-rm $BASIC_CLI_DIR_0_3_2/docs.tar.gz
-mv $BASIC_CLI_DIR_0_3_2/generated-docs/* $BASIC_CLI_DIR_0_3_2
-rm -rf $BASIC_CLI_DIR_0_3_2/generated-docs
+# Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
+# "/packages/basic-cli/main" rather than "/builtins/"
+export ROC_DOCS_URL_ROOT=/packages/basic-cli/main
+
+# Generate the docs for the main branch
+rm -rf ./downloaded-basic-cli
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+rm -rf ./downloaded-basic-cli
+# Move the generated docs to build/packages/basic-cli/main
+mkdir -p $BASIC_CLI_PACKAGE_DIR/main
+mv generated-docs/* $BASIC_CLI_PACKAGE_DIR/main
+
+# Set up docs for different basic-cli versions
+BASIC_CLI_VERSIONS=("0.4.0" "0.3.2") # Listed with the latest version first
+for BASIC_CLI_VERSION in ${BASIC_CLI_VERSIONS[@]}; do
+  echo "Generating CLI example platform docs for version $BASIC_CLI_VERSION..."
+  BASIC_CLI_PACKAGE_VERSION_DIR=$BASIC_CLI_PACKAGE_DIR/$BASIC_CLI_VERSION
+  mkdir -p $BASIC_CLI_PACKAGE_VERSION_DIR
+  curl -fL --output $BASIC_CLI_PACKAGE_VERSION_DIR/docs.tar.gz "https://github.com/roc-lang/basic-cli/releases/download/$BASIC_CLI_VERSION/docs.tar.gz"
+  tar -xf $BASIC_CLI_PACKAGE_VERSION_DIR/docs.tar.gz -C $BASIC_CLI_PACKAGE_VERSION_DIR
+  rm $BASIC_CLI_PACKAGE_VERSION_DIR/docs.tar.gz
+  mv $BASIC_CLI_PACKAGE_VERSION_DIR/generated-docs/* $BASIC_CLI_PACKAGE_VERSION_DIR
+  rm -rf $BASIC_CLI_PACKAGE_VERSION_DIR/generated-docs
+done
+
+# Copy the docs for the latest version of basic-cli to the root of the basic-cli docs folder
+BASIC_CLI_LATEST_VERSION=${BASIC_CLI_VERSIONS[0]}
+cp -r "$BASIC_CLI_PACKAGE_DIR/$BASIC_CLI_LATEST_VERSION/." "$BASIC_CLI_PACKAGE_DIR" 
 
 popd
