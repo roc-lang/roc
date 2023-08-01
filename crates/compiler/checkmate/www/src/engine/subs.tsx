@@ -1,6 +1,7 @@
 import { Content, Rank, Variable, Event } from "../schema";
 import { assertExhaustive } from "../utils/exhaustive";
 import { Refine } from "../utils/refine";
+import { EventEpoch } from "./engine";
 
 export type TypeLink = {
   type: "link";
@@ -103,13 +104,14 @@ export class Subs implements QuerySubs {
     }
   }
 
-  snapshot(): SubsSnapshot {
+  snapshot({ epoch }: { epoch: EventEpoch }): SubsSnapshot {
     const snapshotMap = new Map<Variable, VarType>();
     for (const [key, value] of this.#map) {
       snapshotMap.set(key, { ...value });
     }
     const snapshot = new Subs(snapshotMap);
     return {
+      epoch,
       get(variable: Variable): VarType | undefined {
         return snapshot.get(variable);
       },
@@ -172,5 +174,6 @@ export interface QuerySubs {
 }
 
 export interface SubsSnapshot extends QuerySubs {
+  readonly epoch: EventEpoch;
   __snapshot__: typeof SnapshotSymbol;
 }

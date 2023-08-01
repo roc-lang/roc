@@ -1,4 +1,7 @@
-import Dagre from "@dagrejs/dagre";
+import ELK, {
+  type ElkNode,
+  type LayoutOptions,
+} from "elkjs/lib/elk.bundled.js";
 import ReactFlow, {
   Node,
   Edge,
@@ -12,15 +15,23 @@ import ReactFlow, {
   applyEdgeChanges,
   Panel,
   NodeTypes,
+  useStore,
+  ReactFlowState,
+  Position,
 } from "reactflow";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Variable } from "../../schema";
 
 import "reactflow/dist/style.css";
 import clsx from "clsx";
-import VariableNode, { VariableNodeProps } from "./VariableNode";
+import VariableNode, {
+  VariableMessageEvents,
+  VariableNodeProps,
+} from "./VariableNode";
 import { SubsSnapshot } from "../../engine/subs";
 import { KeydownHandler } from "../Events";
+import { TypedEmitter } from "tiny-typed-emitter";
+import EpochCell, { EpochCellView } from "../Common/EpochCell";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
@@ -28,60 +39,161 @@ export interface VariablesGraphProps {
   onKeydown: (handler: KeydownHandler) => void;
 }
 
-type GraphDirection = "TB" | "BT" | "LR" | "RL";
-
-const DEFAULT_DIRECTION: GraphDirection = "TB";
+function horizontalityToPositions(isHorizontal: boolean): {
+  targetPosition: Position;
+  sourcePosition: Position;
+} {
+  return {
+    targetPosition: isHorizontal ? Position.Left : Position.Top,
+    sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
+  };
+}
 
 interface LayoutedElements {
   nodes: Node[];
   edges: Edge[];
 }
 
-interface ComputeLayoutedElementsProps extends LayoutedElements {
-  direction: GraphDirection;
-}
+const LAYOUT_CONFIG_DOWN = {
+  keypress: "j",
+  emoji: "⬇️",
+  elkLayoutOptions: {
+    "elk.algorithm": "layered",
+    "elk.direction": "DOWN",
+  },
+  isHorizontal: false,
+} as const;
+const LAYOUT_CONFIG_RIGHT = {
+  keypress: "l",
+  emoji: "➡️",
+  elkLayoutOptions: {
+    "elk.algorithm": "layered",
+    "elk.direction": "RIGHT",
+  },
+  isHorizontal: true,
+} as const;
+const LAYOUT_CONFIG_RADIAL = {
+  keypress: "r",
+  emoji: "🌐",
+  elkLayoutOptions: {
+    "elk.algorithm": "radial",
+  },
+  isHorizontal: false,
+} as const;
+const LAYOUT_CONFIG_FORCE = {
+  keypress: "f",
+  emoji: "🧲",
+  elkLayoutOptions: {
+    "elk.algorithm": "force",
+  },
+  isHorizontal: false,
+} as const;
 
-function computeLayoutedElements({
+type LayoutConfiguration =
+  | typeof LAYOUT_CONFIG_DOWN
+  | typeof LAYOUT_CONFIG_RIGHT
+  | typeof LAYOUT_CONFIG_RADIAL
+  | typeof LAYOUT_CONFIG_FORCE;
+
+const LAYOUT_CONFIGURATIONS: LayoutConfiguration[] = [
+  LAYOUT_CONFIG_DOWN,
+  LAYOUT_CONFIG_RIGHT,
+  LAYOUT_CONFIG_RADIAL,
+  LAYOUT_CONFIG_FORCE,
+];
+
+type ComputeElkLayoutOptions = Pick<
+  LayoutConfiguration,
+  "elkLayoutOptions" | "isHorizontal"
+>;
+
+interface ComputeLayoutedElementsProps
+  extends LayoutedElements,
+    ComputeElkLayoutOptions {}
+
+// Elk has a *huge* amount of options to configure. To see everything you can
+// tweak check out:
+//
+// - https://www.eclipse.org/elk/reference/algorithms.html
+// - https://www.eclipse.org/elk/reference/options.html
+const baseElkOptions: LayoutOptions = {
+  "elk.layered.spacing.nodeNodeBetweenLayers": "100",
+  "elk.spacing.nodeNode": "80",
+};
+
+async function computeLayoutedElements({
   nodes,
   edges,
-  direction,
-}: ComputeLayoutedElementsProps): LayoutedElements {
+  elkLayoutOptions,
+  isHorizontal,
+}: ComputeLayoutedElementsProps): Promise<LayoutedElements> {
   if (nodes.length === 0) {
-    return {
+    return Promise.resolve({
       nodes: [],
       edges: [],
-    };
+    });
   }
 
-  const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: direction });
+  const elk = new ELK();
+  const graph: ElkNode = {
+    id: "root",
+    layoutOptions: {
+      ...baseElkOptions,
+      ...elkLayoutOptions,
+    },
+    //@ts-ignore
+    children: nodes.map((node) => ({
+      ...node,
+      // Adjust the target and source handle positions based on the layout
+      // direction.
+      targetPosition: isHorizontal ? "left" : "top",
+      sourcePosition: isHorizontal ? "right" : "bottom",
 
-  edges.forEach((edge) => g.setEdge(edge.source, edge.target));
-  nodes.forEach((node) => g.setNode(node.id, node));
-
-  Dagre.layout(g);
-
-  const result = {
-    nodes: nodes.map((node) => {
-      const { x, y } = g.node(node.id);
-
-      return { ...node, position: { x, y } };
-    }),
-    edges,
+      // Hardcode a width and height for elk to use when layouting.
+      //width: 150,
+      //height: 50,
+    })),
+    //@ts-ignore
+    edges: edges,
   };
-  return result;
+
+  const layoutedGraph = await elk.layout(graph);
+
+  if (!layoutedGraph.children || !layoutedGraph.edges) {
+    throw new Error("Elk did not return a valid graph");
+  }
+
+  return {
+    //@ts-ignore
+    nodes: layoutedGraph.children.map((node) => ({
+      ...node,
+      // React Flow expects a position property on the node instead of `x`
+      // and `y` fields.
+      position: { x: node.x, y: node.y },
+    })),
+    //@ts-ignore
+    edges: layoutedGraph.edges,
+  };
 }
 
 const NODE_TYPES: NodeTypes = {
   variable: VariableNode,
 };
 
-function newVariable(id: string, data: VariableNodeProps["data"]): Node {
+type VariableNodeData = VariableNodeProps["data"];
+type RFVariableNode = Node<VariableNodeData>;
+
+function newVariable(
+  id: string,
+  data: VariableNodeData,
+  isHorizontal: boolean
+): RFVariableNode {
   return {
     id,
     position: { x: 0, y: 0 },
     type: "variable",
     data,
+    ...horizontalityToPositions(isHorizontal),
   };
 }
 
@@ -105,42 +217,125 @@ function addEdgeChange(edge: Edge, existingEdges: Edge[]): EdgeChange | null {
   };
 }
 
+// Auto-layout logic due in part to the `feldera/dbsp` project, licensed under
+// the MIT license.
+//
+// The source code for the original project can be found at
+//   https://github.com/feldera/dbsp/blob/585a1926a6d3a0f8176dc80db5e906ec7d095400/web-ui/src/streaming/builder/hooks/useAutoLayout.ts#L215
+// and its license at
+//   https://github.com/feldera/dbsp/blob/585a1926a6d3a0f8176dc80db5e906ec7d095400/LICENSE
+const nodeCountSelector = (state: ReactFlowState) =>
+  state.nodeInternals.size + state.edges.length;
+const nodesSetInViewSelector = (state: ReactFlowState) =>
+  Array.from(state.nodeInternals.values()).every(
+    (node) => node.width && node.height
+  );
+
+type RedoLayoutFn = () => Promise<void>;
+function useRedoLayout(options: ComputeElkLayoutOptions): RedoLayoutFn {
+  const nodeCount = useStore(nodeCountSelector);
+  const nodesInitialized = useStore(nodesSetInViewSelector);
+  const { getNodes, setNodes, getEdges } = useReactFlow();
+  const instance = useReactFlow();
+
+  return useCallback(async () => {
+    if (!nodeCount || !nodesInitialized) {
+      return;
+    }
+    const { nodes } = await computeLayoutedElements({
+      nodes: getNodes(),
+      edges: getEdges(),
+      ...options,
+    });
+    setNodes(nodes);
+    window.requestAnimationFrame(() => {
+      instance.fitView();
+    });
+  }, [
+    nodeCount,
+    nodesInitialized,
+    getNodes,
+    getEdges,
+    options,
+    setNodes,
+    instance,
+  ]);
+}
+
+// Does positioning of the nodes in the graph.
+function useAutoLayout(options: ComputeElkLayoutOptions) {
+  const redoLayout = useRedoLayout(options);
+
+  useEffect(() => {
+    // This wrapping is of course redundant, but exercised for the purpose of
+    // explicitness.
+    async function inner() {
+      await redoLayout();
+    }
+    inner();
+  }, [redoLayout]);
+}
+
+function useKeydown({
+  layoutConfig,
+  setLayoutConfig,
+  onKeydown,
+}: {
+  layoutConfig: LayoutConfiguration;
+  setLayoutConfig: React.Dispatch<React.SetStateAction<LayoutConfiguration>>;
+  onKeydown: (handler: KeydownHandler) => void;
+}) {
+  const redoLayout = useRedoLayout(layoutConfig);
+
+  const keyDownHandler = useCallback(
+    async (key: string) => {
+      switch (key) {
+        case "c": {
+          await redoLayout();
+          return;
+        }
+        default: {
+          break;
+        }
+      }
+
+      for (const config of LAYOUT_CONFIGURATIONS) {
+        if (key === config.keypress) {
+          setLayoutConfig(config);
+          return;
+        }
+      }
+    },
+    [redoLayout, setLayoutConfig]
+  );
+  onKeydown(async (key) => {
+    await keyDownHandler(key);
+  });
+}
+
 function Graph({
   subs,
   onVariable,
   onKeydown,
 }: VariablesGraphProps): JSX.Element {
-  const instance = useReactFlow();
   const initialNodes: Node[] = [];
   const initialEdges: Edge[] = [];
 
-  const [direction, setDirection] = useState(DEFAULT_DIRECTION);
+  const ee = useRef(new TypedEmitter<VariableMessageEvents>());
+
+  const [layoutConfig, setLayoutConfig] =
+    useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
   const [elements, setElements] = useState<LayoutedElements>({
     nodes: initialNodes,
     edges: initialEdges,
   });
 
-  const refit = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      instance.fitView();
-    });
-  }, [instance]);
-
-  const onLayoutChange = useCallback(
-    (newDirection: GraphDirection) => {
-      setDirection(newDirection);
-
-      setElements(({ nodes, edges }) => {
-        return computeLayoutedElements({
-          direction: newDirection,
-          nodes,
-          edges,
-        });
-      });
-      refit();
-    },
-    [refit]
-  );
+  useAutoLayout(layoutConfig);
+  useKeydown({
+    layoutConfig,
+    setLayoutConfig,
+    onKeydown,
+  });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setElements(({ nodes, edges }) => {
@@ -169,11 +364,17 @@ function Graph({
 
       setElements(({ nodes, edges }) => {
         const optNewNode = addNodeChange(
-          newVariable(to, {
-            subs,
-            variable: subLinkN,
-            addSubVariableLink,
-          }),
+          newVariable(
+            to,
+            {
+              subs,
+              variable: subLinkN,
+              addSubVariableLink,
+              isOutlined: true,
+              ee: ee.current,
+            },
+            layoutConfig.isHorizontal
+          ),
           nodes
         );
         const newNodes = optNewNode
@@ -188,16 +389,12 @@ function Graph({
           ? applyEdgeChanges([optNewEdge], edges)
           : edges;
 
-        return computeLayoutedElements({
-          direction: "TB",
-          nodes: newNodes,
-          edges: newEdges,
-        });
+        return { nodes: newNodes, edges: newEdges };
       });
 
-      refit();
+      ee.current.emit("focus", subLinkN);
     },
-    [subs, refit]
+    [layoutConfig, subs]
   );
 
   const addNode = useCallback(
@@ -207,37 +404,32 @@ function Graph({
 
       setElements(({ nodes, edges }) => {
         const optNewNode = addNodeChange(
-          newVariable(variable, {
-            subs,
-            variable: variableN,
-            addSubVariableLink,
-          }),
+          newVariable(
+            variable,
+            {
+              subs,
+              variable: variableN,
+              addSubVariableLink,
+              isOutlined: true,
+              ee: ee.current,
+            },
+            layoutConfig.isHorizontal
+          ),
           nodes
         );
         const newNodes = optNewNode
           ? applyNodeChanges([optNewNode], nodes)
           : nodes;
 
-        return computeLayoutedElements({
-          direction: "TB",
-          nodes: newNodes,
-          edges,
-        });
+        return { nodes: newNodes, edges: edges };
       });
 
-      refit();
+      ee.current.emit("focus", variableN);
     },
-    [subs, refit, addSubVariableLink]
+    [subs, addSubVariableLink, layoutConfig]
   );
 
   onVariable(addNode);
-  onKeydown((key) => {
-    switch (key) {
-      case "c": {
-        onLayoutChange(direction);
-      }
-    }
-  });
 
   return (
     <ReactFlow
@@ -254,10 +446,13 @@ function Graph({
         hideAttribution: true,
       }}
     >
+      <Panel position="top-left">
+        <EpochCell view={EpochCellView.Graph} epoch={subs.epoch}></EpochCell>
+      </Panel>
       <Panel position="top-right">
-        <DirectionPanel
-          direction={direction}
-          onChange={(e) => onLayoutChange(e)}
+        <LayoutPanel
+          layoutConfig={layoutConfig}
+          setLayoutConfig={setLayoutConfig}
         />
       </Panel>
 
@@ -266,37 +461,32 @@ function Graph({
   );
 }
 
-interface DirectionPanelProps {
-  direction: GraphDirection;
-  onChange: (direction: GraphDirection) => void;
+interface LayoutPanelProps {
+  layoutConfig: LayoutConfiguration;
+  setLayoutConfig: React.Dispatch<React.SetStateAction<LayoutConfiguration>>;
 }
 
-function DirectionPanel({
-  direction,
-  onChange,
-}: DirectionPanelProps): JSX.Element {
+function LayoutPanel({
+  layoutConfig,
+  setLayoutConfig,
+}: LayoutPanelProps): JSX.Element {
   const commonStyle = "rounded cursor-pointer text-2xl select-none";
-
-  const dirs: { dir: GraphDirection; text: string }[] = [
-    { dir: "TB", text: "⬇️" },
-    //{ dir: "LR", text: "➡️" },
-  ];
 
   return (
     <>
-      {dirs.map(({ dir, text }, i) => (
+      {LAYOUT_CONFIGURATIONS.map((config, i) => (
         <span
           key={i}
           className={clsx(
             commonStyle,
             i !== 0 ? "ml-2" : "",
-            dir !== direction ? "opacity-50" : ""
+            config !== layoutConfig ? "opacity-50" : ""
           )}
           onClick={() => {
-            onChange(dir);
+            setLayoutConfig(config);
           }}
         >
-          {text}
+          {config.emoji}
         </span>
       ))}
     </>
