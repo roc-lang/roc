@@ -296,38 +296,38 @@ procedure Num.94 (#Attr.2, #Attr.3):
     ret Num.302;
 
 procedure Str.12 (#Attr.2):
-    let Str.309 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.309;
+    let Str.300 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.300;
 
 procedure Str.4 (#Attr.2, #Attr.3):
-    let Str.312 : Str = lowlevel StrJoinWith #Attr.2 #Attr.3;
-    ret Str.312;
+    let Str.303 : Str = lowlevel StrJoinWith #Attr.2 #Attr.3;
+    ret Str.303;
 
 procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.307 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.307;
+    let Str.298 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.298;
 
 procedure Str.55 (#Attr.2):
-    let Str.315 : List Str = lowlevel StrGraphemes #Attr.2;
-    ret Str.315;
+    let Str.306 : List Str = lowlevel StrGraphemes #Attr.2;
+    ret Str.306;
 
 procedure Str.9 (Str.79):
-    let Str.305 : U64 = 0i64;
-    let Str.306 : U64 = CallByName List.6 Str.79;
-    let Str.80 : {U64, Str, Int1, U8} = CallByName Str.48 Str.79 Str.305 Str.306;
-    let Str.302 : Int1 = StructAtIndex 2 Str.80;
-    if Str.302 then
-        let Str.304 : Str = StructAtIndex 1 Str.80;
-        let Str.303 : [C {U64, U8}, C Str] = TagId(1) Str.304;
-        ret Str.303;
+    let Str.296 : U64 = 0i64;
+    let Str.297 : U64 = CallByName List.6 Str.79;
+    let Str.80 : {U64, Str, Int1, U8} = CallByName Str.48 Str.79 Str.296 Str.297;
+    let Str.293 : Int1 = StructAtIndex 2 Str.80;
+    if Str.293 then
+        let Str.295 : Str = StructAtIndex 1 Str.80;
+        let Str.294 : [C {U64, U8}, C Str] = TagId(1) Str.295;
+        ret Str.294;
     else
-        let Str.300 : U8 = StructAtIndex 3 Str.80;
-        let Str.301 : U64 = StructAtIndex 0 Str.80;
+        let Str.291 : U8 = StructAtIndex 3 Str.80;
+        let Str.292 : U64 = StructAtIndex 0 Str.80;
         let #Derived_gen.36 : Str = StructAtIndex 1 Str.80;
         dec #Derived_gen.36;
-        let Str.299 : {U64, U8} = Struct {Str.301, Str.300};
-        let Str.298 : [C {U64, U8}, C Str] = TagId(0) Str.299;
-        ret Str.298;
+        let Str.290 : {U64, U8} = Struct {Str.292, Str.291};
+        let Str.289 : [C {U64, U8}, C Str] = TagId(0) Str.290;
+        ret Str.289;
 
 procedure TotallyNotJson.100 (TotallyNotJson.850):
     let TotallyNotJson.1479 : Str = "a";
