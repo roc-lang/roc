@@ -24,6 +24,8 @@ roc_std = { path = "../../roc_std" }
 roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
+roc_solve_schema = { path = "../solve_schema" }
+roc_unify = { path = "../unify" }
 ven_pretty = { path = "../../vendor/pretty" }
 
 bitvec.workspace = true

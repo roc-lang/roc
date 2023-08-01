@@ -800,6 +800,7 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
+                    $(#[$ident_meta:meta])*
                     $ident_id:literal $ident_const:ident: $ident_name:literal
                     $(exposed_apply_type=$exposed_apply_type:literal)?
                     $(exposed_type=$exposed_type:literal)?
@@ -951,6 +952,7 @@ macro_rules! define_builtins {
         impl Symbol {
             $(
                 $(
+                    $(#[$ident_meta])*
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )*
                 $(

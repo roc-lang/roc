@@ -41,21 +41,7 @@ You can also assign specific names to expressions. Try entering these lines:
 <pre><samp class="repl-prompt">greeting = <span class="literal">"Hi"</span></samp></pre>
 <pre><samp class="repl-prompt">audience = <span class="literal">"World"</span></samp></pre>
 
-From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names!
-
-### [String Interpolation](#string-interpolation) {#string-interpolation}
-
-You can combine named strings together using _string interpolation_, like so:
-
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
-
-If you put this into the REPL, you should see this output:
-
-<pre><samp><span class="literal">"Hi there, World!" </span><span class="colon">:</span> Str <span class="comment">               # val2</span></samp></pre>
-
-Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
-
-By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
+From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names! We'll use these later on in the tutorial.
 
 ### [Arithmetic](#arithmetic) {#arithmetic}
 
@@ -65,9 +51,11 @@ Now let's try using an _operator_, specifically the `+` operator. Enter this:
 
 You should see this output:
 
-<pre><samp>2 <span class="colon">:</span> Num *</samp></pre>
+<pre><samp>2 <span class="colon">:</span> Num * <span class="comment">               # val2</span></samp></pre>
 
 According to the REPL, one plus one equals two. Sounds right!
+
+> Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
 
 Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_operations) when using multiple arithmetic operators like `+` and `-`, but you can use parentheses to specify exactly how they should be grouped.
 
@@ -75,7 +63,6 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 -1 <span class="colon">:</span> Num *
 </span></samp></pre>
-
 
 ### [Calling Functions](#calling-functions) {#calling-functions}
 
@@ -117,6 +104,24 @@ That's not what we intended to do. Putting parentheses around the `Num.toStr 42`
 Both the `Str.concat` function and the `Num.toStr` function have a dot in their names. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module. Similarly, `Num` is a module, and `toStr` is a function inside that module.
 
 We'll get into more depth about modules later, but for now you can think of a module as a named collection of functions. Eventually we'll discuss how to use them for more than that.
+
+### [String Interpolation](#string-interpolation) {#string-interpolation}
+
+An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
+
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+
+This is syntax sugar for calling `Str.concat` several times, like so:
+
+```roc
+Str.concat greeting (Str.concat " there, " (Str.concat audience "!"))
+```
+
+You can put entire single-line expressions inside the parentheses in string interpolation. For example:
+
+<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">\(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
+
+By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
 
 ## [Building an Application](#building-an-application) {#building-an-application}
 

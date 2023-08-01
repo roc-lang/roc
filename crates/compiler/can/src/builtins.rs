@@ -88,12 +88,15 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::PtrStore => unimplemented!(),
                 LowLevel::PtrLoad => unimplemented!(),
                 LowLevel::PtrClearTagId => unimplemented!(),
-                LowLevel::Alloca => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
+
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),

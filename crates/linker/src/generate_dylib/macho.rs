@@ -71,6 +71,12 @@ pub fn create_dylib_macho(
             dummy_obj_file.path().to_str().unwrap(),
             "-o",
             dummy_lib_file.to_str().unwrap(),
+            // Suppress warnings, because otherwise it prints:
+            //
+            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
+            //
+            // We can't disable that option without breaking either x64 mac or ARM mac
+            "-w",
         ])
         .output()
         .unwrap();

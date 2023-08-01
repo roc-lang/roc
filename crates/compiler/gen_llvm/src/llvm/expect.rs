@@ -9,7 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
@@ -387,6 +387,8 @@ fn build_clone<'a, 'ctx>(
                 union_layout,
             )
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 
@@ -798,7 +800,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                 let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
 
                 for i in 0..other_tags.len() + 1 {
-                    if i == nullable_id as _ {
+                    if i == nullable_id as usize {
                         continue;
                     }
 

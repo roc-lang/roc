@@ -7,7 +7,6 @@
 
 use std::hash::Hash;
 
-use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, ReuseToken, Stmt,
     UpdateModeId, UpdateModeIds,
@@ -888,7 +887,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         .into_iter()
                         .map(|(_reuse_layout, token)| Param {
                             symbol: token.token.symbol,
-                            ownership: Ownership::Owned,
                             layout: *token.inlayout,
                         });
 

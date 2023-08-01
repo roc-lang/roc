@@ -121,7 +121,6 @@ pub enum LowLevel {
     PtrStore,
     PtrLoad,
     PtrClearTagId,
-    Alloca,
     RefCountIncRcPtr,
     RefCountDecRcPtr,
     RefCountIncDataPtr,
@@ -131,6 +130,9 @@ pub enum LowLevel {
     UnboxExpr,
     Unreachable,
     DictPseudoSeed,
+    SetJmp,
+    LongJmp,
+    SetLongJmpBuffer,
 }
 
 macro_rules! higher_order {
@@ -234,12 +236,15 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::PtrStore => unimplemented!(),
                 LowLevel::PtrLoad => unimplemented!(),
                 LowLevel::PtrClearTagId => unimplemented!(),
-                LowLevel::Alloca => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
+
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),

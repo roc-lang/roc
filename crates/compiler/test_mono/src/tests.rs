@@ -16,6 +16,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
+use roc_load::FunctionKind;
 use roc_load::LoadConfig;
 use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
@@ -104,6 +105,8 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
 
     let load_config = LoadConfig {
         target_info: TARGET_INFO,
+        // TODO parameterize
+        function_kind: FunctionKind::LambdaSet,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,
@@ -2328,32 +2331,6 @@ fn issue_4557() {
 }
 
 #[mono_test]
-fn nullable_wrapped_with_non_nullable_singleton_tags() {
-    indoc!(
-        r###"
-        app "test" provides [main] to "./platform"
-
-        F : [
-            A F,
-            B,
-            C,
-        ]
-
-        g : F -> Str
-        g = \f -> when f is
-                A _ -> "A"
-                B -> "B"
-                C -> "C"
-
-        main =
-            g (A (B))
-            |> Str.concat (g B)
-            |> Str.concat (g C)
-        "###
-    )
-}
-
-#[mono_test]
 fn nullable_wrapped_with_nullable_not_last_index() {
     indoc!(
         r###"
@@ -3257,6 +3234,27 @@ fn capture_void_layout_task() {
         main : Task {} []
         main =
             forEach [] \_ -> succeed {}
+        "#
+    )
+}
+
+#[mono_test]
+fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Ast : [ A, B, C Str Ast ]
+
+        main : Str
+        main =
+            x : Ast
+            x = A
+
+            when x is
+                A -> "A"
+                B -> "B"
+                C _ _ -> "C"
         "#
     )
 }

@@ -135,12 +135,11 @@ generateEntryPoint = \buf, types, name, id ->
         when Types.shape types id is
             Function rocFn ->
                 arguments =
-                    rocFn.args
-                    |> List.mapWithIndex \argId, i ->
+                    toArgStr rocFn.args types \argId, _shape, index ->
                         type = typeName types argId
-                        c = Num.toStr i
-                        "arg\(c): \(type)"
-                    |> Str.joinWith ", "
+                        indexStr = Num.toStr index
+
+                        "arg\(indexStr): \(type)"
 
                 ret = typeName types rocFn.ret
 
@@ -154,11 +153,13 @@ generateEntryPoint = \buf, types, name, id ->
         when Types.shape types id is
             Function rocFn ->
                 arguments =
-                    rocFn.args
-                    |> List.map \argId ->
+                    toArgStr rocFn.args types \argId, shape, _index ->
                         type = typeName types argId
-                        "_: \(type)"
-                    |> Str.joinWith ", "
+
+                        if canDeriveCopy types shape then
+                            "_: \(type)"
+                        else
+                            "_: &mut core::mem::ManuallyDrop<\(type)>"
 
                 ret = typeName types rocFn.ret
                 "(_: *mut \(ret), \(arguments))"
@@ -170,11 +171,13 @@ generateEntryPoint = \buf, types, name, id ->
     externArguments =
         when Types.shape types id is
             Function rocFn ->
-                rocFn.args
-                |> List.mapWithIndex \_, i ->
-                    c = Num.toStr i
-                    "arg\(c)"
-                |> Str.joinWith ", "
+                toArgStr rocFn.args types \_argId, shape, index ->
+                    indexStr = Num.toStr index
+
+                    if canDeriveCopy types shape then
+                        "arg\(indexStr)"
+                    else
+                        "&mut core::mem::ManuallyDrop::new(arg\(indexStr))"
 
             _ ->
                 ""
@@ -187,11 +190,13 @@ generateEntryPoint = \buf, types, name, id ->
             fn roc__\(name)_1_exposed_generic\(externSignature);
         }
 
-        let mut ret = std::mem::MaybeUninit::uninit();
+        let mut ret = core::mem::MaybeUninit::uninit();
 
-        unsafe { roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments)) };
+        unsafe {
+            roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
 
-        unsafe { ret.assume_init() }
+            ret.assume_init()
+        }
     }
     """
 
@@ -203,29 +208,40 @@ generateFunction = \buf, types, rocFn ->
     lambdaSet = typeName types rocFn.lambdaSet
 
     publicArguments =
-        rocFn.args
-        |> List.mapWithIndex \argId, i ->
+        toArgStr rocFn.args types \argId, _shape, index ->
             type = typeName types argId
-            c = Num.toStr i
-            "arg\(c): \(type)"
-        |> Str.joinWith ", "
+            indexStr = Num.toStr index
+
+            "arg\(indexStr): \(type)"
 
     externDefArguments =
-        rocFn.args
-        |> List.mapWithIndex \argId, i ->
-            type = typeName types argId
-            c = Num.toStr i
-            "arg\(c): *const \(type)"
-        |> Str.joinWith ", "
+        withoutUnit =
+            toArgStr rocFn.args types \argId, _shape, index ->
+                type = typeName types argId
+                indexStr = Num.toStr index
+
+                "arg\(indexStr): *const \(type)"
+
+        if Str.isEmpty withoutUnit then
+            # These always have a first argument that's a pointer, even if it's to nothing.
+            "arg0: *const ()"
+        else
+            withoutUnit
 
     externCallArguments =
-        rocFn.args
-        |> List.mapWithIndex \_, i ->
-            c = Num.toStr i
-            "&arg\(c)"
-        |> Str.joinWith ", "
+        withoutUnit =
+            toArgStr rocFn.args types \_argId, _shape, index ->
+                indexStr = Num.toStr index
 
-    externComma = if Str.isEmpty publicArguments then "" else ", "
+                "&arg\(indexStr)"
+
+        if Str.isEmpty withoutUnit then
+            # These always have a first argument that's a pointer, even if it's to nothing.
+            "&()"
+        else
+            withoutUnit
+
+    publicComma = if Str.isEmpty publicArguments then "" else ", "
 
     ret = typeName types rocFn.ret
 
@@ -239,20 +255,20 @@ generateFunction = \buf, types, rocFn ->
     }
 
     impl \(name) {
-        pub fn force_thunk(mut self, \(publicArguments)) -> \(ret) {
+        pub fn force_thunk(self\(publicComma)\(publicArguments)) -> \(ret) {
             extern "C" {
-                fn \(externName)(\(externDefArguments)\(externComma) closure_data: *mut u8, output: *mut \(ret));
+                fn \(externName)(\(externDefArguments), closure_data: *mut u8, output: *mut \(ret));
             }
 
-            let mut output = std::mem::MaybeUninit::uninit();
-            let ptr = &mut self.closure_data as *mut _ as *mut u8;
+            let mut output = core::mem::MaybeUninit::uninit();
+            let closure_ptr =
+                (&mut core::mem::ManuallyDrop::new(self.closure_data)) as *mut _ as *mut u8;
 
-            unsafe { \(externName)(\(externCallArguments)\(externComma) ptr, output.as_mut_ptr(), ) };
+            unsafe {
+                \(externName)(\(externCallArguments), closure_ptr, output.as_mut_ptr());
 
-            // ownership of the closure is transferred back to roc
-            core::mem::forget(self.closure_data);
-
-            unsafe { output.assume_init() }
+                output.assume_init()
+            }
         }
     }
     """
@@ -2053,3 +2069,33 @@ nextMultipleOf = \lhs, rhs ->
     when lhs % rhs is
         0 -> lhs
         r -> lhs + (rhs - r)
+
+
+isUnit : Shape -> Bool
+isUnit = \shape ->
+    when shape is
+        Unit -> Bool.true
+        _ -> Bool.false
+
+toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
+toArgStr = \args, types, fmt ->
+    answer = List.walk args { state: "", index: 0 } \{ state, index }, argId ->
+        newState =
+            shape = Types.shape types argId
+
+            # Drop `()` args; they aren't FFI-safe, and nothing will get passed anyway.
+            if isUnit shape then
+                state
+            else
+                argStr = fmt argId shape index
+
+                if Str.isEmpty state then
+                    argStr # Don't prepend a comma if this is the first one
+                else
+                    state
+                    |> Str.concat ", "
+                    |> Str.concat argStr
+
+        { state: newState, index: index + 1 }
+
+    answer.state

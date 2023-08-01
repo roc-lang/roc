@@ -9,7 +9,7 @@ use roc_types::{
 };
 
 use crate::to_var::type_to_var_help;
-use crate::{ability::ObligationCache, env::Env};
+use crate::{ability::ObligationCache, env::InferenceEnv};
 
 #[derive(Debug, Clone, Copy)]
 struct DelayedAliasVariables {
@@ -121,7 +121,7 @@ impl Aliases {
     }
 
     fn instantiate_result_result(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         alias_variables: AliasVariables,
     ) -> Variable {
@@ -143,7 +143,7 @@ impl Aliases {
 
     /// Build an alias of the form `Num range := range`
     fn build_num_opaque(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         symbol: Symbol,
         range_var: Variable,
@@ -160,7 +160,7 @@ impl Aliases {
 
     fn instantiate_builtin_aliases_real_var(
         &mut self,
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         symbol: Symbol,
         alias_variables: AliasVariables,
@@ -228,7 +228,7 @@ impl Aliases {
 
     pub fn instantiate_real_var(
         &mut self,
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         problems: &mut Vec<TypeError>,
         abilities_store: &AbilitiesStore,

@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: windows - subset of tests
 
@@ -36,8 +37,8 @@ jobs:
       - name: zig version
         run: zig version
 
-      - name: install rust nightly 1.67
-        run: rustup install nightly-2022-12-09
+      - name: install rust nightly 1.70.0
+        run: rustup install nightly-2023-04-15
 
       - name: set up llvm 13
         run: |

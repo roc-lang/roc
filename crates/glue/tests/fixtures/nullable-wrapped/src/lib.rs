@@ -14,7 +14,7 @@ pub extern "C" fn rust_main() -> i32 {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = roc_app::mainForHost(());
+    let tag_union = roc_app::mainForHost();
 
     // Eq
     assert!(StrFingerTree::Empty() == StrFingerTree::Empty());

@@ -1,3 +1,5 @@
+use crate::solve::RunSolveOutput;
+use crate::FunctionKind;
 use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint, Constraints};
@@ -61,6 +63,8 @@ pub struct SolveConfig<'a> {
     /// All types introduced in the module. Canonicalized, but not necessarily yet associated with
     /// a variable substitution.
     pub types: Types,
+    /// How functions should be kinded.
+    pub function_kind: FunctionKind,
     /// Table of types introduced in this module that claim to derive an ability implementation.
     /// Due for checking and instantiation after the solver runs over the module.
     pub pending_derives: PendingDerives,
@@ -72,6 +76,10 @@ pub struct SolveConfig<'a> {
     /// Needed during solving to resolve lambda sets from derived implementations that escape into
     /// the user module.
     pub derived_module: SharedDerivedModule,
+
+    #[cfg(debug_assertions)]
+    /// The checkmate collector for this module.
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 pub struct SolveOutput {
@@ -79,6 +87,9 @@ pub struct SolveOutput {
     pub scope: solve::Scope,
     pub errors: Vec<TypeError>,
     pub resolved_abilities_store: AbilitiesStore,
+
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 pub fn run_solve(
@@ -105,7 +116,12 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_scope) = solve::run(
+    let RunSolveOutput {
+        solved,
+        scope,
+        #[cfg(debug_assertions)]
+        checkmate,
+    } = solve::run(
         config,
         &mut problems,
         subs,
@@ -114,10 +130,12 @@ pub fn run_solve(
     );
 
     SolveOutput {
-        subs: solved_subs,
-        scope: solved_scope,
+        subs: solved,
+        scope,
         errors: problems,
         resolved_abilities_store: abilities_store,
+        #[cfg(debug_assertions)]
+        checkmate,
     }
 }
 

@@ -2,16 +2,18 @@
 # How to update version:
 #  - update `channel = "RUST_VERSION"`
 #  - update `channel = "RUST_VERSION"` in examples/platform-switching/rust-platform/rust-toolchain.toml
+#  - update FROM rust:RUST_VERSION-slim-buster in Earthfile 
 #  - to update the nightly version:
 #     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2023
 #     - update `channel = "nightly-OLD_DATE"` below
 #     - update nightly-OLD_DATE in .github/workflows/windows_tests.yml
 #     - update nightly-OLD_DATE in .github/workflows/windows_release_build.yml
 #     - update nightly-OLD_DATE in crates/compiler/build/src/link.rs
+#  - Follow instructions in default.nix: `assert pkgs.lib.assertMsg rustVersionsMatch` ...
 
-channel = "1.67.1" # check ^^^ when changing this
+channel = "1.70.0" # check ^^^ when changing this
 # 
-# channel = "nightly-2022-12-09" # 1.67.0 nightly to be able to use unstable features
+# channel = "nightly-2023-04-15" # 1.70.0 nightly to be able to use unstable features
 profile = "default"
 components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`

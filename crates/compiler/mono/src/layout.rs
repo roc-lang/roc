@@ -26,8 +26,11 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use ven_pretty::{DocAllocator, DocBuilder};
 
+mod erased;
 mod intern;
 mod semantic;
+
+pub use erased::Erased;
 pub use intern::{
     GlobalLayoutInterner, InLayout, LayoutInterner, STLayoutInterner, TLLayoutInterner,
 };
@@ -484,12 +487,17 @@ impl From<LayoutProblem> for RuntimeError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RawFunctionLayout<'a> {
     Function(&'a [InLayout<'a>], LambdaSet<'a>, InLayout<'a>),
+    ErasedFunction(&'a [InLayout<'a>], InLayout<'a>),
     ZeroArgumentThunk(InLayout<'a>),
 }
 
 impl<'a> RawFunctionLayout<'a> {
     pub fn is_zero_argument_thunk(&self) -> bool {
         matches!(self, RawFunctionLayout::ZeroArgumentThunk(_))
+    }
+
+    pub fn is_erased_function(&self) -> bool {
+        matches!(self, RawFunctionLayout::ErasedFunction(_, _))
     }
 
     fn new_help<'b>(
@@ -508,6 +516,7 @@ impl<'a> RawFunctionLayout<'a> {
             LambdaSet(_) => {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
+            ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
@@ -604,13 +613,17 @@ impl<'a> RawFunctionLayout<'a> {
 
                 let fn_args = fn_args.into_bump_slice();
 
-                let lambda_set = cached!(
-                    LambdaSet::from_var(env, args, closure_var, ret_var),
-                    cache_criteria,
-                    env.subs
-                );
+                let closure_data = build_function_closure_data(env, args, closure_var, ret_var);
+                let closure_data = cached!(closure_data, cache_criteria, env.subs);
 
-                Cacheable(Ok(Self::Function(fn_args, lambda_set, ret)), cache_criteria)
+                let function_layout = match closure_data {
+                    ClosureDataKind::LambdaSet(lambda_set) => {
+                        Self::Function(fn_args, lambda_set, ret)
+                    }
+                    ClosureDataKind::Erased => Self::ErasedFunction(fn_args, ret),
+                };
+
+                Cacheable(Ok(function_layout), cache_criteria)
             }
             TagUnion(tags, ext) if tags.is_newtype_wrapper(env.subs) => {
                 debug_assert!(ext_var_is_empty_tag_union(env.subs, ext));
@@ -678,6 +691,47 @@ pub enum LayoutRepr<'a> {
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer(InLayout<'a>),
+    /// Only used in erased functions.
+    FunctionPointer(FunctionPointer<'a>),
+    /// The layout of an erasure.
+    Erased(Erased),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FunctionPointer<'a> {
+    pub args: &'a [InLayout<'a>],
+    pub ret: InLayout<'a>,
+}
+
+impl<'a> FunctionPointer<'a> {
+    pub fn to_doc<'b, D, A, I>(
+        self,
+        alloc: &'b D,
+        interner: &I,
+        seen_rec: &mut SeenRecPtrs<'a>,
+        parens: Parens,
+    ) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+        I: LayoutInterner<'a>,
+    {
+        let Self { args, ret } = self;
+
+        let args = args
+            .iter()
+            .map(|arg| interner.to_doc(*arg, alloc, seen_rec, parens));
+        let args = alloc.intersperse(args, alloc.text(", "));
+        let ret = interner.to_doc(ret, alloc, seen_rec, parens);
+
+        alloc
+            .text("FunPtr((")
+            .append(args)
+            .append(alloc.text(") -> "))
+            .append(ret)
+            .append(")")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1312,6 +1366,13 @@ pub struct LambdaName<'a> {
 }
 
 impl<'a> LambdaName<'a> {
+    pub(crate) fn from_captures(symbol: Symbol, captures: &'a [InLayout<'a>]) -> Self {
+        Self {
+            name: symbol,
+            niche: Niche(NichePriv::Captures(captures)),
+        }
+    }
+
     #[inline(always)]
     pub fn name(&self) -> Symbol {
         self.name
@@ -1340,6 +1401,37 @@ impl<'a> LambdaName<'a> {
     #[inline(always)]
     pub(crate) fn replace_name(&self, name: Symbol) -> Self {
         Self { name, ..*self }
+    }
+}
+
+/// Closure data for a function
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ClosureDataKind<'a> {
+    /// The function is compiled with lambda sets.
+    LambdaSet(LambdaSet<'a>),
+    /// The function is compiled as type-erased.
+    Erased,
+}
+
+impl<'a> ClosureDataKind<'a> {
+    pub fn data_layout(&self) -> InLayout<'a> {
+        match self {
+            Self::LambdaSet(lambda_set) => lambda_set.full_layout,
+            Self::Erased => Layout::ERASED,
+        }
+    }
+}
+
+fn build_function_closure_data<'a>(
+    env: &mut Env<'a, '_>,
+    args: VariableSubsSlice,
+    closure_var: Variable,
+    ret_var: Variable,
+) -> Cacheable<Result<ClosureDataKind<'a>, LayoutProblem>> {
+    match env.subs.get_content_without_compacting(closure_var) {
+        Content::ErasedLambda => cacheable(Ok(ClosureDataKind::Erased)),
+        _ => LambdaSet::from_var(env, args, closure_var, ret_var)
+            .map(|result| result.map(ClosureDataKind::LambdaSet)),
     }
 }
 
@@ -2113,7 +2205,8 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::RangedNumber(_)
-            | Content::Error => {}
+            | Content::Error
+            | Content::ErasedLambda => {}
         }
     }
     (max_depth_any_ctor, max_depth_only_lset, total)
@@ -2393,6 +2486,9 @@ impl<'a> Layout<'a> {
             LambdaSet(_) => {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
+            ErasedLambda => {
+                internal_error!("erased lambda type should only appear under a function, where it's handled independently.");
+            }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
@@ -2529,6 +2625,7 @@ impl<'a> LayoutRepr<'a> {
     pub const DEC: Self = LayoutRepr::Builtin(Builtin::Decimal);
     pub const STR: Self = LayoutRepr::Builtin(Builtin::Str);
     pub const OPAQUE_PTR: Self = LayoutRepr::Ptr(Layout::VOID);
+    pub const ERASED: Self = LayoutRepr::Erased(Erased);
 
     pub const fn struct_(field_layouts: &'a [InLayout<'a>]) -> Self {
         Self::Struct(field_layouts)
@@ -2574,6 +2671,8 @@ impl<'a> LayoutRepr<'a> {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
+            Erased(e) => e.safe_to_memcpy(),
+            FunctionPointer(..) => true,
         }
     }
 
@@ -2659,8 +2758,10 @@ impl<'a> LayoutRepr<'a> {
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner),
-            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Ptr(_) => interner.target_info().ptr_width() as u32,
+            RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
+                interner.target_info().ptr_width() as u32
+            }
+            Erased(e) => e.stack_size_without_alignment(interner.target_info()),
         }
     }
 
@@ -2712,8 +2813,10 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .alignment_bytes(interner),
             Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
-            RecursivePointer(_) => interner.target_info().ptr_width() as u32,
-            Ptr(_) => interner.target_info().ptr_width() as u32,
+            RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
+                interner.target_info().ptr_width() as u32
+            }
+            Erased(e) => e.alignment_bytes(interner.target_info()),
         }
     }
 
@@ -2735,10 +2838,15 @@ impl<'a> LayoutRepr<'a> {
                 unreachable!("should be looked up to get an actual layout")
             }
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
+            FunctionPointer(_) => ptr_width,
+            Erased(e) => e.allocation_alignment_bytes(interner.target_info()),
         }
     }
 
-    pub fn is_refcounted(&self) -> bool {
+    pub fn is_refcounted<I>(&self, interner: &I) -> bool
+    where
+        I: LayoutInterner<'a>,
+    {
         use self::Builtin::*;
         use LayoutRepr::*;
 
@@ -2750,6 +2858,10 @@ impl<'a> LayoutRepr<'a> {
             RecursivePointer(_) => true,
 
             Builtin(List(_)) | Builtin(Str) => true,
+
+            Erased(_) => true,
+
+            LambdaSet(lambda_set) => interner.is_refcounted(lambda_set.runtime_representation()),
 
             _ => false,
         }
@@ -2808,6 +2920,8 @@ impl<'a> LayoutRepr<'a> {
                 // author must make sure that invariants are upheld
                 false
             }
+            FunctionPointer(_) => false,
+            Erased(e) => e.is_refcounted(),
         }
     }
 
@@ -2868,6 +2982,12 @@ impl<'a> LayoutRepr<'a> {
                 }
                 RecursivePointer(_) => {
                     /* do nothing, we've already generated for this type through the Union(_) */
+                }
+                FunctionPointer(_) => {
+                    // drop through
+                }
+                Erased(_) => {
+                    // erasures are just pointers, so they do not vary
                 }
             }
         }
@@ -3219,14 +3339,15 @@ fn layout_from_flat_type<'a>(
             } else {
                 let mut criteria = CACHEABLE;
 
-                let lambda_set = cached!(
-                    LambdaSet::from_var(env, args, closure_var, ret_var),
-                    criteria,
-                    env.subs
-                );
-                let lambda_set = lambda_set.full_layout;
+                let closure_data = build_function_closure_data(env, args, closure_var, ret_var);
+                let closure_data = cached!(closure_data, criteria, env.subs);
 
-                Cacheable(Ok(lambda_set), criteria)
+                match closure_data {
+                    ClosureDataKind::LambdaSet(lambda_set) => {
+                        Cacheable(Ok(lambda_set.full_layout), criteria)
+                    }
+                    ClosureDataKind::Erased => Cacheable(Ok(Layout::ERASED), criteria),
+                }
             }
         }
         Record(fields, ext_var) => {
@@ -3883,6 +4004,36 @@ where
     union_sorted_tags_help(env, tags_vec, opt_rec_var, DropUninhabitedVariants(true)).value()
 }
 
+fn find_nullable_tag<'a, L, I>(tags: I) -> Option<(TagIdIntType, L)>
+where
+    I: Iterator<Item = (&'a L, &'a [Variable])>,
+    L: Into<TagOrClosure> + Ord + Clone + 'a,
+{
+    let mut length = 0;
+    let mut has_payload = 0;
+    let mut nullable = None;
+
+    for (index, (name, variables)) in tags.enumerate() {
+        length += 1;
+
+        if variables.is_empty() {
+            nullable = nullable.or_else(|| Some((index as TagIdIntType, name.clone())));
+        } else {
+            has_payload += 1;
+        }
+    }
+
+    let has_no_payload = length - has_payload;
+
+    // in the scenario of `[ A Str, B, C, D ]`, rather than having one tag be nullable, we want
+    // to store the tag id in the pointer. (we want NonNullableUnwrapped, not NullableWrapped)
+    if (has_payload > 1 && has_no_payload > 0) || has_no_payload == 1 {
+        nullable
+    } else {
+        None
+    }
+}
+
 fn union_sorted_tags_help<'a, L>(
     env: &mut Env<'a, '_>,
     mut tags_vec: std::vec::Vec<(L, std::vec::Vec<Variable>)>,
@@ -3965,12 +4116,7 @@ where
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
             if is_recursive && GENERATE_NULLABLE {
-                for (index, (name, variables)) in tags_vec.iter().enumerate() {
-                    if variables.is_empty() {
-                        nullable = Some((index as TagIdIntType, name.clone()));
-                        break;
-                    }
-                }
+                nullable = find_nullable_tag(tags_vec.iter().map(|(a, b)| (a, b.as_slice())));
             }
 
             for (index, (tag_name, arguments)) in tags_vec.into_iter().enumerate() {
@@ -4260,17 +4406,12 @@ where
     let mut nullable = None;
 
     if GENERATE_NULLABLE {
-        for (index, (_name, variables)) in tags_vec.iter().enumerate() {
-            if variables.is_empty() {
-                nullable = Some(index as TagIdIntType);
-                break;
-            }
-        }
+        nullable = find_nullable_tag(tags_vec.iter().map(|(a, b)| (*a, *b)));
     }
 
     env.insert_seen(rec_var);
     for (index, &(_name, variables)) in tags_vec.iter().enumerate() {
-        if matches!(nullable, Some(i) if i == index as TagIdIntType) {
+        if matches!(nullable, Some((i, _)) if i == index as TagIdIntType) {
             // don't add the nullable case
             continue;
         }
@@ -4303,7 +4444,7 @@ where
     }
     env.remove_seen(rec_var);
 
-    let union_layout = if let Some(tag_id) = nullable {
+    let union_layout = if let Some((tag_id, _)) = nullable {
         match tag_layouts.into_bump_slice() {
             [one] => {
                 let nullable_id = tag_id != 0;
@@ -4441,7 +4582,7 @@ fn layout_from_num_content<'a>(
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) | RangedNumber(..) | LambdaSet(_) => {
+        Structure(_) | RangedNumber(..) | LambdaSet(_) | ErasedLambda => {
             panic!("Invalid Num.Num type application: {content:?}");
         }
         Error => Err(LayoutProblem::Erroneous),

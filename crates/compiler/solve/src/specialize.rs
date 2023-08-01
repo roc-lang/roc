@@ -10,6 +10,7 @@ use roc_debug_flags::ROC_TRACE_COMPACTION;
 use roc_derive_key::{DeriveError, DeriveKey};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
@@ -17,12 +18,12 @@ use roc_types::{
     },
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
-use roc_unify::unify::{unify, Mode, MustImplementConstraints};
+use roc_unify::unify::{unify, MustImplementConstraints};
 
 use crate::{
     ability::builtin_module_with_unlisted_ability_impl,
     deep_copy::deep_copy_var_in,
-    env::{DerivedEnv, Env},
+    env::{DerivedEnv, SolveEnv},
 };
 
 /// What phase in the compiler is reaching out to specialize lambda sets?
@@ -295,7 +296,7 @@ fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Optio
 
 #[must_use]
 pub fn compact_lambda_sets_of_vars<P: Phase>(
-    env: &mut Env,
+    env: &mut SolveEnv,
     uls_of_var: UlsOfVar,
     phase: &P,
 ) -> CompactionResult {
@@ -464,7 +465,7 @@ enum OneCompactionResult {
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 fn compact_lambda_set<P: Phase>(
-    env: &mut Env,
+    env: &mut SolveEnv,
     resolved_concrete: Variable,
     this_lambda_set: Variable,
     phase: &P,
@@ -577,7 +578,7 @@ fn compact_lambda_set<P: Phase>(
         &mut env.uenv(),
         t_f1,
         t_f2,
-        Mode::LAMBDA_SET_SPECIALIZATION,
+        UnificationMode::LAMBDA_SET_SPECIALIZATION,
         Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");
@@ -690,6 +691,7 @@ fn make_specialization_decision<P: Phase>(
         | FlexVar(..)
         | RigidVar(..)
         | LambdaSet(..)
+        | ErasedLambda
         | RangedNumber(..) => {
             internal_error!("unexpected")
         }

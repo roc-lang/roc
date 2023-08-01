@@ -11,16 +11,19 @@ use roc_mono::{
 use tempfile::tempdir;
 use test_solve_helpers::format_problems;
 
+use crate::CompilerSettings;
+
 #[derive(Default)]
-pub struct MonoOptions {
+pub(crate) struct MonoOptions {
     pub no_check: bool,
 }
 
-pub fn write_compiled_ir<'a>(
+pub(crate) fn write_compiled_ir<'a>(
     writer: &mut impl io::Write,
     test_module: &str,
     dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     options: MonoOptions,
+    compiler_settings: CompilerSettings,
     allow_can_errors: bool,
 ) -> io::Result<()> {
     use roc_packaging::cache::RocCacheDir;
@@ -41,6 +44,7 @@ pub fn write_compiled_ir<'a>(
 
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_x86_64(),
+        function_kind: compiler_settings.function_kind,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,

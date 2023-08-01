@@ -14,7 +14,7 @@ procedure List.66 (#Attr.2, #Attr.3):
     let List.537 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.537;
 
-procedure List.80 (#Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9, #Derived_gen.10):
+procedure List.80 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
     joinpoint List.527 List.439 List.440 List.441 List.442 List.443:
         let List.529 : Int1 = CallByName Num.22 List.442 List.443;
         if List.529 then
@@ -27,7 +27,7 @@ procedure List.80 (#Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.
             dec List.439;
             ret List.440;
     in
-    jump List.527 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10;
+    jump List.527 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
 
 procedure List.93 (List.436, List.437, List.438):
     let List.525 : U64 = 0i64;
@@ -45,8 +45,8 @@ procedure Num.22 (#Attr.2, #Attr.3):
 
 procedure Test.10 (Test.66, #Attr.12):
     let Test.9 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.20 then
+    let #Derived_gen.18 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.18 then
         free #Attr.12;
         ret Test.9;
     else
@@ -60,7 +60,7 @@ procedure Test.10 (Test.66, #Attr.12):
 procedure Test.14 (Test.45, #Attr.12):
     let Test.13 : {{}, []} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
     let Test.12 : [<r>C {}, C *self {{}, []}] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.18:
+    joinpoint #Derived_gen.19:
         let Test.50 : {} = Struct {};
         let Test.51 : U8 = GetTagId Test.12;
         joinpoint Test.52 Test.15:
@@ -87,14 +87,14 @@ procedure Test.14 (Test.45, #Attr.12):
                 jump Test.52 Test.53;
         
     in
-    let #Derived_gen.19 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.19 then
+    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.20 then
         free #Attr.12;
-        jump #Derived_gen.18;
+        jump #Derived_gen.19;
     else
         inc Test.12;
         decref #Attr.12;
-        jump #Derived_gen.18;
+        jump #Derived_gen.19;
 
 procedure Test.20 (Test.21, Test.18):
     let Test.23 : [C {}, C []] = CallByName Test.32 Test.21 Test.18;
@@ -156,16 +156,8 @@ procedure Test.80 (Test.81):
     ret Test.83;
 
 procedure Test.84 (Test.86, #Attr.12):
-    let Test.87 : U8 = GetTagId #Attr.12;
-    switch Test.87:
-        case 0:
-            let Test.85 : {} = CallByName Test.10 Test.86 #Attr.12;
-            ret Test.85;
-    
-        default:
-            let Test.85 : {} = CallByName Test.14 Test.86 #Attr.12;
-            ret Test.85;
-    
+    let Test.87 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Test.87
 
 procedure Test.0 ():
     let Test.35 : List [] = Array [];

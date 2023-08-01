@@ -14,9 +14,12 @@ pub mod specialize;
 mod aliases;
 mod deep_copy;
 mod env;
+mod kinds;
 mod pools;
 mod to_var;
 
 pub use aliases::Aliases;
-pub use env::{DerivedEnv, Env};
+pub use env::{DerivedEnv, InferenceEnv, SolveEnv};
+pub use kinds::FunctionKind;
 pub use pools::Pools;
+pub use to_var::type_to_var;

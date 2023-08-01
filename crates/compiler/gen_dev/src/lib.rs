@@ -10,7 +10,7 @@ use std::collections::hash_map::Entry;
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -149,6 +149,13 @@ impl<'a> LastSeenMap<'a> {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
+                    Expr::ErasedMake { value, callee } => {
+                        value.map(|v| self.set_last_seen(v, stmt));
+                        self.set_last_seen(*callee, stmt);
+                    }
+                    Expr::ErasedLoad { symbol, field: _ } => {
+                        self.set_last_seen(*symbol, stmt);
+                    }
                     Expr::Struct(syms) => {
                         for sym in *syms {
                             self.set_last_seen(*sym, stmt);
@@ -176,8 +183,14 @@ impl<'a> LastSeenMap<'a> {
                     Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
-                    Expr::EmptyArray => {}
+                    Expr::Alloca { initializer, .. } => {
+                        if let Some(initializer) = initializer {
+                            self.set_last_seen(*initializer, stmt);
+                        }
+                    }
                     Expr::RuntimeErrorFunction(_) => {}
+                    Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+                    Expr::EmptyArray => {}
                 }
                 self.scan_ast_help(following);
             }
@@ -265,6 +278,7 @@ impl<'a> LastSeenMap<'a> {
 
         match call_type {
             CallType::ByName { .. } => {}
+            CallType::ByPointer { .. } => {}
             CallType::LowLevel { .. } => {}
             CallType::HigherOrder { .. } => {}
             CallType::Foreign { .. } => {}
@@ -729,6 +743,10 @@ trait Backend<'a> {
                         self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                     }
 
+                    CallType::ByPointer { .. } => {
+                        todo_lambda_erasure!()
+                    }
+
                     CallType::LowLevel { op: lowlevel, .. } => {
                         let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                             bumpalo::vec![in self.env().arena];
@@ -839,6 +857,9 @@ trait Backend<'a> {
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
             }
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::ErasedMake { .. } => todo_lambda_erasure!(),
+            Expr::ErasedLoad { .. } => todo_lambda_erasure!(),
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();
 
@@ -878,6 +899,12 @@ trait Backend<'a> {
                 }
 
                 self.build_expr(sym, &new_expr, &Layout::BOOL)
+            }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                self.build_alloca(*sym, *initializer, *element_layout);
             }
             Expr::RuntimeErrorFunction(_) => todo!(),
         }
@@ -1599,10 +1626,6 @@ trait Backend<'a> {
                 self.build_ptr_clear_tag_id(*sym, args[0]);
             }
 
-            LowLevel::Alloca => {
-                self.build_alloca(*sym, args[0], arg_layouts[0]);
-            }
-
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF_RC_PTR.to_string(),
@@ -2243,7 +2266,7 @@ trait Backend<'a> {
 
     fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol);
 
-    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>);
+    fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;

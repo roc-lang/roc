@@ -1,6 +1,5 @@
 #![allow(clippy::manual_map)]
 
-use crate::borrow::Ownership;
 use crate::ir::{
     Call, CallType, Expr, JoinPointId, Param, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
@@ -128,7 +127,6 @@ fn make_tail_recursive<'a>(
         args.iter().map(|(layout, symbol, _)| Param {
             symbol: *symbol,
             layout: *layout,
-            ownership: Ownership::Borrowed,
         }),
         arena,
     )
@@ -670,6 +668,7 @@ impl<'a> TrmcEnv<'a> {
                 // because we do not allow polymorphic recursion, this is the only constraint
                 name == lambda_name
             }
+            CallType::ByPointer { .. } => false,
             CallType::Foreign { .. } | CallType::LowLevel { .. } | CallType::HigherOrder(_) => {
                 false
             }
@@ -725,7 +724,6 @@ impl<'a> TrmcEnv<'a> {
 
             let param = Param {
                 symbol: *old_symbol,
-                ownership: Ownership::Owned,
                 layout: *layout,
             };
             joinpoint_parameters.push(param);
@@ -743,15 +741,10 @@ impl<'a> TrmcEnv<'a> {
             .interner
             .insert_direct_no_semantic(LayoutRepr::Ptr(return_layout));
 
-        let call = Call {
-            call_type: CallType::LowLevel {
-                op: LowLevel::Alloca,
-                update_mode: UpdateModeId::BACKEND_DUMMY,
-            },
-            arguments: arena.alloc([null_symbol]),
+        let ptr_null = Expr::Alloca {
+            initializer: Some(null_symbol),
+            element_layout: return_layout,
         };
-
-        let ptr_null = Expr::Call(call);
         let let_ptr = |next| Stmt::Let(initial_ptr_symbol, ptr_null, ptr_return_layout, next);
 
         let joinpoint_id = JoinPointId(env.named_unique_symbol("trmc"));
@@ -774,14 +767,12 @@ impl<'a> TrmcEnv<'a> {
 
         let param = Param {
             symbol: hole_symbol,
-            ownership: Ownership::Owned,
             layout: ptr_return_layout,
         };
         joinpoint_parameters.push(param);
 
         let param = Param {
             symbol: head_symbol,
-            ownership: Ownership::Owned,
             layout: ptr_return_layout,
         };
         joinpoint_parameters.push(param);
@@ -812,6 +803,7 @@ impl<'a> TrmcEnv<'a> {
             ret_layout: proc.ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             host_exposed_layouts: proc.host_exposed_layouts.clone(),
+            is_erased: proc.is_erased,
         }
     }
 
@@ -1096,7 +1088,7 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
             Some(ru) => ru.symbol == needle || arguments.contains(&needle),
         },
         Expr::Struct(fields) => fields.contains(&needle),
-        Expr::NullPointer => false,
+        Expr::NullPointer | Expr::FunctionPointer { .. } => false,
         Expr::StructAtIndex { structure, .. }
         | Expr::GetTagId { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
@@ -1108,6 +1100,11 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
         Expr::EmptyArray => false,
         Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
         Expr::RuntimeErrorFunction(_) => false,
+        Expr::ErasedMake { value, callee } => {
+            value.map(|v| v == needle).unwrap_or(false) || needle == *callee
+        }
+        Expr::ErasedLoad { symbol, field: _ } => needle == *symbol,
+        Expr::Alloca { initializer, .. } => &Some(needle) == initializer,
     }
 }
 

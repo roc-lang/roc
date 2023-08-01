@@ -1,0 +1,13 @@
+[package]
+name = "roc_checkmate_schema"
+description = "Schema for checkmate."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true

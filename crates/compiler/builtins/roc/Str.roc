@@ -638,12 +638,13 @@ countUtf8Bytes : Str -> Nat
 substringUnsafe : Str, Nat, Nat -> Str
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
-## Returns [Err NotFound] if the substring is not found.
+## If the substring is not found, returns the original string.
+##
 ## ```
-## expect Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
-## expect Str.replaceEach "not here" "/" "_" == Err NotFound
+## expect Str.replaceEach "foo/bar/baz" "/" "_" == "foo_bar_baz"
+## expect Str.replaceEach "not here" "/" "_" == "not here"
 ## ```
-replaceEach : Str, Str, Str -> Result Str [NotFound]
+replaceEach : Str, Str, Str -> Str
 replaceEach = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
@@ -653,9 +654,8 @@ replaceEach = \haystack, needle, flower ->
             |> Str.concat before
             |> Str.concat flower
             |> replaceEachHelp after needle flower
-            |> Ok
 
-        Err err -> Err err
+        Err NotFound -> haystack
 
 replaceEachHelp : Str, Str, Str, Str -> Str
 replaceEachHelp = \buf, haystack, needle, flower ->
@@ -668,39 +668,44 @@ replaceEachHelp = \buf, haystack, needle, flower ->
 
         Err NotFound -> Str.concat buf haystack
 
-expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
+expect Str.replaceEach "abXdeXghi" "X" "_" == "ab_de_ghi"
+expect Str.replaceEach "abcdefg" "nothing" "_" == "abcdefg"
 
 ## Returns the given [Str] with the first occurrence of a substring replaced.
-## Returns [Err NotFound] if the substring is not found.
+## If the substring is not found, returns the original string.
+##
 ## ```
-## expect Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
-## expect Str.replaceFirst "no slashes here" "/" "_" == Err NotFound
+## expect Str.replaceFirst "foo/bar/baz" "/" "_" == "foo_bar/baz"
+## expect Str.replaceFirst "no slashes here" "/" "_" == "no slashes here"
 ## ```
-replaceFirst : Str, Str, Str -> Result Str [NotFound]
+replaceFirst : Str, Str, Str -> Str
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
-            Ok "\(before)\(flower)\(after)"
+            "\(before)\(flower)\(after)"
 
-        Err err -> Err err
+        Err NotFound -> haystack
 
-expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
+expect Str.replaceFirst "abXdeXghi" "X" "_" == "ab_deXghi"
+expect Str.replaceFirst "abcdefg" "nothing" "_" == "abcdefg"
 
 ## Returns the given [Str] with the last occurrence of a substring replaced.
-## Returns [Err NotFound] if the substring is not found.
+## If the substring is not found, returns the original string.
+##
 ## ```
-## expect Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
-## expect Str.replaceLast "no slashes here" "/" "_" == Err NotFound
+## expect Str.replaceLast "foo/bar/baz" "/" "_" == "foo/bar_baz"
+## expect Str.replaceLast "no slashes here" "/" "_" == "no slashes here"
 ## ```
-replaceLast : Str, Str, Str -> Result Str [NotFound]
+replaceLast : Str, Str, Str -> Str
 replaceLast = \haystack, needle, flower ->
     when splitLast haystack needle is
         Ok { before, after } ->
-            Ok "\(before)\(flower)\(after)"
+            "\(before)\(flower)\(after)"
 
-        Err err -> Err err
+        Err NotFound -> haystack
 
-expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
+expect Str.replaceLast "abXdeXghi" "X" "_" == "abXde_ghi"
+expect Str.replaceLast "abcdefg" "nothing" "_" == "abcdefg"
 
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.

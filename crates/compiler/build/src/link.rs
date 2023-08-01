@@ -530,7 +530,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2022-12-09", "cargo"]);
+            cmd.args(["run", "nightly-2023-04-15", "cargo"]);
 
             cmd
         } else {
@@ -1078,6 +1078,12 @@ fn link_macos(
             // "--gc-sections",
             "-arch",
             &arch,
+            // Suppress warnings, because otherwise it prints:
+            //
+            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
+            //
+            // We can't disable that option without breaking either x64 mac or ARM mac
+            "-w",
             "-macos_version_min",
             &get_macos_version(),
         ])
