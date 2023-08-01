@@ -1,20 +1,20 @@
-import { EventIndex } from "../../engine/engine";
+import { EventEpoch } from "../../engine/engine";
 import { Variable } from "../../schema";
 import { VariableElPretty } from "../Common/Variable";
 import { CommonProps } from "./types";
 
 interface VariableProps extends CommonProps {
-  index: EventIndex;
+  epoch: EventEpoch;
   variable: Variable;
 }
 
 export function VariableEl({
   engine,
   toggleVariableVis,
-  index,
+  epoch,
   variable,
 }: VariableProps): JSX.Element {
-  engine.stepTo(index);
+  engine.stepTo(epoch);
   return (
     <VariableElPretty
       variable={variable}

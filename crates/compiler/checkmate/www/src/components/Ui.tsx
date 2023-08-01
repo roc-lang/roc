@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { AllEvents, Variable } from "../schema";
 import { Engine } from "../engine/engine";
 import EventList from "./EventList";
@@ -24,12 +24,15 @@ export default function Ui({ events }: UiProps): JSX.Element {
   ee.on("toggleVariable", (variable: Variable) => {
     toggleVariableHandlers.forEach((handler) => handler(variable));
   });
-  ee.on("keydown", (key: string) => {
-    keydownHandlers.forEach((handler) => handler(key));
+  ee.on("keydown", async (key: string) => {
+    await Promise.all(keydownHandlers.map((handler) => handler(key)));
   });
 
   engine.stepTo(engine.lastEventIndex());
-  const subs = engine.subs.snapshot();
+  const subs = engine.subsSnapshot();
+
+  // _setEpoch to be used in the future!
+  const [epoch, _setEpoch] = useState(subs.epoch);
 
   return (
     <div
@@ -46,6 +49,7 @@ export default function Ui({ events }: UiProps): JSX.Element {
           toggleVariableVis={(variable: Variable) =>
             ee.emit("toggleVariable", variable)
           }
+          currentEpoch={epoch}
         />
       </div>
       <div className="flex-1 min-h-[50%] h-full">

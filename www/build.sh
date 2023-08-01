@@ -116,13 +116,28 @@ BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
 mkdir -p $BASIC_CLI_PACKAGE_DIR
 mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
-# set up docs for basic-cli 0.3.2
-BASIC_CLI_DIR_0_3_2=$BASIC_CLI_PACKAGE_DIR/0.3.2
-mkdir -p $BASIC_CLI_DIR_0_3_2
-curl -fL --output $BASIC_CLI_DIR_0_3_2/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/0.3.2/docs.tar.gz
-tar -xf $BASIC_CLI_DIR_0_3_2/docs.tar.gz -C $BASIC_CLI_DIR_0_3_2/
-rm $BASIC_CLI_DIR_0_3_2/docs.tar.gz
-mv $BASIC_CLI_DIR_0_3_2/generated-docs/* $BASIC_CLI_DIR_0_3_2
-rm -rf $BASIC_CLI_DIR_0_3_2/generated-docs
+# set up docs for older basic-cli versions
+# we need a github token
+if [ -v GITHUB_TOKEN_READ_ONLY ]; then
+
+  curl -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
+
+  DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
+  
+  rm basic_cli_releases.json
+
+  VERSION_NUMBERS=$(echo "$DOCS_LINKS" | grep -oP '(?<=/download/)[^/]+(?=/docs.tar.gz)')
+
+  while read -r VERSION_NR; do
+      echo $VERSION_NR
+      BASIC_CLI_DIR=$BASIC_CLI_PACKAGE_DIR/$VERSION_NR
+      mkdir -p $BASIC_CLI_DIR
+      curl -fL --output $BASIC_CLI_DIR/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/$VERSION_NR/docs.tar.gz
+      tar -xf $BASIC_CLI_DIR/docs.tar.gz -C $BASIC_CLI_DIR/
+      rm $BASIC_CLI_DIR/docs.tar.gz
+      mv $BASIC_CLI_DIR/generated-docs/* $BASIC_CLI_DIR
+      rm -rf $BASIC_CLI_DIR/generated-docs
+  done <<< "$VERSION_NUMBERS"
+fi
 
 popd

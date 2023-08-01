@@ -4,8 +4,11 @@
   "private": true,
   "dependencies": {
     "@dagrejs/dagre": "^1.0.2",
+    "elkjs": "^0.8.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-router-dom": "^6.14.2",
+    "react-router-hash-link": "^2.4.3",
     "reactflow": "^11.7.4"
   },
   "scripts": {
@@ -13,6 +16,7 @@
     "build": "build:codegen && react-scripts build",
     "build:codegen": "node ./scripts/gen_schema_dts.js",
     "check": "tsc",
+    "lint": "eslint src/ scripts/",
     "eject": "react-scripts eject"
   },
   "eslintConfig": {
@@ -39,6 +43,7 @@
     "@types/node": "^16.18.38",
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
+    "@types/react-router-hash-link": "^2.4.6",
     "clsx": "^2.0.0",
     "json-schema-to-typescript": "^13.0.2",
     "react-scripts": "5.0.1",
