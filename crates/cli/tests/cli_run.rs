@@ -662,7 +662,7 @@ mod cli_run {
     fn hello_gui() {
         test_roc_app_slim(
             "examples/gui",
-            "hello.roc",
+            "helloBROKEN.roc",
             "hello-gui",
             "",
             UseValgrind::No,
@@ -675,7 +675,7 @@ mod cli_run {
     fn breakout() {
         test_roc_app_slim(
             "examples/gui/breakout",
-            "breakout.roc",
+            "breakoutBROKEN.roc",
             "breakout",
             "",
             UseValgrind::No,
@@ -687,7 +687,7 @@ mod cli_run {
     fn breakout_hello_gui() {
         test_roc_app_slim(
             "examples/gui/breakout",
-            "hello-gui.roc",
+            "hello-guiBROKEN.roc",
             "hello-gui",
             "",
             UseValgrind::No,
