@@ -34,6 +34,15 @@ main =
         |> Task.onErr \_ -> crash "Failed to copy static files"
         |> Task.await
 
+    # Copy font files - assume that www/build.sh has been run previously and the
+    # fonts are available locally in ../build/fonts
+    {} <- 
+        Command.new "cp"
+        |> Command.args ["-r", "../build/fonts/", "dist/fonts/"]
+        |> Command.status
+        |> Task.onErr \_ -> crash "Failed to copy static files"
+        |> Task.await
+
     # Start file server
     {} <- 
         Command.new "simple-http-server"

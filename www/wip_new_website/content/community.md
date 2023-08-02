@@ -1,6 +1,8 @@
-# Contribute to Roc
+# Community
 
-## Community Values 
+WIP
+
+## Values 
 
 <!-- 
 Work in Progress - Richard is developing this section
@@ -8,13 +10,13 @@ Work in Progress - Richard is developing this section
 Basically it will say something like we expect you to be kind, even if you think someone is being mean to you, don't assume ill intentions etc
 -->
 
-## Meet the Community
+## Meet
 
 - Group Chat [roc.zulipchat.com](https://roc.zulipchat.com/)
 - Github Project [roc-lang/roc](https://github.com/roc-lang/roc)
 - Meetups & Events
 
-## Ideas & Proposals
+## Proposals
 
 - [Good First Issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)
 

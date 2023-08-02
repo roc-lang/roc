@@ -1,12 +1,12 @@
-# Installing Roc
+# Install Roc
 
-## Installation
+## Getting Started Guides
 
-- [Linux x86-64 Getting Started Guide](https://github.com/roc-lang/roc/blob/main/getting_started/linux_x86_64.md)
-- [MacOS Apple Silicon Getting Started Guide](https://github.com/roc-lang/roc/blob/main/getting_started/macos_apple_silicon.md)
-- [MacOS x86-64 Getting Started Guide](https://github.com/roc-lang/roc/blob/main/getting_started/macos_x86_64.md)
-- [Windows Getting Started Guide](https://github.com/roc-lang/roc/blob/main/getting_started/windows.md)
-- [Other Systems Getting Started Guide](https://github.com/roc-lang/roc/blob/main/getting_started/other.md)
+- [Linux x86-64](https://github.com/roc-lang/roc/blob/main/getting_started/linux_x86_64.md)
+- [MacOS Apple Silicon](https://github.com/roc-lang/roc/blob/main/getting_started/macos_apple_silicon.md)
+- [MacOS x86-64](https://github.com/roc-lang/roc/blob/main/getting_started/macos_x86_64.md)
+- [Windows](https://github.com/roc-lang/roc/blob/main/getting_started/windows.md)
+- [Other Systems](https://github.com/roc-lang/roc/blob/main/getting_started/other.md)
 
 ## Nightly Builds
 
@@ -26,6 +26,23 @@
 - Documentation `roc docs`
 
 ## Package Management
+
+The Roc package manager is still a work in progress. In the meantime, you can use packages by including the bundle URL in your module header.
+
+Below is an example of a Roc application which uses the [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) platform and the [lukewilliamboswell/roc-json](https://github.com/lukewilliamboswell/roc-json) package by including the bundle URLs in the module header.
+
+```roc
+app "hello"
+    packages { 
+        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br",
+        json: "https://github.com/lukewilliamboswell/roc-json/releases/download/0.1.0/xbO9bXdHi7E9ja6upN5EJXpDoYm7lwmJ8VzL7a5zhYE.tar.br",
+    }
+    imports [
+        pf.Stdout,
+        json.Core,
+    ]
+    provides [main] to pf
+```
 
 <!-- 
 

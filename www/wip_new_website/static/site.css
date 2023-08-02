@@ -1,6 +1,6 @@
 :root {
     /* WCAG AAA Compliant colors */
-    --code-bg: #f4f8f9;
+    --gray-bg: #f4f8f9;
     --gray: #717171;
     --orange: #bf5000;
     --green: #0b8400;
@@ -39,10 +39,17 @@ body {
 }
 
 footer {
+    width: 100%;
+    background-color: var(--gray-bg);
+    color: var(--text-color);
+    padding: 20px;
+    text-align: center;
     font-size: 0.9rem;
+}
+
+#footer {
     max-width: 1024px;
     margin: 0 auto;
-    font-size: 14px;
 }
 
 section p:last-child {
@@ -66,8 +73,31 @@ li {
     margin-bottom: 0.5rem;
 }
 
+h1, h2, h3, h4 {
+    font-family: "Permanent Marker";
+    padding-left: 12px;
+}
+
+h1 {
+    color: var(--green);
+    font-size: 5rem;
+    text-shadow: 1px 1px 1px #010101;
+}
+
+h2 {
+    color: var(--violet);
+    font-size: 3rem;
+    text-shadow: 1px 1px 1px #010101;
+}
+
+h3 {
+    color: var(--cyan);
+    font-size: 1.5rem;
+    text-shadow: 1px 1px 1px #010101;
+}
+
 #top-bar {
-    background-color: var(--violet-bg);
+    background-color: var(--gray-bg);
     width: 100%;
     height: 50px;
 }
@@ -102,24 +132,24 @@ li {
 }
 
 main {
-    max-width: var(--body-max-width);
-    margin: 36px auto;
-    padding: 0 12px;
+    max-width: 1024px;
+    margin: auto;
+    padding: 12px;
 }
 
 code,
 samp {
     font-family: var(--font-mono);
     color: var(--code-color);
-    background-color: var(--code-bg);
+    background-color: var(--gray-bg);
     display: inline-block;
+    padding: 0;
 }
 
 p code,
 td code,
 li code,
-th code,
-samp {
+th code {
     padding: 0 8px;
 }
 
@@ -141,7 +171,7 @@ pre {
     margin-bottom: 16px;
     padding: 8px 16px;
     box-sizing: border-box;
-    background-color: var(--code-bg);
+    background-color: var(--gray-bg);
     overflow-x: hidden;
     word-wrap: normal;
     font-size: 1.2rem;
@@ -199,8 +229,7 @@ td:last-child {
 
 p,
 aside,
-li,
-footer {
+li {
     font-size: 1.2rem;
     line-height: 1.85rem;
 }
@@ -402,7 +431,7 @@ footer {
     :root {
         /* WCAG AAA Compliant colors */
         /* WCAG AAA Compliant colors */
-        --code-bg: #202746;
+        --gray-bg: #202746;
         --gray: #b6b6b6;
         --orange: #fd6e08;
         --green: #8ecc88;
@@ -527,7 +556,7 @@ code .dim {
 }
 
 .copy-button {
-    background: var(--code-bg);
+    background: var(--gray-bg);
     border: 1px solid var(--magenta);
     color: var(--magenta);
     display: inline-block;
@@ -554,7 +583,7 @@ code .dim {
 .home-goals-column {
     flex-basis: 30%;
     padding: 20px;
-    background-color: var(--violet-bg);
+    background-color: var(--gray-bg);
     margin-right: 20px;
 }
 
@@ -563,7 +592,7 @@ code .dim {
 }
 
 .home-goals-title {
-    font-size: 18px;
+    padding: 0;
     font-weight: bold;
     margin-bottom: 10px;
 }
@@ -578,10 +607,3 @@ code .dim {
     color: var(--violet);
     text-decoration: none;
 }
-
-#footer {
-    background-color: var(--violet-bg);
-    color: var(--text-color);
-    padding: 20px;
-    text-align: center;
-  }
