@@ -66,7 +66,14 @@ export default function Ui({ events }: UiProps): JSX.Element {
           selectedEpochs={selectedEpochs}
         />
       </div>
-      <div className="flex-1 min-h-[50%] h-full flex flex-col">
+      <div className="flex-1 min-h-[50%] h-full flex flex-col place-content-center shadow">
+        {selectedEpochs.length === 0 && (
+          <span className="text-center">
+            <span className="p-2 border rounded-md bg-gray-200 inline-block">
+              Select an event to view.
+            </span>
+          </span>
+        )}
         {subsTop !== undefined && (
           <VariablesGraphView
             subs={subsTop}
@@ -98,7 +105,6 @@ function VariablesGraphView({
   graphEe,
   eventListEe,
 }: VariablesGraphViewProps): JSX.Element {
-  console.log("re-rendering...");
   return (
     <VariablesGraph subs={subs} graphEe={graphEe} eventListEe={eventListEe} />
   );
