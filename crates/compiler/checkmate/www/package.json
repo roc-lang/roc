@@ -9,6 +9,7 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.14.2",
     "react-router-hash-link": "^2.4.3",
+    "react-tooltip": "^5.19.0",
     "reactflow": "^11.7.4"
   },
   "scripts": {

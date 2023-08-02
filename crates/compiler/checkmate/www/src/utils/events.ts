@@ -14,3 +14,12 @@ export interface GraphMessage {
 export interface EventListMessage {
   focusEpoch: (epoch: EventEpoch) => void;
 }
+
+export enum LoadEpochView {
+  Top,
+  Bot,
+}
+
+export interface GlobalMessage {
+  loadEpoch: (epoch: EventEpoch, view: LoadEpochView) => void;
+}

@@ -9,6 +9,7 @@ import { TypedEmitter } from "tiny-typed-emitter";
 import { VariableLink } from "../Common/VariableLink";
 import { VariableMessage } from "../../utils/events";
 import { useFocusOutlineEvent } from "../../hooks/useFocusOutlineEvent";
+import { UnknownVariable } from "../Common/UnknownVariable";
 
 type AddSubVariableLink = ({
   from,
@@ -51,12 +52,17 @@ export default function VariableNode({
   });
 
   const varType = subs.get(rawVariable);
-  if (!varType) throw new Error("VariableNode: no entry for variable");
 
   let renderContent: JSX.Element;
   let bgStyles: string;
-  const isContent = varType.type === "descriptor";
-  switch (varType.type) {
+  const isContent = varType?.type === "descriptor";
+  switch (varType?.type) {
+    case undefined: {
+      bgStyles = "bg-red-500";
+      renderContent = <UnknownVariable variable={rawVariable} />;
+
+      break;
+    }
     case "link": {
       bgStyles = LinkStyles.bg;
 

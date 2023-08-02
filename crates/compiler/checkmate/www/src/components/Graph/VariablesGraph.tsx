@@ -325,8 +325,14 @@ function Graph({
   graphEe,
   eventListEe,
 }: VariablesGraphProps): JSX.Element {
-  const initialNodes: Node[] = [];
-  const initialEdges: Edge[] = [];
+  const instance = useReactFlow();
+
+  // We need to reset the graph when the subs snapshot changes. I'm not sure
+  // why this isn't done by the existing state manager.
+  useEffect(() => {
+    instance.setNodes([]);
+    instance.setEdges([]);
+  }, [instance, subs.epoch]);
 
   const varEe = useRef(new TypedEmitter<VariableMessage>());
   // Allow an unbounded number of listeners since we attach a listener for each
@@ -343,8 +349,8 @@ function Graph({
     useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
 
   const [elements, setElements] = useState<LayoutedElements>({
-    nodes: initialNodes,
-    edges: initialEdges,
+    nodes: [],
+    edges: [],
   });
 
   const [variablesNeedingFocus, setVariablesNeedingFocus] = useState<
@@ -548,10 +554,14 @@ function LayoutPanel({
   );
 }
 
-export default function VariablesGraph(props: VariablesGraphProps) {
+export default function VariablesGraph({
+  subs,
+  graphEe,
+  eventListEe,
+}: VariablesGraphProps) {
   return (
     <ReactFlowProvider>
-      <Graph {...props} />
+      <Graph subs={subs} graphEe={graphEe} eventListEe={eventListEe} />
     </ReactFlowProvider>
   );
 }

@@ -1,26 +1,52 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AllEvents } from "../schema";
-import { Engine } from "../engine/engine";
-import EventList from "./EventList";
+import { Engine, EventEpoch } from "../engine/engine";
+import EventList from "./EventList/index";
 import VariablesGraph from "./Graph/VariablesGraph";
 import { TypedEmitter } from "tiny-typed-emitter";
-import { EventListMessage, GraphMessage } from "../utils/events";
+import {
+  EventListMessage,
+  GlobalMessage,
+  GraphMessage,
+  LoadEpochView,
+} from "../utils/events";
+import { assertExhaustive } from "../utils/exhaustive";
+import { SubsSnapshot } from "../engine/subs";
 
 interface UiProps {
   events: AllEvents;
 }
 
 export default function Ui({ events }: UiProps): JSX.Element {
-  const engine = new Engine(events);
+  const engine = React.useRef(new Engine(events));
 
   const graphEe = React.useRef(new TypedEmitter<GraphMessage>());
   const eventListEe = React.useRef(new TypedEmitter<EventListMessage>());
+  const globalEe = React.useRef(new TypedEmitter<GlobalMessage>());
 
-  engine.stepTo(engine.lastEventIndex());
-  const subs = engine.subsSnapshot();
+  const [subsTop, setSubsTop] = useState<SubsSnapshot | undefined>(undefined);
+  const [subsBot, setSubsBot] = useState<SubsSnapshot | undefined>(undefined);
 
-  // _setEpoch to be used in the future!
-  const [epoch, _setEpoch] = useState(subs.epoch);
+  useEffect(() => {
+    globalEe.current.on("loadEpoch", (epoch, view) => {
+      switch (view) {
+        case LoadEpochView.Top: {
+          setSubsTop(engine.current.stepToSnapshot(epoch));
+          break;
+        }
+        case LoadEpochView.Bot: {
+          setSubsBot(engine.current.stepToSnapshot(epoch));
+          break;
+        }
+        default:
+          assertExhaustive(view);
+      }
+    });
+  }, []);
+
+  const selectedEpochs = [subsTop?.epoch, subsBot?.epoch]
+    .filter((x): x is EventEpoch => x !== undefined)
+    .sort();
 
   return (
     <div
@@ -29,23 +55,51 @@ export default function Ui({ events }: UiProps): JSX.Element {
         graphEe.current.emit("keydown", e.key);
       }}
     >
-      <div className="font-mono mt-2 text-lg md:flex-1 overflow-scroll">
+      <div className="font-mono mt-2 text-lg md:flex-1 overflow-x-hidden overflow-y-scroll">
         <EventList
-          engine={engine}
-          root
+          engine={engine.current}
+          depth={0}
           events={events}
           graphEe={graphEe.current}
           eventListEe={eventListEe.current}
-          currentEpoch={epoch}
+          globalEe={globalEe.current}
+          selectedEpochs={selectedEpochs}
         />
       </div>
-      <div className="flex-1 min-h-[50%] h-full">
-        <VariablesGraph
-          subs={subs}
-          graphEe={graphEe.current}
-          eventListEe={eventListEe.current}
-        />
+      <div className="flex-1 min-h-[50%] h-full flex flex-col">
+        {subsTop !== undefined && (
+          <VariablesGraphView
+            subs={subsTop}
+            graphEe={graphEe.current}
+            eventListEe={eventListEe.current}
+          />
+        )}
+        {/* */}
+        {subsBot !== undefined && (
+          <VariablesGraphView
+            subs={subsBot}
+            graphEe={graphEe.current}
+            eventListEe={eventListEe.current}
+          />
+        )}
       </div>
     </div>
+  );
+}
+
+interface VariablesGraphViewProps {
+  subs: SubsSnapshot;
+  graphEe: TypedEmitter<GraphMessage>;
+  eventListEe: TypedEmitter<EventListMessage>;
+}
+
+function VariablesGraphView({
+  subs,
+  graphEe,
+  eventListEe,
+}: VariablesGraphViewProps): JSX.Element {
+  console.log("re-rendering...");
+  return (
+    <VariablesGraph subs={subs} graphEe={graphEe} eventListEe={eventListEe} />
   );
 }
