@@ -209,8 +209,6 @@ generateEntryPoint = \buf, types, name, id ->
 
                         \(ret) { closure_data }
                     }
-
-                    \(ret) { closure_data }
                 """
 
             Sized _ ->
