@@ -3,9 +3,9 @@
 
 A work-in-progress programming language that aims to be fast, friendly, and functional. 
 
-Checkout the [tutorial](./wip/tutorial.html) and follow-along to see how you can build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!
+Checkout the [tutorial](/wip/tutorial.html) and follow-along to see how you can build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!
 
-Roc doesn’t have a numbered release or an installer yet, however you find helpful instructions on the [install](./wip/install.html) page to download a nightly release, or build from source code.
+Roc doesn’t have a numbered release or an installer yet, however you find helpful instructions on the [install](/wip/install.html) page to download a nightly release, or build from source code.
 
 If you get stuck, our friendly community is always happy to help. Please open a topic in the [Roc Zulip Chat](https://roc.zulipchat.com) `#beginners` channel and let us help you!
 
