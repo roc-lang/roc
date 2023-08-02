@@ -64,3 +64,5 @@ export function contentStyles(desc: TypeDescriptor | undefined): ContentStyles {
       return { name: "Error", bg: "bg-red-400" };
   }
 }
+
+export const LinkStyles: ContentStyles = { name: "Link", bg: "bg-slate-500" };

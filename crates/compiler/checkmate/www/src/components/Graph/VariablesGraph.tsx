@@ -18,6 +18,8 @@ import ReactFlow, {
   useStore,
   ReactFlowState,
   Position,
+  MarkerType,
+  EdgeMarkerType,
 } from "reactflow";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Variable } from "../../schema";
@@ -154,7 +156,9 @@ async function computeLayoutedElements({
       //height: 50,
     })),
     //@ts-ignore
-    edges: edges,
+    edges: edges.map((edge) => ({
+      ...edge,
+    })),
   };
 
   const layoutedGraph = await elk.layout(graph);
@@ -197,20 +201,22 @@ function newVariable(
   };
 }
 
-function addNodeChange(node: Node, existingNodes: Node[]): NodeChange | null {
-  if (existingNodes.some((n) => n.id === node.id)) {
-    return null;
-  }
+function canAddVariable(variableName: string, existingNodes: Node[]): boolean {
+  return !existingNodes.some((n) => n.id === variableName);
+}
+
+function canAddEdge(edgeName: string, existingEdges: Edge[]): boolean {
+  return !existingEdges.some((e) => e.id === edgeName);
+}
+
+function addNode(node: Node): NodeChange {
   return {
     type: "add",
     item: node,
   };
 }
 
-function addEdgeChange(edge: Edge, existingEdges: Edge[]): EdgeChange | null {
-  if (existingEdges.some((e) => e.id === edge.id)) {
-    return null;
-  }
+function addEdge(edge: Edge): EdgeChange {
   return {
     type: "add",
     item: edge,
@@ -322,19 +328,37 @@ function Graph({
   const initialEdges: Edge[] = [];
 
   const ee = useRef(new TypedEmitter<VariableMessageEvents>());
+  // Allow an unbounded number of listeners since we attach a listener for each
+  // variable.
+  ee.current.setMaxListeners(Infinity);
+
+  const [variablesNeedingFocus, setVariablesNeedingFocus] = useState<
+    Set<Variable>
+  >(new Set());
+
+  useEffect(() => {
+    if (variablesNeedingFocus.size === 0) {
+      return;
+    }
+    for (const variable of variablesNeedingFocus) {
+      ee.current.emit("focus", variable);
+    }
+    setVariablesNeedingFocus(new Set());
+  }, [variablesNeedingFocus]);
 
   const [layoutConfig, setLayoutConfig] =
     useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
-  const [elements, setElements] = useState<LayoutedElements>({
-    nodes: initialNodes,
-    edges: initialEdges,
-  });
 
   useAutoLayout(layoutConfig);
   useKeydown({
     layoutConfig,
     setLayoutConfig,
     onKeydown,
+  });
+
+  const [elements, setElements] = useState<LayoutedElements>({
+    nodes: initialNodes,
+    edges: initialEdges,
   });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -355,81 +379,93 @@ function Graph({
     });
   }, []);
 
-  const addSubVariableLink = useCallback(
-    (fromN: Variable, subLinkN: Variable) => {
-      fromN = subs.get_root_key(fromN);
-      subLinkN = subs.get_root_key(subLinkN);
-      const from = fromN.toString();
-      const to = subLinkN.toString();
+  interface AddNewVariableParams {
+    from?: Variable;
+    variable: Variable;
+  }
+
+  const addNewVariable = useCallback(
+    ({ from, variable }: AddNewVariableParams) => {
+      const variablesToFocus = new Set<Variable>();
 
       setElements(({ nodes, edges }) => {
-        const optNewNode = addNodeChange(
-          newVariable(
-            to,
-            {
-              subs,
-              variable: subLinkN,
-              addSubVariableLink,
-              isOutlined: true,
-              ee: ee.current,
-            },
-            layoutConfig.isHorizontal
-          ),
-          nodes
-        );
-        const newNodes = optNewNode
-          ? applyNodeChanges([optNewNode], nodes)
-          : nodes;
+        let fromVariable: Variable | undefined = from;
+        let toVariable: Variable | undefined = variable;
 
-        const optNewEdge = addEdgeChange(
-          { id: `${from}->${to}`, source: from, target: to },
-          edges
-        );
-        const newEdges = optNewEdge
-          ? applyEdgeChanges([optNewEdge], edges)
-          : edges;
+        const nodeChanges: NodeChange[] = [];
+        const edgeChanges: EdgeChange[] = [];
+
+        while (toVariable !== undefined) {
+          const toVariableName = toVariable.toString();
+          if (canAddVariable(toVariableName, nodes)) {
+            const newVariableNode = newVariable(
+              toVariable.toString(),
+              {
+                subs,
+                rawVariable: toVariable,
+                addSubVariableLink: addNewVariable,
+                isOutlined: true,
+                ee: ee.current,
+              },
+              layoutConfig.isHorizontal
+            );
+
+            nodeChanges.push(addNode(newVariableNode));
+          }
+
+          if (fromVariable !== undefined) {
+            const edgeName = `${fromVariable}->${toVariable}`;
+            if (canAddEdge(edgeName, edges)) {
+              let markerEnd: EdgeMarkerType | undefined;
+              if (subs.get_root_key(fromVariable) === toVariable) {
+                markerEnd = {
+                  type: MarkerType.ArrowClosed,
+                  width: 20,
+                  height: 20,
+                };
+              }
+
+              const newEdge = addEdge({
+                id: `${fromVariable}->${toVariable}`,
+                source: fromVariable.toString(),
+                target: toVariableName,
+                markerEnd,
+              });
+
+              edgeChanges.push(newEdge);
+            }
+          }
+
+          variablesToFocus.add(toVariable);
+
+          fromVariable = toVariable;
+          const rootToVariable = subs.get_root_key(toVariable);
+          if (toVariable !== rootToVariable) {
+            toVariable = rootToVariable;
+          } else {
+            toVariable = undefined;
+          }
+        }
+
+        const newNodes = applyNodeChanges(nodeChanges, nodes);
+        const newEdges = applyEdgeChanges(edgeChanges, edges);
 
         return { nodes: newNodes, edges: newEdges };
       });
 
-      ee.current.emit("focus", subLinkN);
+      setVariablesNeedingFocus(variablesToFocus);
     },
-    [layoutConfig, subs]
+    [layoutConfig.isHorizontal, subs]
   );
 
-  const addNode = useCallback(
-    (variableN: Variable) => {
-      variableN = subs.get_root_key(variableN);
-      const variable = variableN.toString();
-
-      setElements(({ nodes, edges }) => {
-        const optNewNode = addNodeChange(
-          newVariable(
-            variable,
-            {
-              subs,
-              variable: variableN,
-              addSubVariableLink,
-              isOutlined: true,
-              ee: ee.current,
-            },
-            layoutConfig.isHorizontal
-          ),
-          nodes
-        );
-        const newNodes = optNewNode
-          ? applyNodeChanges([optNewNode], nodes)
-          : nodes;
-
-        return { nodes: newNodes, edges: edges };
-      });
-
-      ee.current.emit("focus", variableN);
+  const addNewVariableNode = useCallback(
+    (variable: Variable) => {
+      addNewVariable({ variable });
     },
-    [subs, addSubVariableLink, layoutConfig]
+    [addNewVariable]
   );
 
-  onVariable(addNode);
+  onVariable(addNewVariableNode);
 
   return (
     <ReactFlow
