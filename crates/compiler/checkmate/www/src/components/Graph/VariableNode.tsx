@@ -5,10 +5,10 @@ import { assertExhaustive } from "../../utils/exhaustive";
 import { contentStyles, LinkStyles } from "../Content";
 import { VariableElPretty } from "../Common/Variable";
 import { SubsSnapshot, TypeDescriptor } from "../../engine/subs";
-import { useEffect, useState } from "react";
 import { TypedEmitter } from "tiny-typed-emitter";
 import { VariableLink } from "../Common/VariableLink";
 import { VariableMessage } from "../../utils/events";
+import { useFocusOutlineEvent } from "../../hooks/useFocusOutlineEvent";
 
 type AddSubVariableLink = ({
   from,
@@ -45,8 +45,9 @@ export default function VariableNode({
 
   const isOutlined = useFocusOutlineEvent({
     ee: eeProp,
-    isOutlinedProp,
-    variable: rawVariable,
+    value: rawVariable,
+    event: "focus",
+    defaultIsOutlined: isOutlinedProp,
   });
 
   const varType = subs.get(rawVariable);
@@ -144,38 +145,6 @@ export default function VariableNode({
       />
     </div>
   );
-}
-
-function useFocusOutlineEvent({
-  variable,
-  isOutlinedProp,
-  ee,
-}: {
-  variable: Variable;
-  isOutlinedProp: boolean;
-  ee: TypedEmitter<VariableMessage>;
-}) {
-  const [isOutlined, setIsOutlined] = useState(isOutlinedProp);
-
-  useEffect(() => {
-    ee.on("focus", (focusVar: Variable) => {
-      if (focusVar !== variable) return;
-      setIsOutlined(true);
-    });
-  }, [ee, variable]);
-
-  useEffect(() => {
-    if (!isOutlined) return;
-    const timer = setTimeout(() => {
-      setIsOutlined(false);
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [isOutlined]);
-
-  return isOutlined;
 }
 
 function VariableNodeContent(

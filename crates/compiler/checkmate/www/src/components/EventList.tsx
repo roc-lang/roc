@@ -1,8 +1,9 @@
 import clsx from "clsx";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { TypedEmitter } from "tiny-typed-emitter";
 import { EventEpoch } from "../engine/engine";
 import { lastSubEvent } from "../engine/event_util";
+import { useFocusOutlineEvent } from "../hooks/useFocusOutlineEvent";
 import { UnificationMode, Event } from "../schema";
 import { EventListMessage, GraphMessage } from "../utils/events";
 import { Refine } from "../utils/refine";
@@ -110,7 +111,8 @@ function Unification(props: UnificationProps): JSX.Element {
   const [isOpen, setIsOpen] = useState(false);
   const isOutlined = useFocusOutlineEvent({
     ee: eventListEe,
-    epoch: currentEpoch,
+    value: currentEpoch,
+    event: "focusEpoch",
   });
 
   const modeIcon = useMemo(() => <UnificationModeIcon mode={mode} />, [mode]);
@@ -335,34 +337,4 @@ function EventListEpochCell({
       <EpochCell>{epoch}</EpochCell>
     </span>
   );
-}
-
-function useFocusOutlineEvent({
-  epoch,
-  ee,
-}: {
-  epoch: EventEpoch;
-  ee: TypedEmitter<EventListMessage>;
-}) {
-  const [isOutlined, setIsOutlined] = useState(false);
-
-  useEffect(() => {
-    ee.on("focusEpoch", (focusEpoch: EventEpoch) => {
-      if (focusEpoch !== epoch) return;
-      setIsOutlined(true);
-    });
-  }, [ee, epoch]);
-
-  useEffect(() => {
-    if (!isOutlined) return;
-    const timer = setTimeout(() => {
-      setIsOutlined(false);
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [isOutlined]);
-
-  return isOutlined;
 }

@@ -31,12 +31,12 @@ import { SubsSnapshot } from "../../engine/subs";
 import { TypedEmitter } from "tiny-typed-emitter";
 import EpochCell from "../Common/EpochCell";
 import { HashLink } from "react-router-hash-link";
-import { EventEpoch } from "../../engine/engine";
 import {
   EventListMessage,
   GraphMessage,
   VariableMessage,
 } from "../../utils/events";
+import { useFocusOutlineEvent } from "../../hooks/useFocusOutlineEvent";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
@@ -320,36 +320,6 @@ function useKeydown({
   graphEe.on("keydown", async (key) => await keyDownHandler(key));
 }
 
-function useFocusOutlineEvent({
-  epoch,
-  ee,
-}: {
-  epoch: EventEpoch;
-  ee: TypedEmitter<GraphMessage>;
-}) {
-  const [isOutlined, setIsOutlined] = useState(false);
-
-  useEffect(() => {
-    ee.on("focusEpoch", (focusEpoch: EventEpoch) => {
-      if (focusEpoch !== epoch) return;
-      setIsOutlined(true);
-    });
-  }, [ee, epoch]);
-
-  useEffect(() => {
-    if (!isOutlined) return;
-    const timer = setTimeout(() => {
-      setIsOutlined(false);
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [isOutlined]);
-
-  return isOutlined;
-}
-
 function Graph({
   subs,
   graphEe,
@@ -364,8 +334,9 @@ function Graph({
   varEe.current.setMaxListeners(Infinity);
 
   const isOutlined = useFocusOutlineEvent({
-    epoch: subs.epoch,
     ee: graphEe,
+    value: subs.epoch,
+    event: "focusEpoch",
   });
 
   const [layoutConfig, setLayoutConfig] =
