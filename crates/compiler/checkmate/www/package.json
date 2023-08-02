@@ -13,7 +13,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "build:codegen && react-scripts build",
+    "build": "npm run build:codegen && react-scripts build",
     "build:codegen": "node ./scripts/gen_schema_dts.js",
     "check": "tsc",
     "lint": "eslint src/ scripts/",
