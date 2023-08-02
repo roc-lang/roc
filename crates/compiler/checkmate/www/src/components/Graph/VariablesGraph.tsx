@@ -26,19 +26,22 @@ import { Variable } from "../../schema";
 
 import "reactflow/dist/style.css";
 import clsx from "clsx";
-import VariableNode, {
-  VariableMessageEvents,
-  VariableNodeProps,
-} from "./VariableNode";
+import VariableNode, { VariableNodeProps } from "./VariableNode";
 import { SubsSnapshot } from "../../engine/subs";
-import { KeydownHandler } from "../Events";
 import { TypedEmitter } from "tiny-typed-emitter";
-import EpochCell, { EpochCellView } from "../Common/EpochCell";
+import EpochCell from "../Common/EpochCell";
+import { HashLink } from "react-router-hash-link";
+import { EventEpoch } from "../../engine/engine";
+import {
+  EventListMessage,
+  GraphMessage,
+  VariableMessage,
+} from "../../utils/events";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
-  onVariable: (handler: (variable: Variable) => void) => void;
-  onKeydown: (handler: KeydownHandler) => void;
+  graphEe: TypedEmitter<GraphMessage>;
+  eventListEe: TypedEmitter<EventListMessage>;
 }
 
 function horizontalityToPositions(isHorizontal: boolean): {
@@ -285,11 +288,11 @@ function useAutoLayout(options: ComputeElkLayoutOptions) {
 function useKeydown({
   layoutConfig,
   setLayoutConfig,
-  onKeydown,
+  graphEe,
 }: {
   layoutConfig: LayoutConfiguration;
   setLayoutConfig: React.Dispatch<React.SetStateAction<LayoutConfiguration>>;
-  onKeydown: (handler: KeydownHandler) => void;
+  graphEe: TypedEmitter<GraphMessage>;
 }) {
   const redoLayout = useRedoLayout(layoutConfig);
 
@@ -314,23 +317,64 @@ function useKeydown({
     },
     [redoLayout, setLayoutConfig]
   );
-  onKeydown(async (key) => {
-    await keyDownHandler(key);
-  });
+  graphEe.on("keydown", async (key) => await keyDownHandler(key));
+}
+
+function useFocusOutlineEvent({
+  epoch,
+  ee,
+}: {
+  epoch: EventEpoch;
+  ee: TypedEmitter<GraphMessage>;
+}) {
+  const [isOutlined, setIsOutlined] = useState(false);
+
+  useEffect(() => {
+    ee.on("focusEpoch", (focusEpoch: EventEpoch) => {
+      if (focusEpoch !== epoch) return;
+      setIsOutlined(true);
+    });
+  }, [ee, epoch]);
+
+  useEffect(() => {
+    if (!isOutlined) return;
+    const timer = setTimeout(() => {
+      setIsOutlined(false);
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isOutlined]);
+
+  return isOutlined;
 }
 
 function Graph({
   subs,
-  onVariable,
-  onKeydown,
+  graphEe,
+  eventListEe,
 }: VariablesGraphProps): JSX.Element {
   const initialNodes: Node[] = [];
   const initialEdges: Edge[] = [];
 
-  const ee = useRef(new TypedEmitter<VariableMessageEvents>());
+  const varEe = useRef(new TypedEmitter<VariableMessage>());
   // Allow an unbounded number of listeners since we attach a listener for each
   // variable.
-  ee.current.setMaxListeners(Infinity);
+  varEe.current.setMaxListeners(Infinity);
+
+  const isOutlined = useFocusOutlineEvent({
+    epoch: subs.epoch,
+    ee: graphEe,
+  });
+
+  const [layoutConfig, setLayoutConfig] =
+    useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
+
+  const [elements, setElements] = useState<LayoutedElements>({
+    nodes: initialNodes,
+    edges: initialEdges,
+  });
 
   const [variablesNeedingFocus, setVariablesNeedingFocus] = useState<
     Set<Variable>
@@ -341,24 +385,16 @@ function Graph({
       return;
     }
     for (const variable of variablesNeedingFocus) {
-      ee.current.emit("focus", variable);
+      varEe.current.emit("focus", variable);
     }
     setVariablesNeedingFocus(new Set());
   }, [variablesNeedingFocus]);
-
-  const [layoutConfig, setLayoutConfig] =
-    useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
 
   useAutoLayout(layoutConfig);
   useKeydown({
     layoutConfig,
     setLayoutConfig,
-    onKeydown,
-  });
-
-  const [elements, setElements] = useState<LayoutedElements>({
-    nodes: initialNodes,
-    edges: initialEdges,
+    graphEe,
   });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -405,7 +441,7 @@ function Graph({
                 rawVariable: toVariable,
                 addSubVariableLink: addNewVariable,
                 isOutlined: true,
-                ee: ee.current,
+                ee: varEe.current,
               },
               layoutConfig.isHorizontal
             );
@@ -465,7 +501,7 @@ function Graph({
     [addNewVariable]
   );
 
-  onVariable(addNewVariableNode);
+  graphEe.on("focusVariable", addNewVariableNode);
 
   return (
     <ReactFlow
@@ -481,9 +517,21 @@ function Graph({
         // https://reactflow.dev/docs/guides/remove-attribution/
         hideAttribution: true,
       }}
+      className={clsx(
+        "ring-inset rounded-md transition ease-in-out duration-700",
+        isOutlined && "ring-2 ring-blue-500"
+      )}
     >
       <Panel position="top-left">
-        <EpochCell view={EpochCellView.Graph} epoch={subs.epoch}></EpochCell>
+        <HashLink
+          smooth
+          to={`#events-${subs.epoch}`}
+          onClick={() => {
+            eventListEe.emit("focusEpoch", subs.epoch);
+          }}
+        >
+          <EpochCell>Epoch {subs.epoch}</EpochCell>
+        </HashLink>
       </Panel>
       <Panel position="top-right">
         <LayoutPanel

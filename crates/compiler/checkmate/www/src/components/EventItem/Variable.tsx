@@ -10,9 +10,9 @@ interface VariableProps extends CommonProps {
 
 export function VariableEl({
   engine,
-  toggleVariableVis,
   epoch,
   variable,
+  graphEe,
 }: VariableProps): JSX.Element {
   engine.stepTo(epoch);
   return (
@@ -20,7 +20,7 @@ export function VariableEl({
       variable={variable}
       subs={engine.subs}
       onClick={(variable: Variable) => {
-        toggleVariableVis(variable);
+        graphEe.emit("focusVariable", variable);
       }}
     ></VariableElPretty>
   );

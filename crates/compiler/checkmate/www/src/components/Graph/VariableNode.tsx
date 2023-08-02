@@ -8,6 +8,7 @@ import { SubsSnapshot, TypeDescriptor } from "../../engine/subs";
 import { useEffect, useState } from "react";
 import { TypedEmitter } from "tiny-typed-emitter";
 import { VariableLink } from "../Common/VariableLink";
+import { VariableMessage } from "../../utils/events";
 
 type AddSubVariableLink = ({
   from,
@@ -17,17 +18,13 @@ type AddSubVariableLink = ({
   variable: Variable;
 }) => void;
 
-export interface VariableMessageEvents {
-  focus: (variable: Variable) => void;
-}
-
 export interface VariableNodeProps {
   data: {
     subs: SubsSnapshot;
     rawVariable: Variable;
     addSubVariableLink: AddSubVariableLink;
     isOutlined: boolean;
-    ee: TypedEmitter<VariableMessageEvents>;
+    ee: TypedEmitter<VariableMessage>;
   };
   targetPosition?: Position;
   sourcePosition?: Position;
@@ -46,25 +43,11 @@ export default function VariableNode({
     ee: eeProp,
   } = data;
 
-  const [isOutlined, setIsOutlined] = useState(isOutlinedProp);
-
-  useEffect(() => {
-    eeProp.on("focus", (focusVar: Variable) => {
-      if (focusVar !== rawVariable) return;
-      setIsOutlined(true);
-    });
-  }, [eeProp, rawVariable]);
-
-  useEffect(() => {
-    if (!isOutlined) return;
-    const timer = setTimeout(() => {
-      setIsOutlined(false);
-    }, 500);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [isOutlined]);
+  const isOutlined = useFocusOutlineEvent({
+    ee: eeProp,
+    isOutlinedProp,
+    variable: rawVariable,
+  });
 
   const varType = subs.get(rawVariable);
   if (!varType) throw new Error("VariableNode: no entry for variable");
@@ -140,7 +123,7 @@ export default function VariableNode({
     <div
       className={clsx(
         bgStyles,
-        "bg-opacity-50 rounded-lg transition ease-in-out duration-700",
+        "bg-opacity-50 rounded-md transition ease-in-out duration-700",
         isContent ? "py-2 px-4 border" : "p-0",
         isOutlined && "ring-2 ring-blue-500",
         "text-center font-mono"
@@ -161,6 +144,38 @@ export default function VariableNode({
       />
     </div>
   );
+}
+
+function useFocusOutlineEvent({
+  variable,
+  isOutlinedProp,
+  ee,
+}: {
+  variable: Variable;
+  isOutlinedProp: boolean;
+  ee: TypedEmitter<VariableMessage>;
+}) {
+  const [isOutlined, setIsOutlined] = useState(isOutlinedProp);
+
+  useEffect(() => {
+    ee.on("focus", (focusVar: Variable) => {
+      if (focusVar !== variable) return;
+      setIsOutlined(true);
+    });
+  }, [ee, variable]);
+
+  useEffect(() => {
+    if (!isOutlined) return;
+    const timer = setTimeout(() => {
+      setIsOutlined(false);
+    }, 500);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isOutlined]);
+
+  return isOutlined;
 }
 
 function VariableNodeContent(
