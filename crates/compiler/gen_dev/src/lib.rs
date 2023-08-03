@@ -291,6 +291,7 @@ trait Backend<'a> {
     fn interns(&self) -> &Interns;
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
+    fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation>;
 
     fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
         self.module_interns_helpers_mut().1
@@ -462,6 +463,11 @@ trait Backend<'a> {
 
     /// Used for generating wrappers for malloc/realloc/free
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
+
+    // use for roc_panic
+    fn build_roc_setjmp(&mut self) -> &'a [u8];
+    fn build_roc_longjmp(&mut self) -> &'a [u8];
+    fn build_roc_panic(&mut self) -> (&'a [u8], Vec<'a, Relocation>);
 
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     /// Returns the procedure bytes, its relocations, and the names of the refcounting functions it references.
@@ -1661,6 +1667,23 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::SetJmp => self.build_fn_call(
+                sym,
+                String::from("roc_setjmp"),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::LongJmp => self.build_fn_call(
+                sym,
+                String::from("roc_longjmp"),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::SetLongJmpBuffer => {
+                self.build_data_pointer(sym, String::from("setlongjmp_buffer"));
+            }
             LowLevel::DictPseudoSeed => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DICT_PSEUDO_SEED.to_string(),
@@ -1963,6 +1986,7 @@ trait Backend<'a> {
     );
 
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String);
+    fn build_data_pointer(&mut self, dst: &Symbol, data_name: String);
 
     /// Move a returned value into `dst`
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
