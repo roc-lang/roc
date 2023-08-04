@@ -18,25 +18,30 @@ import ReactFlow, {
   useStore,
   ReactFlowState,
   Position,
+  MarkerType,
+  EdgeMarkerType,
 } from "reactflow";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Variable } from "../../schema";
 
 import "reactflow/dist/style.css";
 import clsx from "clsx";
-import VariableNode, {
-  VariableMessageEvents,
-  VariableNodeProps,
-} from "./VariableNode";
+import VariableNode, { VariableNodeProps } from "./VariableNode";
 import { SubsSnapshot } from "../../engine/subs";
-import { KeydownHandler } from "../Events";
 import { TypedEmitter } from "tiny-typed-emitter";
-import EpochCell, { EpochCellView } from "../Common/EpochCell";
+import EpochCell from "../Common/EpochCell";
+import { HashLink } from "react-router-hash-link";
+import {
+  EventListMessage,
+  GraphMessage,
+  VariableMessage,
+} from "../../utils/events";
+import { useFocusOutlineEvent } from "../../hooks/useFocusOutlineEvent";
 
 export interface VariablesGraphProps {
   subs: SubsSnapshot;
-  onVariable: (handler: (variable: Variable) => void) => void;
-  onKeydown: (handler: KeydownHandler) => void;
+  graphEe: TypedEmitter<GraphMessage>;
+  eventListEe: TypedEmitter<EventListMessage>;
 }
 
 function horizontalityToPositions(isHorizontal: boolean): {
@@ -154,7 +159,9 @@ async function computeLayoutedElements({
       //height: 50,
     })),
     //@ts-ignore
-    edges: edges,
+    edges: edges.map((edge) => ({
+      ...edge,
+    })),
   };
 
   const layoutedGraph = await elk.layout(graph);
@@ -197,20 +204,22 @@ function newVariable(
   };
 }
 
-function addNodeChange(node: Node, existingNodes: Node[]): NodeChange | null {
-  if (existingNodes.some((n) => n.id === node.id)) {
-    return null;
-  }
+function canAddVariable(variableName: string, existingNodes: Node[]): boolean {
+  return !existingNodes.some((n) => n.id === variableName);
+}
+
+function canAddEdge(edgeName: string, existingEdges: Edge[]): boolean {
+  return !existingEdges.some((e) => e.id === edgeName);
+}
+
+function addNode(node: Node): NodeChange {
   return {
     type: "add",
     item: node,
   };
 }
 
-function addEdgeChange(edge: Edge, existingEdges: Edge[]): EdgeChange | null {
-  if (existingEdges.some((e) => e.id === edge.id)) {
-    return null;
-  }
+function addEdge(edge: Edge): EdgeChange {
   return {
     type: "add",
     item: edge,
@@ -279,11 +288,11 @@ function useAutoLayout(options: ComputeElkLayoutOptions) {
 function useKeydown({
   layoutConfig,
   setLayoutConfig,
-  onKeydown,
+  graphEe,
 }: {
   layoutConfig: LayoutConfiguration;
   setLayoutConfig: React.Dispatch<React.SetStateAction<LayoutConfiguration>>;
-  onKeydown: (handler: KeydownHandler) => void;
+  graphEe: TypedEmitter<GraphMessage>;
 }) {
   const redoLayout = useRedoLayout(layoutConfig);
 
@@ -308,33 +317,61 @@ function useKeydown({
     },
     [redoLayout, setLayoutConfig]
   );
-  onKeydown(async (key) => {
-    await keyDownHandler(key);
-  });
+  graphEe.on("keydown", async (key) => await keyDownHandler(key));
 }
 
 function Graph({
   subs,
-  onVariable,
-  onKeydown,
+  graphEe,
+  eventListEe,
 }: VariablesGraphProps): JSX.Element {
-  const initialNodes: Node[] = [];
-  const initialEdges: Edge[] = [];
+  const instance = useReactFlow();
 
-  const ee = useRef(new TypedEmitter<VariableMessageEvents>());
+  // We need to reset the graph when the subs snapshot changes. I'm not sure
+  // why this isn't done by the existing state manager.
+  useEffect(() => {
+    instance.setNodes([]);
+    instance.setEdges([]);
+  }, [instance, subs.epoch]);
+
+  const varEe = useRef(new TypedEmitter<VariableMessage>());
+  // Allow an unbounded number of listeners since we attach a listener for each
+  // variable.
+  varEe.current.setMaxListeners(Infinity);
+
+  const isOutlined = useFocusOutlineEvent({
+    ee: graphEe,
+    value: subs.epoch,
+    event: "focusEpoch",
+  });
 
   const [layoutConfig, setLayoutConfig] =
     useState<LayoutConfiguration>(LAYOUT_CONFIG_DOWN);
+
   const [elements, setElements] = useState<LayoutedElements>({
-    nodes: initialNodes,
-    edges: initialEdges,
+    nodes: [],
+    edges: [],
   });
+
+  const [variablesNeedingFocus, setVariablesNeedingFocus] = useState<
+    Set<Variable>
+  >(new Set());
+
+  useEffect(() => {
+    if (variablesNeedingFocus.size === 0) {
+      return;
+    }
+    for (const variable of variablesNeedingFocus) {
+      varEe.current.emit("focus", variable);
+    }
+    setVariablesNeedingFocus(new Set());
+  }, [variablesNeedingFocus]);
 
   useAutoLayout(layoutConfig);
   useKeydown({
     layoutConfig,
     setLayoutConfig,
-    onKeydown,
+    graphEe,
   });
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -355,81 +392,93 @@ function Graph({
     });
   }, []);
 
-  const addSubVariableLink = useCallback(
-    (fromN: Variable, subLinkN: Variable) => {
-      fromN = subs.get_root_key(fromN);
-      subLinkN = subs.get_root_key(subLinkN);
-      const from = fromN.toString();
-      const to = subLinkN.toString();
+  interface AddNewVariableParams {
+    from?: Variable;
+    variable: Variable;
+  }
+
+  const addNewVariable = useCallback(
+    ({ from, variable }: AddNewVariableParams) => {
+      const variablesToFocus = new Set<Variable>();
 
       setElements(({ nodes, edges }) => {
-        const optNewNode = addNodeChange(
-          newVariable(
-            to,
-            {
-              subs,
-              variable: subLinkN,
-              addSubVariableLink,
-              isOutlined: true,
-              ee: ee.current,
-            },
-            layoutConfig.isHorizontal
-          ),
-          nodes
-        );
-        const newNodes = optNewNode
-          ? applyNodeChanges([optNewNode], nodes)
-          : nodes;
+        let fromVariable: Variable | undefined = from;
+        let toVariable: Variable | undefined = variable;
 
-        const optNewEdge = addEdgeChange(
-          { id: `${from}->${to}`, source: from, target: to },
-          edges
-        );
-        const newEdges = optNewEdge
-          ? applyEdgeChanges([optNewEdge], edges)
-          : edges;
+        const nodeChanges: NodeChange[] = [];
+        const edgeChanges: EdgeChange[] = [];
+
+        while (toVariable !== undefined) {
+          const toVariableName = toVariable.toString();
+          if (canAddVariable(toVariableName, nodes)) {
+            const newVariableNode = newVariable(
+              toVariable.toString(),
+              {
+                subs,
+                rawVariable: toVariable,
+                addSubVariableLink: addNewVariable,
+                isOutlined: true,
+                ee: varEe.current,
+              },
+              layoutConfig.isHorizontal
+            );
+
+            nodeChanges.push(addNode(newVariableNode));
+          }
+
+          if (fromVariable !== undefined) {
+            const edgeName = `${fromVariable}->${toVariable}`;
+            if (canAddEdge(edgeName, edges)) {
+              let markerEnd: EdgeMarkerType | undefined;
+              if (subs.get_root_key(fromVariable) === toVariable) {
+                markerEnd = {
+                  type: MarkerType.ArrowClosed,
+                  width: 20,
+                  height: 20,
+                };
+              }
+
+              const newEdge = addEdge({
+                id: `${fromVariable}->${toVariable}`,
+                source: fromVariable.toString(),
+                target: toVariableName,
+                markerEnd,
+              });
+
+              edgeChanges.push(newEdge);
+            }
+          }
+
+          variablesToFocus.add(toVariable);
+
+          fromVariable = toVariable;
+          const rootToVariable = subs.get_root_key(toVariable);
+          if (toVariable !== rootToVariable) {
+            toVariable = rootToVariable;
+          } else {
+            toVariable = undefined;
+          }
+        }
+
+        const newNodes = applyNodeChanges(nodeChanges, nodes);
+        const newEdges = applyEdgeChanges(edgeChanges, edges);
 
         return { nodes: newNodes, edges: newEdges };
       });
 
-      ee.current.emit("focus", subLinkN);
+      setVariablesNeedingFocus(variablesToFocus);
     },
-    [layoutConfig, subs]
+    [layoutConfig.isHorizontal, subs]
   );
 
-  const addNode = useCallback(
-    (variableN: Variable) => {
-      variableN = subs.get_root_key(variableN);
-      const variable = variableN.toString();
-
-      setElements(({ nodes, edges }) => {
-        const optNewNode = addNodeChange(
-          newVariable(
-            variable,
-            {
-              subs,
-              variable: variableN,
-              addSubVariableLink,
-              isOutlined: true,
-              ee: ee.current,
-            },
-            layoutConfig.isHorizontal
-          ),
-          nodes
-        );
-        const newNodes = optNewNode
-          ? applyNodeChanges([optNewNode], nodes)
-          : nodes;
-
-        return { nodes: newNodes, edges: edges };
-      });
-
-      ee.current.emit("focus", variableN);
+  const addNewVariableNode = useCallback(
+    (variable: Variable) => {
+      addNewVariable({ variable });
     },
-    [subs, addSubVariableLink, layoutConfig]
+    [addNewVariable]
   );
 
-  onVariable(addNode);
+  graphEe.on("focusVariable", addNewVariableNode);
 
   return (
     <ReactFlow
@@ -445,9 +494,21 @@ function Graph({
         // https://reactflow.dev/docs/guides/remove-attribution/
         hideAttribution: true,
       }}
+      className={clsx(
+        "ring-inset rounded-md transition ease-in-out duration-700",
+        isOutlined && "ring-2 ring-blue-500"
+      )}
     >
       <Panel position="top-left">
-        <EpochCell view={EpochCellView.Graph} epoch={subs.epoch}></EpochCell>
+        <HashLink
+          smooth
+          to={`#events-${subs.epoch}`}
+          onClick={() => {
+            eventListEe.emit("focusEpoch", subs.epoch);
+          }}
+        >
+          <EpochCell>Epoch {subs.epoch}</EpochCell>
+        </HashLink>
       </Panel>
       <Panel position="top-right">
         <LayoutPanel
@@ -493,10 +554,14 @@ function LayoutPanel({
   );
 }
 
-export default function VariablesGraph(props: VariablesGraphProps) {
+export default function VariablesGraph({
+  subs,
+  graphEe,
+  eventListEe,
+}: VariablesGraphProps) {
   return (
     <ReactFlowProvider>
-      <Graph {...props} />
+      <Graph subs={subs} graphEe={graphEe} eventListEe={eventListEe} />
     </ReactFlowProvider>
   );
 }

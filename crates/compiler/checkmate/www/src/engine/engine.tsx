@@ -83,6 +83,11 @@ export class Engine {
     }
   }
 
+  stepToSnapshot(eventIndex: EventEpoch): SubsSnapshot {
+    this.stepTo(eventIndex);
+    return this.subsSnapshot();
+  }
+
   get subs(): Readonly<Subs> {
     return this.#subs;
   }

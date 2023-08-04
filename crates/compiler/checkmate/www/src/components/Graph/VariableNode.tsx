@@ -2,25 +2,30 @@ import clsx from "clsx";
 import { Handle, Position } from "reactflow";
 import { Variable } from "../../schema";
 import { assertExhaustive } from "../../utils/exhaustive";
-import { contentStyles } from "../Content";
+import { contentStyles, LinkStyles } from "../Content";
 import { VariableElPretty } from "../Common/Variable";
 import { SubsSnapshot, TypeDescriptor } from "../../engine/subs";
-import { useEffect, useState } from "react";
 import { TypedEmitter } from "tiny-typed-emitter";
+import { VariableLink } from "../Common/VariableLink";
+import { VariableMessage } from "../../utils/events";
+import { useFocusOutlineEvent } from "../../hooks/useFocusOutlineEvent";
+import { UnknownVariable } from "../Common/UnknownVariable";
 
-type AddSubVariableLink = (from: Variable, subVariable: Variable) => void;
-
-export interface VariableMessageEvents {
-  focus: (variable: Variable) => void;
-}
+type AddSubVariableLink = ({
+  from,
+  variable,
+}: {
+  from: Variable;
+  variable: Variable;
+}) => void;
 
 export interface VariableNodeProps {
   data: {
     subs: SubsSnapshot;
-    variable: Variable;
+    rawVariable: Variable;
     addSubVariableLink: AddSubVariableLink;
     isOutlined: boolean;
-    ee: TypedEmitter<VariableMessageEvents>;
+    ee: TypedEmitter<VariableMessage>;
   };
   targetPosition?: Position;
   sourcePosition?: Position;
@@ -32,63 +37,101 @@ export default function VariableNode({
   sourcePosition,
 }: VariableNodeProps): JSX.Element {
   const {
-    variable,
     subs,
+    rawVariable,
     addSubVariableLink,
     isOutlined: isOutlinedProp,
     ee: eeProp,
   } = data;
 
-  const [isOutlined, setIsOutlined] = useState(isOutlinedProp);
+  const isOutlined = useFocusOutlineEvent({
+    ee: eeProp,
+    value: rawVariable,
+    event: "focus",
+    defaultIsOutlined: isOutlinedProp,
+  });
 
-  useEffect(() => {
-    eeProp.on("focus", (focusVar: Variable) => {
-      if (focusVar !== variable) return;
-      setIsOutlined(true);
-    });
-  }, [eeProp, variable]);
+  const varType = subs.get(rawVariable);
 
-  useEffect(() => {
-    if (!isOutlined) return;
-    const timer = setTimeout(() => {
-      setIsOutlined(false);
-    }, 500);
+  let renderContent: JSX.Element;
+  let bgStyles: string;
+  const isContent = varType?.type === "descriptor";
+  switch (varType?.type) {
+    case undefined: {
+      bgStyles = "bg-red-500";
+      renderContent = <UnknownVariable variable={rawVariable} />;
 
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [isOutlined]);
+      break;
+    }
+    case "link": {
+      bgStyles = LinkStyles.bg;
 
-  const desc = subs.get_root(variable);
-  const styles = contentStyles(desc);
-  const basis: BasisProps = {
-    subs,
-    origin: variable,
-    addSubVariableLink,
-  };
+      renderContent = (
+        <VariableLink
+          subs={subs}
+          variable={rawVariable}
+          onClick={() =>
+            addSubVariableLink({
+              from: rawVariable,
+              variable: subs.get_root_key(rawVariable),
+            })
+          }
+        />
+      );
 
-  const content = Object.entries(
-    VariableNodeContent(variable, desc, basis)
-  ).filter((el): el is [string, JSX.Element] => !!el[1]);
+      break;
+    }
+    case "descriptor": {
+      const variable = rawVariable;
+      const desc: TypeDescriptor = varType;
 
-  let expandedContent = <></>;
-  if (content.length > 0) {
-    expandedContent = (
-      <ul className="text-sm text-left mt-2 space-y-1">
-        {content.map(([key, value], i) => (
-          <li key={i} className="space-x-2">
-            {key}: {value}
-          </li>
-        ))}
-      </ul>
-    );
+      const styles = contentStyles(desc);
+      bgStyles = styles.bg;
+      const basis: BasisProps = {
+        subs,
+        origin: variable,
+        addSubVariableLink,
+      };
+
+      const content = Object.entries(
+        VariableNodeContent(variable, desc, basis)
+      ).filter((el): el is [string, JSX.Element] => !!el[1]);
+
+      let expandedContent = <></>;
+      if (content.length > 0) {
+        expandedContent = (
+          <ul className="text-sm text-left mt-2 space-y-1">
+            {content.map(([key, value], i) => (
+              <li key={i} className="space-x-2">
+                {key}: {value}
+              </li>
+            ))}
+          </ul>
+        );
+      }
+
+      renderContent = (
+        <>
+          <div>
+            <VariableElPretty variable={variable} subs={subs} />
+          </div>
+          {expandedContent}
+        </>
+      );
+
+      break;
+    }
+    default: {
+      assertExhaustive(varType);
+    }
   }
 
   return (
     <div
       className={clsx(
-        styles.bg,
-        "bg-opacity-50 py-2 px-4 rounded-lg border transition ease-in-out duration-700",
+        bgStyles,
+        "bg-opacity-50 rounded-md transition ease-in-out duration-700",
+        isContent ? "py-2 px-4 border" : "p-0",
         isOutlined && "ring-2 ring-blue-500",
         "text-center font-mono"
       )}
@@ -97,15 +140,14 @@ export default function VariableNode({
         type="target"
         position={targetPosition ?? Position.Top}
         isConnectable={false}
+        style={{ background: "transparent", border: "none" }}
       />
-      <div>
-        <VariableElPretty variable={variable} subs={subs} />
-      </div>
-      {expandedContent}
+      {renderContent}
       <Handle
         type="source"
         position={sourcePosition ?? Position.Bottom}
         isConnectable={false}
+        style={{ background: "transparent", border: "none" }}
       />
     </div>
   );
@@ -238,7 +280,7 @@ function SubVariable({
     <VariableElPretty
       variable={variable}
       subs={subs}
-      onClick={() => addSubVariableLink(origin, variable)}
+      onClick={() => addSubVariableLink({ from: origin, variable })}
     />
   );
 }

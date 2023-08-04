@@ -4,6 +4,7 @@ import { QuerySubs, TypeDescriptor } from "../../engine/subs";
 import { Variable } from "../../schema";
 import DrawHeadConstructor from "../Content/HeadConstructor";
 import { contentStyles } from "./../Content";
+import { VariableName } from "./VariableName";
 
 interface VariableElProps {
   variable: Variable;
@@ -51,23 +52,6 @@ function Helper({
     desc: TypeDescriptor | undefined;
   }): JSX.Element {
   const { bg } = contentStyles(desc);
-  const varHeader =
-    !nested || raw ? (
-      <span
-        className={clsx(
-          "ring-1 ring-inset ring-black-100 px-1 bg-white rounded-md cursor",
-          nested ? "text-md" : "p-0.5"
-        )}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClick?.(variable);
-        }}
-      >
-        {variable}
-      </span>
-    ) : (
-      <></>
-    );
   return (
     <span
       className={clsx(
@@ -76,7 +60,13 @@ function Helper({
         nested ? "text-sm" : "p-0.5 pl-0 text-base"
       )}
     >
-      {varHeader}
+      {(!nested || raw) && (
+        <VariableName
+          variable={variable}
+          onClick={onClick}
+          className={nested ? "text-md" : "p-0.5"}
+        />
+      )}
       {children ? <span className="px-1">{children}</span> : <></>}
     </span>
   );

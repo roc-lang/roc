@@ -1,8 +1,9 @@
+import { TypedEmitter } from "tiny-typed-emitter";
 import type { Engine, EventEpoch } from "../../engine/engine";
-import type { Variable } from "../../schema";
+import { GraphMessage } from "../../utils/events";
 
 export interface CommonProps {
-  currentEpoch: EventEpoch;
+  selectedEpochs: EventEpoch[];
   engine: Engine;
-  toggleVariableVis: (variable: Variable) => void;
+  graphEe: TypedEmitter<GraphMessage>;
 }
