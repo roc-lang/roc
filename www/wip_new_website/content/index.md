@@ -1,28 +1,29 @@
 
 # Roc
 
-A work-in-progress programming language that aims to be fast, friendly, and functional. 
+Work in progress! 
 
-Checkout the [tutorial](/wip/tutorial.html) and follow-along to see how you can build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!
+<!-- TODO turn these into nice buttons -->
+- [tutorial](/wip/tutorial.html)
 
-Roc doesn’t have a numbered release or an installer yet, however you find helpful instructions on the [install](/wip/install.html) page to download a nightly release, or build from source code.
+- [install](/wip/install.html)
 
-If you get stuck, our friendly community is always happy to help. Please open a topic in the [Roc Zulip Chat](https://roc.zulipchat.com) `#beginners` channel and let us help you!
+- [help / group chat](https://roc.zulipchat.com), we're friendly!
 
 ## Goals 
 
 <section class="home-goals-container">
     <div class="home-goals-column">
       <h3 class="home-goals-title">Fast</h3>
-      <p class="home-goals-description">Delightful software runs fast. The Roc compiler should run fast, and it should be able to produce programs that run fast too. <br><a class="home-goals-learn-more" href="/design_goals.html#fast">What does <i>fast</i> mean?</a></p>
+      <p class="home-goals-description">Runs fast, compiles fast. <br><a class="home-goals-learn-more" href="/design_goals.html#fast">Learn more</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Friendly</h3>
-      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. This involves the set of tools Roc includes, and also the spirit of the community of Roc programmers. <br><a class="home-goals-learn-more" href="/design_goals.html#friendly">What does <i>friendly</i> mean?</a></p>
+      <p class="home-goals-description">User-friendly language, friendly community. <br><a class="home-goals-learn-more" href="/design_goals.html#friendly">Learn more</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Functional</h3>
-      <p class="home-goals-description">Roc is a purely functional programming language. The language is built on a small set of simple primitives, which together give you a toolset that's more than the sum of its parts. <br><a class="home-goals-learn-more" href="/design_goals.html#functional">What does <i>functional</i> mean?</a></p>
+      <p class="home-goals-description">Pure functional programming, keep it simple.<br><a class="home-goals-learn-more" href="/design_goals.html#functional">Learn more</a></p>
 </section>
 
 ## Try Roc

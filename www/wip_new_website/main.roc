@@ -51,13 +51,8 @@ view = \page, htmlContent ->
             ],
             footer [] [
                 div [id "footer"] [
-                    text "This site is powered by ",
+                    text " powered by ",
                     a [href "https://www.netlify.com"] [ text "Netlify"],
-                    text ".",
-                    br [] [],
-                    text "The ",
-                    a [href "https://foundation.roc-lang.org"] [ text "Roc Programming Language Foundation"],
-                    text " is a nonprofit corporation.",
                 ]
             ]
         ],
@@ -86,7 +81,6 @@ viewNavbar =
 rocLogo = 
     (Html.element "svg") [
             (Html.attribute "viewBox") "0 -6 51 58",
-            (Html.attribute "fill") "#7c38f5",
             (Html.attribute "xmlns") "http://www.w3.org/2000/svg",
             (Html.attribute "aria-labelledby") "logo-link",
             (Html.attribute "role") "img",
