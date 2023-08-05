@@ -120,7 +120,7 @@ mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packa
 # we need a github token
 if [ -v GITHUB_TOKEN_READ_ONLY ]; then
 
-  curl -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
+  curl -v -H "Authorization: $GITHUB_TOKEN_READ_ONLY" -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
 
   DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
   
