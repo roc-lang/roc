@@ -1130,6 +1130,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     ];
     const SHADOW_SPACE_SIZE: u8 = 32;
 
+    // Refer https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170#callercallee-saved-registers
+    // > The x64 ABI considers registers RBX, RBP, RDI, RSI, RSP, R12, R13, R14, R15, and XMM6-XMM15 nonvolatile.
+    // > They must be saved and restored by a function that uses them.
     #[inline(always)]
     fn general_callee_saved(reg: &X86_64GeneralReg) -> bool {
         matches!(
@@ -1146,16 +1149,23 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         )
     }
 
+    // Refer https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170#callercallee-saved-registers
+    // > The x64 ABI considers registers RBX, RBP, RDI, RSI, RSP, R12, R13, R14, R15, and XMM6-XMM15 nonvolatile.
+    // > They must be saved and restored by a function that uses them.
     #[inline(always)]
     fn float_callee_saved(reg: &X86_64FloatReg) -> bool {
         matches!(
             reg,
-            X86_64FloatReg::XMM0
-                | X86_64FloatReg::XMM1
-                | X86_64FloatReg::XMM2
-                | X86_64FloatReg::XMM3
-                | X86_64FloatReg::XMM4
-                | X86_64FloatReg::XMM5
+            X86_64FloatReg::XMM6
+                | X86_64FloatReg::XMM7
+                | X86_64FloatReg::XMM8
+                | X86_64FloatReg::XMM9
+                | X86_64FloatReg::XMM10
+                | X86_64FloatReg::XMM11
+                | X86_64FloatReg::XMM12
+                | X86_64FloatReg::XMM13
+                | X86_64FloatReg::XMM14
+                | X86_64FloatReg::XMM15
         )
     }
 
