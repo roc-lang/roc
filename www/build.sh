@@ -95,6 +95,7 @@ mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 mkdir www/build/wip
 $roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
 cp -r www/wip_new_website/static/site.css www/build/wip
+cp -r www/build/fonts www/build/wip/fonts
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
