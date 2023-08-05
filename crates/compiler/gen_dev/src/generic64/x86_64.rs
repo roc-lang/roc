@@ -1303,7 +1303,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                 debug_assert_eq!(base_offset % 8, 0);
                 debug_assert_eq!(size, 16);
 
-                X86_64Assembler::mov_reg64_base32(buf, X86_64GeneralReg::RAX, base_offset + 0x00);
+                X86_64Assembler::mov_reg64_base32(buf, X86_64GeneralReg::RAX, base_offset);
                 X86_64Assembler::mov_reg64_base32(buf, X86_64GeneralReg::RDX, base_offset + 0x08);
             }
             _ if layout_interner.stack_size(*layout) == 0 => {}
@@ -1358,7 +1358,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             LayoutRepr::I128 | LayoutRepr::U128 => {
                 let size = layout_interner.stack_size(*layout);
                 let offset = storage_manager.claim_stack_area(sym, size);
-                X86_64Assembler::mov_base32_reg64(buf, offset + 0x00, X86_64GeneralReg::RAX);
+                X86_64Assembler::mov_base32_reg64(buf, offset, X86_64GeneralReg::RAX);
                 X86_64Assembler::mov_base32_reg64(buf, offset + 0x08, X86_64GeneralReg::RDX);
             }
             _ if layout_interner.stack_size(*layout) == 0 => {
