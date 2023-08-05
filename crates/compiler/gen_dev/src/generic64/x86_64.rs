@@ -8,7 +8,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::{CompareOperation, RegisterWidth};
@@ -1296,6 +1296,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
+            // For windows (and zig 0.9 changes in zig 0.10) we need to match what zig does,
+            // in this case uses RAX & RDX to return the value
+            LayoutRepr::I128 | LayoutRepr::U128 => {
+                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                debug_assert_eq!(size, 16);
+
+                X86_64Assembler::mov_reg64_base32(buf, X86_64GeneralReg::RAX, base_offset + 0x00);
+                X86_64Assembler::mov_reg64_base32(buf, X86_64GeneralReg::RDX, base_offset + 0x08);
+            }
             _ if layout_interner.stack_size(*layout) == 0 => {}
             _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
@@ -1342,6 +1352,14 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         match layout_interner.get_repr(*layout) {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
+            }
+            // For windows (and zig 0.9 changes in zig 0.10) we need to match what zig does,
+            // in this case uses RAX & RDX to return the value
+            LayoutRepr::I128 | LayoutRepr::U128 => {
+                let size = layout_interner.stack_size(*layout);
+                let offset = storage_manager.claim_stack_area(sym, size);
+                X86_64Assembler::mov_base32_reg64(buf, offset + 0x00, X86_64GeneralReg::RAX);
+                X86_64Assembler::mov_base32_reg64(buf, offset + 0x08, X86_64GeneralReg::RDX);
             }
             _ if layout_interner.stack_size(*layout) == 0 => {
                 storage_manager.no_data(sym);
@@ -1518,7 +1536,10 @@ impl X86_64WindowsFastcall {
     ) -> bool {
         // TODO: This is not fully correct there are some exceptions for "vector" types.
         // details here: https://docs.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-160#return-values
-        interner.stack_size(*ret_layout) > 8
+        match *ret_layout {
+            Layout::I128 | Layout::U128 => false,
+            _ => interner.stack_size(*ret_layout) > 8,
+        }
     }
 }
 
