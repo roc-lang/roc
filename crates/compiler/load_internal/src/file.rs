@@ -41,7 +41,6 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
     ProcsBase, UpdateModeIds, UsageTrackingMap,
 };
-use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
@@ -2982,8 +2981,8 @@ fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
-    mut layout_interner: STLayoutInterner<'a>,
-    mut exposed_to_host: ExposedToHost,
+    layout_interner: STLayoutInterner<'a>,
+    exposed_to_host: ExposedToHost,
     module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
