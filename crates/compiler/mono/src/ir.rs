@@ -3099,9 +3099,17 @@ fn specialize_host_specializations<'a>(
 
         let mut aliases = BumpMap::default();
 
-        for (id, _, raw_function_layout) in hels {
+        for (var, id) in hels {
             let symbol = env.unique_symbol();
             let lambda_name = LambdaName::no_niche(symbol);
+
+            let mut layout_env =
+                layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+            let lambda_set = env.subs.get_lambda_set(var);
+            let raw_function_layout =
+                RawFunctionLayout::from_var(&mut layout_env, lambda_set.ambient_function)
+                    .value()
+                    .unwrap();
 
             let (key, (top_level, proc)) = generate_host_exposed_function(
                 env,
@@ -10004,7 +10012,7 @@ impl LambdaSetId {
 fn find_lambda_sets<'a>(
     env: &mut crate::layout::Env<'a, '_>,
     initial: Variable,
-) -> Vec<'a, (LambdaSetId, Variable, RawFunctionLayout<'a>)> {
+) -> MutMap<Variable, LambdaSetId> {
     let mut stack = bumpalo::collections::Vec::new_in(env.arena);
 
     // ignore the lambda set of top-level functions
@@ -10020,21 +10028,7 @@ fn find_lambda_sets<'a>(
         }
     }
 
-    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
-    let mut answer =
-        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
-
-    for (variable, lambda_set_id) in lambda_set_variables {
-        let lambda_set = env.subs.get_lambda_set(variable);
-        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
-            .value()
-            .unwrap();
-
-        let key = (lambda_set_id, variable, raw_function_layout);
-        answer.push(key);
-    }
-
-    answer
+    find_lambda_sets_help(env.subs, stack)
 }
 
 pub fn find_lambda_sets_help(
