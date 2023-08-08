@@ -142,7 +142,7 @@
             1; # to run the editor with NVIDIA's closed source drivers
           
           shellHook = ''
-            source <(echo "${aliases}")
+            ${aliases}
           '';
         };
 

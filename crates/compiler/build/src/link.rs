@@ -880,7 +880,7 @@ fn link_linux(
     //env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap()),
     //env::var_os("NIX_LIBGCC_S_PATH").map(|path| path.into_string().unwrap())
     let nix_paths_vec_string = nix_paths();
-    let nix_paths_vec: Vec<PathBuf> = nix_paths_vec_string.iter().map(|path_string| PathBuf::from(path_string)).collect();
+    let nix_paths_vec: Vec<PathBuf> = nix_paths_vec_string.iter().map(PathBuf::from).collect();
     let usr_lib_arch_path = strs_to_path(&["/usr", "lib", &architecture]);
     let lib_arch_path = strs_to_path(&["/lib", &architecture]);
 
@@ -891,7 +891,7 @@ fn link_linux(
         lib_dirs.extend(nix_paths_vec)
     }
 
-    lib_dirs.extend( [
+    lib_dirs.extend([
         usr_lib_arch_path,
         lib_arch_path,
         strs_to_path(&["/usr", "lib"]),
@@ -929,7 +929,13 @@ fn link_linux(
 
                 let dirs = lib_dirs
                     .iter()
-                    .map(|path_buf| path_buf.as_path().to_str().unwrap_or("FAILED TO CONVERT PATH TO STR").to_string())
+                    .map(|path_buf| {
+                        path_buf
+                            .as_path()
+                            .to_str()
+                            .unwrap_or("FAILED TO CONVERT PATH TO STR")
+                            .to_string()
+                    })
                     .collect::<Vec<String>>()
                     .join("\n");
                 eprintln!("We looked in the following directories:\n{dirs}");
@@ -941,7 +947,10 @@ fn link_linux(
         Architecture::X86_64 => {
             // give preference to nix_path if it's defined, this prevents bugs
             if let Some(nix_glibc_path) = nix_glibc_path_opt() {
-                build_path([&nix_glibc_path.into_string().unwrap(), "ld-linux-x86-64.so.2"])
+                build_path([
+                    &nix_glibc_path.into_string().unwrap(),
+                    "ld-linux-x86-64.so.2",
+                ])
             } else {
                 build_path(["/lib64", "ld-linux-x86-64.so.2"])
             }
