@@ -3069,9 +3069,7 @@ fn specialize_host_specializations<'a>(
         let Some(from_platform) = opt_from_platform else { continue };
 
         // now run the lambda set numbering scheme
-        let mut layout_env =
-            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
-        let hels = find_lambda_sets(&mut layout_env, from_platform);
+        let hels = find_lambda_sets(env.arena, env.subs, from_platform);
 
         // now unify
         let mut unify_env = roc_unify::Env::new(
@@ -10009,16 +10007,17 @@ impl LambdaSetId {
     }
 }
 
-fn find_lambda_sets<'a>(
-    env: &mut crate::layout::Env<'a, '_>,
+pub fn find_lambda_sets(
+    arena: &Bump,
+    subs: &Subs,
     initial: Variable,
 ) -> MutMap<Variable, LambdaSetId> {
-    let mut stack = bumpalo::collections::Vec::new_in(env.arena);
+    let mut stack = bumpalo::collections::Vec::new_in(arena);
 
     // ignore the lambda set of top-level functions
-    match env.subs.get_without_compacting(initial).content {
+    match subs.get_without_compacting(initial).content {
         Content::Structure(FlatType::Func(arguments, _, result)) => {
-            let arguments = &env.subs.variables[arguments.indices()];
+            let arguments = &subs.variables[arguments.indices()];
 
             stack.extend(arguments.iter().copied());
             stack.push(result);
@@ -10028,10 +10027,10 @@ fn find_lambda_sets<'a>(
         }
     }
 
-    find_lambda_sets_help(env.subs, stack)
+    find_lambda_sets_help(subs, stack)
 }
 
-pub fn find_lambda_sets_help(
+fn find_lambda_sets_help(
     subs: &Subs,
     mut stack: Vec<'_, Variable>,
 ) -> MutMap<Variable, LambdaSetId> {
