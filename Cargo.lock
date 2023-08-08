@@ -4784,7 +4784,6 @@ dependencies = [
  "criterion",
  "indoc",
  "inkwell",
- "lazy_static",
  "libc",
  "libloading",
  "roc_bitcode",

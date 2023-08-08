@@ -1,5 +1,6 @@
 use std::mem::MaybeUninit;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use inkwell::module::Module;
 use libloading::Library;
@@ -414,10 +415,6 @@ fn write_final_wasm() -> bool {
     false
 }
 
-lazy_static::lazy_static! {
-    static ref TEMP_DIR: tempfile::TempDir = tempfile::tempdir().unwrap();
-}
-
 #[allow(dead_code)]
 fn compile_to_wasm_bytes<'a>(
     arena: &'a bumpalo::Bump,
@@ -426,13 +423,17 @@ fn compile_to_wasm_bytes<'a>(
     context: &'a inkwell::context::Context,
     function_kind: FunctionKind,
 ) -> Vec<u8> {
+    // globally cache the temporary directory
+    static TEMP_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    let temp_dir = TEMP_DIR.get_or_init(|| tempfile::tempdir().unwrap());
+
     let target = wasm32_target_tripple();
 
     let (_main_fn_name, _delayed_errors, llvm_module) =
         create_llvm_module(arena, src, config, context, &target, function_kind);
 
     let content_hash = crate::helpers::src_hash(src);
-    let wasm_file = llvm_module_to_wasm_file(&TEMP_DIR, content_hash, llvm_module);
+    let wasm_file = llvm_module_to_wasm_file(temp_dir, content_hash, llvm_module);
     let compiled_bytes = std::fs::read(wasm_file).unwrap();
 
     if write_final_wasm() {
