@@ -876,9 +876,6 @@ fn link_linux(
         ));
     }
 
-    // Some things we'll need to build a list of dirs to check for libraries
-    //env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap()),
-    //env::var_os("NIX_LIBGCC_S_PATH").map(|path| path.into_string().unwrap())
     let nix_paths_vec_string = nix_paths();
     let nix_paths_vec: Vec<PathBuf> = nix_paths_vec_string.iter().map(PathBuf::from).collect();
     let usr_lib_arch_path = strs_to_path(&["/usr", "lib", &architecture]);
@@ -886,7 +883,7 @@ fn link_linux(
 
     let mut lib_dirs: Vec<PathBuf> = vec![];
 
-    // start with nix paths, this prevents bugs
+    // start with nix paths, this prevents version incompatibility
     if !nix_paths_vec.is_empty() {
         lib_dirs.extend(nix_paths_vec)
     }
