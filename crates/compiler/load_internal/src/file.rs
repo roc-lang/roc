@@ -41,7 +41,6 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
     ProcsBase, UpdateModeIds, UsageTrackingMap,
 };
-use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
@@ -2982,8 +2981,8 @@ fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
-    mut layout_interner: STLayoutInterner<'a>,
-    mut exposed_to_host: ExposedToHost,
+    layout_interner: STLayoutInterner<'a>,
+    exposed_to_host: ExposedToHost,
     module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
@@ -3101,53 +3100,6 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-    let mut glue_getters = Vec::new();
-
-    // the REPL does not have any platform data
-    if let (
-        EntryPoint::Executable {
-            exposed_to_host: exposed_top_levels,
-            ..
-        },
-        Some(platform_data),
-    ) = (&entry_point, platform_data.as_ref())
-    {
-        // Expose glue for the platform, not for the app module!
-        let module_id = platform_data.module_id;
-
-        for (_name, proc_layout) in exposed_top_levels.iter() {
-            let ret = &proc_layout.result;
-            for in_layout in proc_layout.arguments.iter().chain([ret]) {
-                let layout = layout_interner.get(*in_layout);
-                let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-                let all_glue_procs = roc_mono::ir::generate_glue_procs(
-                    module_id,
-                    ident_ids,
-                    arena,
-                    &mut layout_interner,
-                    arena.alloc(layout),
-                );
-
-                let lambda_set_names = all_glue_procs
-                    .legacy_layout_based_extern_names
-                    .iter()
-                    .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
-                exposed_to_host.lambda_sets.extend(lambda_set_names);
-
-                let getter_names = all_glue_procs
-                    .getters
-                    .iter()
-                    .flat_map(|(_, glue_procs)| glue_procs.iter().map(|glue_proc| glue_proc.name));
-                exposed_to_host.getters.extend(getter_names);
-
-                glue_getters.extend(all_glue_procs.getters.iter().flat_map(|(_, glue_procs)| {
-                    glue_procs
-                        .iter()
-                        .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
-                }));
-            }
-        }
-    }
 
     let output_path = match output_path {
         Some(path_str) => Path::new(path_str).into(),
@@ -3176,9 +3128,7 @@ fn finish_specialization<'a>(
         sources,
         timings: state.timings,
         toplevel_expects,
-        glue_layouts: GlueLayouts {
-            getters: glue_getters,
-        },
+        glue_layouts: GlueLayouts { getters: vec![] },
         uses_prebuilt_platform,
     })
 }
