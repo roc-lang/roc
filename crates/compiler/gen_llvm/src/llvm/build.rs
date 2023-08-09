@@ -43,7 +43,7 @@ use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
-    ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
+    HostExposedLambdaSets, ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
     Builtin, InLayout, LambdaName, LambdaSet, Layout, LayoutIds, LayoutInterner, LayoutRepr, Niche,
@@ -4920,6 +4920,7 @@ pub fn build_procedures<'a>(
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
     glue_layouts: &GlueLayouts<'a>,
@@ -4929,6 +4930,7 @@ pub fn build_procedures<'a>(
         layout_interner,
         opt_level,
         procedures,
+        host_exposed_lambda_sets,
         entry_point,
         debug_output_file,
     );
@@ -4982,6 +4984,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
         layout_interner,
         opt_level,
         procedures,
+        vec![],
         EntryPoint::Single(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
@@ -5000,6 +5003,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     entry_point: SingleEntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(
@@ -5007,6 +5011,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         layout_interner,
         opt_level,
         procedures,
+        host_exposed_lambda_sets,
         EntryPoint::Single(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
@@ -5034,6 +5039,7 @@ pub fn build_procedures_expose_expects<'a>(
         layout_interner,
         opt_level,
         procedures,
+        vec![],
         entry_point,
         Some(&std::env::temp_dir().join("test.ll")),
     );
@@ -5096,20 +5102,23 @@ fn build_procedures_help<'a>(
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
 
-    let it = procedures.iter().map(|x| x.1);
+    let it1 = procedures.iter().map(|x| x.1);
+    let it2 = host_exposed_lambda_sets.iter().map(|(_, _, hels)| hels);
 
     let solutions = match roc_alias_analysis::spec_program(
         env.arena,
         layout_interner,
         opt_level,
         entry_point,
-        it,
+        it1,
+        it2,
     ) {
         Err(e) => panic!("Error in alias analysis: {e}"),
         Ok(solutions) => solutions,
@@ -5147,7 +5156,6 @@ fn build_procedures_help<'a>(
             build_proc(
                 env,
                 layout_interner,
-                mod_solutions,
                 &mut layout_ids,
                 func_spec_solutions,
                 scope.clone(),
@@ -5188,6 +5196,26 @@ fn build_procedures_help<'a>(
                     mode,
                     )
                 }
+            }
+        }
+    }
+
+    use LlvmBackendMode::*;
+    match env.mode {
+        GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
+        Binary | BinaryDev | BinaryGlue => {
+            for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
+                let ident_string = proc_name.name().as_str(&env.interns);
+                let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
+
+                expose_alias_to_host(
+                    env,
+                    layout_interner,
+                    mod_solutions,
+                    &fn_name,
+                    *alias_name,
+                    hels,
+                )
             }
         }
     }
@@ -5558,43 +5586,12 @@ fn build_host_exposed_alias_size_help<'a, 'ctx>(
 fn build_proc<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    mod_solutions: &'a ModSolutions,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     mut scope: Scope<'a, 'ctx>,
     proc: &roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
-    use roc_mono::ir::HostExposedLayouts;
-
-    match &proc.host_exposed_layouts {
-        HostExposedLayouts::NotHostExposed => {}
-        HostExposedLayouts::HostExposed { aliases, .. } => {
-            use LlvmBackendMode::*;
-
-            match env.mode {
-                GenTest | WasmGenTest | CliTest => {
-                    /* no host, or exposing types is not supported */
-                }
-                Binary | BinaryDev | BinaryGlue => {
-                    for (alias_name, hels) in aliases.iter() {
-                        let ident_string = proc.name.name().as_str(&env.interns);
-                        let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
-
-                        expose_alias_to_host(
-                            env,
-                            layout_interner,
-                            mod_solutions,
-                            &fn_name,
-                            *alias_name,
-                            hels,
-                        )
-                    }
-                }
-            }
-        }
-    };
-
     let args = proc.args;
     let context = &env.context;
 

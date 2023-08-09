@@ -102,6 +102,7 @@ fn create_llvm_module<'a>(
     use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
+        host_exposed_lambda_sets,
         interns,
         layout_interner,
         ..
@@ -271,6 +272,7 @@ fn create_llvm_module<'a>(
             &layout_interner,
             config.opt_level,
             procedures,
+            host_exposed_lambda_sets,
             entry_point,
         ),
     };

@@ -6,8 +6,8 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    BranchInfo, Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, Literal,
-    ModifyRc, PassedFunction, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
+    BranchInfo, Call, CallSpecId, CallType, Expr, JoinPointId, Literal, ModifyRc, PassedFunction,
+    Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, LayoutWrapper, Niche,
@@ -452,7 +452,7 @@ impl<'a> CodeGenHelp<'a> {
             closure_data_layout: None,
             ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_host_exposed: false,
             is_erased: false,
         });
 
@@ -772,7 +772,7 @@ impl<'a> CallerProc<'a> {
             closure_data_layout: None,
             ret_layout: Layout::UNIT,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_host_exposed: false,
             is_erased: false,
         };
 
@@ -888,10 +888,7 @@ pub fn test_helper<'a>(
         closure_data_layout: None,
         ret_layout: output_layout,
         is_self_recursive: main_proc.is_self_recursive,
-        host_exposed_layouts: HostExposedLayouts::HostExposed {
-            rigids: Default::default(),
-            aliases: Default::default(),
-        },
+        is_host_exposed: true,
         is_erased: false,
     }
 }
