@@ -307,7 +307,6 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    pub is_host_exposed: bool,
     pub is_erased: bool,
 }
 
@@ -3309,7 +3308,6 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        is_host_exposed: false,
         is_erased,
     }
 }
@@ -3405,7 +3403,6 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                is_host_exposed: false,
                 is_erased: false,
             };
 
@@ -3470,7 +3467,6 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        is_host_exposed: false,
         is_erased: false,
     };
 
@@ -3565,7 +3561,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                is_host_exposed: false,
                 is_erased,
             }
         }
@@ -3768,7 +3763,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                is_host_exposed: false,
                 is_erased,
             }
         }
@@ -10328,7 +10322,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            is_host_exposed: false,
             is_erased: false,
         };
 
@@ -10424,7 +10417,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            is_host_exposed: false,
             is_erased: false,
         };
 

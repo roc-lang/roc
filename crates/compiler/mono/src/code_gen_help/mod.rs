@@ -452,7 +452,6 @@ impl<'a> CodeGenHelp<'a> {
             closure_data_layout: None,
             ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            is_host_exposed: false,
             is_erased: false,
         });
 
@@ -772,7 +771,6 @@ impl<'a> CallerProc<'a> {
             closure_data_layout: None,
             ret_layout: Layout::UNIT,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            is_host_exposed: false,
             is_erased: false,
         };
 
@@ -888,7 +886,6 @@ pub fn test_helper<'a>(
         closure_data_layout: None,
         ret_layout: output_layout,
         is_self_recursive: main_proc.is_self_recursive,
-        is_host_exposed: true,
         is_erased: false,
     }
 }
