@@ -14,7 +14,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 use roc_mono::ir::{
-    Call, CallType, EntryPoint, ErasedField, Expr, HigherOrderLowLevel, HostExposedLayouts,
+    Call, CallType, EntryPoint, ErasedField, Expr, HigherOrderLowLevel, HostExposedLambdaSet,
     ListLiteralElement, Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
@@ -137,15 +137,17 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     buf
 }
 
-pub fn spec_program<'a, 'r, I>(
+pub fn spec_program<'a, 'r, I1, I2>(
     arena: &'a Bump,
     interner: &'r STLayoutInterner<'a>,
     opt_level: OptLevel,
     entry_point: roc_mono::ir::EntryPoint<'a>,
-    procs: I,
+    procs: I1,
+    hels: I2,
 ) -> Result<morphic_lib::Solutions>
 where
-    I: Iterator<Item = &'r Proc<'a>>,
+    I1: Iterator<Item = &'r Proc<'a>>,
+    I2: Iterator<Item = &'r HostExposedLambdaSet<'a>>,
 {
     let main_module = {
         let mut m = ModDefBuilder::new();
@@ -183,49 +185,35 @@ where
         let mut host_exposed_functions = Vec::new();
         let mut erased_functions = Vec::new();
 
+        for hels in hels {
+            match hels.raw_function_layout {
+                RawFunctionLayout::Function(_, _, _) => {
+                    let it = hels.proc_layout.arguments.iter().copied();
+                    let bytes =
+                        func_name_bytes_help(hels.symbol, it, Niche::NONE, hels.proc_layout.result);
+
+                    host_exposed_functions.push((bytes, hels.proc_layout.arguments));
+                }
+                RawFunctionLayout::ErasedFunction(..) => {
+                    let it = hels.proc_layout.arguments.iter().copied();
+                    let bytes =
+                        func_name_bytes_help(hels.symbol, it, Niche::NONE, hels.proc_layout.result);
+
+                    host_exposed_functions.push((bytes, hels.proc_layout.arguments));
+                }
+                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                    let bytes =
+                        func_name_bytes_help(hels.symbol, [], Niche::NONE, hels.proc_layout.result);
+
+                    host_exposed_functions.push((bytes, hels.proc_layout.arguments));
+                }
+            }
+        }
+
         // all other functions
         for proc in procs {
             let bytes = func_name_bytes(proc);
             let func_name = FuncName(&bytes);
-
-            if let HostExposedLayouts::HostExposed { aliases, .. } = &proc.host_exposed_layouts {
-                for (_, hels) in aliases {
-                    match hels.raw_function_layout {
-                        RawFunctionLayout::Function(_, _, _) => {
-                            let it = hels.proc_layout.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(
-                                hels.symbol,
-                                it,
-                                Niche::NONE,
-                                hels.proc_layout.result,
-                            );
-
-                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
-                        }
-                        RawFunctionLayout::ErasedFunction(..) => {
-                            let it = hels.proc_layout.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(
-                                hels.symbol,
-                                it,
-                                Niche::NONE,
-                                hels.proc_layout.result,
-                            );
-
-                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
-                        }
-                        RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes = func_name_bytes_help(
-                                hels.symbol,
-                                [],
-                                Niche::NONE,
-                                hels.proc_layout.result,
-                            );
-
-                            host_exposed_functions.push((bytes, hels.proc_layout.arguments));
-                        }
-                    }
-                }
-            }
 
             if debug() {
                 eprintln!(

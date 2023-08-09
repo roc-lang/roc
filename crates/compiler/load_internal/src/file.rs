@@ -38,8 +38,8 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
-    ProcsBase, UpdateModeIds, UsageTrackingMap,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, HostExposedLambdaSets, PartialProc,
+    Proc, ProcLayout, Procs, ProcsBase, UpdateModeIds, UsageTrackingMap,
 };
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
@@ -613,6 +613,7 @@ enum Msg<'a> {
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
         procs_base: ProcsBase<'a>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -708,6 +709,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     pub toplevel_expects: ToplevelExpects,
     pub exposed_to_host: ExposedToHost,
 
@@ -788,6 +790,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies,
             procedures: MutMap::default(),
+            host_exposed_lambda_sets: std::vec::Vec::new(),
             toplevel_expects: ToplevelExpects::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_modules: &[],
@@ -2649,6 +2652,7 @@ fn update<'a>(
             subs,
             procs_base,
             procedures,
+            host_exposed_lambda_sets,
             external_specializations_requested,
             module_timing,
             layout_cache,
@@ -2666,6 +2670,9 @@ fn update<'a>(
             let _ = layout_cache;
 
             state.procedures.extend(procedures);
+            state
+                .host_exposed_lambda_sets
+                .extend(host_exposed_lambda_sets);
             state.module_cache.late_specializations.insert(
                 module_id,
                 LateSpecializationsModule {
@@ -3081,6 +3088,7 @@ fn finish_specialization<'a>(
     let State {
         toplevel_expects,
         procedures,
+        host_exposed_lambda_sets,
         module_cache,
         output_path,
         platform_data,
@@ -3124,6 +3132,7 @@ fn finish_specialization<'a>(
         interns,
         layout_interner,
         procedures,
+        host_exposed_lambda_sets,
         entry_point,
         sources,
         timings: state.timings,
@@ -5513,7 +5522,8 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc();
+    let (procedures, host_exposed_lambda_sets, restored_procs_base) =
+        procs.get_specialized_procs_without_rc();
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
@@ -5529,6 +5539,7 @@ fn make_specializations<'a>(
         layout_cache,
         procs_base: restored_procs_base,
         procedures,
+        host_exposed_lambda_sets,
         update_mode_ids,
         subs,
         expectations,

@@ -142,8 +142,7 @@ impl RegisterVariable {
             TypeTag::EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
             TypeTag::DelayedAlias { shared }
             | TypeTag::StructuralAlias { shared, .. }
-            | TypeTag::OpaqueAlias { shared, .. }
-            | TypeTag::HostExposedAlias { shared, .. } => {
+            | TypeTag::OpaqueAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
                     let direct_var = if rank.is_generalized() {
@@ -751,92 +750,6 @@ pub(crate) fn type_to_var_help(
                 let content = Content::Alias(symbol, alias_variables, alias_variable, kind);
 
                 env.register_with_known_var(destination, rank, content)
-            }
-            HostExposedAlias {
-                shared,
-                actual_type: alias_type,
-                actual_variable: actual_var,
-            } => {
-                let AliasShared {
-                    symbol,
-                    type_argument_abilities: _,
-                    type_argument_regions: _,
-                    lambda_set_variables,
-                    infer_ext_in_output_variables: _, // TODO
-                } = types[shared];
-
-                let type_arguments = types.get_type_arguments(typ_index);
-
-                let alias_variables = {
-                    let length = type_arguments.len() + lambda_set_variables.len();
-                    let new_variables = VariableSubsSlice::reserve_into_subs(env.subs, length);
-
-                    for (target_index, arg_type) in
-                        (new_variables.indices()).zip(type_arguments.into_iter())
-                    {
-                        let copy_var = helper!(arg_type);
-                        env.subs.variables[target_index] = copy_var;
-                    }
-                    let it = (new_variables.indices().skip(type_arguments.len()))
-                        .zip(lambda_set_variables.into_iter());
-                    for (target_index, ls) in it {
-                        // We MUST do this now, otherwise when linking the ambient function during
-                        // instantiation of the real var, there will be nothing to link against.
-                        let copy_var = type_to_var_help(
-                            env,
-                            rank,
-                            problems,
-                            abilities_store,
-                            obligation_cache,
-                            arena,
-                            aliases,
-                            types,
-                            ls,
-                            true,
-                        );
-                        env.subs.variables[target_index] = copy_var;
-                    }
-
-                    AliasVariables {
-                        variables_start: new_variables.start,
-                        type_variables_len: type_arguments.len() as _,
-                        lambda_set_variables_len: lambda_set_variables.len() as _,
-                        all_variables_len: length as _,
-                    }
-                };
-
-                // cannot use helper! here because this variable may be involved in unification below
-                let alias_variable = type_to_var_help(
-                    env,
-                    rank,
-                    problems,
-                    abilities_store,
-                    obligation_cache,
-                    arena,
-                    aliases,
-                    types,
-                    alias_type,
-                    false,
-                );
-                // TODO(opaques): I think host-exposed aliases should always be structural
-                // (when does it make sense to give a host an opaque type?)
-                let content = Content::Alias(
-                    symbol,
-                    alias_variables,
-                    alias_variable,
-                    AliasKind::Structural,
-                );
-                let result = env.register_with_known_var(destination, rank, content);
-
-                // We only want to unify the actual_var with the alias once
-                // if it's already redirected (and therefore, redundant)
-                // don't do it again
-                if !env.subs.redundant(actual_var) {
-                    let descriptor = env.subs.get(result);
-                    env.subs.union(result, actual_var, descriptor);
-                }
-
-                result
             }
             Error => {
                 let content = Content::Error;

@@ -199,6 +199,7 @@ fn mono_module_to_dylib<'a>(
 
     let MonomorphizedModule {
         procedures,
+        host_exposed_lambda_sets,
         entry_point,
         interns,
         subs,
@@ -258,6 +259,7 @@ fn mono_module_to_dylib<'a>(
         &layout_interner,
         opt_level,
         procedures,
+        host_exposed_lambda_sets,
         entry_point,
     );
 

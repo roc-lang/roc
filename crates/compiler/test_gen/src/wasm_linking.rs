@@ -14,8 +14,7 @@ use roc_module::symbol::{
     Symbol,
 };
 use roc_mono::ir::{
-    Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive, Stmt,
-    UpdateModeId,
+    Call, CallType, Expr, Literal, Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use roc_mono::layout::{LambdaName, Layout, Niche, STLayoutInterner};
 use roc_wasm_interp::{wasi, ImportDispatcher, Instance, WasiDispatcher};
@@ -116,7 +115,6 @@ fn build_app_mono<'a>(
         closure_data_layout: None,
         ret_layout: int_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         is_erased: false,
     };
 

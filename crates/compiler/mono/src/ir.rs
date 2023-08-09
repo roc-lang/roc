@@ -307,7 +307,6 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    pub host_exposed_layouts: HostExposedLayouts<'a>,
     pub is_erased: bool,
 }
 
@@ -318,15 +317,6 @@ pub struct HostExposedLambdaSet<'a> {
     pub symbol: Symbol,
     pub proc_layout: ProcLayout<'a>,
     pub raw_function_layout: RawFunctionLayout<'a>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostExposedLayouts<'a> {
-    NotHostExposed,
-    HostExposed {
-        rigids: BumpMap<Lowercase, InLayout<'a>>,
-        aliases: BumpMap<Symbol, HostExposedLambdaSet<'a>>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -905,12 +895,16 @@ impl<'a> SpecializationStack<'a> {
     }
 }
 
+pub type HostExposedLambdaSets<'a> =
+    std::vec::Vec<(LambdaName<'a>, Symbol, HostExposedLambdaSet<'a>)>;
+
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
@@ -930,6 +924,7 @@ impl<'a> Procs<'a> {
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
+            host_exposed_lambda_sets: std::vec::Vec::new(),
             symbol_specializations: Default::default(),
             specialization_stack: SpecializationStack(Vec::with_capacity_in(16, arena)),
 
@@ -995,7 +990,11 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
-    ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
+    ) -> (
+        MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        HostExposedLambdaSets<'a>,
+        ProcsBase<'a>,
+    ) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
@@ -1013,7 +1012,11 @@ impl<'a> Procs<'a> {
             imported_module_thunks: self.imported_module_thunks,
         };
 
-        (specialized_procs, restored_procs_base)
+        (
+            specialized_procs,
+            self.host_exposed_lambda_sets,
+            restored_procs_base,
+        )
     }
 
     // TODO trim these down
@@ -3062,9 +3065,9 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, from_app, opt_from_platform) in it {
+    for (lambda_name, from_app, opt_from_platform) in it {
         let from_app = offset_variable(from_app);
-        let index = specialize_external_help(env, procs, layout_cache, symbol, from_app);
+        let index = specialize_external_help(env, procs, layout_cache, lambda_name, from_app);
 
         let Some(from_platform) = opt_from_platform else { continue };
 
@@ -3094,8 +3097,6 @@ fn specialize_host_specializations<'a>(
                 Failure(..) => internal_error!("unification here should never fail"),
             }
         }
-
-        let mut aliases = BumpMap::default();
 
         for (var, id) in hels {
             let symbol = env.unique_symbol();
@@ -3128,20 +3129,10 @@ fn specialize_host_specializations<'a>(
                 raw_function_layout,
             };
 
-            aliases.insert(key, hels);
-        }
+            let in_progress = &mut procs.specialized.procedures[index.0];
+            let InProgressProc::Done(proc) = in_progress else { unreachable!() };
 
-        let in_progress = &mut procs.specialized.procedures[index.0];
-        let InProgressProc::Done(proc) = in_progress else { unreachable!() };
-
-        match &mut proc.host_exposed_layouts {
-            HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
-            hep @ HostExposedLayouts::NotHostExposed => {
-                *hep = HostExposedLayouts::HostExposed {
-                    aliases,
-                    rigids: Default::default(),
-                };
-            }
+            procs.host_exposed_lambda_sets.push((proc.name, key, hels));
         }
     }
 }
@@ -3308,7 +3299,6 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         is_erased,
     }
 }
@@ -3404,7 +3394,6 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                 is_erased: false,
             };
 
@@ -3469,7 +3458,6 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         is_erased: false,
     };
 
@@ -3533,9 +3521,6 @@ fn specialize_proc_help<'a>(
     let body = partial_proc.body.clone();
     let body_var = partial_proc.body_var;
 
-    // host-exposed functions are tagged on later
-    let host_exposed_layouts = HostExposedLayouts::NotHostExposed;
-
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
     let specialized_proc = match specialized {
@@ -3567,7 +3552,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                host_exposed_layouts,
                 is_erased,
             }
         }
@@ -3770,7 +3754,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                host_exposed_layouts,
                 is_erased,
             }
         }
@@ -10330,7 +10313,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             is_erased: false,
         };
 
@@ -10426,7 +10408,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             is_erased: false,
         };
 
