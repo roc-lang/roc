@@ -319,15 +319,6 @@ pub struct HostExposedLambdaSet<'a> {
     pub raw_function_layout: RawFunctionLayout<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostExposedLayouts<'a> {
-    NotHostExposed,
-    HostExposed {
-        rigids: BumpMap<Lowercase, InLayout<'a>>,
-        aliases: BumpMap<Symbol, HostExposedLambdaSet<'a>>,
-    },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfRecursive {
     NotSelfRecursive,
