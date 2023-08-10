@@ -38,7 +38,7 @@ roc_parse = { path = "../compiler/parse" }
 roc_problem = { path = "../compiler/problem" }
 roc_solve = { path = "../compiler/solve" }
 roc_target = { path = "../compiler/roc_target" }
-roc_test_utils = { path = "../test_utils" }
+roc_test_utils = { path = "../internal/test_utils" }
 
 indoc.workspace = true
 insta.workspace = true

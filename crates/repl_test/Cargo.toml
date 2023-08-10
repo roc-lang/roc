@@ -13,7 +13,7 @@ roc_cli = { path = "../cli" }
 [dev-dependencies]
 roc_build = { path = "../compiler/build" }
 roc_repl_cli = { path = "../repl_cli" }
-roc_test_utils = { path = "../test_utils" }
+roc_test_utils = { path = "../internal/test_utils" }
 roc_wasm_interp = { path = "../wasm_interp" }
 
 bumpalo.workspace = true

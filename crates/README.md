@@ -124,10 +124,6 @@ Responsible for generating warning and error messages.
 
 Provides Rust representations of Roc data structures.
 
-## `test_utils/` - `roc_test_utils`
-
-Provides testing utility functions for use throughout the Rust code base.
-
 ## `tracing/` - `roc_tracing`
 
 Provides tracing utility functions for various executable entry points.

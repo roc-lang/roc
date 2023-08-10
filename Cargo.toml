@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/compiler/*",
+  "crates/internal/*",
   "crates/vendor/*",
   "crates/glue",
   "crates/editor",
@@ -18,7 +19,6 @@ members = [
   "crates/repl_wasm",
   "crates/repl_expect",
   "crates/roc_std",
-  "crates/test_utils",
   "crates/valgrind",
   "crates/tracing",
   "crates/utils/*",
