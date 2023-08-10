@@ -2327,6 +2327,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aeaf4ad7403de93e699c191202f017118df734d3850b01e13a3a8b2e6953d3c9"
 
 [[package]]
+name = "normalize-line-endings"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
+
+[[package]]
 name = "normpath"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3743,6 +3749,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_misc_tests"
+version = "0.0.0"
+dependencies = [
+ "itertools 0.10.5",
+ "snapbox",
+]
+
+[[package]]
 name = "roc_module"
 version = "0.0.1"
 dependencies = [
@@ -4595,6 +4609,28 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.109",
+]
+
+[[package]]
+name = "snapbox"
+version = "0.4.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6bccd62078347f89a914e3004d94582e13824d4e3d8a816317862884c423835"
+dependencies = [
+ "anstream",
+ "anstyle",
+ "normalize-line-endings",
+ "similar",
+ "snapbox-macros",
+]
+
+[[package]]
+name = "snapbox-macros"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaaf09df9f0eeae82be96290918520214530e738a7fe5a351b0f24cf77c0ca31"
+dependencies = [
+ "anstream",
 ]
 
 [[package]]

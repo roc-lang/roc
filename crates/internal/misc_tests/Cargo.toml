@@ -1,0 +1,15 @@
+[package]
+name = "roc_misc_tests"
+description = "Tests about some files in this repository that don't really belong in any other crate"
+publish = false
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version = "0.0.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dev-dependencies]
+itertools.workspace = true
+snapbox = "0.4.11"

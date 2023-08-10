@@ -23,10 +23,10 @@ roc_std = { path = "../roc_std" }
 roc_types = { path = "../compiler/types" }
 ven_pretty = { path = "../vendor/pretty" }
 byte-unit = "4.0.19"
-itertools = "0.10.5"
 
 bumpalo.workspace = true
 distance.workspace = true
+itertools.workspace = true
 
 [dev-dependencies]
 roc_builtins = { path = "../compiler/builtins" }

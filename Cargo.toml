@@ -107,6 +107,7 @@ im-rc = "15.1.0"
 indexmap = "1.9.2"
 indoc = "1.0.9"
 insta = "1.28.0"
+itertools = "0.10.5"
 js-sys = "0.3.61"
 lazy_static = "1.4.0"
 libc = "0.2.139" # update roc_std/Cargo.toml on change

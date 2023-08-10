@@ -22,9 +22,6 @@ jobs:
         with:
           clean: "true"
 
-      - name: Check for duplicate AUTHORS
-        run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
-
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
 
