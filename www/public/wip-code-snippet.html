@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+
+    <title>Code snippet</title>
+    <meta name="viewport" content="width=device-width">
+    <link rel="stylesheet" href="https://www.roc-lang.org/site.css">
+    <style>
+        .interactive-example {
+            position: relative;
+            display: block;
+            width: 440px;
+            height: 800px;
+            padding-right: 300px;
+            cursor: default;
+        }
+
+        .interactive-example label:hover,
+        .interactive-radio:checked+label {
+            background-color: turquoise;
+            cursor: pointer;
+        }
+
+        .interactive-desc {
+            display: none;
+            background-color: #ddd;
+            padding: 8px 16px;
+            margin-top: 32px;
+        }
+
+        .interactive-radio {
+            display: none;
+        }
+
+        .interactive-radio:checked+label+.interactive-desc {
+            display: block;
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            white-space: normal;
+            /* font-family: var(--font-sans); */
+            font-family: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial;
+        }
+    </style>
+</head>
+
+<body>
+    <pre>
+        <samp class="interactive-example">
+
+<input class="interactive-radio" type="radio" name="r" id="r0" autocomplete="off" checked><label for="r0" title="Tap to learn about this syntax"><span class="ident">subject</span> <span class="kw">=</span> <span class="literal">"Awesome Programmer"</span></label><div class="interactive-desc"><p>This assigns the name <code class="ident">subject</code> to the string "Awesome programmer".</p><p>In Roc, assignments are always constant, which means writing <code class="ident">subject =</code> again in the same scope would give an error.</p><p><a href="https://www.roc-lang.org/tutorial#naming-things">Learn more about naming things</a></p></div>
+
+<input class="interactive-radio" type="radio" name="r" id="r1" autocomplete="off"><label for="r1" title="Tap to learn about this syntax"><span class="ident">helloWorld</span> <span class="kw">=</span></label><div class="interactive-desc"><p>This assigns the name <code class="ident">helloWorld</code> to the value returned by this chain of function calls.</p><p>In Roc, assignments are always constant, which means writing <code class="ident">helloWorld =</code> again in the same scope would give an error.</p><p><a href="https://www.roc-lang.org/tutorial#naming-things">Learn more about naming things</a></p></div>
+    <input class="interactive-radio" type="radio" name="r" id="r2" autocomplete="off"><label for="r2" title="Tap to learn about this syntax"><span class="ident">Str</span><span class="kw">.</span><span class="ident">withCapacity</span> <span class="literal">45</span></label><div class="interactive-desc"><p>This calls the <a href="https://www.roc-lang.org/builtins/Str#withCapacity"><code class="ident">Str.withCapacity</code> function</a> passing <code class="ident">45</code> as its argument.</p><p>This creates a new string with capacity for 45 bytes without needing to allocate more space.</p></div>
+    <input class="interactive-radio" type="radio" name="r" id="r3" autocomplete="off"><label for="r3" title="Tap to learn about this syntax"><span class="kw">|></span> <span class="ident">Str</span><span class="kw">.</span><span class="ident">concat</span> <span class="ident">greeting</span></label><div class="interactive-desc"><p>This calls the <a href="https://www.roc-lang.org/builtins/Str#concat"><code class="ident">Str.concat</code> function</a> passing <code class="ident">greeting</code> as its second argument, and the output of the pipeline up to this point as its first argument.</p></div>
+
+        </samp>
+    </pre>
+
+    <div class="interactive-example-info">
+        <input class="interactive-radio" type="radio" name="r" id="r2">
+        <div class="interactive-desc">
+            <p>This is the content for r2</p>
+        </div>
+    </div>
+</body>
+
+</html>
