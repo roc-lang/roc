@@ -1422,6 +1422,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "getopts"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14dbbfd5c71d70241ecf9e6f13737f7b5ce823821063188d7e46c41d371eebd5"
+dependencies = [
+ "unicode-width",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2823,13 +2832,24 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d9cc634bc78768157b5cbfe988ffcd1dcba95cd2b2f03a88316c08c6d00ed63"
+checksum = "77a1a2f1f0a7ecff9c31abbe177637be0e97a0aef46cf8738ece09327985d998"
 dependencies = [
  "bitflags",
+ "getopts",
  "memchr",
  "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark-toc"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd2e473a5c7ddbc0c82e34b0a6b4650d6a33ff52c605f4268c3deef5af4fde66"
+dependencies = [
+ "pulldown-cmark",
+ "regex-macro",
 ]
 
 [[package]]
@@ -3014,6 +3034,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c230d73fb8d8c1b9c0b3135c5142a8acee3a0558fb8db5cf1cb65f8d7862132"
 dependencies = [
  "regex-syntax 0.6.29",
+]
+
+[[package]]
+name = "regex-macro"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12fa36e7add16db296640bba993a65dae2a0088a8e5cd5f935c8bfbd3710145b"
+dependencies = [
+ "once_cell",
+ "regex",
 ]
 
 [[package]]
@@ -3753,6 +3783,7 @@ name = "roc_misc_tests"
 version = "0.0.0"
 dependencies = [
  "itertools 0.10.5",
+ "pulldown-cmark-toc",
  "snapbox",
 ]
 
