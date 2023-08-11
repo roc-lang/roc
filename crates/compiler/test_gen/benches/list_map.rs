@@ -62,8 +62,13 @@ fn roc_function<'a, 'b>(
     };
 
     let context = inkwell::context::Context::create();
-    let (main_fn_name, errors, lib) =
-        helpers::llvm::helper(arena, config, source, arena.alloc(context));
+    let (main_fn_name, errors, lib) = helpers::llvm::helper(
+        arena,
+        config,
+        source,
+        arena.alloc(context),
+        roc_load::FunctionKind::LambdaSet,
+    );
 
     assert!(errors.is_empty(), "Encountered errors:\n{errors}");
 
