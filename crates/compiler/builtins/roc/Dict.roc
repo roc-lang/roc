@@ -241,8 +241,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ## Convert each value in the dictionary to something new, by calling a conversion
 ## function on each of them which receives both the key and the old value. Then return a
 ## new dictionary containing the same keys and the converted values.
-map : Dict k a, (k, a -> b) -> Dict k b
-    where k implements Hash & Eq, b implements Hash & Eq
+map : Dict k a, (k, a -> b) -> Dict k b where k implements Hash & Eq, b implements Hash & Eq
 map = \dict, transform ->
     init = withCapacity (capacity dict)
 
@@ -254,8 +253,7 @@ map = \dict, transform ->
 ## (using [Dict.insertAll]) into one dictionary.
 ##
 ## You may know a similar function named `concatMap` in other languages.
-joinMap : Dict a b, (a, b -> Dict x y) -> Dict x y
-    where a implements Hash & Eq, x implements Hash & Eq
+joinMap : Dict a b, (a, b -> Dict x y) -> Dict x y where a implements Hash & Eq, x implements Hash & Eq
 joinMap = \dict, transform ->
     init = withCapacity (capacity dict) # Might be a pessimization
 
