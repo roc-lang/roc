@@ -5,7 +5,9 @@ app "rust-toolchain-updater"
         pf.Task.{ Task, await },
         pf.File,
         pf.Path,
+        pf.Env,
         pf.Process,
+        pf.Stdout,
     ]
     provides [main] to pf
 
@@ -23,8 +25,26 @@ updateDotToml =
     |> Str.joinWith "\n"
     |> \x -> File.writeUtf8 (Path.fromStr fileName) x
 
+run =
+    cwd <- Env.cwd |> await
+    basename <- Path.display cwd
+        |> Str.split "/"
+        |> List.last
+        |> Task.fromResult
+        |> await
+    if basename == "roc" then
+        updateRustToolchain
+    else
+        Task.fail NotInRocDir
+
 main =
-    Task.attempt updateDotToml \result ->
+    Task.attempt run \result ->
         when result is
             Ok {} -> Process.exit 0
-            Err _err -> Process.exit 1
+            Err err ->
+                msg =
+                    when err is
+                        NotInRocDir -> "this script should be run from inside roc git repository"
+                        _ -> ""
+                {} <- Stdout.line msg |> await
+                Process.exit 1
