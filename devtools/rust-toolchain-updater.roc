@@ -33,7 +33,7 @@ run =
         |> Task.fromResult
         |> await
     if basename == "roc" then
-        updateRustToolchain
+        updateDotToml
     else
         Task.fail NotInRocDir
 
