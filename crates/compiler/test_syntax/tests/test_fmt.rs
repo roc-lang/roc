@@ -5565,7 +5565,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r#"
             A := a where a implements Other
-                has [Eq { eq }, Hash { hash }]
+                implements [Eq { eq }, Hash { hash }]
 
             0
             "#
