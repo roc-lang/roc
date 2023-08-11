@@ -3822,8 +3822,6 @@ mod pattern_match {
     #[cfg(feature = "gen-dev")]
     use crate::helpers::dev::assert_evals_to;
 
-    use crate::helpers::with_larger_debug_stack;
-
     use super::RocList;
 
     #[test]
