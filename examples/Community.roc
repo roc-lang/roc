@@ -13,24 +13,24 @@ Community := {
     people : List Person,
     friends : List (Set Nat),
 }
-     has [
-         Inspect {
-             toInspector: inspectCommunity,
-         },
-     ]
+    has [
+        Inspect {
+            toInspector: inspectCommunity,
+        },
+    ]
 
 Person := {
     firstName : Str,
     lastName : Str,
     age : U8,
     hasBeard : Bool,
-    favoriteColor: Color,
+    favoriteColor : Color,
 }
-     has [
-         Inspect {
-             toInspector: inspectPerson,
-         },
-     ]
+    has [
+        Inspect {
+            toInspector: inspectPerson,
+        },
+    ]
 
 Color : [
     Red,
