@@ -9,22 +9,22 @@ app "rust-toolchain-updater"
     ]
     provides [main] to pf
 
-main =
+updateDotToml = 
     fileName = "rust-toolchain.toml"
     version = "1.71.0"
     path = Path.fromStr fileName
-    task =
-        contents <- File.readUtf8 path |> await
-        Str.split contents "\n"
-        |> List.map \line ->
-            split = Str.split line " "
-            when split is
-                ["channel", ..] -> "channel = \"" |> Str.concat version |> Str.concat "\""
-                _ -> line
-        |> Str.joinWith "\n"
-        |> \x -> File.writeUtf8 (Path.fromStr fileName) x
+    contents <- File.readUtf8 path |> await
+    Str.split contents "\n"
+    |> List.map \line ->
+        split = Str.split line " "
+        when split is
+            ["channel", ..] -> "channel = \"" |> Str.concat version |> Str.concat "\""
+            _ -> line
+    |> Str.joinWith "\n"
+    |> \x -> File.writeUtf8 (Path.fromStr fileName) x
 
-    Task.attempt task \result ->
+main =
+    Task.attempt updateDotToml \result ->
         when result is
             Ok {} -> Process.exit 0
             Err _err -> Process.exit 1
