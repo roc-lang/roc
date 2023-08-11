@@ -121,25 +121,27 @@ inspectPerson = \@Person { firstName, lastName, age, hasBeard, favoriteColor } -
     # This is what the auto-derive would generate.
 
     f0 <- Inspect.custom
+
+    favoriteColorTag =
+        when favoriteColor is
+            Red ->
+                Inspect.tag "Red" []
+
+            Green ->
+                Inspect.tag "Green" []
+
+            Blue ->
+                Inspect.tag "Blue" []
+
+            RGB (r, g, b) ->
+                Inspect.tag "RGB" [Inspect.tuple [Inspect.u8 r, Inspect.u8 g, Inspect.u8 b]]
+
     [
         { key: "firstName", value: Inspect.str firstName },
         { key: "lastName", value: Inspect.str lastName },
         { key: "age", value: Inspect.u8 age },
         { key: "hasBeard", value: Inspect.bool hasBeard },
-        {
-            key: "favoriteColor",
-            value:
-                when favoriteColor is
-                    Red ->
-                        Inspect.tag "Red" []
-                    Green ->
-                        Inspect.tag "Green" []
-                    Blue ->
-                        Inspect.tag "Blue" []
-                    RGB (r, g, b) ->
-                        Inspect.tag "RGB" [Inspect.tuple [Inspect.u8 r, Inspect.u8 g, Inspect.u8 b]]
-                ,
-        },
+        { key: "favoriteColor", value: favoriteColorTag },
     ]
     |> Inspect.record
     |> Inspect.apply f0
