@@ -191,7 +191,7 @@ enum PendingTypeDef<'a> {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
+        derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
     },
 
     Ability {
@@ -497,7 +497,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             //
             //               interface F imports [] exposes []
             //
-            //               Hello := {} has [Encoding.{ toEncoder }]
+            //               Hello := {} implements [Encoding.{ toEncoder }]
             //
             //               toEncoder = \@Hello {} -> ...
             //
@@ -509,7 +509,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             //
             //               interface F imports [Encoding.{ toEncoder }] exposes []
             //
-            //               Hello := {} has [Encoding.{ toEncoder }]
+            //               Hello := {} implements [Encoding.{ toEncoder }]
             //
             //               toEncoder = \@Hello {} -> ...
             //
@@ -527,9 +527,9 @@ fn canonicalize_claimed_ability_impl<'a>(
                 // definition symbol, for example when the ability is defined in the same
                 // module as an implementer:
                 //
-                //   Eq has eq : a, a -> U64 | a has Eq
+                //   Eq implements eq : a, a -> U64 where a implements Eq
                 //
-                //   A := U8 has [Eq {eq}]
+                //   A := U8 implements [Eq {eq}]
                 //
                 // So, do a final check that the implementation symbol is not resolved directly
                 // to the member.
@@ -689,7 +689,7 @@ fn canonicalize_opaque<'a>(
     name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
-    has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
+    has_abilities: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
 ) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
@@ -712,7 +712,7 @@ fn canonicalize_opaque<'a>(
         for has_ability in has_abilities.items {
             let region = has_ability.region;
             let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
-                ast::HasAbility::HasAbility { ability, impls } => (ability, impls),
+                ast::ImplementsAbility::ImplementsAbility { ability, impls } => (ability, impls),
                 _ => internal_error!("spaces not extracted"),
             };
 
@@ -766,8 +766,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A has [Hash {hash: myHash}]
-                    //   B has [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: myHash}]
+                    //   B implements [Hash {hash: myHash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
@@ -1198,7 +1198,7 @@ fn canonicalize_type_defs<'a>(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            Option<&'a Loc<ast::HasAbilities<'a>>>,
+            Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
         ),
         Ability(Loc<Symbol>, Vec<PendingAbilityMember<'a>>),
     }
@@ -1404,7 +1404,7 @@ fn resolve_abilities(
                 [] => {
                     // There are no variables bound to the parent ability - then this member doesn't
                     // need to be a part of the ability.
-                    env.problem(Problem::AbilityMemberMissingHasClause {
+                    env.problem(Problem::AbilityMemberMissingImplementsClause {
                         member: member_sym,
                         ability,
                         region: member_name_region,
@@ -1414,7 +1414,7 @@ fn resolve_abilities(
                 }
                 [..] => {
                     // There is more than one variable bound to the member signature, so something like
-                    //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                    //   Eq implements eq : a, b -> Bool where a implements Eq, b implements Eq
                     // We have no way of telling what type implements a particular instance of Eq in
                     // this case (a or b?), so disallow it.
                     let span_has_clauses = Region::across_all(
@@ -1427,7 +1427,7 @@ fn resolve_abilities(
                     env.problem(Problem::AbilityMemberMultipleBoundVars {
                         member: member_sym,
                         ability,
-                        span_has_clauses,
+                        span_implements_clauses: span_has_clauses,
                         bound_var_names,
                     });
                     // Pretend the member isn't a part of the ability
@@ -2558,7 +2558,7 @@ fn to_pending_alias_or_opaque<'a>(
     name: &'a Loc<&'a str>,
     vars: &'a [Loc<ast::Pattern<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    opt_derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
+    opt_derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
     let region = Region::span_across(&name.region, &ann.region);
@@ -2677,7 +2677,7 @@ fn to_pending_type_def<'a>(
         Ability {
             header: TypeHeader { name, vars },
             members,
-            loc_has: _,
+            loc_implements: _,
         } => {
             let name = match scope
                 .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)

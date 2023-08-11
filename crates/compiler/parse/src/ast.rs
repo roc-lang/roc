@@ -357,15 +357,15 @@ impl<'a> TypeHeader<'a> {
     }
 }
 
-/// The `has` keyword associated with ability definitions.
+/// The `implements` keyword associated with ability definitions.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Has<'a> {
-    Has,
-    SpaceBefore(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
+pub enum Implements<'a> {
+    Implements,
+    SpaceBefore(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-/// An ability demand is a value defining the ability; for example `hash : a -> U64 | a has Hash`
+/// An ability demand is a value defining the ability; for example `hash : a -> U64 where a implements Hash`
 /// for a `Hash` ability.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbilityMember<'a> {
@@ -394,15 +394,15 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<HasAbilities<'a>>>,
+        derived: Option<Loc<ImplementsAbilities<'a>>>,
     },
 
     /// An ability definition. E.g.
-    ///   Hash has
-    ///     hash : a -> U64 | a has Hash
+    ///   Hash implements
+    ///     hash : a -> U64 where a implements Hash
     Ability {
         header: TypeHeader<'a>,
-        loc_has: Loc<Has<'a>>,
+        loc_implements: Loc<Implements<'a>>,
         members: &'a [AbilityMember<'a>],
     },
 }
@@ -538,54 +538,54 @@ impl<'a> Defs<'a> {
 pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct HasClause<'a> {
+pub struct ImplementsClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
     pub abilities: &'a [AbilityName<'a>],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasImpls<'a> {
+pub enum AbilityImpls<'a> {
     // `{ eq: myEq }`
-    HasImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
+    AbilityImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a AbilityImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a AbilityImpls<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 /// `Eq` or `Eq { eq: myEq }`
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasAbility<'a> {
-    HasAbility {
+pub enum ImplementsAbility<'a> {
+    ImplementsAbility {
         /// Should be a zero-argument `Apply` or an error; we'll check this in canonicalization
         ability: Loc<TypeAnnotation<'a>>,
-        impls: Option<Loc<HasImpls<'a>>>,
+        impls: Option<Loc<AbilityImpls<'a>>>,
     },
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ImplementsAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImplementsAbility<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasAbilities<'a> {
-    /// `has [Eq { eq: myEq }, Hash]`
-    Has(Collection<'a, Loc<HasAbility<'a>>>),
+pub enum ImplementsAbilities<'a> {
+    /// `implements [Eq { eq: myEq }, Hash]`
+    Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-impl HasAbilities<'_> {
-    pub fn collection(&self) -> &Collection<Loc<HasAbility>> {
+impl ImplementsAbilities<'_> {
+    pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
         let mut it = self;
         loop {
             match it {
                 Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
                     it = inner;
                 }
-                Self::Has(collection) => return collection,
+                Self::Implements(collection) => return collection,
             }
         }
     }
@@ -641,8 +641,8 @@ pub enum TypeAnnotation<'a> {
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
 
-    /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a has Hash`
-    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<HasClause<'a>>]),
+    /// A "where" clause demanding abilities designated by a `where`, e.g. `a -> U64 where a implements Hash`
+    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<ImplementsClause<'a>>]),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
@@ -1245,39 +1245,39 @@ impl<'a> Spaceable<'a> for Tag<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for Has<'a> {
+impl<'a> Spaceable<'a> for Implements<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Has::SpaceBefore(self, spaces)
+        Implements::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Has::SpaceAfter(self, spaces)
+        Implements::SpaceAfter(self, spaces)
     }
 }
 
-impl<'a> Spaceable<'a> for HasImpls<'a> {
+impl<'a> Spaceable<'a> for AbilityImpls<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasImpls::SpaceBefore(self, spaces)
+        AbilityImpls::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasImpls::SpaceAfter(self, spaces)
+        AbilityImpls::SpaceAfter(self, spaces)
     }
 }
 
-impl<'a> Spaceable<'a> for HasAbility<'a> {
+impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbility::SpaceBefore(self, spaces)
+        ImplementsAbility::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbility::SpaceAfter(self, spaces)
+        ImplementsAbility::SpaceAfter(self, spaces)
     }
 }
 
-impl<'a> Spaceable<'a> for HasAbilities<'a> {
+impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbilities::SpaceBefore(self, spaces)
+        ImplementsAbilities::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbilities::SpaceAfter(self, spaces)
+        ImplementsAbilities::SpaceAfter(self, spaces)
     }
 }
 
@@ -1368,7 +1368,7 @@ impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
-impl_extract_spaces!(HasAbility);
+impl_extract_spaces!(ImplementsAbility);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -1422,43 +1422,43 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     }
 }
 
-impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
+impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
     type Item = Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>;
 
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         match self {
-            HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::AbilityImpls(inner) => Spaces {
                 before: &[],
                 item: *inner,
                 after: &[],
             },
-            HasImpls::SpaceBefore(item, before) => match item {
-                HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::SpaceBefore(item, before) => match item {
+                AbilityImpls::AbilityImpls(inner) => Spaces {
                     before,
                     item: *inner,
                     after: &[],
                 },
-                HasImpls::SpaceBefore(_, _) => todo!(),
-                HasImpls::SpaceAfter(HasImpls::HasImpls(inner), after) => Spaces {
+                AbilityImpls::SpaceBefore(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(AbilityImpls::AbilityImpls(inner), after) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceAfter(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
-            HasImpls::SpaceAfter(item, after) => match item {
-                HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::SpaceAfter(item, after) => match item {
+                AbilityImpls::AbilityImpls(inner) => Spaces {
                     before: &[],
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceBefore(HasImpls::HasImpls(inner), before) => Spaces {
+                AbilityImpls::SpaceBefore(AbilityImpls::AbilityImpls(inner), before) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceBefore(_, _) => todo!(),
-                HasImpls::SpaceAfter(_, _) => todo!(),
+                AbilityImpls::SpaceBefore(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
         }
     }
@@ -1681,11 +1681,11 @@ impl<'a> Malformed for TypeDef<'a> {
             } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
             TypeDef::Ability {
                 header,
-                loc_has,
+                loc_implements,
                 members,
             } => {
                 header.is_malformed()
-                    || loc_has.is_malformed()
+                    || loc_implements.is_malformed()
                     || members.iter().any(|member| member.is_malformed())
             }
         }
@@ -1698,42 +1698,48 @@ impl<'a> Malformed for AbilityMember<'a> {
     }
 }
 
-impl<'a> Malformed for Has<'a> {
+impl<'a> Malformed for Implements<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            Has::Has => false,
-            Has::SpaceBefore(has, _) | Has::SpaceAfter(has, _) => has.is_malformed(),
+            Implements::Implements => false,
+            Implements::SpaceBefore(has, _) | Implements::SpaceAfter(has, _) => has.is_malformed(),
         }
     }
 }
 
-impl<'a> Malformed for HasAbility<'a> {
+impl<'a> Malformed for ImplementsAbility<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            HasAbility::HasAbility { ability, impls } => {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
                 ability.is_malformed() || impls.iter().any(|impl_| impl_.is_malformed())
             }
-            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => has.is_malformed(),
-        }
-    }
-}
-
-impl<'a> Malformed for HasAbilities<'a> {
-    fn is_malformed(&self) -> bool {
-        match self {
-            HasAbilities::Has(abilities) => abilities.iter().any(|ability| ability.is_malformed()),
-            HasAbilities::SpaceBefore(has, _) | HasAbilities::SpaceAfter(has, _) => {
+            ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
                 has.is_malformed()
             }
         }
     }
 }
 
-impl<'a> Malformed for HasImpls<'a> {
+impl<'a> Malformed for ImplementsAbilities<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            HasImpls::HasImpls(impls) => impls.iter().any(|ability| ability.is_malformed()),
-            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => has.is_malformed(),
+            ImplementsAbilities::Implements(abilities) => {
+                abilities.iter().any(|ability| ability.is_malformed())
+            }
+            ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for AbilityImpls<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            AbilityImpls::AbilityImpls(impls) => impls.iter().any(|ability| ability.is_malformed()),
+            AbilityImpls::SpaceBefore(has, _) | AbilityImpls::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
         }
     }
 }
@@ -1823,7 +1829,7 @@ impl<'a> Malformed for Tag<'a> {
     }
 }
 
-impl<'a> Malformed for HasClause<'a> {
+impl<'a> Malformed for ImplementsClause<'a> {
     fn is_malformed(&self) -> bool {
         self.abilities.iter().any(|ability| ability.is_malformed())
     }

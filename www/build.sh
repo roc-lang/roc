@@ -23,7 +23,7 @@ DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
 DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-curl -fLJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT  
+curl -fLJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
 tar -xzf $DESIGN_ASSETS_TARFILE
 mv $DESIGN_ASSETS_DIR/fonts build/
 rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
@@ -71,7 +71,7 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
-  
+
   # get roc release archive
   curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
   # extract archive
@@ -107,7 +107,7 @@ export ROC_DOCS_URL_ROOT=/packages/basic-cli
 
 rm -rf ./downloaded-basic-cli
 
-git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+git clone --branch new-abilities-syntax --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
 cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
 
@@ -124,7 +124,7 @@ if [ -v GITHUB_TOKEN_READ_ONLY ]; then
   curl -v -H "Authorization: $GITHUB_TOKEN_READ_ONLY" -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
 
   DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
-  
+
   rm basic_cli_releases.json
 
   VERSION_NUMBERS=$(echo "$DOCS_LINKS" | grep -oP '(?<=/download/)[^/]+(?=/docs.tar.gz)')

@@ -959,7 +959,7 @@ fn list_walk_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat | a has Eq
+        find : List a, a -> Option Nat where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -3692,7 +3692,7 @@ fn list_walk_backwards_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat | a has Eq
+        find : List a, a -> Option Nat where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -3810,6 +3810,9 @@ fn list_range_length_overflow() {
 
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 mod pattern_match {
+    #[allow(unused_imports)]
+    use crate::helpers::with_larger_debug_stack;
+
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
@@ -3818,8 +3821,6 @@ mod pattern_match {
 
     #[cfg(feature = "gen-dev")]
     use crate::helpers::dev::assert_evals_to;
-
-    use crate::helpers::with_larger_debug_stack;
 
     use super::RocList;
 
