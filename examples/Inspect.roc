@@ -74,6 +74,7 @@ Formatter has
 
 Inspector f := f -> f | f has Formatter
 
+custom : (f -> f) -> Inspector f | f has Formatter
 custom = @Inspector
 
 apply : Inspector f, f -> f | f has Formatter
