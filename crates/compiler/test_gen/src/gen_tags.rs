@@ -17,8 +17,6 @@ use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
-use crate::helpers::with_larger_debug_stack;
-
 #[test]
 fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
@@ -2257,15 +2255,15 @@ fn recursive_tag_id_in_allocation_basic() {
 
             main =
                 when x is
-                    A _ -> "A"  
-                    B _ -> "B"  
-                    C _ -> "C"  
-                    D _ -> "D"  
-                    E _ -> "E"  
-                    F _ -> "F"  
-                    G _ -> "G"  
-                    H _ -> "H"  
-                    I _ -> "I"  
+                    A _ -> "A"
+                    B _ -> "B"
+                    C _ -> "C"
+                    D _ -> "D"
+                    E _ -> "E"
+                    F _ -> "F"
+                    G _ -> "G"
+                    H _ -> "H"
+                    I _ -> "I"
             "###
         ),
         RocStr::from("H"),
