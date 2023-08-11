@@ -1,7 +1,7 @@
 app "test" provides [main] to "./platform"
 
-Id1 has id1 : a -> a where a implements Id1
-Id2 has id2 : a -> a where a implements Id2
+Id1 implements id1 : a -> a where a implements Id1
+Id2 implements id2 : a -> a where a implements Id2
 
 A := {} implements [Id1 {id1}, Id2 {id2}]
 id1 = \@A {} -> @A {}

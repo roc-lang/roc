@@ -1,6 +1,6 @@
 app "test" provides [main] to "./platform"
 
-Default has default : {} -> a where a implements Default
+Default implements default : {} -> a where a implements Default
 
 A := {} implements [Default {default}]
 default = \{} -> @A {}

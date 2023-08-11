@@ -4,10 +4,10 @@ MDecodeError : [TooShort, Leftover (List U8)]
 
 MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
 
-MDecoding has
+MDecoding implements
     decoder : MDecoder val fmt where val implements MDecoding, fmt implements MDecoderFormatting
 
-MDecoderFormatting has
+MDecoderFormatting implements
     u8 : MDecoder U8 fmt where fmt implements MDecoderFormatting
 
 decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting

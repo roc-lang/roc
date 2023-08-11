@@ -2,10 +2,10 @@ app "test" provides [myU8Bytes] to "./platform"
 
 MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
-MEncoding has
+MEncoding implements
   toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
-Format has
+Format implements
   u8 : U8 -> MEncoder fmt where fmt implements Format
 
 appendWith : List U8, MEncoder fmt, fmt -> List U8 where fmt implements Format

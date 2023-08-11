@@ -1,7 +1,7 @@
 app "test" provides [f] to "./platform"
 
-J has j : j -> (k -> {}) where j implements J, k implements K
-K has k : k -> {} where k implements K
+J implements j : j -> (k -> {}) where j implements J, k implements K
+K implements k : k -> {} where k implements K
 
 C := {} implements [J {j: jC}]
 jC = \@C _ -> k

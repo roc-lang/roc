@@ -3,7 +3,7 @@ app "test" provides [main] to "./platform"
 
 Thunk a := {} -> a
 
-Id has id : a -> Thunk a where a implements Id
+Id implements id : a -> Thunk a where a implements Id
 
 A := {} implements [Id {id}]
 id = \@A {} -> @Thunk (\{} -> @A {})
