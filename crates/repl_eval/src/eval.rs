@@ -265,6 +265,8 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
+const FAKE_EXPR: &Loc<Expr> = &Loc::at_zero(Expr::Crash);
+
 fn expr_of_tag<'a, M: ReplAppMemory>(
     env: &mut Env<'a, '_>,
     mem: &'a M,
@@ -279,9 +281,35 @@ fn expr_of_tag<'a, M: ReplAppMemory>(
 
     debug_assert_eq!(arg_layouts.len(), arg_vars.len());
 
-    // NOTE assumes the data bytes are the first bytes
-    let it = arg_vars.iter().copied().zip(arg_layouts.iter());
-    let output = sequence_of_expr(env, mem, data_addr, it, when_recursive);
+    // The type checker stores payloads in definition order, but the memory representation sorts
+    // first by size (and tie-breaks by definition order).
+    let mut layouts: Vec<_> = arg_vars
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let layout = env.layout_cache.from_var(env.arena, *v, env.subs).unwrap();
+            (i, *v, layout)
+        })
+        .collect_in(env.arena);
+
+    layouts.sort_by(|(i1, _, lay1), (i2, _, lay2)| {
+        cmp_fields(&env.layout_cache.interner, i1, *lay1, i2, *lay2)
+    });
+
+    let mut output: Vec<&Loc<Expr>> =
+        Vec::from_iter_in(std::iter::repeat(FAKE_EXPR).take(layouts.len()), env.arena);
+    let mut field_addr = data_addr;
+    for (i, var, lay) in layouts {
+        let repr = env.layout_cache.interner.get_repr(lay);
+        let expr = addr_to_ast(env, mem, field_addr, repr, when_recursive, var);
+        let loc_expr = Loc::at_zero(expr);
+
+        output[i] = &*env.arena.alloc(loc_expr);
+
+        // Advance the field pointer to the next field.
+        field_addr += env.layout_cache.interner.stack_size(lay) as usize;
+    }
+
     let output = output.into_bump_slice();
 
     Expr::Apply(loc_tag_expr, output, CalledVia::Space)
@@ -296,7 +324,7 @@ fn tag_id_from_data<'a, M: ReplAppMemory>(
     data_addr: usize,
 ) -> i64 {
     let offset = union_layout
-        .data_size_without_tag_id(&env.layout_cache.interner, env.target_info)
+        .data_size_without_tag_id(&env.layout_cache.interner)
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
@@ -420,8 +448,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         LayoutRepr::Struct(field_layouts) => {
             let fields = [Layout::U64, layout];
 
-            let result_stack_size = LayoutRepr::struct_(env.arena.alloc(fields))
-                .stack_size(&env.layout_cache.interner, env.target_info);
+            let result_stack_size =
+                LayoutRepr::struct_(env.arena.alloc(fields)).stack_size(&env.layout_cache.interner);
 
             let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match env
                 .subs
@@ -506,20 +534,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         LayoutRepr::RecursivePointer(_) => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        LayoutRepr::LambdaSet(_) => OPAQUE_FUNCTION,
-        LayoutRepr::Boxed(_) => {
-            let size = env.layout_cache.interner.stack_size(layout);
-
-            app.call_function_dynamic_size(main_fn_name, size as usize, |mem: &A::Memory, addr| {
-                addr_to_ast(
-                    env,
-                    mem,
-                    addr,
-                    env.layout_cache.get_repr(layout),
-                    WhenRecursive::Unreachable,
-                    env.subs.get_root_key_without_compacting(raw_var),
-                )
-            })
+        LayoutRepr::Ptr(_) => {
+            unreachable!("Ptr will never be visible to users")
+        }
+        LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_) => {
+            OPAQUE_FUNCTION
         }
     };
 
@@ -558,7 +577,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     let raw_content = env.subs.get_content_without_compacting(raw_var);
 
     let expr = match (raw_content, layout) {
-        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_)) => {
+        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_)) => {
             OPAQUE_FUNCTION
         }
         (_, LayoutRepr::Builtin(Builtin::Bool)) => {
@@ -745,6 +764,34 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 when_recursive,
             )
         }
+        (
+            Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)),
+            LayoutRepr::Union(UnionLayout::NonNullableUnwrapped([inner_layout])),
+        ) => {
+            debug_assert_eq!(args.len(), 1);
+
+            let inner_var_index = args.into_iter().next().unwrap();
+            let inner_var = env.subs[inner_var_index];
+
+            let addr_of_inner = mem.deref_usize(addr);
+            let inner_expr = addr_to_ast(
+                env,
+                mem,
+                addr_of_inner,
+                env.layout_cache.get_repr(*inner_layout),
+                WhenRecursive::Unreachable,
+                inner_var,
+            );
+
+            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
+                module_name: "Box",
+                ident: "box",
+            }));
+            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
+            let box_box_args = env.arena.alloc([box_box_arg]);
+
+            Expr::Apply(box_box, box_box_args, CalledVia::Space)
+        }
         (_, LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(_))) => {
             let (rec_var, tags) = match unroll_recursion_var(env, raw_content) {
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
@@ -859,36 +906,8 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 )
             }
         }
-        (
-            Content::Structure(FlatType::Apply(Symbol::BOX_BOX_TYPE, args)),
-            LayoutRepr::Boxed(inner_layout),
-        ) => {
-            debug_assert_eq!(args.len(), 1);
-
-            let inner_var_index = args.into_iter().next().unwrap();
-            let inner_var = env.subs[inner_var_index];
-
-            let addr_of_inner = mem.deref_usize(addr);
-            let inner_expr = addr_to_ast(
-                env,
-                mem,
-                addr_of_inner,
-                env.layout_cache.get_repr(inner_layout),
-                WhenRecursive::Unreachable,
-                inner_var,
-            );
-
-            let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
-                module_name: "Box",
-                ident: "box",
-            }));
-            let box_box_arg = &*env.arena.alloc(Loc::at_zero(inner_expr));
-            let box_box_args = env.arena.alloc([box_box_arg]);
-
-            Expr::Apply(box_box, box_box_args, CalledVia::Space)
-        }
-        (_, LayoutRepr::Boxed(_)) => {
-            unreachable!("Box layouts can only be behind a `Box.Box` application")
+        (_, LayoutRepr::Ptr(_)) => {
+            unreachable!("Ptr layouts are never available in user code")
         }
     };
     apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
@@ -962,11 +981,14 @@ fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
     let loc_tag_expr = &*arena.alloc(Loc::at_zero(tag_expr));
 
     let output = if field_layouts.len() == payload_vars.len() {
-        let it = payload_vars.iter().copied().zip(field_layouts);
+        let it = payload_vars
+            .iter()
+            .copied()
+            .zip(field_layouts.iter().copied());
         sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
-        let it = payload_vars.iter().copied().zip([&Layout::UNIT]);
+        let it = payload_vars.iter().copied().zip([Layout::UNIT]);
         sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
     } else {
         unreachable!()
@@ -983,8 +1005,7 @@ fn sequence_of_expr<'a, 'env, I, M: ReplAppMemory>(
     when_recursive: WhenRecursive<'a>,
 ) -> Vec<'a, &'a Loc<Expr<'a>>>
 where
-    I: Iterator<Item = (Variable, &'a InLayout<'a>)>,
-    I: ExactSizeIterator<Item = (Variable, &'a InLayout<'a>)>,
+    I: ExactSizeIterator<Item = (Variable, InLayout<'a>)>,
 {
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(sequence.len(), arena);
@@ -997,7 +1018,7 @@ where
             env,
             mem,
             field_addr,
-            env.layout_cache.get_repr(*layout),
+            env.layout_cache.get_repr(layout),
             when_recursive,
             var,
         );
@@ -1006,7 +1027,7 @@ where
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_addr += env.layout_cache.interner.stack_size(*layout) as usize;
+        field_addr += env.layout_cache.interner.stack_size(layout) as usize;
     }
 
     output
@@ -1087,7 +1108,6 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
                 *layout1,
                 label2,
                 *layout2,
-                env.target_info,
             )
         });
 
@@ -1170,7 +1190,6 @@ fn struct_to_ast_tuple<'a, M: ReplAppMemory>(
             *layout1,
             label2,
             *layout2,
-            env.target_info,
         )
     });
 
@@ -1440,6 +1459,6 @@ fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_>
     use std::fmt::Write;
 
     let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
-    write!(string, "{}", num).unwrap();
+    write!(string, "{num}").unwrap();
     Expr::Num(string.into_bump_str())
 }

@@ -27,16 +27,16 @@ procedure List.66 (#Attr.2, #Attr.3):
     ret List.526;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.281 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Str.16 (#Attr.2, #Attr.3):
-    let Str.298 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
-    ret Str.298;
+    let Str.289 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
+    ret Str.289;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.299 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.299;
+    let Str.290 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.290;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

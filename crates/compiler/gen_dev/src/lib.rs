@@ -10,17 +10,17 @@ use std::collections::hash_map::Entry;
 use bumpalo::{collections::Vec, Bump};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::ModuleName;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-    Literal, Param, Proc, ProcLayout, SelfRecursive, Stmt,
+    Literal, ModifyRc, Param, Proc, ProcLayout, SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
+    Builtin, InLayout, LambdaName, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
     TagIdIntType, UnionLayout,
 };
 use roc_mono::list_element_layout;
@@ -138,15 +138,22 @@ impl<'a> LastSeenMap<'a> {
 
                     Expr::Call(call) => self.scan_ast_call(call, stmt),
 
-                    Expr::Tag { arguments, .. } => {
+                    Expr::Tag {
+                        arguments, reuse, ..
+                    } => {
+                        if let Some(ru) = reuse {
+                            self.set_last_seen(ru.symbol, stmt);
+                        }
+
                         for sym in *arguments {
                             self.set_last_seen(*sym, stmt);
                         }
                     }
-                    Expr::ExprBox { symbol } => {
-                        self.set_last_seen(*symbol, stmt);
+                    Expr::ErasedMake { value, callee } => {
+                        value.map(|v| self.set_last_seen(v, stmt));
+                        self.set_last_seen(*callee, stmt);
                     }
-                    Expr::ExprUnbox { symbol } => {
+                    Expr::ErasedLoad { symbol, field: _ } => {
                         self.set_last_seen(*symbol, stmt);
                     }
                     Expr::Struct(syms) => {
@@ -163,6 +170,9 @@ impl<'a> LastSeenMap<'a> {
                     Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
+                    Expr::UnionFieldPtrAtIndex { structure, .. } => {
+                        self.set_last_seen(*structure, stmt);
+                    }
                     Expr::Array { elems, .. } => {
                         for elem in *elems {
                             if let ListLiteralElement::Symbol(sym) = elem {
@@ -170,19 +180,17 @@ impl<'a> LastSeenMap<'a> {
                             }
                         }
                     }
-                    Expr::Reuse {
-                        symbol, arguments, ..
-                    } => {
-                        self.set_last_seen(*symbol, stmt);
-                        for sym in *arguments {
-                            self.set_last_seen(*sym, stmt);
-                        }
-                    }
                     Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => {
                         self.set_last_seen(*symbol, stmt);
                     }
-                    Expr::EmptyArray => {}
+                    Expr::Alloca { initializer, .. } => {
+                        if let Some(initializer) = initializer {
+                            self.set_last_seen(*initializer, stmt);
+                        }
+                    }
                     Expr::RuntimeErrorFunction(_) => {}
+                    Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+                    Expr::EmptyArray => {}
                 }
                 self.scan_ast_help(following);
             }
@@ -270,6 +278,7 @@ impl<'a> LastSeenMap<'a> {
 
         match call_type {
             CallType::ByName { .. } => {}
+            CallType::ByPointer { .. } => {}
             CallType::LowLevel { .. } => {}
             CallType::HigherOrder { .. } => {}
             CallType::Foreign { .. } => {}
@@ -282,6 +291,7 @@ trait Backend<'a> {
     fn interns(&self) -> &Interns;
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
+    fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation>;
 
     fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
         self.module_interns_helpers_mut().1
@@ -317,9 +327,9 @@ trait Backend<'a> {
         &mut Vec<'a, CallerProc<'a>>,
     );
 
-    fn function_symbol_to_string<'b, I>(
+    fn lambda_name_to_string<'b, I>(
         &self,
-        symbol: Symbol,
+        name: LambdaName,
         arguments: I,
         _lambda_set: Option<InLayout>,
         result: InLayout,
@@ -327,18 +337,27 @@ trait Backend<'a> {
     where
         I: Iterator<Item = InLayout<'b>>,
     {
+        use std::fmt::Write;
         use std::hash::{BuildHasher, Hash, Hasher};
 
-        // NOTE: due to randomness, this will not be consistent between runs
-        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
+        let symbol = name.name();
+
+        let mut buf = String::with_capacity(1024);
+
         for a in arguments {
-            a.hash(&mut state);
+            write!(buf, "{:?}", self.interner().dbg_stable(a)).expect("capacity");
         }
 
         // lambda set should not matter; it should already be added as an argument
-        // lambda_set.hash(&mut state);
+        // but the niche of the lambda name may be the only thing differentiating two different
+        // implementations of a function with the same symbol
+        write!(buf, "{:?}", name.niche().dbg_stable(self.interner())).expect("capacity");
 
-        result.hash(&mut state);
+        write!(buf, "{:?}", self.interner().dbg_stable(result)).expect("capacity");
+
+        // NOTE: due to randomness, this will not be consistent between runs
+        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
+        buf.hash(&mut state);
 
         let interns = self.interns();
         let ident_string = symbol.as_str(interns);
@@ -347,7 +366,7 @@ trait Backend<'a> {
         // the functions from the generates #help module (refcounting, equality) is always suffixed
         // with 1. That is fine, they are always unique anyway.
         if ident_string.contains("#help") {
-            format!("{}_{}_1", module_string, ident_string)
+            format!("{module_string}_{ident_string}_1")
         } else {
             format!("{}_{}_{}", module_string, ident_string, state.finish())
         }
@@ -384,13 +403,13 @@ trait Backend<'a> {
     fn increment_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
         let element_increment = self.debug_symbol("element_increment");
         let element_increment_symbol = self.build_indirect_inc(layout);
 
-        let element_increment_string = self.function_symbol_to_string(
-            element_increment_symbol,
+        let element_increment_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_increment_symbol),
             [box_layout].into_iter(),
             None,
             Layout::UNIT,
@@ -404,13 +423,13 @@ trait Backend<'a> {
     fn decrement_fn_pointer(&mut self, layout: InLayout<'a>) -> Symbol {
         let box_layout = self
             .interner_mut()
-            .insert_direct_no_semantic(LayoutRepr::Boxed(layout));
+            .insert_direct_no_semantic(LayoutRepr::Ptr(layout));
 
         let element_decrement = self.debug_symbol("element_decrement");
         let element_decrement_symbol = self.build_indirect_dec(layout);
 
-        let element_decrement_string = self.function_symbol_to_string(
-            element_decrement_symbol,
+        let element_decrement_string = self.lambda_name_to_string(
+            LambdaName::no_niche(element_decrement_symbol),
             [box_layout].into_iter(),
             None,
             Layout::UNIT,
@@ -445,6 +464,11 @@ trait Backend<'a> {
     /// Used for generating wrappers for malloc/realloc/free
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
 
+    // use for roc_panic
+    fn build_roc_setjmp(&mut self) -> &'a [u8];
+    fn build_roc_longjmp(&mut self) -> &'a [u8];
+    fn build_roc_panic(&mut self) -> (&'a [u8], Vec<'a, Relocation>);
+
     /// build_proc creates a procedure and outputs it to the wrapped object writer.
     /// Returns the procedure bytes, its relocations, and the names of the refcounting functions it references.
     fn build_proc(
@@ -452,8 +476,8 @@ trait Backend<'a> {
         proc: Proc<'a>,
         layout_ids: &mut LayoutIds<'a>,
     ) -> (Vec<u8>, Vec<Relocation>, Vec<'a, (Symbol, String)>) {
-        let proc_name = self.function_symbol_to_string(
-            proc.name.name(),
+        let proc_name = self.lambda_name_to_string(
+            proc.name,
             proc.args.iter().map(|t| t.0),
             proc.closure_data_layout,
             proc.ret_layout,
@@ -512,6 +536,29 @@ trait Backend<'a> {
                 self.load_literal_symbols(&[*sym]);
                 self.return_symbol(sym, ret_layout);
                 self.free_symbols(stmt);
+            }
+            Stmt::Refcounting(ModifyRc::Free(symbol), following) => {
+                let dst = Symbol::DEV_TMP;
+
+                let layout = *self.layout_map().get(symbol).unwrap();
+                let alignment_bytes = self.interner().allocation_alignment_bytes(layout);
+                let alignment = self.debug_symbol("alignment");
+                self.load_literal_i32(&alignment, alignment_bytes as i32);
+
+                // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+                self.build_fn_call(
+                    &dst,
+                    bitcode::UTILS_FREE_DATA_PTR.to_string(),
+                    &[*symbol, alignment],
+                    &[Layout::I64, Layout::I32],
+                    &Layout::UNIT,
+                );
+
+                self.free_symbol(&dst);
+                self.free_symbol(&alignment);
+
+                self.build_stmt(layout_ids, following, ret_layout)
             }
             Stmt::Refcounting(modify, following) => {
                 let sym = modify.get_symbol();
@@ -683,15 +730,15 @@ trait Backend<'a> {
                             // implementation in `build_builtin` inlines some of the symbols.
                             return self.build_builtin(
                                 sym,
-                                func_sym.name(),
+                                *func_sym,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
                             );
                         }
 
-                        let fn_name = self.function_symbol_to_string(
-                            func_sym.name(),
+                        let fn_name = self.lambda_name_to_string(
+                            *func_sym,
                             arg_layouts.iter().copied(),
                             None,
                             *ret_layout,
@@ -700,6 +747,10 @@ trait Backend<'a> {
                         // Now that the arguments are needed, load them if they are literals.
                         self.load_literal_symbols(arguments);
                         self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
+                    }
+
+                    CallType::ByPointer { .. } => {
+                        todo_lambda_erasure!()
                     }
 
                     CallType::LowLevel { op: lowlevel, .. } => {
@@ -785,6 +836,14 @@ trait Backend<'a> {
             } => {
                 self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
             }
+            Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => {
+                self.load_union_field_ptr_at_index(sym, structure, *tag_id, *index, union_layout);
+            }
             Expr::GetTagId {
                 structure,
                 union_layout,
@@ -795,39 +854,18 @@ trait Backend<'a> {
                 tag_layout,
                 tag_id,
                 arguments,
-                ..
+                reuse,
             } => {
                 self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, None);
-            }
-            Expr::ExprBox { symbol: value } => {
-                let element_layout = match self.interner().get_repr(*layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
-                    _ => unreachable!("{:?}", self.interner().dbg(*layout)),
-                };
-
-                self.load_literal_symbols([*value].as_slice());
-                self.expr_box(*sym, *value, element_layout, None)
-            }
-            Expr::ExprUnbox { symbol: ptr } => {
-                let element_layout = *layout;
-
-                self.load_literal_symbols([*ptr].as_slice());
-                self.expr_unbox(*sym, *ptr, element_layout)
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.tag(sym, arguments, tag_layout, *tag_id, reuse);
             }
             Expr::NullPointer => {
                 self.load_literal_i64(sym, 0);
             }
-            Expr::Reuse {
-                tag_layout,
-                tag_id,
-                symbol: reused,
-                arguments,
-                ..
-            } => {
-                self.load_literal_symbols(arguments);
-                self.tag(sym, arguments, tag_layout, *tag_id, Some(*reused));
-            }
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::ErasedMake { .. } => todo_lambda_erasure!(),
+            Expr::ErasedLoad { .. } => todo_lambda_erasure!(),
             Expr::Reset { symbol, .. } => {
                 let layout = *self.layout_map().get(symbol).unwrap();
 
@@ -867,6 +905,12 @@ trait Backend<'a> {
                 }
 
                 self.build_expr(sym, &new_expr, &Layout::BOOL)
+            }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                self.build_alloca(*sym, *initializer, *element_layout);
             }
             Expr::RuntimeErrorFunction(_) => todo!(),
         }
@@ -960,7 +1004,7 @@ trait Backend<'a> {
                 ret_layout,
             ),
             LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
-            LowLevel::NumMulWrap => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulWrap => self.build_num_mul_wrap(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,
@@ -1482,16 +1526,16 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrTrimLeft => self.build_fn_call(
+            LowLevel::StrTrimStart => self.build_fn_call(
                 sym,
-                bitcode::STR_TRIM_LEFT.to_string(),
+                bitcode::STR_TRIM_START.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrTrimRight => self.build_fn_call(
+            LowLevel::StrTrimEnd => self.build_fn_call(
                 sym,
-                bitcode::STR_TRIM_RIGHT.to_string(),
+                bitcode::STR_TRIM_END.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -1572,14 +1616,22 @@ trait Backend<'a> {
 
                 self.build_ptr_cast(sym, &args[0])
             }
-            LowLevel::PtrWrite => {
-                let element_layout = match self.interner().get_repr(*ret_layout) {
-                    LayoutRepr::Boxed(boxed) => boxed,
+            LowLevel::PtrStore => {
+                let element_layout = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Ptr(inner) => inner,
                     _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
                 };
 
-                self.build_ptr_write(*sym, args[0], args[1], element_layout);
+                self.build_ptr_store(*sym, args[0], args[1], element_layout);
             }
+            LowLevel::PtrLoad => {
+                self.build_ptr_load(*sym, args[0], *ret_layout);
+            }
+
+            LowLevel::PtrClearTagId => {
+                self.build_ptr_clear_tag_id(*sym, args[0]);
+            }
+
             LowLevel::RefCountDecRcPtr => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DECREF_RC_PTR.to_string(),
@@ -1615,6 +1667,23 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::SetJmp => self.build_fn_call(
+                sym,
+                String::from("roc_setjmp"),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::LongJmp => self.build_fn_call(
+                sym,
+                String::from("roc_longjmp"),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::SetLongJmpBuffer => {
+                self.build_data_pointer(sym, String::from("setlongjmp_buffer"));
+            }
             LowLevel::DictPseudoSeed => self.build_fn_call(
                 sym,
                 bitcode::UTILS_DICT_PSEUDO_SEED.to_string(),
@@ -1807,6 +1876,10 @@ trait Backend<'a> {
                 );
             }
 
+            LowLevel::NumCompare => {
+                self.build_num_cmp(sym, &args[0], &args[1], &arg_layouts[0]);
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }
@@ -1816,12 +1889,12 @@ trait Backend<'a> {
     fn build_builtin(
         &mut self,
         sym: &Symbol,
-        func_sym: Symbol,
+        func_name: LambdaName,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        match func_sym {
+        match func_name.name() {
             Symbol::NUM_IS_ZERO => {
                 debug_assert_eq!(
                     1,
@@ -1844,8 +1917,8 @@ trait Backend<'a> {
             }
             Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
-                let fn_name = self.function_symbol_to_string(
-                    func_sym,
+                let fn_name = self.lambda_name_to_string(
+                    func_name,
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1876,8 +1949,8 @@ trait Backend<'a> {
             }
             Symbol::STR_IS_VALID_SCALAR => {
                 // just call the function
-                let fn_name = self.function_symbol_to_string(
-                    func_sym,
+                let fn_name = self.lambda_name_to_string(
+                    func_name,
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1888,8 +1961,8 @@ trait Backend<'a> {
             }
             _other => {
                 // just call the function
-                let fn_name = self.function_symbol_to_string(
-                    func_sym,
+                let fn_name = self.lambda_name_to_string(
+                    func_name,
                     arg_layouts.iter().copied(),
                     None,
                     *ret_layout,
@@ -1913,6 +1986,7 @@ trait Backend<'a> {
     );
 
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String);
+    fn build_data_pointer(&mut self, dst: &Symbol, data_name: String);
 
     /// Move a returned value into `dst`
     fn move_return_value(&mut self, dst: &Symbol, ret_layout: &InLayout<'a>);
@@ -1963,6 +2037,15 @@ trait Backend<'a> {
 
     /// build_num_mul stores `src1 * src2` into dst.
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_mul_wrap stores `src1 * src2` into dst.
+    fn build_num_mul_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    );
 
     /// build_num_mul stores `src1 / src2` into dst.
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
@@ -2047,6 +2130,14 @@ trait Backend<'a> {
 
     /// build_not stores the result of `!src` into dst.
     fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
+
+    fn build_num_cmp(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    );
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(
@@ -2187,13 +2278,19 @@ trait Backend<'a> {
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
-    fn build_ptr_write(
+    fn build_ptr_store(
         &mut self,
         sym: Symbol,
         ptr: Symbol,
         value: Symbol,
         element_layout: InLayout<'a>,
     );
+
+    fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
+
+    fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol);
+
+    fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
     fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;
@@ -2264,6 +2361,16 @@ trait Backend<'a> {
 
     /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
     fn load_union_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    );
+
+    /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
+    fn load_union_field_ptr_at_index(
         &mut self,
         sym: &Symbol,
         structure: &Symbol,

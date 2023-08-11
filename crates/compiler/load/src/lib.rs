@@ -18,9 +18,13 @@ const SKIP_SUBS_CACHE: bool = {
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
-    EntryPoint, ExecutionMode, ExpectMetadata, Expectations, ExposedToHost, LoadConfig, LoadResult,
-    LoadStart, LoadedModule, LoadingProblem, MonomorphizedModule, Phase, Threading,
+    ExecutionMode, ExpectMetadata, LoadConfig, LoadResult, LoadStart, LoadingProblem, Phase,
+    Threading,
 };
+pub use roc_load_internal::module::{
+    EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
+};
+pub use roc_solve::FunctionKind;
 
 #[allow(clippy::too_many_arguments)]
 fn load<'a>(
@@ -48,6 +52,7 @@ pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     render: RenderTarget,
     palette: Palette,
     roc_cache_dir: RocCacheDir<'_>,
@@ -61,6 +66,7 @@ pub fn load_single_threaded<'a>(
         load_start,
         exposed_types,
         target_info,
+        function_kind,
         cached_subs,
         render,
         palette,
@@ -167,6 +173,7 @@ pub fn load_and_typecheck_str<'a>(
     source: &'a str,
     src_dir: PathBuf,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     render: RenderTarget,
     roc_cache_dir: RocCacheDir<'_>,
     palette: Palette,
@@ -182,6 +189,7 @@ pub fn load_and_typecheck_str<'a>(
         arena,
         load_start,
         target_info,
+        function_kind,
         render,
         palette,
         roc_cache_dir,

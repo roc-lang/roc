@@ -126,7 +126,7 @@ fn find_wasi_libc_path() -> PathBuf {
     internal_error!("cannot find `wasi-libc.a`")
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
@@ -161,7 +161,7 @@ pub fn build_zig_host_native(
 
     zig_cmd.args([
         zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
+        &format!("-femit-bin={emit_bin}"),
         "--pkg-begin",
         "glue",
         find_zig_glue_path().to_str().unwrap(),
@@ -252,99 +252,6 @@ pub fn build_zig_host_native(
         zig_cmd.args(&["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
         zig_cmd.args(&["-O", "ReleaseSmall"]);
-    }
-
-    zig_cmd
-}
-
-#[cfg(target_os = "macos")]
-#[allow(clippy::too_many_arguments)]
-pub fn build_zig_host_native(
-    env_path: &str,
-    env_home: &str,
-    emit_bin: &str,
-    zig_host_src: &str,
-    _target: &str,
-    opt_level: OptLevel,
-    shared_lib_path: Option<&Path>,
-    builtins_host_path: &Path,
-    // For compatibility with the non-macOS def above. Keep these in sync.
-) -> Command {
-    use serde_json::Value;
-
-    // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = zig().args(["env"]).output().unwrap();
-
-    let zig_env_json = if zig_env_output.status.success() {
-        std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            );
-        })
-    } else {
-        match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => internal_error!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            ),
-        }
-    };
-
-    let mut zig_compiler_rt_path = match serde_json::from_str(zig_env_json) {
-        Ok(Value::Object(map)) => match map.get("std_dir") {
-            Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
-            _ => {
-                internal_error!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
-            }
-        },
-        _ => {
-            internal_error!(
-                "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
-                zig_env_json
-            );
-        }
-    };
-
-    zig_compiler_rt_path.push("special");
-    zig_compiler_rt_path.push("compiler_rt.zig");
-
-    let mut zig_cmd = zig();
-    zig_cmd
-        .env_clear()
-        .env("PATH", env_path)
-        .env("HOME", env_home);
-    if let Some(shared_lib_path) = shared_lib_path {
-        zig_cmd.args([
-            "build-exe",
-            "-fPIE",
-            shared_lib_path.to_str().unwrap(),
-            builtins_host_path.to_str().unwrap(),
-        ]);
-    } else {
-        zig_cmd.args(["build-obj"]);
-    }
-    zig_cmd.args([
-        zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
-        "--pkg-begin",
-        "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
-        // include the zig runtime
-        "--pkg-begin",
-        "compiler_rt",
-        zig_compiler_rt_path.to_str().unwrap(),
-        "--pkg-end",
-        // include libc
-        "--library",
-        "c",
-    ]);
-    if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(["-O", "ReleaseSafe"]);
-    } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
@@ -492,7 +399,7 @@ pub fn build_swift_host_native(
 
     match arch {
         Architecture::Aarch64(_) => command.arg("-arm64"),
-        _ => command.arg(format!("-{}", arch)),
+        _ => command.arg(format!("-{arch}")),
     };
 
     command
@@ -623,7 +530,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2022-10-30", "cargo"]);
+            cmd.args(["run", "nightly-2023-04-15", "cargo"]);
 
             cmd
         } else {
@@ -1021,7 +928,7 @@ fn link_linux(
                     .map(|segments| segments.join("/"))
                     .collect::<Vec<String>>()
                     .join("\n");
-                eprintln!("We looked in the following directories:\n{}", dirs);
+                eprintln!("We looked in the following directories:\n{dirs}");
                 process::exit(1);
             }
         };
@@ -1171,6 +1078,12 @@ fn link_macos(
             // "--gc-sections",
             "-arch",
             &arch,
+            // Suppress warnings, because otherwise it prints:
+            //
+            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
+            //
+            // We can't disable that option without breaking either x64 mac or ARM mac
+            "-w",
             "-macos_version_min",
             &get_macos_version(),
         ])
@@ -1178,8 +1091,8 @@ fn link_macos(
 
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
-        ld_command.arg(format!("-L{}", sdk_path));
-        ld_command.arg(format!("-L{}/swift", sdk_path));
+        ld_command.arg(format!("-L{sdk_path}"));
+        ld_command.arg(format!("-L{sdk_path}/swift"));
     };
 
     let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
@@ -1381,9 +1294,7 @@ pub fn llvm_module_to_dylib(
 
     assert!(
         exit_status.success(),
-        "\n___________\nLinking command failed with status {:?}:\n\n  {:?}\n___________\n",
-        exit_status,
-        child
+        "\n___________\nLinking command failed with status {exit_status:?}:\n\n  {child:?}\n___________\n"
     );
 
     // Load the dylib

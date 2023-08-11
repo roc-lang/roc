@@ -7,13 +7,13 @@ procedure Test.1 (Test.2, Test.3):
     ret Test.21;
 
 procedure Test.30 (Test.31):
-    let Test.32 : {U8, {}} = Unbox Test.31;
+    let Test.32 : {U8, {}} = UnionAtIndex (Id 0) (Index 0) Test.31;
     dec Test.31;
     let Test.33 : U8 = StructAtIndex 0 Test.32;
     ret Test.33;
 
 procedure Test.34 (Test.35):
-    let Test.36 : {U8, {}} = Unbox Test.35;
+    let Test.36 : {U8, {}} = UnionAtIndex (Id 0) (Index 0) Test.35;
     dec Test.35;
     let Test.37 : {} = StructAtIndex 1 Test.36;
     ret Test.37;

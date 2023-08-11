@@ -88,6 +88,23 @@ pub struct Annotation {
     pub region: Region,
 }
 
+impl Annotation {
+    fn freshen(mut self, var_store: &mut VarStore) -> Self {
+        let mut substitutions = MutMap::default();
+
+        for v in self.introduced_variables.lambda_sets.iter_mut() {
+            let new = var_store.fresh();
+            substitutions.insert(*v, new);
+
+            *v = new;
+        }
+
+        self.signature.substitute_variables(&substitutions);
+
+        self
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
@@ -1069,8 +1086,7 @@ fn canonicalize_value_defs<'a>(
             debug_assert_eq!(env.home, s.module_id());
             debug_assert!(
                 !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
-                "{:?}",
-                s
+                "{s:?}"
             );
 
             symbol_to_index.push((s.ident_id(), def_index as u32));
@@ -1639,6 +1655,14 @@ pub(crate) fn sort_can_defs_new(
                         }
                     };
 
+                    let host_annotation = if exposed_symbols.contains(&symbol) {
+                        def.annotation
+                            .clone()
+                            .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                    } else {
+                        None
+                    };
+
                     if is_initial && !exposed_symbols.contains(&symbol) {
                         env.problem(Problem::DefsOnlyUsedInRecursion(1, def.region()));
                     }
@@ -1650,6 +1674,7 @@ pub(crate) fn sort_can_defs_new(
                                 Loc::at(def.loc_expr.region, closure_data),
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
@@ -1659,55 +1684,80 @@ pub(crate) fn sort_can_defs_new(
                                 def.loc_expr,
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
                     }
                 } else {
                     match def.loc_pattern.value {
-                        Pattern::Identifier(symbol) => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_function_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
+                        Pattern::Identifier(symbol) => {
+                            let host_annotation = if exposed_symbols.contains(&symbol) {
+                                def.annotation
+                                    .clone()
+                                    .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                            } else {
+                                None
+                            };
+
+                            match def.loc_expr.value {
+                                Closure(closure_data) => {
+                                    declarations.push_function_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        Loc::at(def.loc_expr.region, closure_data),
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        None,
+                                    );
+                                }
+                                _ => {
+                                    declarations.push_value_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        def.loc_expr,
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        None,
+                                    );
+                                }
                             }
-                            _ => {
-                                declarations.push_value_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    def.loc_expr,
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
-                            }
-                        },
+                        }
                         Pattern::AbilityMemberSpecialization {
                             ident: symbol,
                             specializes,
-                        } => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_function_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
+                        } => {
+                            let host_annotation = if exposed_symbols.contains(&symbol) {
+                                def.annotation
+                                    .clone()
+                                    .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                            } else {
+                                None
+                            };
+
+                            match def.loc_expr.value {
+                                Closure(closure_data) => {
+                                    declarations.push_function_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        Loc::at(def.loc_expr.region, closure_data),
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        Some(specializes),
+                                    );
+                                }
+                                _ => {
+                                    declarations.push_value_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        def.loc_expr,
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        Some(specializes),
+                                    );
+                                }
                             }
-                            _ => {
-                                declarations.push_value_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    def.loc_expr,
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
-                            }
-                        },
+                        }
                         _ => {
                             declarations.push_destructure_def(
                                 def.loc_pattern,
@@ -1750,6 +1800,14 @@ pub(crate) fn sort_can_defs_new(
                         Some(r) => Some(Region::span_across(&r, &def.region())),
                     };
 
+                    let host_annotation = if exposed_symbols.contains(&symbol) {
+                        def.annotation
+                            .clone()
+                            .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                    } else {
+                        None
+                    };
+
                     match def.loc_expr.value {
                         Closure(closure_data) => {
                             declarations.push_recursive_def(
@@ -1757,6 +1815,7 @@ pub(crate) fn sort_can_defs_new(
                                 Loc::at(def.loc_expr.region, closure_data),
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
@@ -1766,6 +1825,7 @@ pub(crate) fn sort_can_defs_new(
                                 def.loc_expr,
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
@@ -1838,7 +1898,7 @@ pub(crate) fn sort_can_defs(
             );
 
             let declaration = if def_ordering.references.get_row_col(index, index) {
-                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
+                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {def:?} now, that's a bug!");
 
                 if is_initial
                     && !def
@@ -2272,12 +2332,18 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
+    let mut loc_value = &loc_expr.value;
+
+    while let ast::Expr::ParensAround(value) = loc_value {
+        loc_value = value;
+    }
+
     // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
     // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
     let (loc_can_expr, def_references) = {
-        match (&loc_can_pattern.value, &loc_expr.value) {
+        match (&loc_can_pattern.value, &loc_value) {
             (
                 Pattern::Identifier(defined_symbol)
                 | Pattern::AbilityMemberSpecialization {

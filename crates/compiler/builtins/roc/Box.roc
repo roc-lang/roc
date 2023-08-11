@@ -1,3 +1,7 @@
+## Most users won't need Box, it is used for:
+## - Holding unknown Roc types when developing [platforms](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform).
+## - To improve performance in rare cases.
+##
 interface Box
     exposes [box, unbox]
     imports []

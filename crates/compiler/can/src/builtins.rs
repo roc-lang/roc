@@ -85,12 +85,18 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
-                LowLevel::PtrWrite => unimplemented!(),
+                LowLevel::PtrStore => unimplemented!(),
+                LowLevel::PtrLoad => unimplemented!(),
+                LowLevel::PtrClearTagId => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
+
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
@@ -118,8 +124,8 @@ map_symbol_to_lowlevel_and_arity! {
     StrToUtf8; STR_TO_UTF8; 1,
     StrRepeat; STR_REPEAT; 2,
     StrTrim; STR_TRIM; 1,
-    StrTrimLeft; STR_TRIM_LEFT; 1,
-    StrTrimRight; STR_TRIM_RIGHT; 1,
+    StrTrimStart; STR_TRIM_START; 1,
+    StrTrimEnd; STR_TRIM_END; 1,
     StrToScalars; STR_TO_SCALARS; 1,
     StrGetUnsafe; STR_GET_UNSAFE; 2,
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,

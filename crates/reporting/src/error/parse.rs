@@ -300,6 +300,15 @@ fn to_expr_report<'a>(
                     alloc.parser_suggestion("!"),
                     alloc.reflow(" and the expression after it."),
                 ],
+                "<|" => vec![
+                    alloc.reflow("Roc doesn't have a "),
+                    alloc.parser_suggestion("<|"),
+                    alloc.reflow(" operator. Please use parentheses "),
+                    alloc.parser_suggestion("()"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("|>"),
+                    alloc.reflow(" instead."),
+                ],
                 _ => vec![
                     alloc.reflow("I have no specific suggestion for this operator, "),
                     alloc.reflow("see TODO for the full list of operators in Roc."),
@@ -3469,7 +3478,7 @@ fn to_provides_report<'a>(
             }
         }
 
-        EProvides::Provides(pos) => {
+        EProvides::Provides(pos) | EProvides::IndentProvides(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 

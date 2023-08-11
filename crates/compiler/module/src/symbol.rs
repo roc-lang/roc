@@ -172,7 +172,7 @@ impl Symbol {
 
     #[cfg(debug_assertions)]
     pub fn contains(self, needle: &str) -> bool {
-        format!("{:?}", self).contains(needle)
+        format!("{self:?}").contains(needle)
     }
 }
 
@@ -194,7 +194,7 @@ impl fmt::Debug for Symbol {
             match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
                 Ok(names) => match &names.get(&(module_id.to_zero_indexed() as u32)) {
                     Some(ident_ids) => match ident_ids.get_name(ident_id) {
-                        Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+                        Some(ident_str) => write!(f, "`{module_id:?}.{ident_str}`"),
                         None => fallback_debug_fmt(*self, f),
                     },
                     None => fallback_debug_fmt(*self, f),
@@ -207,7 +207,7 @@ impl fmt::Debug for Symbol {
                     use std::io::Write;
 
                     let mut stderr = std::io::stderr();
-                    writeln!(stderr, "DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err).unwrap();
+                    writeln!(stderr, "DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {err:?}").unwrap();
 
                     fallback_debug_fmt(*self, f)
                 }
@@ -229,7 +229,7 @@ impl fmt::Display for Symbol {
         let ident_id = self.ident_id();
 
         match ident_id {
-            IdentId(value) => write!(f, "{:?}.{:?}", module_id, value),
+            IdentId(value) => write!(f, "{module_id:?}.{value:?}"),
         }
     }
 }
@@ -244,7 +244,7 @@ fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     let module_id = symbol.module_id();
     let ident_id = symbol.ident_id();
 
-    write!(f, "`{:?}.{:?}`", module_id, ident_id)
+    write!(f, "`{module_id:?}.{ident_id:?}`")
 }
 
 /// This is used in Debug builds only, to let us have a Debug instance
@@ -312,8 +312,8 @@ pub fn get_module_ident_ids<'a>(
     all_ident_ids
         .get(module_id)
         .with_context(|| ModuleIdNotFoundSnafu {
-            module_id: format!("{:?}", module_id),
-            all_ident_ids: format!("{:?}", all_ident_ids),
+            module_id: format!("{module_id:?}"),
+            all_ident_ids: format!("{all_ident_ids:?}"),
         })
 }
 
@@ -324,7 +324,7 @@ pub fn get_module_ident_ids_mut<'a>(
     all_ident_ids
         .get_mut(module_id)
         .with_context(|| ModuleIdNotFoundSnafu {
-            module_id: format!("{:?}", module_id),
+            module_id: format!("{module_id:?}"),
             all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
         })
 }
@@ -400,7 +400,7 @@ impl fmt::Debug for ModuleId {
 
         if PRETTY_PRINT_DEBUG_SYMBOLS {
             match names.try_get(self.to_zero_indexed()) {
-                Some(str_ref) => write!(f, "{}", str_ref),
+                Some(str_ref) => write!(f, "{str_ref}"),
                 None => {
                     internal_error!(
                         "Could not find a Debug name for module ID {} in {:?}",
@@ -645,7 +645,7 @@ impl IdentIds {
     pub fn update_key(&mut self, old_name: &str, new_name: &str) -> Result<IdentId, String> {
         match self.interner.find_and_update(old_name, new_name) {
             Some(index) => Ok(IdentId(index as u32)),
-            None => Err(format!("The identifier {:?} is not in IdentIds", old_name)),
+            None => Err(format!("The identifier {old_name:?} is not in IdentIds")),
         }
     }
 
@@ -682,7 +682,7 @@ impl IdentIds {
         self.get_name(ident_id)
             .with_context(|| IdentIdNotFoundSnafu {
                 ident_id,
-                ident_ids_str: format!("{:?}", self),
+                ident_ids_str: format!("{self:?}"),
             })
     }
 
@@ -800,6 +800,7 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
+                    $(#[$ident_meta:meta])*
                     $ident_id:literal $ident_const:ident: $ident_name:literal
                     $(exposed_apply_type=$exposed_apply_type:literal)?
                     $(exposed_type=$exposed_type:literal)?
@@ -951,6 +952,7 @@ macro_rules! define_builtins {
         impl Symbol {
             $(
                 $(
+                    $(#[$ident_meta])*
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )*
                 $(
@@ -1262,6 +1264,12 @@ define_builtins! {
         156 NUM_IS_NAN: "isNaN"
         157 NUM_IS_INFINITE: "isInfinite"
         158 NUM_IS_FINITE: "isFinite"
+        159 NUM_MIN: "min"
+        160 NUM_MAX: "max"
+        161 NUM_E: "e"
+        162 NUM_PI: "pi"
+        163 NUM_TAU: "tau"
+        164 NUM_BITWISE_NOT: "bitwiseNot"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1297,8 +1305,8 @@ define_builtins! {
         15 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         16 STR_REPEAT: "repeat"
         17 STR_TRIM: "trim"
-        18 STR_TRIM_LEFT: "trimLeft"
-        19 STR_TRIM_RIGHT: "trimRight"
+        18 STR_TRIM_START: "trimStart"
+        19 STR_TRIM_END: "trimEnd"
         20 STR_TO_DEC: "toDec"
         21 STR_TO_F64: "toF64"
         22 STR_TO_F32: "toF32"
@@ -1465,6 +1473,9 @@ define_builtins! {
 
         22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
         23 DICT_PSEUDO_SEED: "pseudoSeed"
+        24 DICT_IS_EMPTY: "isEmpty"
+        25 DICT_MAP: "map"
+        26 DICT_JOINMAP: "joinMap"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1484,6 +1495,9 @@ define_builtins! {
         14 SET_CONTAINS: "contains"
         15 SET_TO_DICT: "toDict"
         16 SET_CAPACITY: "capacity"
+        17 SET_IS_EMPTY: "isEmpty"
+        18 SET_MAP: "map"
+        19 SET_JOIN_MAP: "joinMap"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type

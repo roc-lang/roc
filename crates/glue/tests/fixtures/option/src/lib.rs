@@ -1,11 +1,11 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let string = test_glue::mainForHost(true);
+    let string = roc_app::mainForHost(true);
     println!("Answer was: {:?}", string.unwrap_Some()); // Debug
                                                         //
-    let integer = test_glue::mainForHost(false);
+    let integer = roc_app::mainForHost(false);
     println!("Answer was: {:?}", integer.discriminant()); // Debug
 
     // Exit code

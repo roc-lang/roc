@@ -430,6 +430,7 @@ mod test_snapshots {
         pass/requires_type.header,
         pass/single_arg_closure.expr,
         pass/single_underscore_closure.expr,
+        pass/space_before_colon.full,
         pass/space_only_after_minus.expr,
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
@@ -525,14 +526,13 @@ mod test_snapshots {
             // Expect file to be missing
             assert!(
                 !result_path.exists(),
-                "Expected {:?} to be missing. \
+                "Expected {result_path:?} to be missing. \
                 This is how we represent a 'default' result (i.e. a test that \
                 formats to the same thing as the input). \
                 Consider running the tests with:\n\
                 `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
                 (which will delete the file for you),\n\
-                and commiting the delete.",
-                result_path
+                and commiting the delete."
             );
         }
     }
@@ -544,15 +544,12 @@ mod test_snapshots {
         let mut parent = std::path::PathBuf::from("tests");
         parent.push("snapshots");
         parent.push(expect.to_dir_name());
-        let input_path = parent.join(format!("{}.{}.roc", name, ty));
-        let result_path = parent.join(format!("{}.{}.result-ast", name, ty));
-        let formatted_path = parent.join(format!("{}.{}.formatted.roc", name, ty));
+        let input_path = parent.join(format!("{name}.{ty}.roc"));
+        let result_path = parent.join(format!("{name}.{ty}.result-ast"));
+        let formatted_path = parent.join(format!("{name}.{ty}.formatted.roc"));
 
         let source = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
-            panic!(
-                "Could not find a snapshot test result at {:?} - {:?}",
-                input_path, err
-            )
+            panic!("Could not find a snapshot test result at {input_path:?} - {err:?}")
         });
 
         let input = func(&source);
@@ -565,14 +562,14 @@ mod test_snapshots {
                 }
                 Ok(ast.debug_format_inner())
             }
-            Err(err) => Err(format!("{:?}", err)),
+            Err(err) => Err(format!("{err:?}")),
         };
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);
             for token in tokens {
                 if token.value == roc_parse::highlight::Token::Error {
-                    panic!("Found an error highlight token in the input: {:?}", token);
+                    panic!("Found an error highlight token in the input: {token:?}");
                 }
             }
         }
@@ -652,7 +649,7 @@ mod test_snapshots {
     #[test]
     fn string_with_escaped_char_at_end() {
         parses_with_escaped_char(
-            |esc| format!(r#""abcd{}""#, esc),
+            |esc| format!(r#""abcd{esc}""#),
             |esc, arena| bumpalo::vec![in arena;  Plaintext("abcd"), EscapedChar(esc)],
         );
     }
@@ -660,7 +657,7 @@ mod test_snapshots {
     #[test]
     fn string_with_escaped_char_in_front() {
         parses_with_escaped_char(
-            |esc| format!(r#""{}abcd""#, esc),
+            |esc| format!(r#""{esc}abcd""#),
             |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abcd")],
         );
     }
@@ -668,7 +665,7 @@ mod test_snapshots {
     #[test]
     fn string_with_escaped_char_in_middle() {
         parses_with_escaped_char(
-            |esc| format!(r#""ab{}cd""#, esc),
+            |esc| format!(r#""ab{esc}cd""#),
             |esc, arena| bumpalo::vec![in arena; Plaintext("ab"), EscapedChar(esc), Plaintext("cd")],
         );
     }
@@ -676,7 +673,7 @@ mod test_snapshots {
     #[test]
     fn string_with_multiple_escaped_chars() {
         parses_with_escaped_char(
-            |esc| format!(r#""{}abc{}de{}fghi{}""#, esc, esc, esc, esc),
+            |esc| format!(r#""{esc}abc{esc}de{esc}fghi{esc}""#),
             |esc, arena| bumpalo::vec![in arena; EscapedChar(esc), Plaintext("abc"), EscapedChar(esc), Plaintext("de"), EscapedChar(esc), Plaintext("fghi"), EscapedChar(esc)],
         );
     }

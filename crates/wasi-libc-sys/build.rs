@@ -24,7 +24,7 @@ fn main() {
             "--global-cache-dir",
             zig_cache_dir.to_str().unwrap(),
             "src/dummy.c",
-            &format!("-femit-bin={}/dummy.wasm", out_dir),
+            &format!("-femit-bin={out_dir}/dummy.wasm"),
         ])
         .output()
         .unwrap();

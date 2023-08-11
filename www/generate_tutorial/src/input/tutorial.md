@@ -41,21 +41,7 @@ You can also assign specific names to expressions. Try entering these lines:
 <pre><samp class="repl-prompt">greeting = <span class="literal">"Hi"</span></samp></pre>
 <pre><samp class="repl-prompt">audience = <span class="literal">"World"</span></samp></pre>
 
-From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names!
-
-### [String Interpolation](#string-interpolation) {#string-interpolation}
-
-You can combine named strings together using _string interpolation_, like so:
-
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
-
-If you put this into the REPL, you should see this output:
-
-<pre><samp><span class="literal">"Hi there, World!" </span><span class="colon">:</span> Str <span class="comment">               # val2</span></samp></pre>
-
-Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
-
-By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
+From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names! We'll use these later on in the tutorial.
 
 ### [Arithmetic](#arithmetic) {#arithmetic}
 
@@ -65,9 +51,11 @@ Now let's try using an _operator_, specifically the `+` operator. Enter this:
 
 You should see this output:
 
-<pre><samp>2 <span class="colon">:</span> Num *</samp></pre>
+<pre><samp>2 <span class="colon">:</span> Num * <span class="comment">               # val2</span></samp></pre>
 
 According to the REPL, one plus one equals two. Sounds right!
+
+> Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
 
 Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_operations) when using multiple arithmetic operators like `+` and `-`, but you can use parentheses to specify exactly how they should be grouped.
 
@@ -75,7 +63,6 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 -1 <span class="colon">:</span> Num *
 </span></samp></pre>
-
 
 ### [Calling Functions](#calling-functions) {#calling-functions}
 
@@ -118,6 +105,24 @@ Both the `Str.concat` function and the `Num.toStr` function have a dot in their 
 
 We'll get into more depth about modules later, but for now you can think of a module as a named collection of functions. Eventually we'll discuss how to use them for more than that.
 
+### [String Interpolation](#string-interpolation) {#string-interpolation}
+
+An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
+
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+
+This is syntax sugar for calling `Str.concat` several times, like so:
+
+```roc
+Str.concat greeting (Str.concat " there, " (Str.concat audience "!"))
+```
+
+You can put entire single-line expressions inside the parentheses in string interpolation. For example:
+
+<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">\(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
+
+By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
+
 ## [Building an Application](#building-an-application) {#building-an-application}
 
 Let's move out of the REPL and create our first Roc application!
@@ -126,7 +131,7 @@ Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -427,11 +432,11 @@ Roc supports optional record fields using the `?` operator. This can be a useful
 In Roc you can write a function like:
 
 ```roc
-table = \{ 
-        height, 
-        width, 
-        title? "oak", 
-        description? "a wooden table" 
+table = \{
+        height,
+        width,
+        title? "oak",
+        description? "a wooden table"
     }
     ->
 ```
@@ -469,7 +474,7 @@ optional field, you'll get a compile error.
 This means it's never possible to end up with an *optional value* that exists
 outside a record field. Optionality is a concept that exists only in record
 fields, and it's intended for the use case of config records like this. The
-ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead. 
+ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead.
 
 ## [Tags](#tags) {#tags}
 
@@ -699,7 +704,7 @@ List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 
 Every element in a Roc list has to share the same type. For example, we can have a list of strings like `["Sam", "Lee", "Ari"]`, or a list of numbers like `[1, 2, 3, 4, 5]` but we can't have a list which mixes strings and numbers like `["Sam", 1, "Lee", 2, 3]`, that would be a compile-time error.
 
-Ensuring that all elements in a list share a type eliminates entire categories of problems. For example, it means that whenever you use `List.append` to add elements to a list, as long as you don't have any compile-time errors, you won't get any runtime errors from calling `List.map` afterwards, no matter what you appended to the list! More generally, it's safe to assume that unless you run out of memory, `List.map` will run successfully unless you got a compile-time error about an incompatibility (like `Num.negate` on a list of strings).
+Ensuring that all elements in a list share a type eliminates entire categories of problems. For example, it means that whenever you use `List.append` to add elements to a list, as long as you don't have any compile-time errors, you won't get any runtime errors from calling `List.map` afterwards, no matter what you appended to the list! More generally, it's safe to assume that unless you run out of memory, `List.map` will run successfully unless you got a compile-time error about an incompatibility (like `Num.neg` on a list of strings).
 
 ### [Lists that hold elements of different types](#lists-that-hold-elements-of-different-types) {#lists-that-hold-elements-of-different-types}
 
@@ -926,6 +931,9 @@ first / second
 ```roc
 Num.div first second
 ```
+```roc
+first |> Num.div second
+```
 
 All operators in Roc are syntax sugar for normal function calls. See the [Operator Desugaring Table](https://www.roc-lang.org/tutorial#operator-desugaring-table) at the end of this tutorial for a complete list of them.
 
@@ -1111,10 +1119,10 @@ Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, b
 
 A type can be defined to be opaque to hide its internal structure. This is a lot more amazing than it may seem. It can make your code more modular, robust, and easier to read:
 - If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
-- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case. 
+- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case.
 - Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
 
-You can create an opaque type with the `:=` operator. Let's make one called `Username`:	
+You can create an opaque type with the `:=` operator. Let's make one called `Username`:
 
 ```roc
 Username := Str
@@ -1334,7 +1342,7 @@ So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
 
 Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
 
-- **Builtins** provide functions that are automatically imported into every module. 
+- **Builtins** provide functions that are automatically imported into every module.
 - **Applications** are combined with a platform and compiled into an executable.
 - **Interfaces** provide functions which can be imported into other modules.
 - **Packages** organise modules to share functionality across applications and platforms.
@@ -1368,9 +1376,9 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
-    provides main to pf
+    provides [main] to pf
 ```
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.
@@ -1380,7 +1388,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1419,11 +1427,11 @@ See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/p
 
 Package documentation can be generated using the Roc cli with `roc docs /package/*.roc`.
 
-Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.  
+Build a package for distribution with `roc build --bundle .tar.br /package/main.roc`. This will create a single tarball that can then be easily shared online using a URL.
 
 You can import a package that is available either locally, or from a URL into a Roc application or platform. This is achieved by specifying the package in the `packages` section of the application or platform file structure. For example, `packages { .., parser: "<package URL>" }` is an example that imports a parser module from a URL.
 
-How does the Roc cli import and download a package from a URL? 
+How does the Roc cli import and download a package from a URL?
 
 1. First it checks to see whether the relevant folder already exists in the local filesystem and if not, creates it. If there is a package already downloaded then there is no need to download or extract anything. Packages are cached in a directory, typically `~/.cache/roc` on UNIX, and `%APPDATA%\\Roc` on Windows.
 2. It then downloads the file at that URL and verifies that the hash of the file matches the hash at the end of the URL.
@@ -1435,7 +1443,7 @@ Including the hash solves a number of problems:
 
 1. The package at the URL can not suddenly change and cause different behavior.
 2. Because of 1. there is no need to check the URL on every compilation to see if we have the latest version.
-3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.   
+3. If the domain of the URL expires, a malicious actor can change the package but the hash will not match so the roc cli will reject it.
 
 ### [Interface Modules](#interface-modules) {#interface-modules}
 
@@ -1466,7 +1474,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1496,7 +1504,7 @@ Let's change `main` to read a line from `stdin`, and then print it back out agai
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1537,7 +1545,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
@@ -1957,7 +1965,7 @@ For this reason, any time you see a function that only runs a `when` on its only
 Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression                    |    Desugars To     |
-| ----------------------------- | ------------------ | 
+| ----------------------------- | ------------------ |
 | `a + b`                       |   `Num.add a b`    |
 | `a - b`                       |   `Num.sub a b`    |
 | `a * b`                       |   `Num.mul a b`    |
@@ -1965,16 +1973,12 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a // b`                      | `Num.divTrunc a b` |
 | `a ^ b`                       |   `Num.pow a b`    |
 | `a % b`                       |   `Num.rem a b`    |
-| `a >> b`                      |   `Num.shr a b`    |
-| `a << b`                      |   `Num.shl a b`    |
 | `-a`                          |    `Num.neg a`     |
-| `-f x y`                      | `Num.neg (f x y)`  |
 | `a == b`                      |  `Bool.isEq a b`   |
 | `a != b`                      | `Bool.isNotEq a b` |
 | `a && b`                      |   `Bool.and a b`   |
 | <code>a \|\| b</code>         | `Bool.or a b`      |
 | `!a`                          |    `Bool.not a`    |
-| `!f x y`                      | `Bool.not (f x y)` |
 | <code>a \|> b</code>          |       `b a`        |
 | <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
 

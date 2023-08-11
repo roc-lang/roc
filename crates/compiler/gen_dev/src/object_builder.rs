@@ -75,6 +75,23 @@ pub fn build_module<'a, 'r>(
             )
         }
         Triple {
+            architecture: TargetArch::X86_64,
+            binary_format: TargetBF::Coff,
+            ..
+        } if cfg!(feature = "target-x86_64") => {
+            let backend = new_backend_64bit::<
+                x86_64::X86_64GeneralReg,
+                x86_64::X86_64FloatReg,
+                x86_64::X86_64Assembler,
+                x86_64::X86_64WindowsFastcall,
+            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            build_object(
+                procedures,
+                backend,
+                Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
+            )
+        }
+        Triple {
             architecture: TargetArch::Aarch64(_),
             binary_format: TargetBF::Elf,
             ..
@@ -115,6 +132,111 @@ pub fn build_module<'a, 'r>(
             )
         }
         x => unimplemented!("the target, {:?}", x),
+    }
+}
+
+fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
+    let bss_section = output.section_id(StandardSection::Data);
+
+    // 8 registers + 3 words for a RocStr
+    // TODO 50 is the wrong size here, look at implementation and put correct value in here
+    const SIZE: usize = (8 + 50) * core::mem::size_of::<u64>();
+
+    let symbol = Symbol {
+        name: b"setlongjmp_buffer".to_vec(),
+        value: 0,
+        size: SIZE as u64,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(bss_section),
+        flags: SymbolFlags::None,
+    };
+
+    let symbol_id = output.add_symbol(symbol);
+    output.add_symbol_data(symbol_id, bss_section, &[0x00; SIZE], 8);
+
+    symbol_id
+}
+
+fn generate_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_setjmp".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let proc_data = backend.build_roc_setjmp();
+
+    output.add_symbol_data(proc_id, text_section, proc_data, 16);
+}
+
+fn generate_longjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_longjmp".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let proc_data = backend.build_roc_longjmp();
+
+    output.add_symbol_data(proc_id, text_section, proc_data, 16);
+}
+
+// a roc_panic to be used in tests; relies on setjmp/longjmp
+fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: b"roc_panic".to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let proc_id = output.add_symbol(proc_symbol);
+    let (proc_data, relocs) = backend.build_roc_panic();
+
+    let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
+
+    for r in relocs {
+        let relocation = match r {
+            Relocation::LinkedData { offset, name } => {
+                if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
+                    write::Relocation {
+                        offset: offset + proc_offset,
+                        size: 32,
+                        kind: RelocationKind::GotRelative,
+                        encoding: RelocationEncoding::Generic,
+                        symbol: sym_id,
+                        addend: -4,
+                    }
+                } else {
+                    internal_error!("failed to find data symbol for {:?}", name);
+                }
+            }
+            Relocation::LocalData { .. }
+            | Relocation::LinkedFunction { .. }
+            | Relocation::JmpToReturn { .. } => {
+                unreachable!("not currently created by build_roc_panic")
+            }
+        };
+
+        output.add_relocation(text_section, relocation).unwrap();
     }
 }
 
@@ -190,6 +312,12 @@ fn build_object<'a, B: Backend<'a>>(
     );
     */
 
+    define_setlongjmp_buffer(&mut output);
+
+    generate_roc_panic(&mut backend, &mut output);
+    generate_setjmp(&mut backend, &mut output);
+    generate_longjmp(&mut backend, &mut output);
+
     if backend.env().mode.generate_allocators() {
         generate_wrapper(
             &mut backend,
@@ -209,12 +337,7 @@ fn build_object<'a, B: Backend<'a>>(
             "roc_dealloc".into(),
             "free".into(),
         );
-        generate_wrapper(
-            &mut backend,
-            &mut output,
-            "roc_panic".into(),
-            "roc_builtins.utils.test_panic".into(),
-        );
+
         // Extra symbols only required on unix systems.
         if matches!(output.format(), BinaryFormat::Elf | BinaryFormat::MachO) {
             generate_wrapper(
@@ -229,6 +352,15 @@ fn build_object<'a, B: Backend<'a>>(
                 &mut output,
                 "roc_shm_open".into(),
                 "shm_open".into(),
+            );
+        } else if matches!(output.format(), BinaryFormat::Coff) {
+            // TODO figure out why this symbol is required, it should not be required
+            // Without this it does not build on Windows
+            generate_wrapper(
+                &mut backend,
+                &mut output,
+                "roc_getppid".into(),
+                "malloc".into(),
             );
         }
     }
@@ -245,6 +377,18 @@ fn build_object<'a, B: Backend<'a>>(
             let exposed_proc = build_exposed_proc(&mut backend, &proc);
             let exposed_generic_proc = build_exposed_generic_proc(&mut backend, &proc);
 
+            let (module_id, layout_interner, interns, code_gen_help, _) =
+                backend.module_interns_helpers_mut();
+
+            let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+
+            let test_helper = roc_mono::code_gen_help::test_helper(
+                code_gen_help,
+                ident_ids,
+                layout_interner,
+                &proc,
+            );
+
             #[cfg(debug_assertions)]
             {
                 let module_id = exposed_generic_proc.name.name().module_id();
@@ -255,6 +399,18 @@ fn build_object<'a, B: Backend<'a>>(
                     .unwrap();
                 module_id.register_debug_idents(ident_ids);
             }
+
+            // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+
+            build_proc_symbol(
+                &mut output,
+                &mut layout_ids,
+                &mut procs,
+                &mut backend,
+                layout,
+                test_helper,
+                Exposed::TestMain,
+            );
 
             build_proc_symbol(
                 &mut output,
@@ -343,8 +499,8 @@ fn build_object<'a, B: Backend<'a>>(
     for ((sym, layout), proc) in helper_symbols_and_layouts.into_iter().zip(helper_procs) {
         debug_assert_eq!(sym, proc.name.name());
 
-        let fn_name = backend.function_symbol_to_string(
-            sym,
+        let fn_name = backend.lambda_name_to_string(
+            LambdaName::no_niche(sym),
             layout.arguments.iter().copied(),
             None,
             layout.result,
@@ -443,7 +599,7 @@ fn build_exposed_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'a>) -> P
         closure_data_layout: None,
         ret_layout: proc.ret_layout,
         is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
+        is_erased: proc.is_erased,
     }
 }
 
@@ -464,7 +620,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_layout = backend
         .interner_mut()
-        .insert_direct_no_semantic(roc_mono::layout::LayoutRepr::Boxed(proc.ret_layout));
+        .insert_direct_no_semantic(roc_mono::layout::LayoutRepr::Ptr(proc.ret_layout));
 
     let mut args = bumpalo::collections::Vec::new_in(arena);
     args.extend(proc.args);
@@ -485,7 +641,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
 
     let box_write = Call {
         call_type: roc_mono::ir::CallType::LowLevel {
-            op: roc_module::low_level::LowLevel::PtrWrite,
+            op: roc_module::low_level::LowLevel::PtrStore,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([arg_generic, s1]),
@@ -524,7 +680,7 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
         closure_data_layout: None,
         ret_layout: roc_mono::layout::Layout::UNIT,
         is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
+        is_erased: proc.is_erased,
     }
 }
 
@@ -533,6 +689,7 @@ enum Exposed {
     ExposedGeneric,
     Exposed,
     NotExposed,
+    TestMain,
 }
 
 fn build_proc_symbol<'a, B: Backend<'a>>(
@@ -559,12 +716,13 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         Exposed::Exposed => layout_ids
             .get_toplevel(sym, &layout)
             .to_exposed_symbol_string(sym, backend.interns()),
-        Exposed::NotExposed => backend.function_symbol_to_string(
-            sym,
+        Exposed::NotExposed => backend.lambda_name_to_string(
+            proc.name,
             layout.arguments.iter().copied(),
             None,
             layout.result,
         ),
+        Exposed::TestMain => String::from("test_main"),
     };
 
     let proc_symbol = Symbol {
@@ -575,7 +733,7 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
         // TODO: Depending on whether we are building a static or dynamic lib, this should change.
         // We should use Dynamic -> anyone, Linkage -> static link, Compilation -> this module only.
         scope: match exposed {
-            Exposed::ExposedGeneric | Exposed::Exposed => SymbolScope::Dynamic,
+            Exposed::ExposedGeneric | Exposed::Exposed | Exposed::TestMain => SymbolScope::Dynamic,
             Exposed::NotExposed => SymbolScope::Linkage,
         },
         weak: false,
@@ -605,7 +763,7 @@ fn build_proc<'a, B: Backend<'a>>(
         let elfreloc = match reloc {
             Relocation::LocalData { offset, data } => {
                 let data_symbol = write::Symbol {
-                    name: format!("{}.data{}", fn_name, local_data_index)
+                    name: format!("{fn_name}.data{local_data_index}")
                         .as_bytes()
                         .to_vec(),
                     value: 0,

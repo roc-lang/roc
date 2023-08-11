@@ -20,6 +20,7 @@ roc_load = { path = "../compiler/load" }
 roc_mono = { path = "../compiler/mono" }
 roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
+roc_solve = { path = "../compiler/solve" }
 roc_target = { path = "../compiler/roc_target" }
 
 bincode.workspace = true

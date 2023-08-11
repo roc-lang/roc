@@ -8,6 +8,7 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::{MutMap, VecMap};
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
@@ -110,8 +111,7 @@ impl Types {
             target,
         );
 
-        let variables: Vec<_> = entry_points.values().copied().collect();
-        for var in variables {
+        for (_symbol, var) in entry_points.clone() {
             env.lambda_set_ids = env.find_lambda_sets(var);
             let id = env.add_toplevel_type(var, &mut types);
 
@@ -521,8 +521,7 @@ impl Types {
             } else {
                 // TODO report this gracefully!
                 panic!(
-                    "Duplicate name detected - {:?} could refer to either {:?} or {:?}",
-                    name, existing_type, typ
+                    "Duplicate name detected - {name:?} could refer to either {existing_type:?} or {typ:?}"
                 );
             }
         } else {
@@ -1171,7 +1170,6 @@ struct Env<'a> {
     enum_names: Enums,
     pending_recursive_types: VecMap<TypeId, Variable>,
     known_recursive_types: VecMap<Variable, TypeId>,
-    target: TargetInfo,
 }
 
 impl<'a> Env<'a> {
@@ -1194,7 +1192,6 @@ impl<'a> Env<'a> {
             glue_procs_by_layout,
             lambda_set_ids: Default::default(),
             layout_cache: LayoutCache::new(layout_interner, target),
-            target,
         }
     }
 
@@ -1215,8 +1212,7 @@ impl<'a> Env<'a> {
 
             debug_assert!(
                 matches!(types.get_type(type_id), RocType::RecursivePointer(TypeId::PENDING)),
-                "The TypeId {:?} was registered as a pending recursive pointer, but was not stored in Types as one.",
-                type_id
+                "The TypeId {type_id:?} was registered as a pending recursive pointer, but was not stored in Types as one."
             );
 
             // size and alignment shouldn't change; this is still
@@ -1226,8 +1222,7 @@ impl<'a> Env<'a> {
     }
 
     fn find_lambda_sets(&self, root: Variable) -> MutMap<Variable, LambdaSetId> {
-        let stack = bumpalo::vec![in self.arena; root];
-        roc_mono::ir::find_lambda_sets_help(self.subs, stack)
+        roc_mono::ir::find_lambda_sets(self.arena, self.subs, root)
     }
 
     fn add_toplevel_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
@@ -1269,10 +1264,15 @@ fn add_function_type<'a>(
     let args = env.subs.get_subs_slice(*args);
     let mut arg_type_ids = Vec::with_capacity(args.len());
 
-    let name = format!("RocFunction_{:?}", closure_var);
+    let name = format!("RocFunction_{closure_var:?}");
 
-    let id = env.lambda_set_ids.get(&closure_var).unwrap();
-    let extern_name = format!("roc__mainForHost_{}_caller", id.0);
+    let extern_name = match env.lambda_set_ids.get(&closure_var) {
+        Some(id) => format!("roc__mainForHost_{}_caller", id.0),
+        None => {
+            debug_assert!(is_toplevel);
+            String::from("this_extern_should_not_be_used_this_is_a_bug")
+        }
+    };
 
     for arg_var in args {
         let arg_layout = env
@@ -1571,6 +1571,7 @@ fn add_type_help<'a>(
 
             type_id
         }
+        Content::ErasedLambda => todo_lambda_erasure!(),
         Content::LambdaSet(lambda_set) => {
             let tags = lambda_set.solved;
 
@@ -1831,7 +1832,6 @@ where
             *layout1,
             label2,
             *layout2,
-            env.layout_cache.target_info,
         )
     });
 
@@ -1854,7 +1854,7 @@ where
                         getter: getter.clone(),
                     };
 
-                    (format!("{}", label), type_id, accessors)
+                    (format!("{label}"), type_id, accessors)
                 })
                 .collect();
 
@@ -1868,7 +1868,7 @@ where
                 .map(|(label, field_var, field_layout)| {
                     let type_id = add_type_help(env, field_layout, field_var, None, types);
 
-                    (format!("{}", label), type_id)
+                    (format!("{label}"), type_id)
                 })
                 .collect();
 
@@ -1946,7 +1946,7 @@ fn tag_union_type_from_layout<'a>(
                         .stack_size()
                         .max(1);
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     RocTagUnion::NonRecursive {
@@ -1964,7 +1964,7 @@ fn tag_union_type_from_layout<'a>(
                     let discriminant_size =
                         Discriminant::from_number_of_tags(tags.len()).stack_size();
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     RocTagUnion::Recursive {
@@ -2002,7 +2002,7 @@ fn tag_union_type_from_layout<'a>(
                     let discriminant_size =
                         Discriminant::from_number_of_tags(other_tags.len()).stack_size();
                     let discriminant_offset = union_layout
-                        .tag_id_offset(&env.layout_cache.interner, env.target)
+                        .tag_id_offset(&env.layout_cache.interner)
                         .unwrap();
 
                     // nullable_id refers to the index of the tag that is represented at runtime as NULL.
@@ -2088,16 +2088,7 @@ fn tag_union_type_from_layout<'a>(
                 },
             }
         }
-        LayoutRepr::Boxed(elem_layout) => {
-            let (tag_name, payload_fields) =
-                single_tag_payload_fields(env, union_tags, subs, layout, &[elem_layout], types);
-
-            RocTagUnion::SingleTagStruct {
-                name: name.clone(),
-                tag_name,
-                payload: payload_fields,
-            }
-        }
+        LayoutRepr::Ptr(_) => unreachable!("Ptr values are never publicly exposed"),
         LayoutRepr::LambdaSet(lambda_set) => tag_union_type_from_layout(
             env,
             opt_name,
@@ -2112,6 +2103,8 @@ fn tag_union_type_from_layout<'a>(
             // been turned into an error earlier in the process.
             unreachable!();
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 
@@ -2231,7 +2224,13 @@ fn single_tag_payload_fields<'a, 'b>(
         env.glue_procs_by_layout.get(&layout).is_some(),
         env.layout_cache
             .interner
-            .has_varying_stack_size(in_layout, env.arena)
+            .has_varying_stack_size(in_layout, env.arena),
+        "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
+            &layout,
+            env.glue_procs_by_layout.get(&layout),
+            env.layout_cache
+                .interner
+                .has_varying_stack_size(in_layout, env.arena)
     );
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);

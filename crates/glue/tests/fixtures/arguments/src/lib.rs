@@ -1,8 +1,8 @@
-mod test_glue;
+use roc_app;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let answer = test_glue::mainForHost(42i64);
+    let answer = roc_app::mainForHost(42i64);
 
     println!("Answer was: {:?}", answer); // Debug
 

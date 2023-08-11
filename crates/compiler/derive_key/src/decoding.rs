@@ -103,7 +103,7 @@ impl FlatDecodable {
             | Content::RigidVar(_)
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnboundVar),
-            Content::LambdaSet(_) => Err(Underivable),
+            Content::LambdaSet(_) | Content::ErasedLambda => Err(Underivable),
         }
     }
 

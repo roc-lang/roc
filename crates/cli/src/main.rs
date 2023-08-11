@@ -2,17 +2,18 @@
 use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
-    build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
-    CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET,
-    FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    build_app, format, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS,
+    CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION,
+    DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
-use roc_load::{LoadingProblem, Threading};
+use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
+use roc_target::Target;
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -122,10 +123,12 @@ fn main() -> io::Result<()> {
                 .get_one::<String>(FLAG_TARGET)
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
+            let function_kind = FunctionKind::LambdaSet;
             roc_linker::generate_stub_lib(
                 input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &target.to_triple(),
+                function_kind,
             )
         }
         Some((CMD_BUILD, matches)) => {
@@ -200,12 +203,12 @@ fn main() -> io::Result<()> {
                 }
 
                 Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{}", report);
+                    print!("{report}");
 
                     Ok(1)
                 }
                 Err(other) => {
-                    panic!("build_file failed with error:\n{:?}", other);
+                    panic!("build_file failed with error:\n{other:?}");
                 }
             }
         }
@@ -272,7 +275,7 @@ fn main() -> io::Result<()> {
             let format_exit_code = match format(roc_files, format_mode) {
                 Ok(_) => 0,
                 Err(message) => {
-                    eprintln!("{}", message);
+                    eprintln!("{message}");
                     1
                 }
             };

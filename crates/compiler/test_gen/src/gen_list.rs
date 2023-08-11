@@ -7,7 +7,6 @@ use crate::helpers::dev::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
-#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]
@@ -1777,14 +1776,14 @@ fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec2: Vec<i64> = (0..num_elems2)
         .map(|i| 54321 % (i + num_elems1 + num_elems2 + 1))
         .collect();
-    let slice_str1 = format!("{:?}", vec1);
-    let slice_str2 = format!("{:?}", vec2);
+    let slice_str1 = format!("{vec1:?}");
+    let slice_str2 = format!("{vec2:?}");
     let mut expected = vec1;
 
     expected.extend(vec2);
 
     assert_evals_to!(
-        &format!("List.concat {} {}", slice_str1, slice_str2),
+        &format!("List.concat {slice_str1} {slice_str2}"),
         RocList::from_slice(&expected),
         RocList<i64>
     );
@@ -3823,6 +3822,8 @@ mod pattern_match {
     #[cfg(feature = "gen-dev")]
     use crate::helpers::dev::assert_evals_to;
 
+    use crate::helpers::with_larger_debug_stack;
+
     use super::RocList;
 
     #[test]
@@ -3863,21 +3864,21 @@ mod pattern_match {
         with_larger_debug_stack(|| {
             assert_evals_to!(
                 r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [A, A, ..] -> 3u8
-                [A, B, ..] -> 4u8
-                [B, ..] -> 5u8
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [A, A, ..] -> 3u8
+                    [A, B, ..] -> 4u8
+                    [B, ..] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
-                helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
-                helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
+                    helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
+                    helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
                 RocList::from_slice(&[
                     1, //
                     2, //
@@ -3887,7 +3888,7 @@ mod pattern_match {
                 ]),
                 RocList<u8>
             )
-        })
+        });
     }
 
     #[test]
@@ -3895,21 +3896,21 @@ mod pattern_match {
         with_larger_debug_stack(|| {
             assert_evals_to!(
                 r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [.., A, A] -> 3u8
-                [.., B, A] -> 4u8
-                [.., B] -> 5u8
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [.., A, A] -> 3u8
+                    [.., B, A] -> 4u8
+                    [.., B] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
-                helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
-                helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
+                    helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
+                    helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
                 RocList::from_slice(&[
                     1, //
                     2, //

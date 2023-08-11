@@ -557,14 +557,8 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This string interpolation is invalid:"),
                 alloc.region(lines.convert_region(region)),
-                alloc.concat([
-                    alloc.reflow(r"I was expecting an identifier, like "),
-                    alloc.parser_suggestion("\\u(message)"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("\\u(LoremIpsum.text)"),
-                    alloc.text("."),
-                ]),
-                alloc.reflow(r"Learn more about string interpolation at TODO"),
+                alloc.reflow(r"String interpolations cannot contain newlines or other interpolations."),
+                alloc.reflow(r"You can learn more about string interpolation at <https://www.roc-lang.org/tutorial#string-interpolation>"),
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
@@ -845,7 +839,7 @@ pub fn can_problem<'b>(
                     alloc.reflow("An implementation of "), alloc.symbol_unqualified(member), alloc.reflow(" could not be found in this scope:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {}: my{} }}", member_str, member_str))]))
+                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {member_str}: my{member_str} }}"))]))
             ]);
             title = IMPLEMENTATION_NOT_FOUND.to_string();
         }

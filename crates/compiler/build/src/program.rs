@@ -8,8 +8,8 @@ use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{
-    EntryPoint, ExecutionMode, ExpectMetadata, LoadConfig, LoadMonomorphizedError, LoadedModule,
-    LoadingProblem, MonomorphizedModule, Threading,
+    EntryPoint, ExecutionMode, ExpectMetadata, FunctionKind, LoadConfig, LoadMonomorphizedError,
+    LoadedModule, LoadingProblem, MonomorphizedModule, Threading,
 };
 use roc_mono::ir::{OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
@@ -133,7 +133,7 @@ pub fn gen_from_mono_module<'a>(
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
-    mut loaded: MonomorphizedModule<'a>,
+    loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
     opt_level: OptLevel,
@@ -166,7 +166,7 @@ fn gen_from_mono_module_llvm<'a>(
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
     debug_assert!(kind_id > 0);
-    let enum_attr = context.create_enum_attribute(kind_id, 1);
+    let enum_attr = context.create_enum_attribute(kind_id, 0);
 
     for function in module.get_functions() {
         let name = function.get_name().to_str().unwrap();
@@ -232,9 +232,10 @@ fn gen_from_mono_module_llvm<'a>(
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
-        &mut loaded.layout_interner,
+        &loaded.layout_interner,
         opt_level,
         loaded.procedures,
+        loaded.host_exposed_lambda_sets,
         entry_point,
         Some(&app_ll_file),
         &loaded.glue_layouts,
@@ -320,10 +321,10 @@ fn gen_from_mono_module_llvm<'a>(
         if !unrecognized.is_empty() {
             let out = unrecognized
                 .iter()
-                .map(|x| format!("{:?}", x))
+                .map(|x| format!("{x:?}"))
                 .collect::<Vec<String>>()
                 .join(", ");
-            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".", out);
+            eprintln!("Unrecognized sanitizer: {out}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".");
             eprintln!("Note: \"cargo-fuzz\" and \"afl.rs\" both enable sanitizer coverage for fuzzing. They just use different parameters to match the respective libraries.")
         }
 
@@ -340,7 +341,7 @@ fn gen_from_mono_module_llvm<'a>(
         }
         let opt = opt.output().unwrap();
 
-        assert!(opt.stderr.is_empty(), "{:#?}", opt);
+        assert!(opt.stderr.is_empty(), "{opt:#?}");
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
@@ -358,7 +359,7 @@ fn gen_from_mono_module_llvm<'a>(
             .output()
             .unwrap();
 
-        assert!(bc_to_object.status.success(), "{:#?}", bc_to_object);
+        assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
 
         MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
     } else if emit_debug_info {
@@ -414,7 +415,7 @@ fn gen_from_mono_module_llvm<'a>(
                     .output()
                     .unwrap();
 
-                assert!(ll_to_object.stderr.is_empty(), "{:#?}", ll_to_object);
+                assert!(ll_to_object.stderr.is_empty(), "{ll_to_object:#?}");
             }
             _ => unreachable!(),
         }
@@ -716,13 +717,13 @@ pub fn handle_error_module(
 pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
     match problem {
         LoadingProblem::FormattedReport(report) => {
-            print!("{}", report);
+            print!("{report}");
             Ok(1)
         }
         _ => {
             // TODO: tighten up the types here, we should always end up with a
             // formatted report from load.
-            print!("Failed with error: {:?}", problem);
+            print!("Failed with error: {problem:?}");
             Ok(1)
         }
     }
@@ -740,8 +741,20 @@ pub fn standard_load_config(
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
     };
 
+    // UNSTABLE(lambda-erasure)
+    let function_kind = if cfg!(debug_assertions) {
+        if std::env::var("EXPERIMENTAL_ROC_ERASE").is_ok() {
+            FunctionKind::Erased
+        } else {
+            FunctionKind::LambdaSet
+        }
+    } else {
+        FunctionKind::LambdaSet
+    };
+
     LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
@@ -889,7 +902,7 @@ fn build_loaded_file<'a>(
         buf.push('\n');
 
         use std::fmt::Write;
-        write!(buf, "{}", module_timing).unwrap();
+        write!(buf, "{module_timing}").unwrap();
 
         if it.peek().is_some() {
             buf.push('\n');
@@ -914,10 +927,7 @@ fn build_loaded_file<'a>(
                 .expect("Failed to (re)build platform.");
 
             if emit_timings && !is_platform_prebuilt {
-                println!(
-                    "Finished rebuilding the platform in {} ms\n",
-                    rebuild_duration
-                );
+                println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
             }
 
             Some(HostRebuildTiming::BeforeApp(rebuild_duration))
@@ -957,8 +967,7 @@ fn build_loaded_file<'a>(
 
     if emit_timings {
         println!(
-            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
-            buf
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{buf}"
         );
 
         println!(
@@ -972,10 +981,7 @@ fn build_loaded_file<'a>(
         let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
 
         if emit_timings && !is_platform_prebuilt {
-            println!(
-                "Finished rebuilding the platform in {} ms\n",
-                rebuild_duration
-            );
+            println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
         }
     }
 
@@ -1007,7 +1013,7 @@ fn build_loaded_file<'a>(
             };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
-                .suffix(&format!(".{}", extension))
+                .suffix(&format!(".{extension}"))
                 .tempfile()
                 .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
             let app_o_file = app_o_file.path();
@@ -1212,6 +1218,8 @@ pub fn check_file<'a>(
 
     let load_config = LoadConfig {
         target_info,
+        // TODO: we may not want this for just checking.
+        function_kind: FunctionKind::LambdaSet,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
@@ -1257,8 +1265,7 @@ pub fn check_file<'a>(
 
     if emit_timings {
         println!(
-            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{}",
-            buf
+            "\n\nCompilation finished!\n\nHere's how long each module took to compile:\n\n{buf}"
         );
 
         println!("Finished checking in {} ms\n", compilation_end.as_millis(),);

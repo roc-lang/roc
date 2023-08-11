@@ -587,15 +587,19 @@ impl<T> Clone for SubsSlice<T> {
 
 impl<T> Default for SubsSlice<T> {
     fn default() -> Self {
-        Self {
-            start: Default::default(),
-            length: Default::default(),
-            _marker: Default::default(),
-        }
+        Self::empty()
     }
 }
 
 impl<T> SubsSlice<T> {
+    pub fn empty() -> Self {
+        Self {
+            start: 0,
+            length: 0,
+            _marker: Default::default(),
+        }
+    }
+
     pub fn get_slice<'a>(&self, slice: &'a [T]) -> &'a [T] {
         &slice[self.indices()]
     }
@@ -774,11 +778,11 @@ impl fmt::Debug for Subs {
             let root = self.get_root_key_without_compacting(var);
 
             if var == root {
-                write!(f, "{} => ", i)?;
+                write!(f, "{i} => ")?;
 
                 subs_fmt_desc(&desc, self, f)?;
             } else {
-                write!(f, "{} => <{:?}>", i, root)?;
+                write!(f, "{i} => <{root:?}>")?;
             }
 
             writeln!(f)?;
@@ -811,7 +815,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                 Some(index) => subs[*index].as_str(),
                 None => "_",
             };
-            write!(f, "Flex({})", name)
+            write!(f, "Flex({name})")
         }
         Content::FlexAbleVar(name, symbols) => {
             let name = match name {
@@ -827,7 +831,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
         Content::RecursionVar {
             structure,
             opt_name,
-        } => write!(f, "Recursion({:?}, {:?})", structure, opt_name),
+        } => write!(f, "Recursion({structure:?}, {opt_name:?})"),
         Content::Structure(flat_type) => subs_fmt_flat_type(flat_type, subs, f),
         Content::Alias(name, arguments, actual, kind) => {
             let slice = subs.get_subs_slice(arguments.all_variables());
@@ -855,7 +859,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             write!(f, "LambdaSet([")?;
 
             for (name, slice) in solved.iter_from_subs(subs) {
-                write!(f, "{:?} ", name)?;
+                write!(f, "{name:?} ")?;
                 for var in slice {
                     write!(
                         f,
@@ -869,7 +873,7 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
 
             write!(f, "]")?;
             if let Some(rec_var) = recursion_var.into_variable() {
-                write!(f, " as <{:?}>", rec_var)?;
+                write!(f, " as <{rec_var:?}>")?;
             }
             for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
                 write!(
@@ -881,10 +885,11 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
                     region
                 )?;
             }
-            write!(f, ", ^<{:?}>)", ambient_function_var)
+            write!(f, ", ^<{ambient_function_var:?}>)")
         }
+        Content::ErasedLambda => write!(f, "ErasedLambda"),
         Content::RangedNumber(range) => {
-            write!(f, "RangedNumber( {:?})", range)
+            write!(f, "RangedNumber( {range:?})")
         }
         Content::Error => write!(f, "Error"),
     }
@@ -903,7 +908,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
         FlatType::Apply(name, arguments) => {
             let slice = subs.get_subs_slice(*arguments);
 
-            write!(f, "Apply({:?}, {:?})", name, slice)
+            write!(f, "Apply({name:?}, {slice:?})")
         }
         FlatType::Func(arguments, lambda_set, result) => {
             let slice = subs.get_subs_slice(*arguments);
@@ -948,7 +953,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 )?;
             }
 
-            write!(f, "}}<{:?}>", new_ext)
+            write!(f, "}}<{new_ext:?}>")
         }
         FlatType::Tuple(elems, ext) => {
             write!(f, "( ")?;
@@ -962,14 +967,14 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 )?;
             }
 
-            write!(f, ")<{:?}>", new_ext)
+            write!(f, ")<{new_ext:?}>")
         }
         FlatType::TagUnion(tags, ext) => {
             write!(f, "[")?;
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
-                write!(f, "{:?} ", name)?;
+                write!(f, "{name:?} ")?;
                 for var in slice {
                     write!(
                         f,
@@ -981,26 +986,22 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
                 write!(f, ", ")?;
             }
 
-            write!(f, "]<{:?}>", new_ext)
+            write!(f, "]<{new_ext:?}>")
         }
         FlatType::FunctionOrTagUnion(tagnames, symbol, ext) => {
             let tagnames: &[TagName] = subs.get_subs_slice(*tagnames);
 
-            write!(
-                f,
-                "FunctionOrTagUnion({:?}, {:?}, {:?})",
-                tagnames, symbol, ext
-            )
+            write!(f, "FunctionOrTagUnion({tagnames:?}, {symbol:?}, {ext:?})")
         }
         FlatType::RecursiveTagUnion(rec, tags, ext) => {
             write!(f, "[")?;
 
             let (it, new_ext) = tags.sorted_iterator_and_ext(subs, *ext);
             for (name, slice) in it {
-                write!(f, "{:?} {:?}, ", name, slice)?;
+                write!(f, "{name:?} {slice:?}, ")?;
             }
 
-            write!(f, "]<{:?}> as <{:?}>", new_ext, rec)
+            write!(f, "]<{new_ext:?}> as <{rec:?}>")
         }
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
         FlatType::EmptyTuple => write!(f, "EmptyTuple"),
@@ -1016,7 +1017,7 @@ impl std::fmt::Debug for DebugUtable<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("UnificationTable {\n")?;
         for v in 0..self.0.utable.len() {
-            f.write_fmt(format_args!("  {} => ", v))?;
+            f.write_fmt(format_args!("  {v} => "))?;
             let var = unsafe { Variable::from_index(v as u32) };
             let root = self.0.utable.root_key_without_compacting(var);
             if root == var {
@@ -1234,7 +1235,7 @@ impl IllegalCycleMark {
 pub struct Variable(u32);
 
 macro_rules! define_const_var {
-    ($($(:pub)? $name:ident),* $(,)?) => {
+    ($($(#[$meta:meta])* $(:pub)? $name:ident),* $(,)?) => {
         #[allow(non_camel_case_types, clippy::upper_case_acronyms)]
         enum ConstVariables {
             $( $name, )*
@@ -1242,7 +1243,7 @@ macro_rules! define_const_var {
         }
 
         impl Variable {
-            $( pub const $name: Variable = Variable(ConstVariables::$name as u32); )*
+            $( $(#[$meta])* pub const $name: Variable = Variable(ConstVariables::$name as u32); )*
 
             pub const NUM_RESERVED_VARS: usize = ConstVariables::FINAL_CONST_VAR as usize;
         }
@@ -1353,6 +1354,9 @@ define_const_var! {
     // The following are abound in derived abilities, so we cache them.
     :pub STR,
     :pub LIST_U8,
+
+    /// The erased lambda type.
+    :pub ERASED_LAMBDA,
 }
 
 impl Variable {
@@ -1698,25 +1702,31 @@ pub struct SubsSnapshot {
 }
 
 impl Subs {
+    // IFTTT INIT-TagNames
     pub const RESULT_TAG_NAMES: SubsSlice<TagName> = SubsSlice::new(0, 2);
     pub const TAG_NAME_ERR: SubsIndex<TagName> = SubsIndex::new(0);
     pub const TAG_NAME_OK: SubsIndex<TagName> = SubsIndex::new(1);
     pub const TAG_NAME_INVALID_NUM_STR: SubsIndex<TagName> = SubsIndex::new(2);
     pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(3);
     pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(4);
+    // END INIT-TagNames
 
+    // IFTTT INIT-VariableSubsSlice
     pub const STR_SLICE: VariableSubsSlice = SubsSlice::new(0, 1);
+    // END INIT-VariableSubsSlice
 
+    // IFTTT INIT-SymbolSubsSlice
     #[rustfmt::skip]
-    pub const AB_ENCODING: SubsSlice<Symbol> = SubsSlice::new(0, 1);
+    pub const AB_ENCODING: SubsSlice<Symbol>        = SubsSlice::new(0, 1);
     #[rustfmt::skip]
-    pub const AB_DECODING: SubsSlice<Symbol> = SubsSlice::new(1, 1);
+    pub const AB_DECODING: SubsSlice<Symbol>        = SubsSlice::new(1, 1);
     #[rustfmt::skip]
-    pub const AB_HASHER: SubsSlice<Symbol>   = SubsSlice::new(2, 1);
+    pub const AB_HASHER: SubsSlice<Symbol>          = SubsSlice::new(2, 1);
     #[rustfmt::skip]
-    pub const AB_HASH: SubsSlice<Symbol>     = SubsSlice::new(3, 1);
+    pub const AB_HASH: SubsSlice<Symbol>            = SubsSlice::new(3, 1);
     #[rustfmt::skip]
-    pub const AB_EQ: SubsSlice<Symbol>       = SubsSlice::new(4, 1);
+    pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
+    // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
         Self::with_capacity(0)
@@ -1727,13 +1737,16 @@ impl Subs {
 
         let mut tag_names = Vec::with_capacity(32);
 
+        // IFTTT INIT-TagNames
         tag_names.push(TagName("Err".into()));
         tag_names.push(TagName("Ok".into()));
 
         tag_names.push(TagName("InvalidNumStr".into()));
         tag_names.push(TagName("BadUtf8".into()));
         tag_names.push(TagName("OutOfBounds".into()));
+        // END INIT-TagNames
 
+        // IFTTT INIT-SymbolNames
         let mut symbol_names = Vec::with_capacity(32);
 
         symbol_names.push(Symbol::ENCODE_ENCODING);
@@ -1741,13 +1754,15 @@ impl Subs {
         symbol_names.push(Symbol::HASH_HASHER);
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
         symbol_names.push(Symbol::BOOL_EQ);
+        // END INIT-SymbolNames
+
+        // IFTTT INIT-VariableSubsSlice
+        let variables = vec![Variable::STR];
+        // END INIT-VariableSubsSlice
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            variables: vec![
-                // Used for STR_SLICE
-                Variable::STR,
-            ],
+            variables,
             tag_names,
             symbol_names,
             field_names: Vec::new(),
@@ -1810,6 +1825,8 @@ impl Subs {
             Variable::LIST_U8,
             Content::Structure(FlatType::Apply(Symbol::LIST_LIST, u8_slice)),
         );
+
+        subs.set_content(Variable::ERASED_LAMBDA, Content::ErasedLambda);
 
         subs
     }
@@ -2163,10 +2180,15 @@ impl Subs {
         self.utable.vars_since_snapshot(&snapshot.utable_snapshot)
     }
 
-    pub fn get_lambda_set(&self, lambda_set: Variable) -> LambdaSet {
-        match self.get_content_without_compacting(lambda_set) {
-            Content::LambdaSet(lambda_set) => *lambda_set,
-            _ => internal_error!("not a lambda set"),
+    pub fn get_lambda_set(&self, mut lambda_set: Variable) -> LambdaSet {
+        loop {
+            match self.get_content_without_compacting(lambda_set) {
+                Content::LambdaSet(lambda_set) => return *lambda_set,
+                Content::RecursionVar { structure, .. } => {
+                    lambda_set = *structure;
+                }
+                _ => internal_error!("not a lambda set"),
+            }
         }
     }
 
@@ -2202,7 +2224,7 @@ impl Subs {
                 | Content::RecursionVar { .. }
                 | Content::RangedNumber(_)
                 | Content::Error => return false,
-                Content::LambdaSet(_) => return true,
+                Content::LambdaSet(_) | Content::ErasedLambda => return false,
                 Content::Structure(FlatType::Func(..)) => return true,
                 Content::Structure(_) => return false,
                 Content::Alias(_, _, real_var, _) => {
@@ -2366,7 +2388,10 @@ pub enum Content {
         structure: Variable,
         opt_name: Option<SubsIndex<Lowercase>>,
     },
+    /// A resolved set of lambdas. Compatible when functions are kinded as lambda set.
     LambdaSet(LambdaSet),
+    /// A type-erased lambda. Compatible when functions are not kinded.
+    ErasedLambda,
     Structure(FlatType),
     Alias(Symbol, AliasVariables, Variable, AliasKind),
     RangedNumber(crate::num::NumericRange),
@@ -2815,9 +2840,7 @@ where
         debug_assert_eq!(
             labels.len(),
             variables.len(),
-            "tag name len != variables len: {:?} {:?}",
-            labels,
-            variables,
+            "tag name len != variables len: {labels:?} {variables:?}",
         );
 
         Self {
@@ -3596,6 +3619,7 @@ fn occurs(
 
                 occurs_union(subs, root_var, ctx, safe!(UnionLabels<Symbol>, solved))
             }
+            ErasedLambda => Ok(()),
             RangedNumber(_range_vars) => Ok(()),
         })();
 
@@ -3681,7 +3705,8 @@ fn explicit_substitute(
             | FlexAbleVar(_, _)
             | RigidAbleVar(_, _)
             | RecursionVar { .. }
-            | Error => in_var,
+            | Error
+            | ErasedLambda => in_var,
 
             Structure(flat_type) => {
                 match flat_type {
@@ -3862,7 +3887,7 @@ fn get_var_names(
         subs.set_mark(var, Mark::GET_VAR_NAMES);
 
         match desc.content {
-            Error | FlexVar(None) | FlexAbleVar(None, _) => taken_names,
+            Error | FlexVar(None) | FlexAbleVar(None, _) | ErasedLambda => taken_names,
 
             FlexVar(Some(name_index)) | FlexAbleVar(Some(name_index), _) => add_name(
                 subs,
@@ -4020,7 +4045,7 @@ where
     } else {
         // TODO is this the proper use of index here, or should we be
         // doing something else like turning it into an ASCII letter?
-        Lowercase::from(format!("{}{}", given_name, index))
+        Lowercase::from(format!("{given_name}{index}"))
     };
 
     match taken_names.get(&indexed_name) {
@@ -4179,7 +4204,7 @@ fn content_to_err_type(
             ErrorType::Alias(symbol, err_args, Box::new(err_type), kind)
         }
 
-        LambdaSet(self::LambdaSet { .. }) => {
+        LambdaSet(..) | ErasedLambda => {
             // Don't print lambda sets since we don't expect them to be exposed to the user
             ErrorType::Error
         }
@@ -4330,7 +4355,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::Record(err_fields, TypeExt::Closed),
 
                 other =>
-                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4362,7 +4387,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::Tuple(err_elems, TypeExt::Closed),
 
                 other =>
-                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4388,7 +4413,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
-                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4418,7 +4443,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
-                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {other:?}")
             }
         }
 
@@ -4450,7 +4475,7 @@ fn flat_type_to_err_type(
                 ErrorType::Error => ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::Closed, pol),
 
                 other =>
-                    panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
+                    panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {other:?}")
             }
         }
     }
@@ -4789,6 +4814,7 @@ impl StorageSubs {
                 unspecialized: Self::offset_uls_slice(offsets, *unspecialized),
                 ambient_function: Self::offset_variable(offsets, *ambient_function_var),
             }),
+            ErasedLambda => ErasedLambda,
             RangedNumber(range) => RangedNumber(*range),
             Error => Content::Error,
         }
@@ -5156,7 +5182,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
             copy
         }
 
-        FlexVar(None) | Error => copy,
+        FlexVar(None) | ErasedLambda | Error => copy,
 
         RecursionVar {
             opt_name,
@@ -5391,6 +5417,7 @@ fn is_registered(content: &Content) -> bool {
         | Content::FlexAbleVar(..)
         | Content::RigidAbleVar(..) => false,
         Content::Structure(FlatType::EmptyRecord | FlatType::EmptyTagUnion) => false,
+        Content::ErasedLambda => false,
 
         Content::Structure(_)
         | Content::RecursionVar { .. }
@@ -5788,6 +5815,12 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
             copy
         }
 
+        ErasedLambda => {
+            env.target.set(copy, make_descriptor(ErasedLambda));
+
+            copy
+        }
+
         RangedNumber(range) => {
             let new_content = RangedNumber(range);
 
@@ -5862,7 +5895,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     }
                 })
             }
-            FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+            FlexVar(_) | FlexAbleVar(_, _) | ErasedLambda | Error => (),
 
             RecursionVar { structure, .. } => {
                 stack.push(*structure);
@@ -6049,7 +6082,8 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
             | Content::RecursionVar {
                 structure: _,
                 opt_name: _,
-            } => {}
+            }
+            | Content::ErasedLambda => {}
         }
     }
 
@@ -6074,7 +6108,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
             //     are determined as illegal and reported during canonicalization, because you
             //     cannot have a tag union without a non-recursive variant.
             | Content::RecursionVar { .. } => {}
-            Content::LambdaSet(_) => {}
+            Content::LambdaSet(_) | Content::ErasedLambda => {}
             Content::Structure(structure) => match structure {
                 FlatType::Apply(_, args) => stack.extend(subs.get_subs_slice(*args)),
                 FlatType::Func(args, _, ret) => {

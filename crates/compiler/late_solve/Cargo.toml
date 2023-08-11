@@ -9,11 +9,13 @@ version.workspace = true
 
 [dependencies]
 roc_can = { path = "../can" }
+roc_checkmate = { path = "../checkmate" }
 roc_collections = { path = "../collections" }
 roc_derive = { path = "../derive" }
 roc_error_macros = { path = "../../error_macros" }
 roc_module = { path = "../module" }
 roc_solve = { path = "../solve" }
+roc_solve_schema = { path = "../solve_schema" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
 

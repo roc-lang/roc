@@ -4,15 +4,20 @@ Roc is not ready for a 0.1 release yet, but we do have:
 
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://roc-lang.org/tutorial)
-- [**docs** for the standard library](https://www.roc-lang.org/builtins/Str)
-- [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
-- [Zulip chat](https://roc.zulipchat.com) for help, questions and discussions
+- [**docs** for the standard library](https://www.roc-lang.org/builtins)
+- [**examples**](https://github.com/roc-lang/examples/tree/main/examples)
+- [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
+- [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
-If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [Zulip chat](https://roc.zulipchat.com), we're friendly!
+If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
 
 ## Sponsors
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en).
+You can 💜 **sponsor** 💜 Roc on:
+- [GitHub](https://github.com/sponsors/roc-lang)
+- [Liberapay](https://liberapay.com/roc_lang)
+
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
@@ -24,6 +29,7 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+* [Ivo Balbaert](https://github.com/Ivo-Balbaert)
 * [Lucas Rosa](https://github.com/rvcas)
 * [Jonas Schell](https://github.com/Ocupe)
 * [Christopher Dolan](https://github.com/cdolan)

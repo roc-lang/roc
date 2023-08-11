@@ -5,5 +5,5 @@ platform "effects"
     imports [pf.Effect]
     provides [mainForHost]
 
-mainForHost : Effect.Effect {} as Fx
+mainForHost : Effect.Effect {}
 mainForHost = main

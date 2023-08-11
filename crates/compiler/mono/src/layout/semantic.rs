@@ -15,6 +15,12 @@ impl<'a> std::fmt::Debug for SemanticRepr<'a> {
     }
 }
 
+impl<'a> SemanticRepr<'a> {
+    pub fn fmt_consistent(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt_consistent(f)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Inner<'a> {
     None,
@@ -22,6 +28,19 @@ enum Inner<'a> {
     Tuple(SemaTuple),
     TagUnion(SemaTagUnion<'a>),
     Lambdas(SemaLambdas<'a>),
+}
+
+impl<'a> Inner<'a> {
+    fn fmt_consistent(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // don't print the interned string name of a symbol to get consistent output
+        if let Self::Lambdas(sema_lambdas) = self {
+            f.debug_struct("SemaLambdas")
+                .field("lambda_count", &sema_lambdas.lambdas.len())
+                .finish()
+        } else {
+            std::fmt::Debug::fmt(&self, f)
+        }
+    }
 }
 
 impl<'a> SemanticRepr<'a> {

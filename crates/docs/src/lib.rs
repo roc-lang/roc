@@ -25,8 +25,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
     let loaded_module = load_module_for_docs(root_file);
 
     // TODO get these from the platform's source file rather than hardcoding them!
+    // github.com/roc-lang/roc/issues/5712
     let package_name = "Documentation".to_string();
-    let version = String::new();
 
     // Clear out the generated-docs dir (we'll create a fresh one at the end)
     if build_dir.exists() {
@@ -101,8 +101,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
     // Insert asset urls & sidebar links
     let template_html = assets
         .raw_template_html
-        .replace("<!-- search.js -->", "/search.js")
-        .replace("<!-- styles.css -->", "/styles.css")
+        .replace("<!-- search.js -->", "search.js")
+        .replace("<!-- styles.css -->", "styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
             "<!-- Prefetch links -->",
@@ -110,7 +110,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 .docs_by_module
                 .iter()
                 .map(|(_, module)| {
-                    let href = module_link_url(module.name.as_str());
+                    let href = module.name.as_str();
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -118,6 +118,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 .join("\n    ")
                 .as_str(),
         )
+        .replace("<!-- base -->", &base_url())
         .replace(
             "<!-- Module links -->",
             render_sidebar(loaded_module.docs_by_module.values()).as_str(),
@@ -142,8 +143,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 page_title(package_name.as_str(), "").as_str(),
             )
             .replace(
-                "<!-- Package Name and Version -->",
-                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+                "<!-- Package Name -->",
+                render_name_link(package_name.as_str()).as_str(),
             )
             .replace(
                 "<!-- Module Docs -->",
@@ -151,10 +152,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
             );
 
         fs::write(build_dir.join("index.html"), rendered_package).unwrap_or_else(|error| {
-            panic!(
-                "Attempted to write index.html but failed with this error: {}",
-                error
-            )
+            panic!("Attempted to write index.html but failed with this error: {error}")
         });
     }
 
@@ -172,8 +170,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
                 page_title(package_name.as_str(), module_name).as_str(),
             )
             .replace(
-                "<!-- Package Name and Version -->",
-                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+                "<!-- Package Name -->",
+                render_name_link(package_name.as_str()).as_str(),
             )
             .replace(
                 "<!-- Module Docs -->",
@@ -188,10 +186,6 @@ pub fn generate_docs_html(root_file: PathBuf) {
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn module_link_url(module_name: &str) -> String {
-    format!("{}{}", base_url(), module_name)
-}
-
 fn page_title(package_name: &str, module_name: &str) -> String {
     format!("<title>{module_name} - {package_name}</title>")
 }
@@ -203,12 +197,11 @@ fn render_package_index(root_module: &LoadedModule) -> String {
     for module in root_module.docs_by_module.values() {
         // The anchor tag containing the module link
         let mut link_buf = String::new();
-        let href = module_link_url(module.name.as_str());
 
         push_html(
             &mut link_buf,
             "a",
-            vec![("href", href.as_str())],
+            vec![("href", module.name.as_str())],
             module.name.as_str(),
         );
 
@@ -235,16 +228,12 @@ fn render_module_documentation(
     all_exposed_symbols: &VecSet<Symbol>,
 ) -> String {
     let mut buf = String::new();
+    let module_name = module.name.as_str();
 
     push_html(&mut buf, "h2", vec![("class", "module-name")], {
         let mut link_buf = String::new();
 
-        push_html(
-            &mut link_buf,
-            "a",
-            vec![("href", "/#")],
-            module.name.as_str(),
-        );
+        push_html(&mut link_buf, "a", vec![("href", "/#")], module_name);
 
         link_buf
     });
@@ -256,12 +245,12 @@ fn render_module_documentation(
                 if all_exposed_symbols.contains(&doc_def.symbol) {
                     buf.push_str("<section>");
 
-                    let name = doc_def.name.as_str();
-                    let href = format!("#{name}");
+                    let def_name = doc_def.name.as_str();
+                    let href = format!("{module_name}#{def_name}");
                     let mut content = String::new();
 
                     push_html(&mut content, "a", vec![("href", href.as_str())], LINK_SVG);
-                    push_html(&mut content, "strong", vec![], name);
+                    push_html(&mut content, "strong", vec![], def_name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -278,7 +267,7 @@ fn render_module_documentation(
                     push_html(
                         &mut buf,
                         "h3",
-                        vec![("id", name), ("class", "entry-name")],
+                        vec![("id", def_name), ("class", "entry-name")],
                         content.as_str(),
                     );
 
@@ -365,33 +354,23 @@ fn base_url() -> String {
     }
 }
 
-fn render_name_and_version(name: &str, version: &str) -> String {
+// TODO render version as well
+fn render_name_link(name: &str) -> String {
     let mut buf = String::new();
-    let mut url_str = base_url();
-
-    url_str.push_str(name);
 
     push_html(&mut buf, "h1", vec![("class", "pkg-full-name")], {
         let mut link_buf = String::new();
 
-        push_html(&mut link_buf, "a", vec![("href", url_str.as_str())], name);
+        // link to root (= docs overview page)
+        push_html(
+            &mut link_buf,
+            "a",
+            vec![("href", base_url().as_str())],
+            name,
+        );
 
         link_buf
     });
-
-    let mut versions_url_str = base_url();
-
-    versions_url_str.push('/');
-    versions_url_str.push_str(name);
-    versions_url_str.push('/');
-    versions_url_str.push_str(version);
-
-    push_html(
-        &mut buf,
-        "a",
-        vec![("class", "version"), ("href", versions_url_str.as_str())],
-        version,
-    );
 
     buf
 }
@@ -400,13 +379,13 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
     let mut buf = String::new();
 
     for module in modules {
-        let href = module_link_url(module.name.as_str());
+        let href = module.name.as_str();
         let mut sidebar_entry_content = String::new();
 
         push_html(
             &mut sidebar_entry_content,
             "a",
-            vec![("class", "sidebar-module-link"), ("href", &href)],
+            vec![("class", "sidebar-module-link"), ("href", href)],
             module.name.as_str(),
         );
 
@@ -418,7 +397,7 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
                     if module.exposed_symbols.contains(&doc_def.symbol) {
                         let mut entry_href = String::new();
 
-                        entry_href.push_str(href.as_str());
+                        entry_href.push_str(href);
                         entry_href.push('#');
                         entry_href.push_str(doc_def.name.as_str());
 
@@ -457,6 +436,7 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     let arena = Bump::new();
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
+        function_kind: roc_solve::FunctionKind::LambdaSet,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::AllAvailable,
@@ -470,10 +450,10 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     ) {
         Ok(loaded) => loaded,
         Err(LoadingProblem::FormattedReport(report)) => {
-            eprintln!("{}", report);
+            eprintln!("{report}");
             std::process::exit(1);
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     }
 }
 
@@ -796,8 +776,7 @@ fn doc_url<'a>(
             Err(_) => {
                 // TODO return Err here
                 panic!(
-                    "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
-                    ident
+                    "Tried to generate an automatic link in docs for symbol `{ident}`, but that symbol was not in scope in this module."
                 );
             }
         }
@@ -819,8 +798,7 @@ fn doc_url<'a>(
                 else if !all_exposed_symbols.contains(&symbol) {
                     // TODO return Err here
                     panic!(
-                            "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
-                            module_name, ident, module_name, ident);
+                            "Tried to generate an automatic link in docs for `{module_name}.{ident}`, but `{module_name}` does not expose `{ident}`.");
                 }
 
                 // This is a valid symbol for this dependency,
@@ -831,7 +809,7 @@ fn doc_url<'a>(
             }
             None => {
                 // TODO return Err here
-                panic!("Tried to generate a doc link for `{}.{}` but the `{}` module was not imported!", module_name, ident, module_name);
+                panic!("Tried to generate a doc link for `{module_name}.{ident}` but the `{module_name}` module was not imported!");
             }
         }
     }
@@ -847,7 +825,7 @@ fn doc_url<'a>(
 
     DocUrl {
         url,
-        title: format!("Docs for {}.{}", module_name, ident),
+        title: format!("Docs for {module_name}.{ident}"),
     }
 }
 
@@ -934,10 +912,9 @@ fn markdown_to_html(
 
     for event in parser {
         match event {
-            Event::Code(cow_str) => {
-                let highlighted_html =
-                    roc_highlight::highlight_roc_code_inline(cow_str.to_string().as_str());
-                docs_parser.push(Event::Html(CowStr::from(highlighted_html)));
+            Event::Code(code_str) => {
+                let inline_code = pulldown_cmark::CowStr::from(format!("<code>{code_str}</code>"));
+                docs_parser.push(pulldown_cmark::Event::Html(inline_code));
             }
             Event::End(Link(LinkType::ShortcutUnknown, ref _url, ref _title)) => {
                 // Replace the preceding Text node with a Code node, so it
@@ -954,17 +931,17 @@ fn markdown_to_html(
 
                 docs_parser.push(event);
             }
-            Event::Start(CodeBlock(CodeBlockKind::Fenced(cow_str))) => {
-                in_code_block = Some(cow_str);
+            Event::Start(CodeBlock(CodeBlockKind::Fenced(code_str))) => {
+                in_code_block = Some(code_str);
             }
             Event::End(CodeBlock(_)) => {
                 match in_code_block {
-                    Some(cow_str) => {
-                        if cow_str.contains("unchecked") {
+                    Some(code_str) => {
+                        if code_str.contains("unchecked") {
                             // TODO HANDLE UNCHECKED
                         }
 
-                        if cow_str.contains("repl") {
+                        if code_str.contains("repl") {
                             // TODO HANDLE REPL
                         }
 

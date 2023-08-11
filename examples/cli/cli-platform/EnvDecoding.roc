@@ -1,27 +1,27 @@
 interface EnvDecoding exposes [EnvFormat, format] imports []
 
 EnvFormat := {} implements [
-         DecoderFormatting {
-             u8: envU8,
-             u16: envU16,
-             u32: envU32,
-             u64: envU64,
-             u128: envU128,
-             i8: envI8,
-             i16: envI16,
-             i32: envI32,
-             i64: envI64,
-             i128: envI128,
-             f32: envF32,
-             f64: envF64,
-             dec: envDec,
-             bool: envBool,
-             string: envString,
-             list: envList,
-             record: envRecord,
-             tuple: envTuple,
-         },
-     ]
+        DecoderFormatting {
+            u8: envU8,
+            u16: envU16,
+            u32: envU32,
+            u64: envU64,
+            u128: envU128,
+            i8: envI8,
+            i16: envI16,
+            i32: envI32,
+            i64: envI64,
+            i128: envI128,
+            f32: envF32,
+            f64: envF64,
+            dec: envDec,
+            bool: envBool,
+            string: envString,
+            list: envList,
+            record: envRecord,
+            tuple: envTuple,
+        },
+    ]
 
 format : {} -> EnvFormat
 format = \{} -> @EnvFormat {}

@@ -455,6 +455,18 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ) {
         todo!("Loading returned complex symbols for AArch64");
     }
+
+    fn setjmp(_buf: &mut Vec<'_, u8>) {
+        todo!()
+    }
+
+    fn longjmp(_buf: &mut Vec<'_, u8>) {
+        todo!()
+    }
+
+    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
@@ -529,7 +541,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _fn_name: String,
         _dst: AArch64GeneralReg,
     ) {
-        todo!("calling functions literal for AArch64");
+        todo!("function pointer for AArch64");
+    }
+
+    #[inline(always)]
+    fn data_pointer(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _fn_name: String,
+        _dst: AArch64GeneralReg,
+    ) {
+        todo!("data pointer for AArch64");
     }
 
     #[inline(always)]
@@ -832,6 +854,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("saving floating point reg to base offset for AArch64");
     }
     #[inline(always)]
+    fn mov_base32_freg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
+        todo!("saving floating point reg to base offset for AArch64");
+    }
+    #[inline(always)]
     fn movesd_mem64_offset32_freg64(
         _buf: &mut Vec<'_, u8>,
         _ptr: AArch64GeneralReg,
@@ -965,33 +991,32 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
-        debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("sign extending 4 byte values");
-        } else if size == 2 {
-            todo!("sign extending 2 byte values");
-        } else if size == 1 {
-            todo!("sign extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for sign extension: {}", size);
+    fn movsx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!("sign extend 1 byte values"),
+            RegisterWidth::W16 => todo!("sign extend 2 byte values"),
+            RegisterWidth::W32 => todo!("sign extend 4 byte values"),
+            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
         }
     }
+
     #[inline(always)]
-    fn movzx_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32, size: u8) {
-        debug_assert!(size <= 8);
-        if size == 8 {
-            Self::mov_reg64_base32(buf, dst, offset);
-        } else if size == 4 {
-            todo!("zero extending 4 byte values");
-        } else if size == 2 {
-            todo!("zero extending 2 byte values");
-        } else if size == 1 {
-            todo!("zero extending 1 byte values");
-        } else {
-            internal_error!("Invalid size for zero extension: {}", size);
+    fn movzx_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        match register_width {
+            RegisterWidth::W8 => todo!("zero extend 1 byte values"),
+            RegisterWidth::W16 => todo!("zero extend 2 byte values"),
+            RegisterWidth::W32 => todo!("zero extend 4 byte values"),
+            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
         }
     }
 
@@ -3161,7 +3186,7 @@ mod tests {
                     UsesZR => "xzr".to_owned(),
                     UsesSP => "sp".to_owned(),
                 },
-                _ => format!("{}", self),
+                _ => format!("{self}"),
             }
         }
     }

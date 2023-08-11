@@ -10,11 +10,12 @@ use std::{collections::HashMap, hash::BuildHasherDefault};
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
+use roc_error_macros::internal_error;
 use roc_module::low_level::LowLevel;
 use roc_module::{low_level::LowLevelWrapperType, symbol::Symbol};
 
+use crate::ir::ErasedField;
 use crate::{
-    borrow::{lowlevel_borrow_signature, Ownership},
     ir::{
         BranchInfo, Call, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
         ModifyRc, Param, Proc, ProcLayout, Stmt,
@@ -221,6 +222,22 @@ impl<'a, 'i> SymbolRcTypesEnv<'a, 'i> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ownership {
+    Owned,
+    Borrowed,
+}
+
+impl Ownership {
+    fn is_owned(&self) -> bool {
+        matches!(self, Ownership::Owned)
+    }
+
+    fn is_borrowed(&self) -> bool {
+        matches!(self, Ownership::Borrowed)
+    }
+}
+
 type SymbolsOwnership = MutMap<Symbol, Ownership>;
 
 /**
@@ -271,9 +288,10 @@ impl<'v> RefcountEnvironment<'v> {
     */
     fn consume_rc_symbol(&mut self, symbol: Symbol) -> Ownership {
         // Consume the symbol by setting it to borrowed (if it was owned before), and return the previous ownership.
-        self.symbols_ownership
-            .insert(symbol, Ownership::Borrowed)
-            .expect("Expected symbol to be in environment")
+        match self.symbols_ownership.insert(symbol, Ownership::Borrowed) {
+            Some(ownership) => ownership,
+            None => internal_error!("Expected symbol {symbol:?} to be in environment"),
+        }
     }
 
     /**
@@ -344,17 +362,16 @@ impl<'v> RefcountEnvironment<'v> {
         // A groupby or something similar would be nice here.
         let mut symbol_usage = MutMap::default();
         for symbol in symbols {
-            match {
-                self.symbols_rc_types
-                    .get(&symbol)
-                    .expect("Expected symbol to be in the map")
-            } {
+            match self.symbols_rc_types.get(&symbol) {
                 // If the symbol is reference counted, we need to increment the usage count.
-                VarRcType::ReferenceCounted => {
+                Some(VarRcType::ReferenceCounted) => {
                     *symbol_usage.entry(symbol).or_default() += 1;
                 }
                 // If the symbol is not reference counted, we don't need to do anything.
-                VarRcType::NotReferenceCounted => continue,
+                Some(VarRcType::NotReferenceCounted) => continue,
+                None => {
+                    internal_error!("symbol {symbol:?} does not have an rc type")
+                }
             }
         }
         symbol_usage
@@ -543,15 +560,16 @@ fn insert_refcount_operations_stmt<'v, 'a>(
                         .iter()
                         .filter(|(_, o)| o.is_owned())
                     {
-                        let error = "All symbols defined in the current environment should be in the environment of the branches.";
                         let consumed =
                             branch_envs
                                 .iter()
                                 .any(|branch_env: &&RefcountEnvironment<'v>| {
-                                    matches!(
-                                        branch_env.get_symbol_ownership(symbol).expect(error),
-                                        Ownership::Borrowed
-                                    )
+                                    match branch_env.get_symbol_ownership(symbol) {
+                                        None => internal_error!(
+                                            "symbol {symbol:?} in the current env should be in the branch's env"
+                                        ),
+                                        Some(ownership) => matches!(ownership, Ownership::Borrowed),
+                                    }
                                 });
                         if consumed {
                             // If the symbol is currently owned, and not in a some branches, it must be consumed in all branches
@@ -870,7 +888,11 @@ fn insert_refcount_operations_binding<'a>(
     }
 
     match expr {
-        Expr::Literal(_) | Expr::NullPointer | Expr::EmptyArray | Expr::RuntimeErrorFunction(_) => {
+        Expr::Literal(_)
+        | Expr::NullPointer
+        | Expr::FunctionPointer { .. }
+        | Expr::EmptyArray
+        | Expr::RuntimeErrorFunction(_) => {
             // Literals, empty arrays, and runtime errors are not (and have nothing) reference counted.
             new_let!(stmt)
         }
@@ -880,16 +902,30 @@ fn insert_refcount_operations_binding<'a>(
 
             inc_owned!(arguments.iter().copied(), new_let)
         }
-        Expr::ExprBox { symbol } => {
+
+        Expr::ErasedMake { value, callee: _ } => {
             let new_let = new_let!(stmt);
 
-            inc_owned!([*symbol], new_let)
+            if let Some(value) = value {
+                inc_owned!([*value], new_let)
+            } else {
+                new_let
+            }
+        }
+
+        Expr::ErasedLoad { symbol, field } => {
+            let new_let = new_let!(stmt);
+
+            match field {
+                ErasedField::Value => inc_owned!([*symbol], new_let),
+                ErasedField::Callee | ErasedField::ValuePtr => new_let,
+            }
         }
 
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
-        | Expr::ExprUnbox { symbol: structure } => {
+        | Expr::UnionFieldPtrAtIndex { structure, .. } => {
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
             let new_stmt = dec_borrowed!([*structure], stmt);
@@ -902,7 +938,9 @@ fn insert_refcount_operations_binding<'a>(
                 match expr {
                     Expr::StructAtIndex { .. }
                     | Expr::UnionAtIndex { .. }
-                    | Expr::ExprUnbox { .. } => insert_inc_stmt(arena, *binding, 1, new_stmt),
+                    | Expr::UnionFieldPtrAtIndex { .. } => {
+                        insert_inc_stmt(arena, *binding, 1, new_stmt)
+                    }
                     // No usage of an element of a reference counted symbol. No need to increment.
                     Expr::GetTagId { .. } => new_stmt,
                     _ => unreachable!("Unexpected expression type"),
@@ -939,6 +977,14 @@ fn insert_refcount_operations_binding<'a>(
                 // A by name call refers to a normal function call.
                 // Normal functions take all their parameters as owned, so we can mark them all as such.
                 CallType::ByName { .. } => {
+                    let new_let = new_let!(stmt);
+
+                    inc_owned!(arguments.iter().copied(), new_let)
+                }
+                // A normal Roc function call, but we don't actually know where its target is.
+                // As such, we assume that it takes all parameters as owned, as will the function
+                // itself.
+                CallType::ByPointer { .. } => {
                     let new_let = new_let!(stmt);
 
                     inc_owned!(arguments.iter().copied(), new_let)
@@ -1089,8 +1135,13 @@ fn insert_refcount_operations_binding<'a>(
                 }
             }
         }
-        Expr::Reuse { .. } | Expr::Reset { .. } | Expr::ResetRef { .. } => {
-            unreachable!("Reset(ref) and reuse should not exist at this point")
+        Expr::Reset { .. } | Expr::ResetRef { .. } => {
+            unreachable!("Reset(ref) should not exist at this point")
+        }
+        Expr::Alloca { initializer, .. } => {
+            let new_let = new_let!(stmt);
+
+            inc_owned!(initializer.as_ref().copied().into_iter(), new_let)
         }
     }
 }
@@ -1205,4 +1256,127 @@ fn insert_dec_stmt<'a>(
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     arena.alloc(Stmt::Refcounting(ModifyRc::Dec(symbol), continuation))
+}
+
+/**
+ * Retrieve the borrow signature of a low-level operation.
+ */
+fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
+    use LowLevel::*;
+
+    // TODO is true or false more efficient for non-refcounted layouts?
+    let irrelevant = Ownership::Owned;
+    let function = irrelevant;
+    let closure_data = irrelevant;
+    let owned = Ownership::Owned;
+    let borrowed = Ownership::Borrowed;
+
+    // Here we define the borrow signature of low-level operations
+    //
+    // - arguments with non-refcounted layouts (ints, floats) are `irrelevant`
+    // - arguments that we may want to update destructively must be Owned
+    // - other refcounted arguments are Borrowed
+    match op {
+        Unreachable => arena.alloc_slice_copy(&[irrelevant]),
+        DictPseudoSeed => arena.alloc_slice_copy(&[irrelevant]),
+        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
+        | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
+            arena.alloc_slice_copy(&[borrowed])
+        }
+        ListWithCapacity | StrWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
+        ListReplaceUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        ListConcat => arena.alloc_slice_copy(&[owned, owned]),
+        StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
+        StrSubstringUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
+        StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
+        StrAppendScalar => arena.alloc_slice_copy(&[owned, irrelevant]),
+        StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrTrim => arena.alloc_slice_copy(&[owned]),
+        StrTrimStart => arena.alloc_slice_copy(&[owned]),
+        StrTrimEnd => arena.alloc_slice_copy(&[owned]),
+        StrSplit => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        StrToNum => arena.alloc_slice_copy(&[borrowed]),
+        ListPrepend => arena.alloc_slice_copy(&[owned, owned]),
+        StrJoinWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        ListMap => arena.alloc_slice_copy(&[owned, function, closure_data]),
+        ListMap2 => arena.alloc_slice_copy(&[owned, owned, function, closure_data]),
+        ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
+        ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
+        ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
+
+        ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
+        ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListDropAt => arena.alloc_slice_copy(&[owned, irrelevant]),
+        ListSwap => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        ListReleaseExcessCapacity => arena.alloc_slice_copy(&[owned]),
+        StrReleaseExcessCapacity => arena.alloc_slice_copy(&[owned]),
+
+        Eq | NotEq => arena.alloc_slice_copy(&[borrowed, borrowed]),
+
+        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
+        | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
+        | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
+        | NumPow | NumPowInt | NumBitwiseAnd | NumBitwiseXor | NumBitwiseOr | NumShiftLeftBy
+        | NumShiftRightBy | NumShiftRightZfBy => arena.alloc_slice_copy(&[irrelevant, irrelevant]),
+
+        NumToStr
+        | NumAbs
+        | NumNeg
+        | NumSin
+        | NumCos
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumRound
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | Not
+        | NumIsNan
+        | NumIsInfinite
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumIntCast
+        | NumToIntChecked
+        | NumToFloatCast
+        | NumToFloatChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits
+        | I128OfDec => arena.alloc_slice_copy(&[irrelevant]),
+        NumBytesToU16 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        NumBytesToU32 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        NumBytesToU64 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        NumBytesToU128 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
+        StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrFromUtf8Range => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
+        StrToUtf8 => arena.alloc_slice_copy(&[owned]),
+        StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+        StrFromInt | StrFromFloat => arena.alloc_slice_copy(&[irrelevant]),
+        Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
+
+        ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
+
+        BoxExpr | UnboxExpr => {
+            unreachable!("These lowlevel operations are turned into mono Expr's")
+        }
+
+        PtrStore => arena.alloc_slice_copy(&[owned, owned]),
+        PtrLoad => arena.alloc_slice_copy(&[owned]),
+        PtrCast => arena.alloc_slice_copy(&[owned]),
+
+        SetJmp | LongJmp | SetLongJmpBuffer => {
+            unreachable!("only inserted in dev backend codegen")
+        }
+
+        PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        | RefCountDecDataPtr | RefCountIsUnique => {
+            unreachable!("Only inserted *after* borrow checking: {:?}", op);
+        }
+    }
 }

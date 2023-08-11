@@ -20,8 +20,8 @@ pub enum LowLevel {
     StrRepeat,
     StrFromFloat,
     StrTrim,
-    StrTrimLeft,
-    StrTrimRight,
+    StrTrimStart,
+    StrTrimEnd,
     StrToNum,
     StrToScalars,
     StrGetUnsafe,
@@ -118,7 +118,9 @@ pub enum LowLevel {
     Not,
     Hash,
     PtrCast,
-    PtrWrite,
+    PtrStore,
+    PtrLoad,
+    PtrClearTagId,
     RefCountIncRcPtr,
     RefCountDecRcPtr,
     RefCountIncDataPtr,
@@ -128,6 +130,9 @@ pub enum LowLevel {
     UnboxExpr,
     Unreachable,
     DictPseudoSeed,
+    SetJmp,
+    LongJmp,
+    SetLongJmpBuffer,
 }
 
 macro_rules! higher_order {
@@ -228,12 +233,18 @@ macro_rules! map_symbol_to_lowlevel {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
-                LowLevel::PtrWrite => unimplemented!(),
+                LowLevel::PtrStore => unimplemented!(),
+                LowLevel::PtrLoad => unimplemented!(),
+                LowLevel::PtrClearTagId => unimplemented!(),
                 LowLevel::RefCountIncRcPtr => unimplemented!(),
                 LowLevel::RefCountDecRcPtr=> unimplemented!(),
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
+
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
@@ -260,8 +271,8 @@ map_symbol_to_lowlevel! {
     StrToUtf8 <= STR_TO_UTF8,
     StrRepeat <= STR_REPEAT,
     StrTrim <= STR_TRIM,
-    StrTrimLeft <= STR_TRIM_LEFT,
-    StrTrimRight <= STR_TRIM_RIGHT,
+    StrTrimStart <= STR_TRIM_START,
+    StrTrimEnd <= STR_TRIM_END,
     StrToScalars <= STR_TO_SCALARS,
     StrGetUnsafe <= STR_GET_UNSAFE,
     StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE,

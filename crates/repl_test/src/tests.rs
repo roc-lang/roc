@@ -1304,3 +1304,101 @@ fn nested_tuple() {
         r#"("a", (2, 3)) : ( Str, ( U32, U32 )a )a"#,
     );
 }
+
+#[test]
+fn ordered_tag_union_memory_layout() {
+    expect_success(
+        indoc!(
+            r#"
+            Loc : { line: U32, column: U32 }
+
+            Node : [ A Loc, Height U8 Loc ]
+
+            x : Node
+            x = Height 1 { line: 2, column: 3 }
+            x
+            "#
+        ),
+        r#"Height 1 { column: 3, line: 2 } : Node"#,
+    );
+}
+
+#[test]
+fn interpolation_with_nested_strings() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Str.joinWith ["a", "b", "c"] ", ") bar"
+            "#
+        ),
+        r#""foo a, b, c bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_num_to_str() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Num.toStr Num.maxI8) bar"
+            "#
+        ),
+        r#""foo 127 bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_operator_desugaring() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Num.toStr (1 + 2)) bar"
+            "#
+        ),
+        r#""foo 3 bar" : Str"#,
+    );
+}
+
+// This test doesn't work on wasm because wasm expects <span>s, but
+// the point of the test is the string interpolation behavior.
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn interpolation_with_nested_interpolation() {
+    expect_failure(
+        indoc!(
+            r#"
+            "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+            "#
+        ),
+        indoc!(
+            r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This string interpolation is invalid:
+
+                4│      "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                String interpolations cannot contain newlines or other interpolations.
+
+                You can learn more about string interpolation at
+                <https://www.roc-lang.org/tutorial#string-interpolation>
+
+
+                Enter an expression to evaluate, or a definition (like x = 1) to use in future expressions.
+
+                Unless there was a compile-time error, expressions get automatically named so you can refer to them later.
+                For example, if you see # val1 after an output, you can now refer to that expression as val1 in future expressions.
+
+                Tips:
+
+                  - ctrl-v + ctrl-j makes a newline
+
+                  - :q to quit
+
+                  - :help"#
+        ),
+        // TODO figure out why the tests prints the repl help text at the end, but only after syntax errors or something?
+        // In the actual repl this doesn't happen, only in the test.
+    );
+}

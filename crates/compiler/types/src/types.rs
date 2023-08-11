@@ -55,11 +55,11 @@ impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
         use RecordField::*;
 
         match self {
-            Optional(typ) => write!(f, "Optional({:?})", typ),
-            Required(typ) => write!(f, "Required({:?})", typ),
-            Demanded(typ) => write!(f, "Demanded({:?})", typ),
-            RigidRequired(typ) => write!(f, "RigidRequired({:?})", typ),
-            RigidOptional(typ) => write!(f, "RigidOptional({:?})", typ),
+            Optional(typ) => write!(f, "Optional({typ:?})"),
+            Required(typ) => write!(f, "Required({typ:?})"),
+            Demanded(typ) => write!(f, "Demanded({typ:?})"),
+            RigidRequired(typ) => write!(f, "RigidRequired({typ:?})"),
+            RigidOptional(typ) => write!(f, "RigidOptional({typ:?})"),
         }
     }
 }
@@ -397,11 +397,6 @@ pub enum TypeTag {
     OpaqueAlias {
         shared: Index<AliasShared>,
         actual: Index<TypeTag>,
-    },
-    HostExposedAlias {
-        shared: Index<AliasShared>,
-        actual_type: Index<TypeTag>,
-        actual_variable: Variable,
     },
 
     Apply {
@@ -998,41 +993,6 @@ impl Types {
                 self.set_type_tag(index, tag, type_arguments_slice)
             }
 
-            Type::HostExposedAlias {
-                name,
-                type_arguments,
-                lambda_set_variables,
-                actual_var,
-                actual,
-            } => {
-                let type_arguments_slice = self.from_old_type_slice(type_arguments.iter());
-
-                let lambda_set_slice = {
-                    let slice = self.reserve_type_tags(lambda_set_variables.len());
-
-                    for (index, argument) in slice.into_iter().zip(lambda_set_variables) {
-                        self.from_old_type_at(index, &argument.0);
-                    }
-
-                    Slice::new(slice.start() as _, slice.len() as _)
-                };
-
-                let alias_shared = AliasShared {
-                    symbol: *name,
-                    type_argument_abilities: Slice::default(),
-                    type_argument_regions: Slice::default(),
-                    lambda_set_variables: lambda_set_slice,
-                    infer_ext_in_output_variables: Slice::default(),
-                };
-
-                let tag = TypeTag::HostExposedAlias {
-                    shared: Index::push_new(&mut self.aliases, alias_shared),
-                    actual_type: self.from_old_type(actual),
-                    actual_variable: *actual_var,
-                };
-
-                self.set_type_tag(index, tag, type_arguments_slice)
-            }
             Type::Variable(var) => {
                 self.set_type_tag(index, TypeTag::Variable(*var), Slice::default())
             }
@@ -1213,27 +1173,6 @@ impl Types {
                         OpaqueAlias {
                             shared: new_shared,
                             actual: new_actual,
-                        },
-                        new_type_arguments,
-                    )
-                }
-                HostExposedAlias {
-                    shared,
-                    actual_type,
-                    actual_variable,
-                } => {
-                    let type_arguments = self.get_type_arguments(typ);
-
-                    let new_type_arguments = defer_slice!(type_arguments);
-                    let new_shared = do_shared!(shared);
-                    let new_actual_type = defer!(actual_type);
-                    let new_actual_variable = subst!(actual_variable);
-
-                    (
-                        HostExposedAlias {
-                            shared: new_shared,
-                            actual_type: new_actual_type,
-                            actual_variable: new_actual_variable,
                         },
                         new_type_arguments,
                     )
@@ -1432,12 +1371,7 @@ mod debug_types {
                 maybe_paren!(Free, p, alias(types, f, tag, shared))
             }
             TypeTag::StructuralAlias { shared, actual }
-            | TypeTag::OpaqueAlias { shared, actual }
-            | TypeTag::HostExposedAlias {
-                shared,
-                actual_type: actual,
-                actual_variable: _,
-            } => maybe_paren!(
+            | TypeTag::OpaqueAlias { shared, actual } => maybe_paren!(
                 Free,
                 p,
                 alias(types, f, tag, shared)
@@ -1609,7 +1543,7 @@ mod debug_types {
         use crate::num::IntLitWidth::*;
         use crate::num::NumericRange::*;
 
-        let fmt_width = f.text(match range.width() {
+        let fmt_width = f.text(match range.min_width() {
             U8 | I8 => "8",
             U16 | I16 => "16",
             U32 | I32 => "32",
@@ -1743,13 +1677,6 @@ pub enum Type {
         actual: Box<Type>,
         kind: AliasKind,
     },
-    HostExposedAlias {
-        name: Symbol,
-        type_arguments: Vec<Type>,
-        lambda_set_variables: Vec<LambdaSet>,
-        actual_var: Variable,
-        actual: Box<Type>,
-    },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
     Apply(Symbol, Vec<Loc<Type>>, Region),
@@ -1835,19 +1762,6 @@ impl Clone for Type {
                 infer_ext_in_output_types: infer_ext_in_output_variables.clone(),
                 actual: actual.clone(),
                 kind: *kind,
-            },
-            Self::HostExposedAlias {
-                name,
-                type_arguments,
-                lambda_set_variables,
-                actual_var,
-                actual,
-            } => Self::HostExposedAlias {
-                name: *name,
-                type_arguments: type_arguments.clone(),
-                lambda_set_variables: lambda_set_variables.clone(),
-                actual_var: *actual_var,
-                actual: actual.clone(),
             },
             Self::RecursiveTagUnion(arg0, arg1, arg2) => {
                 Self::RecursiveTagUnion(*arg0, arg1.clone(), arg2.clone())
@@ -1949,10 +1863,10 @@ fn write_tags<'a>(
 
     let mut it = tags.peekable();
     while let Some((label, arguments)) = it.next() {
-        write!(f, "{:?}", label)?;
+        write!(f, "{label:?}")?;
 
         for argument in arguments {
-            write!(f, " {:?}", argument)?;
+            write!(f, " {argument:?}")?;
         }
 
         if it.peek().is_some() {
@@ -1976,23 +1890,23 @@ impl fmt::Debug for Type {
                         write!(f, ", ")?;
                     }
 
-                    write!(f, "{:?}", arg)?;
+                    write!(f, "{arg:?}")?;
                 }
 
-                write!(f, " |{:?}|", closure)?;
+                write!(f, " |{closure:?}|")?;
                 write!(f, " -> ")?;
 
                 ret.fmt(f)?;
 
                 write!(f, ")")
             }
-            Type::Variable(var) => write!(f, "<{:?}>", var),
+            Type::Variable(var) => write!(f, "<{var:?}>"),
 
             Type::Apply(symbol, args, _) => {
-                write!(f, "({:?}", symbol)?;
+                write!(f, "({symbol:?}")?;
 
                 for arg in args {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " {arg:?}")?;
                 }
 
                 write!(f, ")")
@@ -2004,10 +1918,10 @@ impl fmt::Debug for Type {
                 lambda_set_variables,
                 infer_ext_in_output_types,
             }) => {
-                write!(f, "(DelayedAlias {:?}", symbol)?;
+                write!(f, "(DelayedAlias {symbol:?}")?;
 
                 for arg in type_arguments {
-                    write!(f, " {:?}", arg)?;
+                    write!(f, " {arg:?}")?;
                 }
 
                 for (lambda_set, greek_letter) in
@@ -2017,7 +1931,7 @@ impl fmt::Debug for Type {
                 }
 
                 for (i, infer_ext) in infer_ext_in_output_types.iter().enumerate() {
-                    write!(f, " `{}@{:?}", i, infer_ext)?;
+                    write!(f, " `{i}@{infer_ext:?}")?;
                 }
 
                 write!(f, ")")?;
@@ -2032,12 +1946,12 @@ impl fmt::Debug for Type {
                 actual: _actual,
                 ..
             } => {
-                write!(f, "(Alias {:?}", symbol)?;
+                write!(f, "(Alias {symbol:?}")?;
 
                 for arg in type_arguments {
                     write!(f, " {:?}", &arg.typ)?;
                     if let Some(abs) = &arg.opt_abilities {
-                        write!(f, ":{:?}", abs)?;
+                        write!(f, ":{abs:?}")?;
                     }
                 }
 
@@ -2048,25 +1962,9 @@ impl fmt::Debug for Type {
                 }
 
                 // Sometimes it's useful to see the expansion of the alias
-                write!(f, "[ but actually {:?} ]", _actual)?;
+                write!(f, "[ but actually {_actual:?} ]")?;
 
                 write!(f, ")")?;
-
-                Ok(())
-            }
-            Type::HostExposedAlias {
-                name,
-                type_arguments: arguments,
-                ..
-            } => {
-                write!(f, "HostExposedAlias {:?}", name)?;
-
-                for arg in arguments {
-                    write!(f, " {:?}", arg)?;
-                }
-
-                // Sometimes it's useful to see the expansion of the alias
-                // write!(f, "[ but actually {:?} ]", _actual)?;
 
                 Ok(())
             }
@@ -2082,13 +1980,11 @@ impl fmt::Debug for Type {
                 for (label, field_type) in fields {
                     match field_type {
                         RecordField::Optional(_) | RecordField::RigidOptional(_) => {
-                            write!(f, "{:?} ? {:?}", label, field_type)?
+                            write!(f, "{label:?} ? {field_type:?}")?
                         }
                         RecordField::Required(_)
                         | RecordField::Demanded(_)
-                        | RecordField::RigidRequired(_) => {
-                            write!(f, "{:?} : {:?}", label, field_type)?
-                        }
+                        | RecordField::RigidRequired(_) => write!(f, "{label:?} : {field_type:?}")?,
                     }
 
                     if any_written_yet {
@@ -2129,7 +2025,7 @@ impl fmt::Debug for Type {
                 let mut any_written_yet = false;
 
                 for (_, field_type) in elems.iter() {
-                    write!(f, "{:?}", field_type)?;
+                    write!(f, "{field_type:?}")?;
 
                     if any_written_yet {
                         write!(f, ", ")?;
@@ -2179,7 +2075,7 @@ impl fmt::Debug for Type {
             }
             Type::FunctionOrTagUnion(tag_name, _, ext) => {
                 write!(f, "[")?;
-                write!(f, "{:?}", tag_name)?;
+                write!(f, "{tag_name:?}")?;
                 write!(f, "]")?;
 
                 match ext {
@@ -2204,9 +2100,9 @@ impl fmt::Debug for Type {
             } => {
                 write!(f, "ClosureTag(")?;
 
-                write!(f, "{:?}, ", name)?;
+                write!(f, "{name:?}, ")?;
                 for capture in captures {
-                    write!(f, "{:?}, ", capture)?;
+                    write!(f, "{capture:?}, ")?;
                 }
 
                 write!(f, ")")
@@ -2229,13 +2125,13 @@ impl fmt::Debug for Type {
                     }
                 }?;
 
-                write!(f, " as <{:?}>", rec)
+                write!(f, " as <{rec:?}>")
             }
             Type::RangedNumber(range_vars) => {
-                write!(f, "Ranged({:?})", range_vars)
+                write!(f, "Ranged({range_vars:?})")
             }
             Type::UnspecializedLambdaSet { unspecialized } => {
-                write!(f, "{:?}", unspecialized)
+                write!(f, "{unspecialized:?}")
             }
         }
     }
@@ -2386,22 +2282,6 @@ impl Type {
 
                     stack.push(actual);
                 }
-                HostExposedAlias {
-                    type_arguments,
-                    lambda_set_variables,
-                    actual: actual_type,
-                    ..
-                } => {
-                    for value in type_arguments.iter_mut() {
-                        stack.push(value);
-                    }
-
-                    for lambda_set in lambda_set_variables.iter_mut() {
-                        stack.push(lambda_set.as_inner_mut());
-                    }
-
-                    stack.push(actual_type);
-                }
                 Apply(_, args, _) => {
                     stack.extend(args.iter_mut().map(|t| &mut t.value));
                 }
@@ -2524,22 +2404,6 @@ impl Type {
 
                     stack.push(actual);
                 }
-                HostExposedAlias {
-                    type_arguments,
-                    lambda_set_variables,
-                    actual: actual_type,
-                    ..
-                } => {
-                    for value in type_arguments.iter_mut() {
-                        stack.push(value);
-                    }
-
-                    for lambda_set in lambda_set_variables.iter_mut() {
-                        stack.push(lambda_set.as_inner_mut());
-                    }
-
-                    stack.push(actual_type);
-                }
                 Apply(_, args, _) => {
                     stack.extend(args.iter_mut().map(|t| &mut t.value));
                 }
@@ -2642,10 +2506,6 @@ impl Type {
                 }
                 alias_actual.substitute_alias(rep_symbol, rep_args, actual)
             }
-            HostExposedAlias {
-                actual: actual_type,
-                ..
-            } => actual_type.substitute_alias(rep_symbol, rep_args, actual),
             Apply(symbol, args, region) if *symbol == rep_symbol => {
                 if args.len() == rep_args.len()
                     && args
@@ -2729,9 +2589,6 @@ impl Type {
                 actual: actual_type,
                 ..
             } => alias_symbol == &rep_symbol || actual_type.contains_symbol(rep_symbol),
-            HostExposedAlias { name, actual, .. } => {
-                name == &rep_symbol || actual.contains_symbol(rep_symbol)
-            }
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
             Apply(_, args, _) => args.iter().any(|arg| arg.value.contains_symbol(rep_symbol)),
             RangedNumber(_) => false,
@@ -2795,7 +2652,6 @@ impl Type {
                 actual: actual_type,
                 ..
             } => actual_type.contains_variable(rep_variable),
-            HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
             Apply(_, args, _) => args
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
@@ -2998,22 +2854,6 @@ fn instantiate_aliases<'a, F>(
                 .iter_mut()
                 .for_each(|t| instantiate_aliases(&mut t.value.typ, region, aliases, ctx));
         }
-        HostExposedAlias {
-            type_arguments: type_args,
-            lambda_set_variables,
-            actual: actual_type,
-            ..
-        } => {
-            for arg in type_args {
-                instantiate_aliases(arg, region, aliases, ctx);
-            }
-
-            for arg in lambda_set_variables {
-                arg.instantiate_aliases(region, aliases, ctx);
-            }
-
-            instantiate_aliases(&mut *actual_type, region, aliases, ctx);
-        }
         Alias {
             type_arguments: type_args,
             lambda_set_variables,
@@ -3172,12 +3012,6 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 output.push(*alias_symbol);
                 stack.push(actual_type);
             }
-            HostExposedAlias { name, actual, .. } => {
-                // because the type parameters are inlined in the actual type, we don't need to look
-                // at the type parameters here
-                output.push(*name);
-                stack.push(actual);
-            }
             Apply(symbol, args, _) => {
                 output.push(*symbol);
                 stack.extend(args.iter().map(|t| &t.value));
@@ -3300,16 +3134,6 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         } => {
             for arg in type_arguments {
                 variables_help(&arg.typ, accum);
-            }
-            variables_help(actual, accum);
-        }
-        HostExposedAlias {
-            type_arguments: arguments,
-            actual,
-            ..
-        } => {
-            for arg in arguments {
-                variables_help(arg, accum);
             }
             variables_help(actual, accum);
         }
@@ -3452,16 +3276,6 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
         } => {
             for arg in type_arguments {
                 variables_help_detailed(&arg.typ, accum);
-            }
-            variables_help_detailed(actual, accum);
-        }
-        HostExposedAlias {
-            type_arguments: arguments,
-            actual,
-            ..
-        } => {
-            for arg in arguments {
-                variables_help_detailed(arg, accum);
             }
             variables_help_detailed(actual, accum);
         }
@@ -4016,7 +3830,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             if write_parens {
                 buf.push('(');
             }
-            write!(buf, "{:?}", symbol).unwrap();
+            write!(buf, "{symbol:?}").unwrap();
 
             for arg in arguments {
                 buf.push(' ');
@@ -4061,7 +3875,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             if write_parens {
                 buf.push('(');
             }
-            write!(buf, "{:?}", symbol).unwrap();
+            write!(buf, "{symbol:?}").unwrap();
 
             for arg in arguments {
                 buf.push(' ');
@@ -4146,7 +3960,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             let mut it = tags.into_iter().peekable();
 
             while let Some((tag, args)) = it.next() {
-                write!(buf, "{:?}", tag).unwrap();
+                write!(buf, "{tag:?}").unwrap();
                 for arg in args {
                     buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::InTypeParam);
@@ -4165,7 +3979,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
 
             let mut it = tags.into_iter().peekable();
             while let Some((tag, args)) = it.next() {
-                write!(buf, "{:?}", tag).unwrap();
+                write!(buf, "{tag:?}").unwrap();
                 for arg in args {
                     buf.push(' ');
                     write_debug_error_type_help(arg, buf, Parens::Unnecessary);
@@ -4654,20 +4468,6 @@ fn instantiate_lambda_sets_as_unspecialized(
                 }
                 stack.push(actual);
                 stack.extend(type_arguments.iter_mut().rev().map(|t| &mut t.typ));
-            }
-            Type::HostExposedAlias {
-                name: _,
-                type_arguments,
-                lambda_set_variables,
-                actual_var: _,
-                actual,
-            } => {
-                for lambda_set in lambda_set_variables.iter_mut() {
-                    debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
-                    lambda_set.0 = new_uls();
-                }
-                stack.push(actual);
-                stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Apply(_sym, args, _region) => {
                 stack.extend(args.iter_mut().rev().map(|t| &mut t.value));

@@ -10,6 +10,7 @@ use roc_load::{EntryPoint, ExecutionMode, ExposedToHost, LoadConfig, Threading};
 use roc_module::symbol::Interns;
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_solve::FunctionKind;
 use roc_target::get_target_triple_str;
 use std::cmp::Ordering;
 use std::mem;
@@ -64,7 +65,7 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
 pub const PRECOMPILED_HOST_EXT: &str = "rh"; // Short for "roc host"
 
 pub fn preprocessed_host_filename(target: &Triple) -> Option<String> {
-    roc_target::get_target_triple_str(target).map(|x| format!("{}.{}", x, PRECOMPILED_HOST_EXT))
+    roc_target::get_target_triple_str(target).map(|x| format!("{x}.{PRECOMPILED_HOST_EXT}"))
 }
 
 fn metadata_file_name(target: &Triple) -> String {
@@ -88,6 +89,7 @@ pub fn generate_stub_lib(
     input_path: &Path,
     roc_cache_dir: RocCacheDir<'_>,
     triple: &Triple,
+    function_kind: FunctionKind,
 ) -> std::io::Result<i32> {
     // Note: this should theoretically just be able to load the host, I think.
     // Instead, I am loading an entire app because that was simpler and had example code.
@@ -101,6 +103,7 @@ pub fn generate_stub_lib(
         roc_cache_dir,
         LoadConfig {
             target_info,
+            function_kind,
             render: RenderTarget::Generic,
             palette: DEFAULT_PALETTE,
             threading: Threading::AllAvailable,
@@ -181,9 +184,9 @@ impl ExposedSymbols {
             let sym = x.as_str(interns);
 
             custom_names.extend([
-                format!("roc__{}_1_exposed", sym),
-                format!("roc__{}_1_exposed_generic", sym),
-                format!("roc__{}_1_exposed_size", sym),
+                format!("roc__{sym}_1_exposed"),
+                format!("roc__{sym}_1_exposed_generic"),
+                format!("roc__{sym}_1_exposed_size"),
             ]);
 
             let exported_closure_types = exposed_to_host
@@ -193,9 +196,9 @@ impl ExposedSymbols {
 
             for (i, _) in exported_closure_types.enumerate() {
                 custom_names.extend([
-                    format!("roc__{}_{i}_caller", sym),
-                    format!("roc__{}_{i}_size", sym),
-                    format!("roc__{}_{i}_result_size", sym),
+                    format!("roc__{sym}_{i}_caller"),
+                    format!("roc__{sym}_{i}_size"),
+                    format!("roc__{sym}_{i}_result_size"),
                 ]);
             }
         }
@@ -227,16 +230,16 @@ impl ExposedSymbols {
 
         for sym in &self.top_level_values {
             custom_names.extend([
-                format!("roc__{}_1_exposed", sym),
-                format!("roc__{}_1_exposed_generic", sym),
-                format!("roc__{}_size", sym),
+                format!("roc__{sym}_1_exposed"),
+                format!("roc__{sym}_1_exposed_generic"),
+                format!("roc__{sym}_size"),
             ]);
 
             for closure_type in &self.exported_closure_types {
                 custom_names.extend([
-                    format!("roc__{}_1_{}_caller", sym, closure_type),
-                    format!("roc__{}_1_{}_size", sym, closure_type),
-                    format!("roc__{}_1_{}_result_size", sym, closure_type),
+                    format!("roc__{sym}_1_{closure_type}_caller"),
+                    format!("roc__{sym}_1_{closure_type}_size"),
+                    format!("roc__{sym}_1_{closure_type}_result_size"),
                 ]);
             }
         }
@@ -421,7 +424,7 @@ fn preprocess(
     time: bool,
 ) {
     if verbose {
-        println!("Targeting: {}", target);
+        println!("Targeting: {target}");
     }
 
     let endianness = target

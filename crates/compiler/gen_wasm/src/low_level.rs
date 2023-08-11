@@ -1,7 +1,7 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
@@ -12,7 +12,7 @@ use roc_mono::low_level::HigherOrder;
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
-use crate::{PTR_TYPE, TARGET_INFO};
+use crate::PTR_TYPE;
 use roc_wasm_module::{Align, LocalId, ValueType};
 
 /// Number types used for Wasm code gen
@@ -281,8 +281,8 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
                 backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
             }
-            StrTrimLeft => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_LEFT),
-            StrTrimRight => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_RIGHT),
+            StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
+            StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
             StrReserve => self.load_args_and_call_zig(backend, bitcode::STR_RESERVE),
             StrReleaseExcessCapacity => {
@@ -365,7 +365,7 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 // Increment refcount
-                if self.ret_layout_raw.is_refcounted() {
+                if self.ret_layout_raw.is_refcounted(backend.layout_interner) {
                     let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
                     backend.code_builder.get_local(elem_local);
                     backend.code_builder.i32_const(1);
@@ -398,14 +398,13 @@ impl<'a> LowLevelCall<'a> {
                             {
                                 let list_offset = 0;
                                 let elem_offset = LayoutRepr::Builtin(Builtin::List(list_elem))
-                                    .stack_size(backend.layout_interner, TARGET_INFO);
+                                    .stack_size(backend.layout_interner);
                                 (list_offset, elem_offset, f2)
                             }
                             (_, LayoutRepr::Builtin(Builtin::List(list_elem)))
                                 if l1 == backend.layout_interner.get_repr(list_elem) =>
                             {
-                                let list_offset =
-                                    l1.stack_size(backend.layout_interner, TARGET_INFO);
+                                let list_offset = l1.stack_size(backend.layout_interner);
                                 let elem_offset = 0;
                                 (list_offset, elem_offset, f1)
                             }
@@ -468,7 +467,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -507,7 +506,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
@@ -523,7 +522,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -564,7 +563,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let elem_layout = backend.layout_interner.get_repr(elem_layout);
                 let (elem_width, elem_align) =
-                    elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -1692,10 +1691,8 @@ impl<'a> LowLevelCall<'a> {
                         // In most languages this operation is for signed numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to signed before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
-                        let bit_width = 8 * self
-                            .ret_layout_raw
-                            .stack_size(backend.layout_interner, TARGET_INFO)
-                            as i32;
+                        let bit_width =
+                            8 * self.ret_layout_raw.stack_size(backend.layout_interner) as i32;
                         if bit_width < 32 && !symbol_is_signed_int(backend, num) {
                             // Sign-extend the number by shifting left and right again
                             backend
@@ -1741,9 +1738,7 @@ impl<'a> LowLevelCall<'a> {
                         // In most languages this operation is for unsigned numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to unsigned before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
-                        let bit_width = 8 * self
-                            .ret_layout_raw
-                            .stack_size(backend.layout_interner, TARGET_INFO);
+                        let bit_width = 8 * self.ret_layout_raw.stack_size(backend.layout_interner);
                         if bit_width < 32 && symbol_is_signed_int(backend, num) {
                             let mask = (1 << bit_width) - 1;
 
@@ -1965,7 +1960,38 @@ impl<'a> LowLevelCall<'a> {
                 backend.storage.load_symbols(code_builder, self.arguments);
             }
 
-            PtrWrite => todo!("{:?}", self.lowlevel),
+            PtrStore => {
+                // PtrStore : Ptr a, a -> {}
+                let ptr = self.arguments[0];
+                let value = self.arguments[1];
+
+                let (ptr_local_id, offset) = match backend.storage.get(&ptr) {
+                    StoredValue::Local { local_id, .. } => (*local_id, 0),
+                    _ => internal_error!("A pointer will always be an i32"),
+                };
+
+                // copy the argument to the pointer address
+                backend.storage.copy_value_to_memory(
+                    &mut backend.code_builder,
+                    ptr_local_id,
+                    offset,
+                    value,
+                );
+            }
+            PtrLoad => backend.ptr_load(self.ret_symbol, self.arguments[0]),
+            PtrClearTagId => {
+                let ptr = self.arguments[0];
+
+                let ptr_local_id = match backend.storage.get(&ptr) {
+                    StoredValue::Local { local_id, .. } => *local_id,
+                    _ => internal_error!("A pointer will always be an i32"),
+                };
+
+                backend.code_builder.get_local(ptr_local_id);
+
+                backend.code_builder.i32_const(-4); // 11111111...1100
+                backend.code_builder.i32_and();
+            }
 
             Hash => todo!("{:?}", self.lowlevel),
 
@@ -1986,6 +2012,10 @@ impl<'a> LowLevelCall<'a> {
                 StoredValue::StackMemory { .. } => { /* do nothing */ }
             },
             DictPseudoSeed => self.load_args_and_call_zig(backend, bitcode::UTILS_DICT_PSEUDO_SEED),
+
+            SetJmp | LongJmp | SetLongJmpBuffer => {
+                unreachable!("only inserted in dev backend codegen")
+            }
         }
     }
 
@@ -2001,8 +2031,7 @@ impl<'a> LowLevelCall<'a> {
             .runtime_representation(backend.storage.symbol_layouts[&self.arguments[1]]);
         debug_assert_eq!(
             arg_layout_raw, other_arg_layout,
-            "Cannot do `==` comparison on different types: {:?} vs {:?}",
-            arg_layout, other_arg_layout
+            "Cannot do `==` comparison on different types: {arg_layout:?} vs {other_arg_layout:?}"
         );
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
@@ -2035,7 +2064,7 @@ impl<'a> LowLevelCall<'a> {
             | LayoutRepr::Struct { .. }
             | LayoutRepr::Union(_)
             | LayoutRepr::LambdaSet(_)
-            | LayoutRepr::Boxed(_) => {
+            | LayoutRepr::Ptr(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
                     .storage
@@ -2059,6 +2088,9 @@ impl<'a> LowLevelCall<'a> {
                     self.arguments,
                 )
             }
+
+            LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
@@ -2440,7 +2472,7 @@ pub fn call_higher_order_lowlevel<'a>(
             }
         }
     };
-    let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
+    let wrapper_sym = backend.create_symbol(&format!("#wrap#{fn_name:?}"));
     let wrapper_layout = {
         let mut wrapper_arg_layouts: Vec<InLayout<'a>> =
             Vec::with_capacity_in(argument_layouts.len() + 1, backend.env.arena);
@@ -2455,7 +2487,7 @@ pub fn call_higher_order_lowlevel<'a>(
             argument_layouts.iter().take(n_non_closure_args).map(|lay| {
                 backend
                     .layout_interner
-                    .insert_direct_no_semantic(LayoutRepr::Boxed(*lay))
+                    .insert_direct_no_semantic(LayoutRepr::Ptr(*lay))
             });
 
         wrapper_arg_layouts.push(wrapped_captures_layout);
@@ -2467,7 +2499,7 @@ pub fn call_higher_order_lowlevel<'a>(
                 wrapper_arg_layouts.push(
                     backend
                         .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Boxed(*result_layout)),
+                        .insert_direct_no_semantic(LayoutRepr::Ptr(*result_layout)),
                 );
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),
@@ -2561,7 +2593,7 @@ pub fn call_higher_order_lowlevel<'a>(
             );
             let elem_layout = backend.layout_interner.get_repr(elem_layout);
             let (element_width, alignment) =
-                elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+                elem_layout.stack_size_and_alignment(backend.layout_interner);
 
             let cb = &mut backend.code_builder;
 
@@ -2630,7 +2662,7 @@ fn list_map_n<'a>(
     let elem_ret = unwrap_list_elem_layout(backend.layout_interner.get_repr(return_layout));
     let elem_ret = backend.layout_interner.get_repr(elem_ret);
     let (elem_ret_size, elem_ret_align) =
-        elem_ret.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
+        elem_ret.stack_size_and_alignment(backend.layout_interner);
 
     let cb = &mut backend.code_builder;
 

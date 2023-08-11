@@ -23,7 +23,6 @@ main =
 
         Err GetIntError ->
             Task.putLine "Error: Failed to get Integer from stdin."
-            
 
 sort : List I64 -> List I64
 sort = \list ->

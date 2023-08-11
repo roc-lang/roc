@@ -17,8 +17,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
-    ProcLayout, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, Literal,
+    ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -70,7 +70,7 @@ fn specialize_drops_stmt<'a, 'i>(
     stmt: &Stmt<'a>,
 ) -> &'a Stmt<'a> {
     match stmt {
-        Stmt::Let(binding, expr, layout, continuation) => {
+        Stmt::Let(binding, expr @ Expr::Call(call), layout, continuation) => {
             environment.add_symbol_layout(*binding, *layout);
 
             macro_rules! alloc_let_with_continuation {
@@ -86,168 +86,183 @@ fn specialize_drops_stmt<'a, 'i>(
                 }};
             }
 
-            match expr {
-                Expr::Call(Call {
-                    call_type,
-                    arguments,
-                }) => {
-                    match call_type.clone().replace_lowlevel_wrapper() {
-                        CallType::LowLevel {
-                            op: LowLevel::ListGetUnsafe,
-                            ..
-                        } => {
-                            let [structure, index] = match arguments {
-                                [structure, index] => [structure, index],
-                                _ => unreachable!("List get should have two arguments"),
-                            };
-
-                            environment.add_list_child_symbol(*structure, *binding, index);
-
-                            alloc_let_with_continuation!(environment)
-                        }
-                        // Check whether the increments can be passed to the continuation.
-                        CallType::LowLevel { op, .. } => match low_level_no_rc(&op) {
-                            // It should be safe to pass the increments to the continuation.
-                            RC::NoRc => alloc_let_with_continuation!(environment),
-                            // We probably should not pass the increments to the continuation.
-                            RC::Rc | RC::Uknown => {
-                                let incremented_symbols = environment.incremented_symbols.drain();
-
-                                let new_stmt = alloc_let_with_continuation!(environment);
-
-                                // The new_environment might have inserted increments that were set to 0 before. We need to add th
-                                for (symbol, increment) in incremented_symbols.map.into_iter() {
-                                    environment
-                                        .incremented_symbols
-                                        .insert_count(symbol, increment);
-                                }
-
-                                new_stmt
-                            }
-                        },
-                        _ => {
-                            // Calls can modify the RC of the symbol.
-                            // If we move a increment of children after the function,
-                            // the function might deallocate the child before we can use it after the function.
-                            // If we move the decrement of the parent to before the function,
-                            // the parent might be deallocated before the function can use it.
-                            // Thus forget everything about any increments.
-
-                            let incremented_symbols = environment.incremented_symbols.drain();
-
-                            let new_stmt = alloc_let_with_continuation!(environment);
-
-                            // The new_environment might have inserted increments that were set to 0 before. We need to add th
-                            for (symbol, increment) in incremented_symbols.map.into_iter() {
-                                environment
-                                    .incremented_symbols
-                                    .insert_count(symbol, increment);
-                            }
-
-                            new_stmt
-                        }
-                    }
-                }
-
-                Expr::Tag {
-                    tag_id,
-                    arguments: children,
+            match call.call_type.clone().replace_lowlevel_wrapper() {
+                CallType::LowLevel {
+                    op: LowLevel::ListGetUnsafe,
                     ..
                 } => {
-                    environment.symbol_tag.insert(*binding, *tag_id);
+                    let [structure, index] = match call.arguments {
+                        [structure, index] => [structure, index],
+                        _ => unreachable!("List get should have two arguments"),
+                    };
 
-                    for (index, child) in children.iter().enumerate() {
-                        environment.add_union_child(*binding, *child, *tag_id, index as u64);
+                    environment.add_list_child_symbol(*structure, *binding, index);
+
+                    alloc_let_with_continuation!(environment)
+                }
+                // Check whether the increments can be passed to the continuation.
+                CallType::LowLevel { op, .. } => match low_level_no_rc(&op) {
+                    // It should be safe to pass the increments to the continuation.
+                    RC::NoRc => alloc_let_with_continuation!(environment),
+                    // We probably should not pass the increments to the continuation.
+                    RC::Rc | RC::Uknown => {
+                        let incremented_symbols = environment.incremented_symbols.drain();
+
+                        let new_stmt = alloc_let_with_continuation!(environment);
+
+                        // The new_environment might have inserted increments that were set to 0 before. We need to add th
+                        for (symbol, increment) in incremented_symbols.map.into_iter() {
+                            environment
+                                .incremented_symbols
+                                .insert_count(symbol, increment);
+                        }
+
+                        new_stmt
+                    }
+                },
+                _ => {
+                    // Calls can modify the RC of the symbol.
+                    // If we move a increment of children after the function,
+                    // the function might deallocate the child before we can use it after the function.
+                    // If we move the decrement of the parent to before the function,
+                    // the parent might be deallocated before the function can use it.
+                    // Thus forget everything about any increments.
+
+                    let incremented_symbols = environment.incremented_symbols.drain();
+
+                    let new_stmt = alloc_let_with_continuation!(environment);
+
+                    // The new_environment might have inserted increments that were set to 0 before. We need to add th
+                    for (symbol, increment) in incremented_symbols.map.into_iter() {
+                        environment
+                            .incremented_symbols
+                            .insert_count(symbol, increment);
                     }
 
-                    alloc_let_with_continuation!(environment)
+                    new_stmt
                 }
-                Expr::Struct(children) => {
-                    for (index, child) in children.iter().enumerate() {
-                        environment.add_struct_child(*binding, *child, index as u64);
+            }
+        }
+        Stmt::Let(_, _, _, _) => {
+            use Expr::*;
+
+            // to prevent stack overflows, try to use an explicit stack to accumulate a bunch of
+            // Let statements. Call expressions require more logic and are never put on this stack
+            let mut stack = vec![];
+
+            let mut stmt = stmt;
+
+            while let Stmt::Let(binding, expr, layout, continuation) = stmt {
+                environment.add_symbol_layout(*binding, *layout);
+
+                // update the environment based on the expr
+                match expr {
+                    Call(_) => {
+                        // Expr::Call is tricky and we are lazy and handle it elsewhere. it
+                        // ends a chain of eligible Let statements.
+                        break;
                     }
-
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::ExprBox { symbol: child } => {
-                    environment.add_box_child(*binding, *child);
-
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::Array {
-                    elems: children, ..
-                } => {
-                    for (index, child) in
-                        children
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, child)| match child {
-                                ListLiteralElement::Literal(_) => None,
-                                ListLiteralElement::Symbol(s) => Some((index, s)),
-                            })
-                    {
-                        environment.add_list_child(*binding, *child, index as u64);
-                    }
-
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::StructAtIndex {
-                    index, structure, ..
-                } => {
-                    environment.add_struct_child(*structure, *binding, *index);
-                    // alloc_let_with_continuation!(environment)
-
-                    // TODO do we need to remove the indexed value to prevent it from being dropped sooner?
-                    // It will only be dropped sooner if the reference count is 1. Which can only happen if there is no increment before.
-                    // So we should be fine.
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::UnionAtIndex {
-                    structure,
-                    tag_id,
-                    union_layout: _,
-                    index,
-                } => {
-                    // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
-                    environment.add_union_child(*structure, *binding, *tag_id, *index);
-                    // Generated code might know the tag of the union without switching on it.
-                    // So if we unionAtIndex, we must know the tag and we can use it to specialize the drop.
-                    environment.symbol_tag.insert(*structure, *tag_id);
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::ExprUnbox { symbol } => {
-                    environment.add_box_child(*symbol, *binding);
-                    alloc_let_with_continuation!(environment)
-                }
-
-                Expr::Reuse { .. } => {
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::Reset { .. } => {
-                    // TODO allow to inline this to replace it with resetref
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::ResetRef { .. } => {
-                    alloc_let_with_continuation!(environment)
-                }
-                Expr::Literal(literal) => {
-                    // literal ints are used to store the the index for lists.
-                    // Add it to the env so when we use it to index a list, we can use the index to specialize the drop.
-                    if let Literal::Int(i) = literal {
+                    Literal(crate::ir::Literal::Int(i)) => {
                         environment
                             .symbol_index
                             .insert(*binding, i128::from_ne_bytes(*i) as u64);
                     }
-                    alloc_let_with_continuation!(environment)
+                    Literal(_) => { /* do nothing */ }
+                    Tag {
+                        tag_id,
+                        arguments: children,
+                        ..
+                    } => {
+                        environment.symbol_tag.insert(*binding, *tag_id);
+
+                        for (index, child) in children.iter().enumerate() {
+                            environment.add_union_child(*binding, *child, *tag_id, index as u64);
+                        }
+                    }
+                    Struct(children) => {
+                        for (index, child) in children.iter().enumerate() {
+                            environment.add_struct_child(*binding, *child, index as u64);
+                        }
+                    }
+                    StructAtIndex {
+                        index, structure, ..
+                    } => {
+                        environment.add_struct_child(*structure, *binding, *index);
+
+                        // TODO do we need to remove the indexed value to prevent it from being dropped sooner?
+                        // It will only be dropped sooner if the reference count is 1. Which can only happen if there is no increment before.
+                        // So we should be fine.
+                    }
+                    UnionAtIndex {
+                        structure,
+                        tag_id,
+                        index,
+                        ..
+                    } => {
+                        // TODO perhaps we need the union_layout later as well? if so, create a new function/map to store it.
+                        environment.add_union_child(*structure, *binding, *tag_id, *index);
+                        // Generated code might know the tag of the union without switching on it.
+                        // So if we UnionAtIndex, we must know the tag and we can use it to specialize the drop.
+                        environment.symbol_tag.insert(*structure, *tag_id);
+                    }
+                    UnionFieldPtrAtIndex {
+                        structure, tag_id, ..
+                    } => {
+                        // Generated code might know the tag of the union without switching on it.
+                        // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
+                        environment.symbol_tag.insert(*structure, *tag_id);
+                    }
+                    Array {
+                        elems: children, ..
+                    } => {
+                        let it =
+                            children
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, child)| match child {
+                                    ListLiteralElement::Literal(_) => None,
+                                    ListLiteralElement::Symbol(s) => Some((index, s)),
+                                });
+
+                        for (index, child) in it {
+                            environment.add_list_child(*binding, *child, index as u64);
+                        }
+                    }
+                    ErasedMake { value, callee: _ } => {
+                        if let Some(value) = value {
+                            environment.add_struct_child(*binding, *value, 0);
+                        }
+                    }
+                    ErasedLoad { symbol, field } => {
+                        match field {
+                            ErasedField::Value => {
+                                environment.add_struct_child(*symbol, *binding, 0);
+                            }
+                            ErasedField::Callee | ErasedField::ValuePtr => {
+                                // nothing to own
+                            }
+                        }
+                    }
+                    Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
+                    RuntimeErrorFunction(_)
+                    | FunctionPointer { .. }
+                    | GetTagId { .. }
+                    | Alloca { .. }
+                    | EmptyArray
+                    | NullPointer => { /* do nothing */ }
                 }
-                Expr::RuntimeErrorFunction(_)
-                | Expr::NullPointer
-                | Expr::GetTagId { .. }
-                | Expr::EmptyArray => {
-                    // Does nothing relevant to drop specialization. So we can just continue.
-                    alloc_let_with_continuation!(environment)
-                }
+
+                // now store the let binding for later
+                stack.push((*binding, expr.clone(), *layout));
+
+                // and "recurse" down the statement chain
+                stmt = continuation;
             }
+
+            stack.into_iter().rev().fold(
+                specialize_drops_stmt(arena, layout_interner, ident_ids, environment, stmt),
+                |acc, (binding, expr, layout)| arena.alloc(Stmt::Let(binding, expr, layout, acc)),
+            )
         }
         Stmt::Switch {
             cond_symbol,
@@ -375,9 +390,29 @@ fn specialize_drops_stmt<'a, 'i>(
                 }};
             }
 
+            environment.jump_incremented_symbols =
+                new_default_branch.2.jump_incremented_symbols.clone();
+
             let newer_branches = new_branches
                 .iter()
                 .map(|(label, info, branch, branch_env)| {
+                    for (joinpoint, current_incremented_symbols) in
+                        environment.jump_incremented_symbols.iter_mut()
+                    {
+                        let opt_symbols = branch_env.jump_incremented_symbols.get(joinpoint);
+                        if let Some(branch_incremented_symbols) = opt_symbols {
+                            current_incremented_symbols.map.retain(|key, join_count| {
+                                let opt_count = branch_incremented_symbols.map.get(key);
+                                if let Some(count) = opt_count {
+                                    *join_count = std::cmp::min(*join_count, *count);
+                                }
+
+                                // retain only the Some cases
+                                opt_count.is_some()
+                            });
+                        }
+                    }
+
                     let new_branch = insert_incs!(branch_env, branch);
 
                     (*label, info.clone(), new_branch.clone())
@@ -507,15 +542,6 @@ fn specialize_drops_stmt<'a, 'i>(
                             &mut incremented_children,
                             continuation,
                         ),
-                        LayoutRepr::Boxed(_layout) => specialize_boxed(
-                            arena,
-                            layout_interner,
-                            ident_ids,
-                            environment,
-                            &mut incremented_children,
-                            symbol,
-                            continuation,
-                        ),
                         LayoutRepr::Builtin(Builtin::List(layout)) => specialize_list(
                             arena,
                             layout_interner,
@@ -551,8 +577,9 @@ fn specialize_drops_stmt<'a, 'i>(
                     updated_stmt
                 }
             }
-            ModifyRc::DecRef(_) => {
-                // Inlining has no point, since it doesn't decrement it's children
+            ModifyRc::DecRef(_) | ModifyRc::Free(_) => {
+                // These operations are not recursive (the children are not touched)
+                // so inlining is not useful
                 arena.alloc(Stmt::Refcounting(
                     *rc,
                     specialize_drops_stmt(
@@ -624,35 +651,118 @@ fn specialize_drops_stmt<'a, 'i>(
             body,
             remainder,
         } => {
-            let mut new_environment = environment.clone();
-            new_environment.incremented_symbols.clear();
+            // We cannot perform this optimization if the joinpoint is recursive.
+            // E.g. if the body of a recursive joinpoint contains an increment, we do not want to move that increment up to the remainder.
 
+            let mut remainder_environment = environment.clone();
+
+            let new_remainder = specialize_drops_stmt(
+                arena,
+                layout_interner,
+                ident_ids,
+                &mut remainder_environment,
+                remainder,
+            );
+
+            let mut body_environment = environment.clone();
             for param in parameters.iter() {
-                new_environment.add_symbol_layout(param.symbol, param.layout);
+                body_environment.add_symbol_layout(param.symbol, param.layout);
             }
+            body_environment.incremented_symbols.clear();
 
             let new_body = specialize_drops_stmt(
                 arena,
                 layout_interner,
                 ident_ids,
-                &mut new_environment,
+                &mut body_environment,
                 body,
             );
+
+            let remainder_jump_info = remainder_environment.jump_incremented_symbols.get(id);
+
+            let body_jump_info = body_environment.jump_incremented_symbols.get(id);
+
+            let (newer_body, newer_remainder) = match (remainder_jump_info, body_jump_info) {
+                // We have info from the remainder, and the body is not recursive.
+                // Meaning we can pass the incremented_symbols from the remainder to the body.
+                (Some(jump_info), None) if !jump_info.is_empty() => {
+                    // Update body with incremented symbols from remainder
+                    body_environment.incremented_symbols = jump_info.clone();
+
+                    let newer_body = specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        &mut body_environment,
+                        body,
+                    );
+
+                    // Update remainder
+                    environment.join_incremented_symbols.insert(
+                        *id,
+                        JoinUsage {
+                            join_consumes: jump_info.clone(),
+                            join_returns: body_environment.incremented_symbols,
+                        },
+                    );
+                    let newer_remainder = specialize_drops_stmt(
+                        arena,
+                        layout_interner,
+                        ident_ids,
+                        environment,
+                        remainder,
+                    );
+
+                    (newer_body, newer_remainder)
+                }
+                _ => {
+                    // Keep the body and remainder as is.
+                    // Update the environment with remainder environment.
+
+                    *environment = remainder_environment;
+
+                    (new_body, new_remainder)
+                }
+            };
 
             arena.alloc(Stmt::Join {
                 id: *id,
                 parameters,
-                body: new_body,
-                remainder: specialize_drops_stmt(
-                    arena,
-                    layout_interner,
-                    ident_ids,
-                    environment,
-                    remainder,
-                ),
+                body: newer_body,
+                remainder: newer_remainder,
             })
         }
-        Stmt::Jump(joinpoint_id, arguments) => arena.alloc(Stmt::Jump(*joinpoint_id, arguments)),
+        Stmt::Jump(joinpoint_id, arguments) => {
+            match environment.join_incremented_symbols.get(joinpoint_id) {
+                Some(JoinUsage {
+                    join_consumes,
+                    join_returns,
+                }) => {
+                    // Consume all symbols that were consumed in the join.
+                    for (symbol, count) in join_consumes.map.iter() {
+                        for _ in 0..*count {
+                            let popped = environment.incremented_symbols.pop(symbol);
+                            debug_assert!(
+                                popped,
+                                "Every incremented symbol should be available from jumps"
+                            );
+                        }
+                    }
+                    for (symbol, count) in join_returns.map.iter() {
+                        environment
+                            .incremented_symbols
+                            .insert_count(*symbol, *count);
+                    }
+                }
+                None => {
+                    // No join usage, let the join know the minimum amount of symbols that were incremented from each jump.
+                    environment
+                        .jump_incremented_symbols
+                        .insert(*joinpoint_id, environment.incremented_symbols.clone());
+                }
+            }
+            arena.alloc(Stmt::Jump(*joinpoint_id, arguments))
+        }
         Stmt::Crash(symbol, crash_tag) => arena.alloc(Stmt::Crash(*symbol, *crash_tag)),
     }
 }
@@ -712,7 +822,7 @@ fn specialize_struct<'a, 'i>(
                         // This value has not been index before, create a new symbol.
                         None => {
                             let field_symbol =
-                                environment.create_symbol(ident_ids, &format!("field_val_{}", i));
+                                environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
                             let field_val_expr = Expr::StructAtIndex {
                                 index: i as u64,
@@ -792,12 +902,13 @@ fn specialize_union<'a, 'i>(
                     for (index, _layout) in field_layouts.iter().enumerate() {
                         for (child, t, _i) in children_clone
                             .iter()
+                            .rev()
                             .filter(|(_child, _t, i)| *i == index as u64)
                         {
                             debug_assert_eq!(tag, *t);
 
                             let removed = incremented_children.pop(child);
-                            index_symbols.insert(index, (*child, removed));
+                            index_symbols.entry(index).or_insert((*child, removed));
 
                             if removed {
                                 break;
@@ -850,7 +961,7 @@ fn specialize_union<'a, 'i>(
                                         Some(rc) => {
                                             let field_symbol = environment.create_symbol(
                                                 ident_ids,
-                                                &format!("field_val_{}", i),
+                                                &format!("field_val_{i}"),
                                             );
 
                                             let field_val_expr = Expr::UnionAtIndex {
@@ -916,8 +1027,10 @@ fn specialize_union<'a, 'i>(
                                             ))
                                         }),
                                         arena.alloc(Stmt::Refcounting(
-                                            // TODO this could be replaced by a free if ever added to the IR.
-                                            ModifyRc::DecRef(*symbol),
+                                            // we know for sure that the allocation is unique at
+                                            // this point. Therefore we can free (or maybe reuse)
+                                            // without checking the refcount again.
+                                            ModifyRc::Free(*symbol),
                                             continuation,
                                         )),
                                     )
@@ -953,63 +1066,6 @@ fn specialize_union<'a, 'i>(
     }
 }
 
-fn specialize_boxed<'a, 'i>(
-    arena: &'a Bump,
-    layout_interner: &'i mut STLayoutInterner<'a>,
-    ident_ids: &'i mut IdentIds,
-    environment: &mut DropSpecializationEnvironment<'a>,
-    incremented_children: &mut CountingMap<Child>,
-    symbol: &Symbol,
-    continuation: &'a Stmt<'a>,
-) -> &'a Stmt<'a> {
-    let removed = match incremented_children.map.iter().next() {
-        Some((s, _)) => {
-            let s = *s;
-            incremented_children.pop(&s);
-            Some(s)
-        }
-        None => None,
-    };
-
-    let new_continuation =
-        specialize_drops_stmt(arena, layout_interner, ident_ids, environment, continuation);
-
-    match removed {
-        Some(s) => {
-            branch_uniqueness(
-                arena,
-                ident_ids,
-                layout_interner,
-                environment,
-                *symbol,
-                // If the symbol is unique:
-                // - free the box
-                |_, _, continuation| {
-                    arena.alloc(Stmt::Refcounting(
-                        // TODO can be replaced by free if ever added to the IR.
-                        ModifyRc::DecRef(*symbol),
-                        continuation,
-                    ))
-                },
-                // If the symbol is not unique:
-                // - increment the child
-                // - decref the box
-                |_, _, continuation| {
-                    arena.alloc(Stmt::Refcounting(
-                        ModifyRc::Inc(s, 1),
-                        arena.alloc(Stmt::Refcounting(ModifyRc::DecRef(*symbol), continuation)),
-                    ))
-                },
-                new_continuation,
-            )
-        }
-        None => {
-            // No known children, keep decrementing the symbol.
-            arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), new_continuation))
-        }
-    }
-}
-
 fn specialize_list<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i mut STLayoutInterner<'a>,
@@ -1017,7 +1073,7 @@ fn specialize_list<'a, 'i>(
     environment: &mut DropSpecializationEnvironment<'a>,
     incremented_children: &mut CountingMap<Child>,
     symbol: &Symbol,
-    item_layout: InLayout,
+    item_layout: InLayout<'a>,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     let current_length = environment.list_length.get(symbol).copied();
@@ -1034,11 +1090,11 @@ fn specialize_list<'a, 'i>(
         layout_interner.contains_refcounted(item_layout),
         current_length,
     ) {
+        // Only specialize lists if the amount of children is known.
+        // Otherwise we might have to insert an unbouned number of decrements.
         (true, Some(length)) => {
             match environment.list_children.get(symbol) {
-                // Only specialize lists if all children are known.
-                // Otherwise we might have to insert an unbouned number of decrements.
-                Some(children) if children.len() as u64 == length => {
+                Some(children) => {
                     // TODO perhaps this allocation can be avoided.
                     let children_clone = children.clone();
 
@@ -1047,7 +1103,11 @@ fn specialize_list<'a, 'i>(
                     let mut index_symbols = MutMap::default();
 
                     for index in 0..length {
-                        for (child, i) in children_clone.iter().filter(|(_child, i)| *i == index) {
+                        for (child, i) in children_clone
+                            .iter()
+                            .rev()
+                            .filter(|(_child, i)| *i == index)
+                        {
                             debug_assert!(length > *i);
 
                             let removed = incremented_children.pop(child);
@@ -1074,15 +1134,54 @@ fn specialize_list<'a, 'i>(
 
                     // Reversed to ensure that the generated code decrements the items in the correct order.
                     for i in (0..length).rev() {
-                        let (s, popped) = index_symbols.get(&i).unwrap();
+                        match index_symbols.get(&i) {
+                            // If the symbol is known, we can decrement it (if incremented before).
+                            Some((s, popped)) => {
+                                if !*popped {
+                                    // Decrement the children that were not incremented before. And thus don't cancel out.
+                                    newer_continuation = arena.alloc(Stmt::Refcounting(
+                                        ModifyRc::Dec(*s),
+                                        newer_continuation,
+                                    ));
+                                }
 
-                        if !*popped {
-                            // Decrement the children that were not incremented before. And thus don't cancel out.
-                            newer_continuation = arena
-                                .alloc(Stmt::Refcounting(ModifyRc::Dec(*s), newer_continuation));
-                        }
+                                // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                            }
+                            // If the symbol is unknown, we have to get the value from the list.
+                            // Should only happen when list elements are discarded.
+                            None => {
+                                let field_symbol =
+                                    environment.create_symbol(ident_ids, &format!("field_val_{i}"));
 
-                        // Do nothing for the children that were incremented before, as the decrement will cancel out.
+                                let index_symbol =
+                                    environment.create_symbol(ident_ids, &format!("index_val_{i}"));
+
+                                let dec = arena.alloc(Stmt::Refcounting(
+                                    ModifyRc::Dec(field_symbol),
+                                    newer_continuation,
+                                ));
+
+                                let index = arena.alloc(Stmt::Let(
+                                    field_symbol,
+                                    Expr::Call(Call {
+                                        call_type: CallType::LowLevel {
+                                            op: LowLevel::ListGetUnsafe,
+                                            update_mode: UpdateModeId::BACKEND_DUMMY,
+                                        },
+                                        arguments: arena.alloc([*symbol, index_symbol]),
+                                    }),
+                                    item_layout,
+                                    dec,
+                                ));
+
+                                newer_continuation = arena.alloc(Stmt::Let(
+                                    index_symbol,
+                                    Expr::Literal(Literal::Int(i128::to_ne_bytes(i as i128))),
+                                    Layout::isize(layout_interner.target_info()),
+                                    index,
+                                ));
+                            }
+                        };
                     }
 
                     newer_continuation
@@ -1208,8 +1307,21 @@ where
                 arena.alloc(Stmt::Switch {
                     cond_symbol: unique_symbol,
                     cond_layout: Layout::BOOL,
-                    branches: &*arena.alloc([(1, BranchInfo::None, u.clone())]),
-                    default_branch: (BranchInfo::None, n),
+                    branches: &*arena.alloc([(
+                        1,
+                        BranchInfo::Unique {
+                            scrutinee: symbol,
+                            unique: true,
+                        },
+                        u.clone(),
+                    )]),
+                    default_branch: (
+                        BranchInfo::Unique {
+                            scrutinee: symbol,
+                            unique: false,
+                        },
+                        n,
+                    ),
                     ret_layout: environment.layout,
                 })
             };
@@ -1297,6 +1409,18 @@ struct DropSpecializationEnvironment<'a> {
 
     // Map containing the current known length of a list.
     list_length: MutMap<Symbol, u64>,
+
+    // A map containing the minimum number of symbol increments from jumps for a joinpoint.
+    jump_incremented_symbols: MutMap<JoinPointId, CountingMap<Symbol>>,
+
+    // A map containing the expected number of symbol increments from joinpoints for a jump.
+    join_incremented_symbols: MutMap<JoinPointId, JoinUsage>,
+}
+
+#[derive(Clone)]
+struct JoinUsage {
+    join_consumes: CountingMap<Symbol>,
+    join_returns: CountingMap<Symbol>,
 }
 
 impl<'a> DropSpecializationEnvironment<'a> {
@@ -1314,10 +1438,12 @@ impl<'a> DropSpecializationEnvironment<'a> {
             symbol_tag: MutMap::default(),
             symbol_index: MutMap::default(),
             list_length: MutMap::default(),
+            jump_incremented_symbols: MutMap::default(),
+            join_incremented_symbols: MutMap::default(),
         }
     }
 
-    fn create_symbol<'i>(&self, ident_ids: &'i mut IdentIds, debug_name: &str) -> Symbol {
+    fn create_symbol(&self, ident_ids: &mut IdentIds, debug_name: &str) -> Symbol {
         let ident_id = ident_ids.add_str(debug_name);
         Symbol::new(self.home, ident_id)
     }
@@ -1346,13 +1472,6 @@ impl<'a> DropSpecializationEnvironment<'a> {
             .push((child, tag, index));
     }
 
-    fn add_box_child(&mut self, parent: Parent, child: Child) {
-        self.box_children
-            .entry(parent)
-            .or_insert_with(|| Vec::new_in(self.arena))
-            .push(child);
-    }
-
     fn add_list_child(&mut self, parent: Parent, child: Child, index: u64) {
         self.list_children
             .entry(parent)
@@ -1370,19 +1489,19 @@ impl<'a> DropSpecializationEnvironment<'a> {
         let mut res = Vec::new_in(self.arena);
 
         if let Some(children) = self.struct_children.get(parent) {
-            res.extend(children.iter().map(|(child, _)| child));
+            res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
         if let Some(children) = self.union_children.get(parent) {
-            res.extend(children.iter().map(|(child, _, _)| child));
+            res.extend(children.iter().rev().map(|(child, _, _)| child));
         }
 
         if let Some(children) = self.box_children.get(parent) {
-            res.extend(children.iter());
+            res.extend(children.iter().rev());
         }
 
         if let Some(children) = self.list_children.get(parent) {
-            res.extend(children.iter().map(|(child, _)| child));
+            res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
         res
@@ -1422,8 +1541,8 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         StrAppendScalar => RC::Rc,
         StrGetScalarUnsafe => RC::NoRc,
         StrTrim => RC::Rc,
-        StrTrimLeft => RC::Rc,
-        StrTrimRight => RC::Rc,
+        StrTrimStart => RC::Rc,
+        StrTrimEnd => RC::Rc,
         StrSplit => RC::NoRc,
         StrToNum => RC::NoRc,
         ListPrepend => RC::Rc,
@@ -1492,17 +1611,24 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }
 
-        PtrCast | PtrWrite | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        // only inserted for internal purposes. RC should not touch it
+        PtrStore => RC::NoRc,
+        PtrLoad => RC::NoRc,
+        PtrCast => RC::NoRc,
+
+        PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 
 /// Map that contains a count for each key.
 /// Keys with a count of 0 are kept around, so that it can be seen that they were once present.
-#[derive(Clone)]
-struct CountingMap<K> {
+#[derive(Clone, PartialEq, Eq)]
+struct CountingMap<K: std::cmp::Eq + std::hash::Hash> {
     map: MutMap<K, u64>,
 }
 
@@ -1551,6 +1677,10 @@ where
     }
 
     fn clear(&mut self) {
-        self.map.clear();
+        self.map.clear()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.map.is_empty()
     }
 }

@@ -1,5 +1,4 @@
 use super::pattern::{build_list_index_probe, store_pattern, DestructType, ListIndex, Pattern};
-use crate::borrow::Ownership;
 use crate::ir::{
     substitute_in_exprs_many, BranchInfo, Call, CallType, CompiledGuardStmt, Env, Expr,
     GuardStmtSpec, JoinPointId, Literal, Param, Procs, Stmt,
@@ -775,8 +774,7 @@ fn to_relevant_branch<'a>(
                 // if there is no test, the pattern should not require any
                 debug_assert!(
                     matches!(pattern, Pattern::Identifier(_) | Pattern::Underscore,),
-                    "{:?}",
-                    pattern,
+                    "{pattern:?}",
                 );
 
                 Some(branch.clone())
@@ -1140,7 +1138,7 @@ fn to_relevant_branch_help<'a>(
         EnumLiteral { tag_id, .. } => match test {
             IsByte {
                 tag_id: test_id, ..
-            } if tag_id == *test_id as _ => {
+            } if tag_id == *test_id as u8 => {
                 start.extend(end);
                 Some(Branch {
                     goal: branch.goal,
@@ -1480,7 +1478,6 @@ pub(crate) fn optimize_when<'a>(
                     parameters_buf.push(Param {
                         symbol: param_symbol,
                         layout,
-                        ownership: Ownership::Owned,
                     });
                     pattern_symbols_buf.push(pattern_symbol);
                     substitutions.insert(pattern_symbol, param_symbol);
@@ -2112,7 +2109,6 @@ fn decide_to_branching<'a>(
             let param = Param {
                 symbol: test_symbol,
                 layout: Layout::BOOL,
-                ownership: Ownership::Owned,
             };
 
             let CompiledGuardStmt {

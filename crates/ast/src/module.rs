@@ -12,6 +12,7 @@ pub fn load_module(
 ) -> LoadedModule {
     let load_config = LoadConfig {
         target_info: TargetInfo::default_x86_64(), // editor only needs type info, so this is unused
+        function_kind: roc_solve::FunctionKind::LambdaSet, // TODO the editor may need to dynamically change this
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
@@ -25,14 +26,8 @@ pub fn load_module(
     match loaded {
         Ok(x) => x,
         Err(roc_load::LoadingProblem::FormattedReport(report)) => {
-            panic!(
-                "Failed to load module from src_file: {:?}. Report: {}",
-                src_file, report
-            );
+            panic!("Failed to load module from src_file: {src_file:?}. Report: {report}");
         }
-        Err(e) => panic!(
-            "Failed to load module from src_file {:?}: {:?}",
-            src_file, e
-        ),
+        Err(e) => panic!("Failed to load module from src_file {src_file:?}: {e:?}"),
     }
 }

@@ -6,7 +6,7 @@ use crate::{
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
@@ -22,6 +22,8 @@ use std::rc::Rc;
 use RegStorage::*;
 use StackStorage::*;
 use Storage::*;
+
+use super::RegisterWidth;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RegStorage<GeneralReg: RegTrait, FloatReg: RegTrait> {
@@ -343,10 +345,19 @@ impl<
                 sign_extend,
             }) => {
                 let reg = self.get_general_reg(buf);
+
+                let register_width = match size {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => internal_error!("Invalid size: {size}"),
+                };
+
                 if sign_extend {
-                    ASM::movsx_reg64_base32(buf, reg, base_offset, size as u8);
+                    ASM::movsx_reg_base32(buf, register_width, reg, base_offset);
                 } else {
-                    ASM::movzx_reg64_base32(buf, reg, base_offset, size as u8);
+                    ASM::movzx_reg_base32(buf, register_width, reg, base_offset);
                 }
                 self.general_used_regs.push((reg, *sym));
                 self.symbol_storage_map.insert(*sym, Reg(General(reg)));
@@ -469,10 +480,18 @@ impl<
             }) => {
                 debug_assert!(*size <= 8);
 
+                let register_width = match size {
+                    8 => RegisterWidth::W64,
+                    4 => RegisterWidth::W32,
+                    2 => RegisterWidth::W16,
+                    1 => RegisterWidth::W8,
+                    _ => internal_error!("Invalid size: {size}"),
+                };
+
                 if *sign_extend {
-                    ASM::movsx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                    ASM::movsx_reg_base32(buf, register_width, reg, *base_offset)
                 } else {
-                    ASM::movzx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                    ASM::movzx_reg_base32(buf, register_width, reg, *base_offset)
                 }
             }
             Stack(Complex { size, .. }) => {
@@ -614,8 +633,7 @@ impl<
 
         let (union_offset, _) = self.stack_offset_and_size(structure);
 
-        let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(layout_interner, self.target_info);
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(layout_interner);
         let id_offset = data_size - data_alignment;
         let discriminant = union_layout.discriminant();
 
@@ -765,7 +783,11 @@ impl<
                         let reg = self.load_to_float_reg(buf, sym);
                         ASM::mov_base32_freg64(buf, to_offset, reg);
                     }
-                    FloatWidth::F32 => todo!(),
+                    FloatWidth::F32 => {
+                        debug_assert_eq!(to_offset % 4, 0);
+                        let reg = self.load_to_float_reg(buf, sym);
+                        ASM::mov_base32_freg64(buf, to_offset, reg);
+                    }
                 },
                 Builtin::Bool => {
                     // same as 8-bit integer, but we special-case true/false because these symbols
@@ -785,7 +807,13 @@ impl<
                         }
                     }
                 }
-                Builtin::Decimal => todo!(),
+                Builtin::Decimal => {
+                    let (from_offset, size) = self.stack_offset_and_size(sym);
+                    debug_assert_eq!(from_offset % 8, 0);
+                    debug_assert_eq!(size % 8, 0);
+                    debug_assert_eq!(size, layout_interner.stack_size(*layout));
+                    self.copy_to_stack_offset(buf, size, from_offset, to_offset)
+                }
                 Builtin::Str | Builtin::List(_) => {
                     let (from_offset, size) = self.stack_offset_and_size(sym);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
@@ -808,7 +836,8 @@ impl<
 
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
-            LayoutRepr::RecursivePointer(_) | LayoutRepr::Boxed(_) | LayoutRepr::Union(_) => {
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
+            pointer_layouts!() => {
                 // like a 64-bit integer
                 debug_assert_eq!(to_offset % 8, 0);
                 let reg = self.load_to_general_reg(buf, sym);
@@ -1146,12 +1175,7 @@ impl<
     ) {
         let mut param_storage = bumpalo::vec![in self.env.arena];
         param_storage.reserve(params.len());
-        for Param {
-            symbol,
-            ownership: _,
-            layout,
-        } in params
-        {
+        for Param { symbol, layout } in params {
             // Claim a location for every join point parameter to be loaded at.
             // Put everything on the stack for simplicity.
             self.joinpoint_argument_stack_storage(layout_interner, *symbol, *layout);

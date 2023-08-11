@@ -469,8 +469,7 @@ impl IAbilitiesStore<Resolved> {
 
         debug_assert!(
             old_specialization.is_none(),
-            "Existing resolution: {:?}",
-            old_specialization
+            "Existing resolution: {old_specialization:?}"
         );
     }
 
