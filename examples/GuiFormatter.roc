@@ -3,12 +3,7 @@ interface GuiFormatter
         GuiFormatter,
         toGui,
     ]
-    imports [
-        Inspect.{
-            Formatter,
-            Inspector,
-        },
-    ]
+    imports []
 
 ## This can't depend on the platform, so I just copied all of this.
 
@@ -49,7 +44,7 @@ GuiFormatter := { nodes : List Elem }
 init : {} -> GuiFormatter
 init = \{} -> @GuiFormatter { nodes: [] }
 
-list : list, Inspect.ElemWalker GuiFormatter list elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
+list : list, ElemWalker GuiFormatter list elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
 list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes
@@ -63,7 +58,7 @@ list = \content, walkFn, toInspector ->
 
     addNode f0 (Col nodes)
 
-set : set, Inspect.ElemWalker GuiFormatter set elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
+set : set, ElemWalker GuiFormatter set elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
 set = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes
@@ -77,7 +72,7 @@ set = \content, walkFn, toInspector ->
 
     addNode f0 (Col nodes)
 
-dict : dict, Inspect.KeyValWalker GuiFormatter dict key value, (key -> Inspector GuiFormatter), (value -> Inspector GuiFormatter) -> Inspector GuiFormatter
+dict : dict, KeyValWalker GuiFormatter dict key value, (key -> Inspector GuiFormatter), (value -> Inspector GuiFormatter) -> Inspector GuiFormatter
 dict = \d, walkFn, keyToInspector, valueToInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes

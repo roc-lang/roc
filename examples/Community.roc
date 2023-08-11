@@ -7,9 +7,7 @@ interface Community
         Person,
         walkFriendNames,
     ]
-    imports [
-        Inspect.{ InspectFormatter, Inspector, Inspect },
-    ]
+    imports []
 
 Community := {
     people : List Person,

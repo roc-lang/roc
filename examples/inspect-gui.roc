@@ -1,7 +1,6 @@
 app "inspect-gui"
     packages { pf: "gui/platform/main.roc" }
     imports [
-        Inspect,
         Community,
         GuiFormatter,
     ]

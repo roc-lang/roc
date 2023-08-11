@@ -1,10 +1,11 @@
 interface Inspect
     exposes [
         Inspect,
-        InspectFormatter,
         Inspector,
-        KeyValWalker,
+        InspectFormatter,
         ElemWalker,
+        KeyValWalker,
+        inspect,
         init,
         list,
         set,
@@ -30,10 +31,12 @@ interface Inspect
         dec,
         custom,
         apply,
-        inspect,
         toInspector,
     ]
-    imports []
+    imports [
+        Bool.{ Bool },
+        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
+    ]
 
 KeyValWalker state collection key val : collection, state, (state, key, val -> state) -> state
 ElemWalker state collection elem : collection, state, (state, elem -> state) -> state
