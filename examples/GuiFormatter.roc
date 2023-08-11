@@ -12,34 +12,34 @@ ButtonStyles : { bgColor : Rgba, borderColor : Rgba, borderWidth : F32, textColo
 Elem : [Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str]
 
 GuiFormatter := { nodes : List Elem }
-     has [
-         Formatter {
-             init: init,
-             list: list,
-             set: set,
-             dict: dict,
-             tag: tag,
-             tuple: tuple,
-             record: record,
-             bool: bool,
-             str: str,
-             opaque: opaque,
-             u8: u8,
-             i8: i8,
-             u16: u16,
-             i16: i16,
-             u32: u32,
-             i32: i32,
-             u64: u64,
-             i64: i64,
-             u128: u128,
-             i128: i128,
-             f32: f32,
-             f64: f64,
-             dec: dec,
+    has [
+        Formatter {
+            init: init,
+            list: list,
+            set: set,
+            dict: dict,
+            tag: tag,
+            tuple: tuple,
+            record: record,
+            bool: bool,
+            str: str,
+            opaque: opaque,
+            u8: u8,
+            i8: i8,
+            u16: u16,
+            i16: i16,
+            u32: u32,
+            i32: i32,
+            u64: u64,
+            i64: i64,
+            u128: u128,
+            i128: i128,
+            f32: f32,
+            f64: f64,
+            dec: dec,
 
-         },
-     ]
+        },
+    ]
 
 init : {} -> GuiFormatter
 init = \{} -> @GuiFormatter { nodes: [] }
