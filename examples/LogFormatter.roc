@@ -43,7 +43,7 @@ LogFormatter := { data : Str }
 init : {} -> LogFormatter
 init = \{} -> @LogFormatter { data: "" }
 
-list : list, Inspect.ElemWalkFn (LogFormatter, Bool) list elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
+list : list, Inspect.ElemWalker (LogFormatter, Bool) list elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
 list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     write f0 "["
@@ -62,7 +62,7 @@ list = \content, walkFn, toInspector ->
     |> .0
     |> write "]"
 
-set : set, Inspect.ElemWalkFn (LogFormatter, Bool) set elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
+set : set, Inspect.ElemWalker (LogFormatter, Bool) set elem, (elem -> Inspector LogFormatter) -> Inspector LogFormatter
 set = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     write f0 "{"
@@ -81,7 +81,7 @@ set = \content, walkFn, toInspector ->
     |> .0
     |> write "}"
 
-dict : dict, Inspect.KeyValWalkFn (LogFormatter, Bool) dict key value, (key -> Inspector LogFormatter), (value -> Inspector LogFormatter) -> Inspector LogFormatter
+dict : dict, Inspect.KeyValWalker (LogFormatter, Bool) dict key value, (key -> Inspector LogFormatter), (value -> Inspector LogFormatter) -> Inspector LogFormatter
 dict = \d, walkFn, keyToInspector, valueToInspector ->
     f0 <- Inspect.custom
     write f0 "{"

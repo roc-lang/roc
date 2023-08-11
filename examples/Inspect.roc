@@ -3,6 +3,8 @@ interface Inspect
         Inspect,
         InspectFormatter,
         Inspector,
+        KeyValWalker,
+        ElemWalker,
         init,
         list,
         set,
@@ -30,13 +32,11 @@ interface Inspect
         apply,
         inspect,
         toInspector,
-        KeyValWalkFn,
-        ElemWalkFn,
     ]
     imports []
 
-KeyValWalkFn state container key value : container, state, (state, key, value -> state) -> state
-ElemWalkFn state container elem : container, state, (state, elem -> state) -> state
+KeyValWalker state collection key val : collection, state, (state, key, val -> state) -> state
+ElemWalker state collection elem : collection, state, (state, elem -> state) -> state
 
 InspectFormatter has
     init : {} -> f | f has InspectFormatter
@@ -47,9 +47,9 @@ InspectFormatter has
     bool : Bool -> Inspector f | f has InspectFormatter
     str : Str -> Inspector f | f has InspectFormatter
 
-    list : list, ElemWalkFn state list elem, (elem -> Inspector f) -> Inspector f | f has InspectFormatter
-    set : set, ElemWalkFn state set elem, (elem -> Inspector f) -> Inspector f | f has InspectFormatter
-    dict : dict, KeyValWalkFn state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f | f has InspectFormatter
+    list : list, ElemWalker state list elem, (elem -> Inspector f) -> Inspector f | f has InspectFormatter
+    set : set, ElemWalker state set elem, (elem -> Inspector f) -> Inspector f | f has InspectFormatter
+    dict : dict, KeyValWalker state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f | f has InspectFormatter
 
     # Note opaque is used for both opaque types and functions.
     # The auto deriver for functions probably could put the function type.

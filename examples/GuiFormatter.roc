@@ -49,7 +49,7 @@ GuiFormatter := { nodes : List Elem }
 init : {} -> GuiFormatter
 init = \{} -> @GuiFormatter { nodes: [] }
 
-list : list, Inspect.ElemWalkFn GuiFormatter list elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
+list : list, Inspect.ElemWalker GuiFormatter list elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
 list = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes
@@ -63,7 +63,7 @@ list = \content, walkFn, toInspector ->
 
     addNode f0 (Col nodes)
 
-set : set, Inspect.ElemWalkFn GuiFormatter set elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
+set : set, Inspect.ElemWalker GuiFormatter set elem, (elem -> Inspector GuiFormatter) -> Inspector GuiFormatter
 set = \content, walkFn, toInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes
@@ -77,7 +77,7 @@ set = \content, walkFn, toInspector ->
 
     addNode f0 (Col nodes)
 
-dict : dict, Inspect.KeyValWalkFn GuiFormatter dict key value, (key -> Inspector GuiFormatter), (value -> Inspector GuiFormatter) -> Inspector GuiFormatter
+dict : dict, Inspect.KeyValWalker GuiFormatter dict key value, (key -> Inspector GuiFormatter), (value -> Inspector GuiFormatter) -> Inspector GuiFormatter
 dict = \d, walkFn, keyToInspector, valueToInspector ->
     f0 <- Inspect.custom
     # Use a temporary buffer for the children nodes
@@ -228,4 +228,3 @@ addNode = \@GuiFormatter { nodes }, node ->
 
 toGui : GuiFormatter -> Elem
 toGui = \@GuiFormatter { nodes } -> Col nodes
-
