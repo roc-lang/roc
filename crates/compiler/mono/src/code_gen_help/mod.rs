@@ -6,7 +6,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
 
 use crate::ir::{
-    Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, PassedFunction,
+    BranchInfo, Call, CallSpecId, CallType, Expr, JoinPointId, Literal, ModifyRc, PassedFunction,
     Proc, ProcLayout, SelfRecursive, Stmt, UpdateModeId,
 };
 use crate::layout::{
@@ -452,7 +452,7 @@ impl<'a> CodeGenHelp<'a> {
             closure_data_layout: None,
             ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         });
 
         proc_symbol
@@ -571,11 +571,6 @@ impl<'a> CodeGenHelp<'a> {
                 return layout;
             }
 
-            LayoutRepr::Boxed(inner) => {
-                let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
-                LayoutRepr::Boxed(inner)
-            }
-
             LayoutRepr::Ptr(inner) => {
                 let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
                 LayoutRepr::Ptr(inner)
@@ -587,6 +582,10 @@ impl<'a> CodeGenHelp<'a> {
 
             // This line is the whole point of the function
             LayoutRepr::RecursivePointer(_) => LayoutRepr::Union(ctx.recursive_union.unwrap()),
+
+            LayoutRepr::FunctionPointer(_) => return layout,
+
+            LayoutRepr::Erased(_) => return layout,
         };
 
         layout_interner.insert(Layout::new(LayoutWrapper::Direct(repr), semantic))
@@ -772,7 +771,7 @@ impl<'a> CallerProc<'a> {
             closure_data_layout: None,
             ret_layout: Layout::UNIT,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         if false {
@@ -788,7 +787,7 @@ impl<'a> CallerProc<'a> {
                 .pretty(80)
                 .to_string();
 
-            println!("{}", doc);
+            println!("{doc}");
         }
 
         Self {
@@ -842,7 +841,225 @@ fn layout_needs_helper_proc<'a>(
         LayoutRepr::Union(_) => true,
         LayoutRepr::LambdaSet(_) => true,
         LayoutRepr::RecursivePointer(_) => false,
-        LayoutRepr::Boxed(_) => true,
         LayoutRepr::Ptr(_) => false,
+        LayoutRepr::FunctionPointer(_) => false,
+        LayoutRepr::Erased(_) => true,
+    }
+}
+
+pub fn test_helper<'a>(
+    env: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    layout_interner: &mut STLayoutInterner<'a>,
+    main_proc: &Proc<'a>,
+) -> Proc<'a> {
+    let name = LambdaName::no_niche(env.create_symbol(ident_ids, "test_main"));
+
+    let it = (0..main_proc.args.len()).map(|i| env.create_symbol(ident_ids, &format!("arg_{i}")));
+    let arguments = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+    let it = arguments
+        .iter()
+        .zip(main_proc.args.iter())
+        .map(|(s, (l, _))| (*l, *s));
+    let args = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+    //    tag: u64,
+    //    error_msg: *mut RocStr,
+    //    value: MaybeUninit<T>,
+    let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
+    let repr = LayoutRepr::Struct(env.arena.alloc(fields));
+    let output_layout = layout_interner.insert_direct_no_semantic(repr);
+    let body = test_helper_body(
+        env,
+        ident_ids,
+        layout_interner,
+        main_proc,
+        arguments,
+        output_layout,
+    );
+
+    Proc {
+        name,
+        args,
+        body,
+        closure_data_layout: None,
+        ret_layout: output_layout,
+        is_self_recursive: main_proc.is_self_recursive,
+        is_erased: false,
+    }
+}
+
+fn test_helper_body<'a>(
+    env: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    layout_interner: &mut STLayoutInterner<'a>,
+    main_proc: &Proc<'a>,
+    arguments: &'a [Symbol],
+    output_layout: InLayout<'a>,
+) -> Stmt<'a> {
+    // let buffer = SetLongJmpBuffer
+    let buffer_symbol = env.create_symbol(ident_ids, "buffer");
+    let buffer_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::SetLongJmpBuffer,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: &[],
+    });
+    let buffer_stmt = |next| Stmt::Let(buffer_symbol, buffer_expr, Layout::U64, next);
+
+    let field_layouts = env.arena.alloc([Layout::U64, Layout::U64]);
+    let ret_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Struct(field_layouts));
+
+    let setjmp_symbol = env.create_symbol(ident_ids, "setjmp");
+    let setjmp_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::SetJmp,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: env.arena.alloc([buffer_symbol]),
+    });
+    let setjmp_stmt = |next| Stmt::Let(setjmp_symbol, setjmp_expr, ret_layout, next);
+
+    let is_longjmp_symbol = env.create_symbol(ident_ids, "is_longjmp");
+    let is_longjmp_expr = Expr::StructAtIndex {
+        index: 0,
+        field_layouts,
+        structure: setjmp_symbol,
+    };
+    let is_longjmp_stmt = |next| Stmt::Let(is_longjmp_symbol, is_longjmp_expr, Layout::U64, next);
+
+    let tag_symbol = env.create_symbol(ident_ids, "tag");
+    let tag_expr = Expr::StructAtIndex {
+        index: 1,
+        field_layouts,
+        structure: setjmp_symbol,
+    };
+    let tag_stmt = |next| Stmt::Let(tag_symbol, tag_expr, Layout::U64, next);
+
+    // normal path, no panics
+    let if_zero_stmt = {
+        let it = main_proc.args.iter().map(|(a, _)| *a);
+        let arg_layouts = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+        let result_symbol = env.create_symbol(ident_ids, "result");
+        let result_expr = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: main_proc.name,
+                ret_layout: main_proc.ret_layout,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments,
+        });
+        let result = |next| Stmt::Let(result_symbol, result_expr, main_proc.ret_layout, next);
+
+        let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
+        let ok_tag_expr = Expr::Literal(Literal::Int((0i128).to_ne_bytes()));
+        let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
+
+        let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
+        let msg_ptr_expr = Expr::Literal(Literal::Int((0i128).to_ne_bytes()));
+        let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+
+        // construct the record
+        let output_symbol = env.create_symbol(ident_ids, "output_ok");
+        let fields = [ok_tag_symbol, msg_ptr_symbol, result_symbol];
+        let output_expr = Expr::Struct(env.arena.alloc(fields));
+        let output = |next| Stmt::Let(output_symbol, output_expr, output_layout, next);
+
+        let arena = env.arena;
+        result(arena.alloc(
+            //
+            ok_tag(arena.alloc(
+                //
+                msg_ptr(arena.alloc(
+                    //
+                    output(arena.alloc(
+                        //
+                        Stmt::Ret(output_symbol),
+                    )),
+                )),
+            )),
+        ))
+    };
+
+    // a longjmp/panic occurred
+    let if_nonzero_stmt = {
+        let alloca_symbol = env.create_symbol(ident_ids, "alloca");
+        let alloca_expr = Expr::Alloca {
+            element_layout: main_proc.ret_layout,
+            initializer: None,
+        };
+        let alloca = |next| Stmt::Let(alloca_symbol, alloca_expr, Layout::U64, next);
+
+        let load_symbol = env.create_symbol(ident_ids, "load");
+        let load_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrLoad,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: env.arena.alloc([alloca_symbol]),
+        });
+        let load = |next| Stmt::Let(load_symbol, load_expr, main_proc.ret_layout, next);
+
+        // construct the record
+        let output_symbol = env.create_symbol(ident_ids, "output_err");
+        // is_longjmp_symbol is a pointer to the error message
+        let fields = [tag_symbol, is_longjmp_symbol, load_symbol];
+        let output_expr = Expr::Struct(env.arena.alloc(fields));
+        let output = |next| Stmt::Let(output_symbol, output_expr, output_layout, next);
+
+        let arena = env.arena;
+        arena.alloc(alloca(arena.alloc(
+            //
+            load(arena.alloc(
+                //
+                output(arena.alloc(
+                    //
+                    Stmt::Ret(output_symbol),
+                )),
+            )),
+        )))
+    };
+
+    buffer_stmt(env.arena.alloc(
+        //
+        setjmp_stmt(env.arena.alloc(
+            //
+            is_longjmp_stmt(env.arena.alloc(
+                //
+                tag_stmt(env.arena.alloc(
+                    //
+                    switch_if_zero_else(
+                        env.arena,
+                        is_longjmp_symbol,
+                        output_layout,
+                        if_zero_stmt,
+                        if_nonzero_stmt,
+                    ),
+                )),
+            )),
+        )),
+    ))
+}
+
+fn switch_if_zero_else<'a>(
+    arena: &'a Bump,
+    condition_symbol: Symbol,
+    return_layout: InLayout<'a>,
+    then_branch_stmt: Stmt<'a>,
+    else_branch_stmt: &'a Stmt<'a>,
+) -> Stmt<'a> {
+    let then_branch = (0u64, BranchInfo::None, then_branch_stmt);
+    let else_branch = (BranchInfo::None, else_branch_stmt);
+
+    Stmt::Switch {
+        cond_symbol: condition_symbol,
+        cond_layout: Layout::U64,
+        branches: &*arena.alloc([then_branch]),
+        default_branch: else_branch,
+        ret_layout: return_layout,
     }
 }

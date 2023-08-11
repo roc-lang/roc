@@ -6,6 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::{ident::TagName, symbol::Symbol};
 use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         self, AliasVariables, Content, FlatType, GetSubsSlice, LambdaSet, OptVariable, Rank,
@@ -17,13 +18,13 @@ use roc_types::{
         Category, ExtImplicitOpenness, Polarity, TypeTag, Types,
     },
 };
-use roc_unify::unify::{unify, Mode, Unified};
+use roc_unify::unify::{unify, Unified};
 
 use crate::{
     ability::{AbilityImplError, ObligationCache},
     deep_copy::deep_copy_var_in,
-    env::Env,
-    Aliases,
+    env::InferenceEnv,
+    Aliases, FunctionKind,
 };
 
 std::thread_local! {
@@ -42,7 +43,7 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 pub(crate) fn either_type_index_to_var(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
@@ -70,7 +71,8 @@ pub(crate) fn either_type_index_to_var(
                     || matches!(
                         types[type_index],
                         TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
-                    )
+                    ),
+                "different variable was returned for type index variable cell!"
             );
             var
         }
@@ -81,8 +83,8 @@ pub(crate) fn either_type_index_to_var(
     }
 }
 
-pub(crate) fn type_to_var(
-    env: &mut Env,
+pub fn type_to_var(
+    env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
@@ -126,7 +128,7 @@ enum RegisterVariable {
 
 impl RegisterVariable {
     fn from_type(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
@@ -140,8 +142,7 @@ impl RegisterVariable {
             TypeTag::EmptyTagUnion => Direct(Variable::EMPTY_TAG_UNION),
             TypeTag::DelayedAlias { shared }
             | TypeTag::StructuralAlias { shared, .. }
-            | TypeTag::OpaqueAlias { shared, .. }
-            | TypeTag::HostExposedAlias { shared, .. } => {
+            | TypeTag::OpaqueAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
                     let direct_var = if rank.is_generalized() {
@@ -149,7 +150,7 @@ impl RegisterVariable {
                         reserved
                     } else {
                         // for any other rank, we need to copy; it takes care of adjusting the rank
-                        deep_copy_var_in(env, rank, reserved, arena)
+                        deep_copy_var_in(&mut env.as_solve_env(), rank, reserved, arena)
                     };
                     // Safety: the `destination` will become the source-of-truth for the type index, since it
                     // was not already transformed before (if it was, we'd be in the Variable branch!)
@@ -165,7 +166,7 @@ impl RegisterVariable {
 
     #[inline(always)]
     fn with_stack(
-        env: &mut Env,
+        env: &mut InferenceEnv,
         rank: Rank,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
@@ -253,7 +254,7 @@ enum TypeToVar {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn type_to_var_help(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     abilities_store: &AbilitiesStore,
@@ -346,20 +347,29 @@ pub(crate) fn type_to_var_help(
                 name,
                 ambient_function,
             } => {
-                let captures = types.get_type_arguments(typ_index);
-                let union_lambdas =
-                    create_union_lambda(env, rank, arena, types, name, captures, &mut stack);
+                match env.function_kind {
+                    FunctionKind::LambdaSet => {
+                        let captures = types.get_type_arguments(typ_index);
+                        let union_lambdas = create_union_lambda(
+                            env, rank, arena, types, name, captures, &mut stack,
+                        );
 
-                let content = Content::LambdaSet(subs::LambdaSet {
-                    solved: union_lambdas,
-                    // We may figure out the lambda set is recursive during solving, but it never
-                    // is to begin with.
-                    recursion_var: OptVariable::NONE,
-                    unspecialized: SubsSlice::default(),
-                    ambient_function,
-                });
+                        let content = Content::LambdaSet(subs::LambdaSet {
+                            solved: union_lambdas,
+                            // We may figure out the lambda set is recursive during solving, but it never
+                            // is to begin with.
+                            recursion_var: OptVariable::NONE,
+                            unspecialized: SubsSlice::default(),
+                            ambient_function,
+                        });
 
-                env.register_with_known_var(destination, rank, content)
+                        env.register_with_known_var(destination, rank, content)
+                    }
+                    FunctionKind::Erased => {
+                        // TODO(erased-lambda): can we merge in with Variable::ERASED_LAMBDA instead?
+                        env.register_with_known_var(destination, rank, Content::ErasedLambda)
+                    }
+                }
             }
             UnspecializedLambdaSet { unspecialized } => {
                 let unspecialized_slice = SubsSlice::extend_new(
@@ -741,92 +751,6 @@ pub(crate) fn type_to_var_help(
 
                 env.register_with_known_var(destination, rank, content)
             }
-            HostExposedAlias {
-                shared,
-                actual_type: alias_type,
-                actual_variable: actual_var,
-            } => {
-                let AliasShared {
-                    symbol,
-                    type_argument_abilities: _,
-                    type_argument_regions: _,
-                    lambda_set_variables,
-                    infer_ext_in_output_variables: _, // TODO
-                } = types[shared];
-
-                let type_arguments = types.get_type_arguments(typ_index);
-
-                let alias_variables = {
-                    let length = type_arguments.len() + lambda_set_variables.len();
-                    let new_variables = VariableSubsSlice::reserve_into_subs(env.subs, length);
-
-                    for (target_index, arg_type) in
-                        (new_variables.indices()).zip(type_arguments.into_iter())
-                    {
-                        let copy_var = helper!(arg_type);
-                        env.subs.variables[target_index] = copy_var;
-                    }
-                    let it = (new_variables.indices().skip(type_arguments.len()))
-                        .zip(lambda_set_variables.into_iter());
-                    for (target_index, ls) in it {
-                        // We MUST do this now, otherwise when linking the ambient function during
-                        // instantiation of the real var, there will be nothing to link against.
-                        let copy_var = type_to_var_help(
-                            env,
-                            rank,
-                            problems,
-                            abilities_store,
-                            obligation_cache,
-                            arena,
-                            aliases,
-                            types,
-                            ls,
-                            true,
-                        );
-                        env.subs.variables[target_index] = copy_var;
-                    }
-
-                    AliasVariables {
-                        variables_start: new_variables.start,
-                        type_variables_len: type_arguments.len() as _,
-                        lambda_set_variables_len: lambda_set_variables.len() as _,
-                        all_variables_len: length as _,
-                    }
-                };
-
-                // cannot use helper! here because this variable may be involved in unification below
-                let alias_variable = type_to_var_help(
-                    env,
-                    rank,
-                    problems,
-                    abilities_store,
-                    obligation_cache,
-                    arena,
-                    aliases,
-                    types,
-                    alias_type,
-                    false,
-                );
-                // TODO(opaques): I think host-exposed aliases should always be structural
-                // (when does it make sense to give a host an opaque type?)
-                let content = Content::Alias(
-                    symbol,
-                    alias_variables,
-                    alias_variable,
-                    AliasKind::Structural,
-                );
-                let result = env.register_with_known_var(destination, rank, content);
-
-                // We only want to unify the actual_var with the alias once
-                // if it's already redirected (and therefore, redundant)
-                // don't do it again
-                if !env.subs.redundant(actual_var) {
-                    let descriptor = env.subs.get(result);
-                    env.subs.union(result, actual_var, descriptor);
-                }
-
-                result
-            }
             Error => {
                 let content = Content::Error;
 
@@ -865,7 +789,7 @@ pub(crate) fn type_to_var_help(
                     &mut env.uenv(),
                     var,
                     flex_ability,
-                    Mode::EQ,
+                    UnificationMode::EQ,
                     Polarity::OF_VALUE,
                 ) {
                     Unified::Success {
@@ -911,7 +835,7 @@ pub(crate) fn type_to_var_help(
 
 #[inline(always)]
 fn roc_result_to_var(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1090,7 +1014,7 @@ fn find_tag_name_run(slice: &[TagName], subs: &mut Subs) -> Option<SubsSlice<Tag
 
 #[inline(always)]
 fn register_tag_arguments(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1114,7 +1038,7 @@ fn register_tag_arguments(
 
 /// Assumes that the tags are sorted and there are no duplicates!
 fn insert_tags_fast_path(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1185,7 +1109,7 @@ fn insert_tags_fast_path(
 }
 
 fn insert_tags_slow_path(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1215,7 +1139,7 @@ fn insert_tags_slow_path(
 }
 
 fn type_to_union_tags(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,
@@ -1274,7 +1198,7 @@ fn type_to_union_tags(
 }
 
 fn create_union_lambda(
-    env: &mut Env,
+    env: &mut InferenceEnv,
     rank: Rank,
     arena: &'_ bumpalo::Bump,
     types: &mut Types,

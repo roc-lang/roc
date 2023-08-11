@@ -1,7 +1,7 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
@@ -365,7 +365,7 @@ impl<'a> LowLevelCall<'a> {
                 );
 
                 // Increment refcount
-                if self.ret_layout_raw.is_refcounted() {
+                if self.ret_layout_raw.is_refcounted(backend.layout_interner) {
                     let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
                     backend.code_builder.get_local(elem_local);
                     backend.code_builder.i32_const(1);
@@ -1978,7 +1978,7 @@ impl<'a> LowLevelCall<'a> {
                     value,
                 );
             }
-            PtrLoad => backend.expr_unbox(self.ret_symbol, self.arguments[0]),
+            PtrLoad => backend.ptr_load(self.ret_symbol, self.arguments[0]),
             PtrClearTagId => {
                 let ptr = self.arguments[0];
 
@@ -1991,42 +1991,6 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(-4); // 11111111...1100
                 backend.code_builder.i32_and();
-            }
-            Alloca => {
-                // Alloca : a -> Ptr a
-                let arg = self.arguments[0];
-                let arg_layout = backend.storage.symbol_layouts.get(&arg).unwrap();
-
-                let (size, alignment_bytes) = backend
-                    .layout_interner
-                    .stack_size_and_alignment(*arg_layout);
-
-                let (frame_ptr, offset) = backend
-                    .storage
-                    .allocate_anonymous_stack_memory(size, alignment_bytes);
-
-                // write the default value into the stack memory
-                backend.storage.copy_value_to_memory(
-                    &mut backend.code_builder,
-                    frame_ptr,
-                    offset,
-                    arg,
-                );
-
-                // create a local variable for the pointer
-                let ptr_local_id = match backend.storage.ensure_value_has_local(
-                    &mut backend.code_builder,
-                    self.ret_symbol,
-                    self.ret_storage.clone(),
-                ) {
-                    StoredValue::Local { local_id, .. } => local_id,
-                    _ => internal_error!("A pointer will always be an i32"),
-                };
-
-                backend.code_builder.get_local(frame_ptr);
-                backend.code_builder.i32_const(offset as i32);
-                backend.code_builder.i32_add();
-                backend.code_builder.set_local(ptr_local_id);
             }
 
             Hash => todo!("{:?}", self.lowlevel),
@@ -2048,6 +2012,10 @@ impl<'a> LowLevelCall<'a> {
                 StoredValue::StackMemory { .. } => { /* do nothing */ }
             },
             DictPseudoSeed => self.load_args_and_call_zig(backend, bitcode::UTILS_DICT_PSEUDO_SEED),
+
+            SetJmp | LongJmp | SetLongJmpBuffer => {
+                unreachable!("only inserted in dev backend codegen")
+            }
         }
     }
 
@@ -2063,8 +2031,7 @@ impl<'a> LowLevelCall<'a> {
             .runtime_representation(backend.storage.symbol_layouts[&self.arguments[1]]);
         debug_assert_eq!(
             arg_layout_raw, other_arg_layout,
-            "Cannot do `==` comparison on different types: {:?} vs {:?}",
-            arg_layout, other_arg_layout
+            "Cannot do `==` comparison on different types: {arg_layout:?} vs {other_arg_layout:?}"
         );
 
         let invert_result = matches!(self.lowlevel, LowLevel::NotEq);
@@ -2097,7 +2064,6 @@ impl<'a> LowLevelCall<'a> {
             | LayoutRepr::Struct { .. }
             | LayoutRepr::Union(_)
             | LayoutRepr::LambdaSet(_)
-            | LayoutRepr::Boxed(_)
             | LayoutRepr::Ptr(_) => {
                 // Don't want Zig calling convention here, we're calling internal Roc functions
                 backend
@@ -2122,6 +2088,9 @@ impl<'a> LowLevelCall<'a> {
                     self.arguments,
                 )
             }
+
+            LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
@@ -2503,7 +2472,7 @@ pub fn call_higher_order_lowlevel<'a>(
             }
         }
     };
-    let wrapper_sym = backend.create_symbol(&format!("#wrap#{:?}", fn_name));
+    let wrapper_sym = backend.create_symbol(&format!("#wrap#{fn_name:?}"));
     let wrapper_layout = {
         let mut wrapper_arg_layouts: Vec<InLayout<'a>> =
             Vec::with_capacity_in(argument_layouts.len() + 1, backend.env.arena);
@@ -2518,7 +2487,7 @@ pub fn call_higher_order_lowlevel<'a>(
             argument_layouts.iter().take(n_non_closure_args).map(|lay| {
                 backend
                     .layout_interner
-                    .insert_direct_no_semantic(LayoutRepr::Boxed(*lay))
+                    .insert_direct_no_semantic(LayoutRepr::Ptr(*lay))
             });
 
         wrapper_arg_layouts.push(wrapped_captures_layout);
@@ -2530,7 +2499,7 @@ pub fn call_higher_order_lowlevel<'a>(
                 wrapper_arg_layouts.push(
                     backend
                         .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Boxed(*result_layout)),
+                        .insert_direct_no_semantic(LayoutRepr::Ptr(*result_layout)),
                 );
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),

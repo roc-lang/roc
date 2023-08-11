@@ -180,6 +180,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
+    let function_kind = roc_solve::FunctionKind::LambdaSet;
     // TODO use this to filter out problems and warnings in wrapped defs.
     // See the variable by the same name in the CLI REPL for how to do this!
     let mono = match compile_to_mono(
@@ -187,6 +188,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         std::iter::empty(),
         &src,
         target_info,
+        function_kind,
         DEFAULT_PALETTE_HTML,
     ) {
         (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible
@@ -233,7 +235,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
-        None => return Ok(format!("<function> : {}", expr_type_str)),
+        None => return Ok(format!("<function> : {expr_type_str}")),
     };
 
     let app_module_bytes = {
@@ -280,7 +282,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     // Send the compiled binary out to JS and create an executable instance from it
     js_create_app(&app_module_bytes)
         .await
-        .map_err(|js| format!("{:?}", js))?;
+        .map_err(|js| format!("{js:?}"))?;
 
     let mut app = WasmReplApp { arena };
 

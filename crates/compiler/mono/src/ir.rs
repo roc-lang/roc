@@ -1,11 +1,12 @@
 #![allow(clippy::manual_map)]
 
-use crate::borrow::Ownership;
+use crate::ir::erased::{build_erased_function, ResolvedErasedLambda};
 use crate::ir::literal::{make_num_literal, IntOrFloatValue};
 use crate::layout::{
-    self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, InLayout, LambdaName,
-    LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr, Niche,
-    RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    self, Builtin, ClosureCallOptions, ClosureDataKind, ClosureRepresentation, EnumDispatch,
+    InLayout, LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem,
+    LayoutRepr, Niche, RawFunctionLayout, TLLayoutInterner, TagIdIntType, UnionLayout,
+    WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -21,7 +22,7 @@ use roc_debug_flags::{
     ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_RUNTIME_ERROR_GEN,
 };
 use roc_derive::SharedDerivedModule;
-use roc_error_macros::{internal_error, todo_abilities};
+use roc_error_macros::{internal_error, todo_abilities, todo_lambda_erasure};
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -42,7 +43,9 @@ use pattern::{from_can_pattern, store_pattern, Pattern};
 
 pub use literal::{ListLiteralElement, Literal};
 
+mod boxed;
 mod decision_tree;
+mod erased;
 mod literal;
 mod pattern;
 
@@ -74,8 +77,8 @@ roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Stmt, 12 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 13 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 5 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
@@ -181,8 +184,7 @@ impl<'a> PartialProcs<'a> {
     pub fn insert(&mut self, symbol: Symbol, partial_proc: PartialProc<'a>) -> PartialProcId {
         debug_assert!(
             !self.contains_key(symbol),
-            "The {:?} is inserted as a partial proc twice: that's a bug!",
-            symbol,
+            "The {symbol:?} is inserted as a partial proc twice: that's a bug!",
         );
 
         let id = PartialProcId(self.symbols.len());
@@ -305,7 +307,7 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    pub host_exposed_layouts: HostExposedLayouts<'a>,
+    pub is_erased: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -317,16 +319,7 @@ pub struct HostExposedLambdaSet<'a> {
     pub raw_function_layout: RawFunctionLayout<'a>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostExposedLayouts<'a> {
-    NotHostExposed,
-    HostExposed {
-        rigids: BumpMap<Lowercase, InLayout<'a>>,
-        aliases: BumpMap<Symbol, HostExposedLambdaSet<'a>>,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelfRecursive {
     NotSelfRecursive,
     SelfRecursive(JoinPointId),
@@ -412,11 +405,11 @@ pub struct HostSpecializations<'a> {
     /// Separate array so we can search for membership quickly
     /// If it's a value and not a lambda, the value is recorded as LambdaName::no_niche.
     symbol_or_lambdas: std::vec::Vec<LambdaName<'a>>,
-    storage_subs: StorageSubs,
+    /// For each symbol, a variable that stores the unsolved (!) annotation
+    annotations: std::vec::Vec<Option<Variable>>,
     /// For each symbol, what types to specialize it for, points into the storage_subs
     types_to_specialize: std::vec::Vec<Variable>,
-    /// Variables for an exposed alias
-    exposed_aliases: std::vec::Vec<std::vec::Vec<(Symbol, Variable)>>,
+    storage_subs: StorageSubs,
 }
 
 impl Default for HostSpecializations<'_> {
@@ -429,26 +422,24 @@ impl<'a> HostSpecializations<'a> {
     pub fn new() -> Self {
         Self {
             symbol_or_lambdas: std::vec::Vec::new(),
+            annotations: std::vec::Vec::new(),
             storage_subs: StorageSubs::new(Subs::default()),
             types_to_specialize: std::vec::Vec::new(),
-            exposed_aliases: std::vec::Vec::new(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.symbol_or_lambdas.is_empty()
     }
 
     pub fn insert_host_exposed(
         &mut self,
         env_subs: &mut Subs,
         symbol_or_lambda: LambdaName<'a>,
-        opt_annotation: Option<roc_can::def::Annotation>,
+        annotation: Option<Variable>,
         variable: Variable,
     ) {
         let variable = self.storage_subs.extend_with_variable(env_subs, variable);
-
-        let mut host_exposed_aliases = std::vec::Vec::new();
-
-        if let Some(annotation) = opt_annotation {
-            host_exposed_aliases.extend(annotation.introduced_variables.host_exposed_aliases);
-        }
 
         match self
             .symbol_or_lambdas
@@ -458,7 +449,7 @@ impl<'a> HostSpecializations<'a> {
             None => {
                 self.symbol_or_lambdas.push(symbol_or_lambda);
                 self.types_to_specialize.push(variable);
-                self.exposed_aliases.push(host_exposed_aliases);
+                self.annotations.push(annotation);
             }
             Some(_) => {
                 // we assume that only one specialization of a function is directly exposed to the
@@ -467,20 +458,18 @@ impl<'a> HostSpecializations<'a> {
                 panic!("A host-exposed symbol can only be exposed once");
             }
         }
-
-        debug_assert_eq!(self.types_to_specialize.len(), self.exposed_aliases.len());
     }
 
     fn decompose(
         self,
     ) -> (
         StorageSubs,
-        impl Iterator<Item = (LambdaName<'a>, Variable, std::vec::Vec<(Symbol, Variable)>)>,
+        impl Iterator<Item = (LambdaName<'a>, Variable, Option<Variable>)>,
     ) {
         let it1 = self.symbol_or_lambdas.into_iter();
 
         let it2 = self.types_to_specialize.into_iter();
-        let it3 = self.exposed_aliases.into_iter();
+        let it3 = self.annotations.into_iter();
 
         (
             self.storage_subs,
@@ -675,7 +664,7 @@ impl<'a> Specialized<'a> {
                 } else {
                     match in_progress {
                         InProgressProc::InProgress => {
-                            panic!("Function {:?} ({:?}) is not done specializing", s, l)
+                            panic!("Function {s:?} ({l:?}) is not done specializing")
                         }
                         InProgressProc::Done(proc) => Some((s, l, proc)),
                     }
@@ -731,31 +720,42 @@ impl<'a> Specialized<'a> {
         }
     }
 
-    fn insert_specialized(&mut self, symbol: Symbol, layout: ProcLayout<'a>, proc: Proc<'a>) {
+    fn insert_specialized(
+        &mut self,
+        symbol: Symbol,
+        layout: ProcLayout<'a>,
+        proc: Proc<'a>,
+    ) -> SpecializedIndex {
         for (i, s) in self.symbols.iter().enumerate() {
             if *s == symbol && self.proc_layouts[i] == layout {
                 match &self.procedures[i] {
                     InProgressProc::InProgress => {
                         self.procedures[i] = InProgressProc::Done(proc);
-                        return;
+                        return SpecializedIndex(i);
                     }
                     InProgressProc::Done(_) => {
                         // overwrite existing! this is important in practice
                         // TODO investigate why we generate the wrong proc in some cases and then
                         // correct later
                         self.procedures[i] = InProgressProc::Done(proc);
-                        return;
+                        return SpecializedIndex(i);
                     }
                 }
             }
         }
 
         // the key/layout combo was not found; insert it
+        let i = self.symbols.len();
+
         self.symbols.push(symbol);
         self.proc_layouts.push(layout);
         self.procedures.push(InProgressProc::Done(proc));
+
+        SpecializedIndex(i)
     }
 }
+
+struct SpecializedIndex(usize);
 
 /// Uniquely determines the specialization of a polymorphic (non-proc) value symbol.
 /// Two specializations are equivalent if their [`SpecializationMark`]s are equal.
@@ -838,11 +838,7 @@ impl<'a> SymbolSpecializations<'a> {
     /// Only those bound to number literals can be compiled polymorphically.
     fn mark_eligible(&mut self, symbol: Symbol) {
         let _old = self.0.insert(symbol, VecMap::with_capacity(1));
-        debug_assert!(
-            _old.is_none(),
-            "overwriting specializations for {:?}",
-            symbol
-        );
+        debug_assert!(_old.is_none(), "overwriting specializations for {symbol:?}");
     }
 
     /// Removes all specializations for a symbol, returning the type and symbol of each specialization.
@@ -899,12 +895,16 @@ impl<'a> SpecializationStack<'a> {
     }
 }
 
+pub type HostExposedLambdaSets<'a> =
+    std::vec::Vec<(LambdaName<'a>, Symbol, HostExposedLambdaSet<'a>)>;
+
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
@@ -924,6 +924,7 @@ impl<'a> Procs<'a> {
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
+            host_exposed_lambda_sets: std::vec::Vec::new(),
             symbol_specializations: Default::default(),
             specialization_stack: SpecializationStack(Vec::with_capacity_in(16, arena)),
 
@@ -945,8 +946,7 @@ impl<'a> Procs<'a> {
             .expect("specialization stack is empty");
         debug_assert_eq!(
             popped, specialization,
-            "incorrect popped specialization: passed {:?}, but was {:?}",
-            specialization, popped
+            "incorrect popped specialization: passed {specialization:?}, but was {popped:?}"
         );
     }
 
@@ -990,7 +990,11 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
-    ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
+    ) -> (
+        MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        HostExposedLambdaSets<'a>,
+        ProcsBase<'a>,
+    ) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
@@ -1008,7 +1012,11 @@ impl<'a> Procs<'a> {
             imported_module_thunks: self.imported_module_thunks,
         };
 
-        (specialized_procs, restored_procs_base)
+        (
+            specialized_procs,
+            self.host_exposed_lambda_sets,
+            restored_procs_base,
+        )
     }
 
     // TODO trim these down
@@ -1026,7 +1034,7 @@ impl<'a> Procs<'a> {
     ) -> Result<ProcLayout<'a>, RuntimeError> {
         let raw_layout = layout_cache
             .raw_from_var(env.arena, annotation, env.subs)
-            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+            .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
         let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
@@ -1054,7 +1062,7 @@ impl<'a> Procs<'a> {
                 // if we've already specialized this one, no further work is needed.
                 if !already_specialized {
                     if self.is_module_thunk(name.name()) {
-                        debug_assert!(layout.arguments.is_empty(), "{:?}", name);
+                        debug_assert!(layout.arguments.is_empty(), "{name:?}");
                     }
 
                     let needs_suspended_specialization =
@@ -1145,7 +1153,7 @@ impl<'a> Procs<'a> {
                                     );
                                 }
                                 Err(error) => {
-                                    panic!("TODO generate a RuntimeError message for {:?}", error);
+                                    panic!("TODO generate a RuntimeError message for {error:?}");
                                 }
                             }
                         }
@@ -1234,7 +1242,7 @@ impl<'a> Procs<'a> {
                             .insert_specialized(proc_name.name(), proc_layout, proc);
                     }
                     Err(error) => {
-                        panic!("TODO generate a RuntimeError message for {:?}", error);
+                        panic!("TODO generate a RuntimeError message for {error:?}");
                     }
                 }
             }
@@ -1454,14 +1462,12 @@ pub struct JoinPointId(pub Symbol);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
-    pub ownership: Ownership,
     pub layout: InLayout<'a>,
 }
 
 impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
-        ownership: Ownership::Owned,
         layout: Layout::UNIT,
     };
 }
@@ -1688,6 +1694,13 @@ impl<'a> Call<'a> {
 
                 alloc.text("CallByName ").append(alloc.intersperse(it, " "))
             }
+            CallType::ByPointer { pointer, .. } => {
+                let it = std::iter::once(pointer)
+                    .chain(arguments.iter().copied())
+                    .map(|s| symbol_to_doc(alloc, s, pretty));
+
+                alloc.text("CallByPtr ").append(alloc.intersperse(it, " "))
+            }
             LowLevel { op: lowlevel, .. } => {
                 let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
@@ -1765,6 +1778,11 @@ pub enum CallType<'a> {
         arg_layouts: &'a [InLayout<'a>],
         specialization_id: CallSpecId,
     },
+    ByPointer {
+        pointer: Symbol,
+        ret_layout: InLayout<'a>,
+        arg_layouts: &'a [InLayout<'a>],
+    },
     Foreign {
         foreign_symbol: ForeignSymbol,
         ret_layout: InLayout<'a>,
@@ -1832,6 +1850,15 @@ pub struct ReuseToken {
     pub update_mode: UpdateModeId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErasedField {
+    /// Load a dereferenceable pointer to the value.
+    Value,
+    /// Load a non-dereferenceable pointer to the value.
+    ValuePtr,
+    Callee,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
@@ -1878,12 +1905,31 @@ pub enum Expr<'a> {
     },
     EmptyArray,
 
-    ExprBox {
-        symbol: Symbol,
+    /// Creates a type-erased value.
+    ErasedMake {
+        /// The erased value. If this is an erased function, the value are the function captures,
+        /// or `None` if the function is not a closure.
+        value: Option<Symbol>,
+        /// The function pointer of the erased value, if it's an erased function.
+        callee: Symbol,
     },
 
-    ExprUnbox {
+    /// Loads a field from a type-erased value.
+    ErasedLoad {
+        /// The erased symbol.
         symbol: Symbol,
+        /// The field to load.
+        field: ErasedField,
+    },
+
+    /// Returns a pointer to the given function.
+    FunctionPointer {
+        lambda_name: LambdaName<'a>,
+    },
+
+    Alloca {
+        element_layout: InLayout<'a>,
+        initializer: Option<Symbol>,
     },
 
     Reset {
@@ -1926,13 +1972,13 @@ pub(crate) fn symbol_to_doc_string(symbol: Symbol, force_pretty: bool) -> String
     use roc_module::ident::ModuleName;
 
     if pretty_print_ir_symbols() || force_pretty {
-        format!("{:?}", symbol)
+        format!("{symbol:?}")
     } else {
-        let text = format!("{}", symbol);
+        let text = format!("{symbol}");
 
         if text.starts_with(ModuleName::APP) {
             let name: String = text.trim_start_matches(ModuleName::APP).into();
-            format!("Test{}", name)
+            format!("Test{name}")
         } else {
             text
         }
@@ -2024,7 +2070,7 @@ impl<'a> Expr<'a> {
                 .text("Reset { symbol: ")
                 .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(", id: ")
-                .append(format!("{:?}", update_mode))
+                .append(format!("{update_mode:?}"))
                 .append(" }"),
             ResetRef {
                 symbol,
@@ -2033,7 +2079,7 @@ impl<'a> Expr<'a> {
                 .text("ResetRef { symbol: ")
                 .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(", id: ")
-                .append(format!("{:?}", update_mode))
+                .append(format!("{update_mode:?}"))
                 .append(" }"),
             Struct(args) => {
                 let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
@@ -2067,20 +2113,44 @@ impl<'a> Expr<'a> {
                 .text("GetTagId ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            ExprBox { symbol, .. } => alloc
-                .text("Box ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
+            ErasedMake { value, callee } => {
+                let value = match value {
+                    Some(v) => symbol_to_doc(alloc, *v, pretty),
+                    None => alloc.text("<null>"),
+                };
+                let callee = symbol_to_doc(alloc, *callee, pretty);
+                alloc
+                    .text("ErasedMake { value: ")
+                    .append(value)
+                    .append(", callee: ")
+                    .append(callee)
+                    .append(" }")
+            }
 
-            ExprUnbox { symbol, .. } => alloc
-                .text("Unbox ")
-                .append(symbol_to_doc(alloc, *symbol, pretty)),
+            ErasedLoad { symbol, field } => {
+                let field = match field {
+                    ErasedField::Value => ".Value",
+                    ErasedField::ValuePtr => ".ValuePtr",
+                    ErasedField::Callee => ".Callee",
+                };
+
+                alloc
+                    .text("ErasedLoad ")
+                    .append(symbol_to_doc(alloc, *symbol, pretty))
+                    .append(alloc.text(" "))
+                    .append(field)
+            }
+
+            FunctionPointer { lambda_name } => alloc
+                .text("FunctionPointer ")
+                .append(symbol_to_doc(alloc, lambda_name.name(), pretty)),
 
             UnionAtIndex {
                 tag_id,
                 structure,
                 index,
                 ..
-            } => text!(alloc, "UnionAtIndex (Id {}) (Index {}) ", tag_id, index)
+            } => text!(alloc, "UnionAtIndex (Id {tag_id}) (Index {index}) ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
             UnionFieldPtrAtIndex {
@@ -2088,13 +2158,15 @@ impl<'a> Expr<'a> {
                 structure,
                 index,
                 ..
-            } => text!(
-                alloc,
-                "UnionFieldPtrAtIndex (Id {}) (Index {}) ",
-                tag_id,
-                index
-            )
-            .append(symbol_to_doc(alloc, *structure, pretty)),
+            } => text!(alloc, "UnionFieldPtrAtIndex (Id {tag_id}) (Index {index}) ",)
+                .append(symbol_to_doc(alloc, *structure, pretty)),
+
+            Alloca { initializer, .. } => match initializer {
+                Some(initializer) => {
+                    text!(alloc, "Alloca ").append(symbol_to_doc(alloc, *initializer, pretty))
+                }
+                None => text!(alloc, "Alloca <uninitialized>"),
+            },
         }
     }
 
@@ -2993,8 +3065,75 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, variable, _host_exposed_aliases) in it {
-        specialize_external_help(env, procs, layout_cache, symbol, offset_variable(variable))
+    for (lambda_name, from_app, opt_from_platform) in it {
+        let from_app = offset_variable(from_app);
+        let index = specialize_external_help(env, procs, layout_cache, lambda_name, from_app);
+
+        let Some(from_platform) = opt_from_platform else { continue };
+
+        // now run the lambda set numbering scheme
+        let hels = find_lambda_sets(env.arena, env.subs, from_platform);
+
+        // now unify
+        let mut unify_env = roc_unify::Env::new(
+            env.subs,
+            #[cfg(debug_assertions)]
+            None,
+        );
+
+        let unified = roc_unify::unify::unify(
+            &mut unify_env,
+            from_platform,
+            from_app,
+            roc_solve_schema::UnificationMode::EQ,
+            roc_types::types::Polarity::Pos,
+        );
+
+        {
+            use roc_unify::unify::Unified::*;
+
+            match unified {
+                Success { .. } => { /* great */ }
+                Failure(..) => internal_error!("unification here should never fail"),
+            }
+        }
+
+        for (var, id) in hels {
+            let symbol = env.unique_symbol();
+            let lambda_name = LambdaName::no_niche(symbol);
+
+            let mut layout_env =
+                layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+            let lambda_set = env.subs.get_lambda_set(var);
+            let raw_function_layout =
+                RawFunctionLayout::from_var(&mut layout_env, lambda_set.ambient_function)
+                    .value()
+                    .unwrap();
+
+            let (key, (top_level, proc)) = generate_host_exposed_function(
+                env,
+                procs,
+                layout_cache,
+                lambda_name,
+                raw_function_layout,
+            );
+
+            procs
+                .specialized
+                .insert_specialized(symbol, top_level, proc);
+
+            let hels = HostExposedLambdaSet {
+                id,
+                symbol,
+                proc_layout: top_level,
+                raw_function_layout,
+            };
+
+            let in_progress = &mut procs.specialized.procedures[index.0];
+            let InProgressProc::Done(proc) = in_progress else { unreachable!() };
+
+            procs.host_exposed_lambda_sets.push((proc.name, key, hels));
+        }
     }
 }
 
@@ -3019,7 +3158,7 @@ fn specialize_external_specializations<'a>(
             // duplicate specializations, and the insertion into a hash map
             // below will deduplicate them.
 
-            specialize_external_help(env, procs, layout_cache, symbol, imported_variable)
+            specialize_external_help(env, procs, layout_cache, symbol, imported_variable);
         }
     }
 }
@@ -3030,11 +3169,11 @@ fn specialize_external_help<'a>(
     layout_cache: &mut LayoutCache<'a>,
     name: LambdaName<'a>,
     variable: Variable,
-) {
+) -> SpecializedIndex {
     let partial_proc_id = match procs.partial_procs.symbol_to_id(name.name()) {
         Some(v) => v,
         None => {
-            panic!("Cannot find a partial proc for {:?}", name);
+            panic!("Cannot find a partial proc for {name:?}");
         }
     };
 
@@ -3042,7 +3181,7 @@ fn specialize_external_help<'a>(
         specialize_variable(env, procs, name, layout_cache, variable, partial_proc_id);
 
     match specialization_result {
-        Ok((mut proc, layout)) => {
+        Ok((proc, layout)) => {
             let top_level = ProcLayout::from_raw_named(env.arena, name, layout);
 
             if procs.is_module_thunk(name.name()) {
@@ -3089,64 +3228,11 @@ fn specialize_external_help<'a>(
                         }
                     }
                 }
-
-                // Now, let's generate the host-exposed lambda set wrappers from the type of the
-                // host-exported function.
-                {
-                    let extern_names = {
-                        let mut layout_env = layout::Env::from_components(
-                            layout_cache,
-                            env.subs,
-                            env.arena,
-                            env.target_info,
-                        );
-
-                        find_lambda_sets(&mut layout_env, variable)
-                    };
-
-                    let mut aliases = BumpMap::default();
-
-                    for (id, raw_function_layout) in extern_names {
-                        let symbol = env.unique_symbol();
-                        let lambda_name = LambdaName::no_niche(symbol);
-
-                        let (key, (top_level, proc)) = generate_host_exposed_function(
-                            env,
-                            procs,
-                            layout_cache,
-                            lambda_name,
-                            raw_function_layout,
-                        );
-
-                        procs
-                            .specialized
-                            .insert_specialized(symbol, top_level, proc);
-
-                        let hels = HostExposedLambdaSet {
-                            id,
-                            symbol,
-                            proc_layout: top_level,
-                            raw_function_layout,
-                        };
-
-                        aliases.insert(key, hels);
-                    }
-
-                    match &mut proc.host_exposed_layouts {
-                        HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
-                        hep @ HostExposedLayouts::NotHostExposed => {
-                            *hep = HostExposedLayouts::HostExposed {
-                                aliases,
-                                rigids: Default::default(),
-                            };
-                        }
-                    }
-                }
             }
 
             procs
                 .specialized
-                .insert_specialized(name.name(), top_level, proc);
+                .insert_specialized(name.name(), top_level, proc)
         }
         Err(SpecializeFailure { attempted_layout }) => {
             let proc = generate_runtime_error_function(env, name, attempted_layout);
@@ -3155,7 +3241,7 @@ fn specialize_external_help<'a>(
 
             procs
                 .specialized
-                .insert_specialized(name.name(), top_level, proc);
+                .insert_specialized(name.name(), top_level, proc)
         }
     }
 }
@@ -3183,6 +3269,7 @@ fn generate_runtime_error_function<'a>(
 
     let runtime_error = runtime_error(env, msg.into_bump_str());
 
+    let is_erased = layout.is_erased_function();
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
             let real_arg_layouts =
@@ -3199,6 +3286,9 @@ fn generate_runtime_error_function<'a>(
 
             (args.into_bump_slice(), ret_layout)
         }
+        RawFunctionLayout::ErasedFunction(..) => {
+            todo_lambda_erasure!()
+        }
         RawFunctionLayout::ZeroArgumentThunk(ret_layout) => (&[] as &[_], ret_layout),
     };
 
@@ -3209,7 +3299,7 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        is_erased,
     }
 }
 
@@ -3288,6 +3378,9 @@ fn generate_host_exposed_function<'a>(
 
             (function_name, (top_level, proc))
         }
+        RawFunctionLayout::ErasedFunction(..) => {
+            todo_lambda_erasure!()
+        }
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             let assigned = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(assigned));
@@ -3301,7 +3394,7 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                is_erased: false,
             };
 
             let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
@@ -3365,7 +3458,7 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        is_erased: false,
     };
 
     let top_level = ProcLayout::new(
@@ -3428,15 +3521,13 @@ fn specialize_proc_help<'a>(
     let body = partial_proc.body.clone();
     let body_var = partial_proc.body_var;
 
-    // host-exposed functions are tagged on later
-    let host_exposed_layouts = HostExposedLayouts::NotHostExposed;
-
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
     let specialized_proc = match specialized {
         SpecializedLayout::FunctionPointerBody {
             ret_layout,
             closure: opt_closure_layout,
+            is_erased,
         } => {
             // this is a function body like
             //
@@ -3461,19 +3552,23 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                host_exposed_layouts,
+                is_erased,
             }
         }
         SpecializedLayout::FunctionBody {
             arguments: proc_args,
             closure: opt_closure_layout,
             ret_layout,
+            is_erased,
         } => {
             let mut proc_args = Vec::from_iter_in(proc_args.iter().copied(), env.arena);
 
             // unpack the closure symbols, if any
             match (opt_closure_layout, captured_symbols) {
-                (Some(closure_layout), CapturedSymbols::Captured(captured)) => {
+                (
+                    Some(ClosureDataKind::LambdaSet(closure_layout)),
+                    CapturedSymbols::Captured(captured),
+                ) => {
                     // debug_assert!(!captured.is_empty());
 
                     // An argument from the closure list may have taken on a specialized symbol
@@ -3630,6 +3725,15 @@ fn specialize_proc_help<'a>(
                         }
                     }
                 }
+                (Some(ClosureDataKind::Erased), CapturedSymbols::Captured(captured)) => {
+                    specialized_body = erased::unpack_closure_data(
+                        env,
+                        layout_cache,
+                        Symbol::ARG_CLOSURE,
+                        captured,
+                        specialized_body,
+                    );
+                }
                 (None, CapturedSymbols::None) | (None, CapturedSymbols::Captured([])) => {}
                 _ => unreachable!("to closure or not to closure?"),
             }
@@ -3641,13 +3745,7 @@ fn specialize_proc_help<'a>(
                     .maybe_get_specialized(*symbol, *layout)
             });
 
-            let closure_data_layout = match opt_closure_layout {
-                Some(lambda_set) => {
-                    let lambda_set = lambda_set.full_layout;
-                    Some(lambda_set)
-                }
-                None => None,
-            };
+            let closure_data_layout = opt_closure_layout.map(|clos| clos.data_layout());
 
             Proc {
                 name: lambda_name,
@@ -3656,7 +3754,7 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                host_exposed_layouts,
+                is_erased,
             }
         }
     };
@@ -3669,13 +3767,15 @@ enum SpecializedLayout<'a> {
     /// A body like `foo = \a,b,c -> ...`
     FunctionBody {
         arguments: &'a [(InLayout<'a>, Symbol)],
-        closure: Option<LambdaSet<'a>>,
+        closure: Option<ClosureDataKind<'a>>,
         ret_layout: InLayout<'a>,
+        is_erased: bool,
     },
     /// A body like `foo = Num.add`
     FunctionPointerBody {
         closure: Option<LambdaSet<'a>>,
         ret_layout: InLayout<'a>,
+        is_erased: bool,
     },
 }
 
@@ -3697,7 +3797,20 @@ fn build_specialized_proc_from_var<'a>(
                 lambda_name,
                 pattern_symbols,
                 pattern_layouts_vec,
-                Some(closure_layout),
+                Some(ClosureDataKind::LambdaSet(closure_layout)),
+                ret_layout,
+            )
+        }
+        RawFunctionLayout::ErasedFunction(pattern_layouts, ret_layout) => {
+            let mut pattern_layouts_vec = Vec::with_capacity_in(pattern_layouts.len(), env.arena);
+            pattern_layouts_vec.extend_from_slice(pattern_layouts);
+
+            build_specialized_proc(
+                env.arena,
+                lambda_name,
+                pattern_symbols,
+                pattern_layouts_vec,
+                Some(ClosureDataKind::Erased),
                 ret_layout,
             )
         }
@@ -3721,7 +3834,7 @@ fn build_specialized_proc<'a>(
     lambda_name: LambdaName<'a>,
     pattern_symbols: &[Symbol],
     pattern_layouts: Vec<'a, InLayout<'a>>,
-    lambda_set: Option<LambdaSet<'a>>,
+    closure_data: Option<ClosureDataKind<'a>>,
     ret_layout: InLayout<'a>,
 ) -> Result<SpecializedLayout<'a>, LayoutProblem> {
     use SpecializedLayout::*;
@@ -3733,6 +3846,8 @@ fn build_specialized_proc<'a>(
     for (arg_layout, arg_name) in pattern_layouts.into_iter().zip(pattern_symbols.iter()) {
         proc_args.push((arg_layout, *arg_name));
     }
+
+    let is_erased = matches!(closure_data, Some(ClosureDataKind::Erased));
 
     // Given
     //
@@ -3753,29 +3868,29 @@ fn build_specialized_proc<'a>(
     // then
 
     let proc_name = lambda_name.name();
-    match lambda_set {
-        Some(lambda_set) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
+    match closure_data {
+        Some(closure_data) if pattern_symbols.last() == Some(&Symbol::ARG_CLOSURE) => {
             // here we define the lifted (now top-level) f function. Its final argument is `Symbol::ARG_CLOSURE`,
             // it stores the closure structure (just an integer in this case)
-            let lambda_set_layout = lambda_set.full_layout;
-            proc_args.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+            let closure_data_layout = closure_data.data_layout();
+            proc_args.push((closure_data_layout, Symbol::ARG_CLOSURE));
 
             debug_assert_eq!(
                 pattern_layouts_len + 1,
                 pattern_symbols.len(),
-                "Tried to zip two vecs with different lengths in {:?}!",
-                proc_name,
+                "Tried to zip two vecs with different lengths in {proc_name:?}!",
             );
 
             let proc_args = proc_args.into_bump_slice();
 
             Ok(FunctionBody {
                 arguments: proc_args,
-                closure: Some(lambda_set),
+                closure: Some(closure_data),
                 ret_layout,
+                is_erased,
             })
         }
-        Some(lambda_set) => {
+        Some(closure_data) => {
             // a function that returns a function, but is not itself a closure
             // e.g.  f = Num.add
 
@@ -3791,27 +3906,27 @@ fn build_specialized_proc<'a>(
                         arguments: proc_args,
                         closure: None,
                         ret_layout,
+                        is_erased,
                     })
                 }
                 Ordering::Greater => {
                     if pattern_symbols.is_empty() {
-                        let ret_layout = lambda_set.full_layout;
+                        let ret_layout = closure_data.data_layout();
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
+                            is_erased,
                         })
                     } else {
                         // so far, the problem when hitting this branch was always somewhere else
                         // I think this branch should not be reachable in a bugfree compiler
                         panic!(
-                            "more arguments (according to the layout) than argument symbols for {:?}",
-                            proc_name
+                            "more arguments (according to the layout) than argument symbols for {proc_name:?}"
                         )
                     }
                 }
                 Ordering::Less => panic!(
-                    "more argument symbols than arguments (according to the layout) for {:?}",
-                    proc_name
+                    "more argument symbols than arguments (according to the layout) for {proc_name:?}"
                 ),
             }
         }
@@ -3831,6 +3946,7 @@ fn build_specialized_proc<'a>(
                         arguments: proc_args,
                         closure: None,
                         ret_layout,
+                        is_erased,
                     })
                 }
                 Ordering::Greater => {
@@ -3838,19 +3954,18 @@ fn build_specialized_proc<'a>(
                         Ok(FunctionPointerBody {
                             closure: None,
                             ret_layout,
+                            is_erased,
                         })
                     } else {
                         // so far, the problem when hitting this branch was always somewhere else
                         // I think this branch should not be reachable in a bugfree compiler
                         panic!(
-                            "more arguments (according to the layout) than argument symbols for {:?}",
-                            proc_name
+                            "more arguments (according to the layout) than argument symbols for {proc_name:?}"
                         )
                     }
                 }
                 Ordering::Less => panic!(
-                    "more argument symbols than arguments (according to the layout) for {:?}",
-                    proc_name
+                    "more argument symbols than arguments (according to the layout) for {proc_name:?}"
                 ),
             }
         }
@@ -3879,7 +3994,7 @@ fn specialize_variable<'a>(
     // TODO: can we get rid of raw entirely?
     let raw = layout_cache
         .raw_from_var(env.arena, fn_var, env.subs)
-        .unwrap_or_else(|err| panic!("TODO handle invalid function {:?}", err));
+        .unwrap_or_else(|err| panic!("TODO handle invalid function {err:?}"));
 
     let raw = if procs.is_module_thunk(proc_name.name()) {
         match raw {
@@ -3980,6 +4095,17 @@ impl<'a> ProcLayout<'a> {
                     lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
                 ProcLayout::new(arena, arguments, lambda_name.niche(), result)
             }
+            RawFunctionLayout::ErasedFunction(arguments, result) => {
+                let arguments = if lambda_name.no_captures() {
+                    arguments
+                } else {
+                    let mut extended_args = Vec::with_capacity_in(arguments.len(), arena);
+                    extended_args.extend(arguments.iter().chain(&[Layout::ERASED]).copied());
+                    extended_args.into_bump_slice()
+                };
+
+                ProcLayout::new(arena, arguments, lambda_name.niche(), result)
+            }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
                 ProcLayout::new(arena, &[], Niche::NONE, result)
             }
@@ -4041,7 +4167,7 @@ fn specialize_naked_symbol<'a>(
         return result;
     } else if env.is_imported_symbol(symbol) {
         match layout_cache.from_var(env.arena, variable, env.subs) {
-            Err(e) => panic!("invalid layout {:?}", e),
+            Err(e) => panic!("invalid layout {e:?}"),
             Ok(_) => {
                 // this is a 0-arity thunk
                 let result = call_by_name(
@@ -4571,13 +4697,12 @@ pub fn with_hole<'a>(
                         let layout = layout_cache
                             .from_var(env.arena, branch_var, env.subs)
                             .unwrap_or_else(|err| {
-                                panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                                panic!("TODO turn fn_var into a RuntimeError {err:?}")
                             });
 
                         let param = Param {
                             symbol: assigned,
                             layout,
-                            ownership: Ownership::Owned,
                         };
 
                         Stmt::Join {
@@ -4637,12 +4762,11 @@ pub fn with_hole<'a>(
 
             let layout = layout_cache
                 .from_var(env.arena, expr_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             let param = Param {
                 symbol: assigned,
                 layout,
-                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -4690,7 +4814,7 @@ pub fn with_hole<'a>(
 
             let elem_layout = layout_cache
                 .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             for arg_expr in loc_elems.into_iter() {
                 if let Some(literal) =
@@ -4833,6 +4957,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
+                        RawFunctionLayout::ErasedFunction(_, _) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
                     }
                 }
@@ -4934,6 +5059,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
+                        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
                             internal_error!("should not be a thunk!")
                         }
@@ -5031,7 +5157,7 @@ pub fn with_hole<'a>(
 
             let record_layout = layout_cache
                 .from_var(env.arena, record_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             let field_layouts = match layout_cache.get_repr(record_layout) {
                 LayoutRepr::Struct(field_layouts) => field_layouts,
@@ -5149,6 +5275,41 @@ pub fn with_hole<'a>(
                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                     unreachable!("a closure syntactically always must have at least one argument")
                 }
+                RawFunctionLayout::ErasedFunction(argument_layouts, ret_layout) => {
+                    let captured_symbols = if captured_symbols.is_empty() {
+                        CapturedSymbols::None
+                    } else {
+                        let captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
+                        let captured_symbols = captured_symbols.into_bump_slice();
+                        CapturedSymbols::Captured(captured_symbols)
+                    };
+                    let resolved_erased_lambda = ResolvedErasedLambda::new(
+                        env,
+                        layout_cache,
+                        name,
+                        captured_symbols,
+                        argument_layouts,
+                        ret_layout,
+                    );
+
+                    let inserted = procs.insert_anonymous(
+                        env,
+                        resolved_erased_lambda.lambda_name(),
+                        function_type,
+                        arguments,
+                        loc_body,
+                        captured_symbols,
+                        return_type,
+                        layout_cache,
+                    );
+
+                    if let Err(e) = inserted {
+                        return runtime_error(env, env.arena.alloc(format!("RuntimeError: {e:?}")));
+                    }
+                    drop(inserted);
+
+                    build_erased_function(env, layout_cache, resolved_erased_lambda, assigned, hole)
+                }
                 RawFunctionLayout::Function(_argument_layouts, lambda_set, _ret_layout) => {
                     let mut captured_symbols = Vec::from_iter_in(captured_symbols, env.arena);
                     captured_symbols.sort();
@@ -5179,11 +5340,10 @@ pub fn with_hole<'a>(
                     if let Err(e) = inserted {
                         return runtime_error(
                             env,
-                            env.arena.alloc(format!("RuntimeError: {:?}", e,)),
+                            env.arena.alloc(format!("RuntimeError: {e:?}",)),
                         );
-                    } else {
-                        drop(inserted);
                     }
+                    drop(inserted);
 
                     // define the closure data
 
@@ -5332,6 +5492,7 @@ pub fn with_hole<'a>(
                                         env.arena.alloc(result),
                                     );
                                 }
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!("calling a non-closure layout")
                                 }
@@ -5366,6 +5527,7 @@ pub fn with_hole<'a>(
                                         hole,
                                     );
                                 }
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
                                     unreachable!("calling a non-closure layout")
                                 }
@@ -5431,6 +5593,22 @@ pub fn with_hole<'a>(
                                         layout_cache,
                                         closure_data_symbol,
                                         env.arena.alloc(result),
+                                    );
+                                }
+                                RawFunctionLayout::ErasedFunction(arg_layouts, ret_layout) => {
+                                    let hole_layout =
+                                        layout_cache.from_var(env.arena, fn_var, env.subs).unwrap();
+                                    result = erased::call_erased_function(
+                                        env,
+                                        layout_cache,
+                                        procs,
+                                        loc_expr.value,
+                                        fn_var,
+                                        (arg_layouts, ret_layout),
+                                        arg_symbols,
+                                        assigned,
+                                        hole,
+                                        hole_layout,
                                     );
                                 }
                                 RawFunctionLayout::ZeroArgumentThunk(_) => {
@@ -5566,6 +5744,7 @@ pub fn with_hole<'a>(
                                 hole,
                             )
                         }
+                        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                         RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!("match_on_closure_argument received a zero-argument thunk"),
                     }
                 }};
@@ -5614,13 +5793,22 @@ pub fn with_hole<'a>(
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprBox { symbol: x }, layout, hole)
+                    let element_layout = match layout_cache.interner.get_repr(layout) {
+                        LayoutRepr::Union(UnionLayout::NonNullableUnwrapped([l])) => l,
+                        _ => unreachable!("invalid layout for a box expression"),
+                    };
+
+                    let expr = boxed::box_(arena.alloc(x), element_layout);
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 UnboxExpr => {
                     debug_assert_eq!(arg_symbols.len(), 1);
                     let x = arg_symbols[0];
 
-                    Stmt::Let(assigned, Expr::ExprUnbox { symbol: x }, layout, hole)
+                    let expr = boxed::unbox(x, arena.alloc(layout));
+
+                    Stmt::Let(assigned, expr, layout, hole)
                 }
                 _ => {
                     let call = self::Call {
@@ -5743,7 +5931,7 @@ fn compile_struct_like_access<'a>(
 
             let layout = layout_cache
                 .from_var(env.arena, elem_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             Stmt::Let(assigned, expr, layout, hole)
         }
@@ -6186,7 +6374,7 @@ fn convert_tag_union<'a>(
             // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
             let layout = layout_cache
                 .from_var(env.arena, variant_var, env.subs)
-                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
             // even though this was originally a Tag, we treat it as a Struct from now on
             let stmt = if let [only_field] = field_symbols {
@@ -6220,7 +6408,7 @@ fn convert_tag_union<'a>(
                 // Layout will unpack this unwrapped tack if it only has one (non-zero-sized) field
                 let layout = layout_cache
                     .from_var(env.arena, variant_var, env.subs)
-                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+                    .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {err:?}"));
 
                 // even though this was originally a Tag, we treat it as a Struct from now on
                 let stmt = if let [only_field] = field_symbols {
@@ -6478,6 +6666,7 @@ fn tag_union_to_function<'a>(
                         hole,
                     )
                 }
+                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                 RawFunctionLayout::ZeroArgumentThunk(_) => unreachable!(),
             }
         }
@@ -6485,8 +6674,7 @@ fn tag_union_to_function<'a>(
         Err(e) => runtime_error(
             env,
             env.arena.alloc(format!(
-                "Could not produce tag function due to a runtime error: {:?}",
-                e,
+                "Could not produce tag function due to a runtime error: {e:?}",
             )),
         ),
     }
@@ -7503,6 +7691,15 @@ fn substitute_in_call<'a>(
             ret_layout: *ret_layout,
             specialization_id: *specialization_id,
         }),
+        CallType::ByPointer {
+            pointer,
+            arg_layouts,
+            ret_layout,
+        } => substitute(subs, *pointer).map(|new| CallType::ByPointer {
+            pointer: new,
+            arg_layouts,
+            ret_layout: *ret_layout,
+        }),
         CallType::Foreign { .. } => None,
         CallType::LowLevel { .. } => None,
         CallType::HigherOrder { .. } => None,
@@ -7652,13 +7849,33 @@ fn substitute_in_expr<'a>(
             }
         }
 
-        ExprBox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprBox { symbol: new_symbol })
+        ErasedMake { value, callee } => {
+            match (
+                value.and_then(|v| substitute(subs, v)),
+                substitute(subs, *callee),
+            ) {
+                (None, None) => None,
+                (Some(value), None) => Some(ErasedMake {
+                    value: Some(value),
+                    callee: *callee,
+                }),
+                (None, Some(callee)) => Some(ErasedMake {
+                    value: *value,
+                    callee,
+                }),
+                (Some(value), Some(callee)) => Some(ErasedMake {
+                    value: Some(value),
+                    callee,
+                }),
+            }
         }
 
-        ExprUnbox { symbol } => {
-            substitute(subs, *symbol).map(|new_symbol| ExprUnbox { symbol: new_symbol })
-        }
+        ErasedLoad { symbol, field } => substitute(subs, *symbol).map(|new_symbol| ErasedLoad {
+            symbol: new_symbol,
+            field: *field,
+        }),
+
+        FunctionPointer { .. } => None,
 
         StructAtIndex {
             index,
@@ -7711,6 +7928,17 @@ fn substitute_in_expr<'a>(
                 tag_id: *tag_id,
                 index: *index,
                 union_layout: *union_layout,
+            }),
+            None => None,
+        },
+
+        Alloca {
+            element_layout,
+            initializer,
+        } => match substitute(subs, (*initializer)?) {
+            Some(initializer) => Some(Alloca {
+                element_layout: *element_layout,
+                initializer: Some(initializer),
             }),
             None => None,
         },
@@ -7977,6 +8205,7 @@ fn specialize_symbol<'a>(
                             // data for a lambda set.
                             let layout = match raw {
                                 RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                                RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
                                 RawFunctionLayout::Function(_, lambda_set, _) => layout_cache
                                     .put_in_direct_no_semantic(LayoutRepr::LambdaSet(lambda_set)),
                             };
@@ -8127,6 +8356,36 @@ fn specialize_symbol<'a>(
                             env.arena.alloc(result),
                         )
                     }
+                }
+                RawFunctionLayout::ErasedFunction(argument_layouts, ret_layout) => {
+                    let erased_lambda = erased::ResolvedErasedLambda::new(
+                        env,
+                        layout_cache,
+                        original,
+                        captured,
+                        argument_layouts,
+                        ret_layout,
+                    );
+                    let lambda_name = erased_lambda.lambda_name();
+
+                    let proc_layout =
+                        ProcLayout::from_raw_named(env.arena, lambda_name, res_layout);
+
+                    procs.insert_passed_by_name(
+                        env,
+                        arg_var,
+                        lambda_name,
+                        proc_layout,
+                        layout_cache,
+                    );
+
+                    erased::build_erased_function(
+                        env,
+                        layout_cache,
+                        erased_lambda,
+                        assign_to,
+                        result,
+                    )
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
@@ -8281,17 +8540,13 @@ fn call_by_name<'a>(
     match layout_cache.raw_from_var(env.arena, fn_var, env.subs) {
         Err(LayoutProblem::UnresolvedTypeVar(var)) => {
             let msg = format!(
-                "Hit an unresolved type variable {:?} when creating a layout for {:?} (var {:?})",
-                var, proc_name, fn_var
+                "Hit an unresolved type variable {var:?} when creating a layout for {proc_name:?} (var {fn_var:?})"
             );
 
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
         Err(LayoutProblem::Erroneous) => {
-            let msg = format!(
-                "Hit an erroneous type when creating a layout for {:?}",
-                proc_name
-            );
+            let msg = format!("Hit an erroneous type when creating a layout for {proc_name:?}");
 
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
@@ -8380,6 +8635,40 @@ fn call_by_name<'a>(
                 )
             }
         }
+        Ok(RawFunctionLayout::ErasedFunction(arg_layouts, ret_layout)) => {
+            // TODO(erased-lambdas) call-by-name should never apply here
+            let arena = env.arena;
+            let arg_symbols = Vec::from_iter_in(
+                loc_args.iter().map(|(arg_var, arg_expr)| {
+                    possible_reuse_symbol_or_specialize(
+                        env,
+                        procs,
+                        layout_cache,
+                        &arg_expr.value,
+                        *arg_var,
+                    )
+                }),
+                arena,
+            )
+            .into_bump_slice();
+
+            let result = erased::call_erased_function(
+                env,
+                layout_cache,
+                procs,
+                roc_can::expr::Expr::Var(proc_name, fn_var),
+                fn_var,
+                (arg_layouts, ret_layout),
+                arg_symbols,
+                assigned,
+                hole,
+                // TODO is this right??
+                ret_layout,
+            );
+
+            let iter = loc_args.into_iter().rev().zip(arg_symbols.iter().rev());
+            assign_to_symbols(env, procs, layout_cache, iter, result)
+        }
         Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
             if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
@@ -8443,9 +8732,7 @@ fn call_by_name_help<'a>(
         Some(name) => {
             debug_assert!(
                 iter_lambda_names.next().is_none(),
-                "Somehow, call by name for {:?} has multiple capture niches: {:?}",
-                proc_name,
-                lambda_set
+                "Somehow, call by name for {proc_name:?} has multiple capture niches: {lambda_set:?}"
             );
             name
         }
@@ -8484,8 +8771,7 @@ fn call_by_name_help<'a>(
         debug_assert_eq!(
             argument_layouts.len(),
             field_symbols.len(),
-            "see call_by_name for background (scroll down a bit), function is {:?}",
-            proc_name,
+            "see call_by_name for background (scroll down a bit), function is {proc_name:?}",
         );
         call_specialized_proc(
             env,
@@ -8536,8 +8822,7 @@ fn call_by_name_help<'a>(
             debug_assert_eq!(
                 argument_layouts.len(),
                 field_symbols.len(),
-                "see call_by_name for background (scroll down a bit), function is {:?}",
-                proc_name,
+                "see call_by_name for background (scroll down a bit), function is {proc_name:?}",
             );
 
             let field_symbols = field_symbols.into_bump_slice();
@@ -8589,8 +8874,7 @@ fn call_by_name_help<'a>(
                 debug_assert_eq!(
                     argument_layouts.len(),
                     field_symbols.len(),
-                    "see call_by_name for background (scroll down a bit), function is {:?}",
-                    proc_name,
+                    "see call_by_name for background (scroll down a bit), function is {proc_name:?}",
                 );
 
                 let field_symbols = field_symbols.into_bump_slice();
@@ -8781,8 +9065,7 @@ fn call_by_name_module_thunk<'a>(
                             Ok((proc, raw_layout)) => {
                                 debug_assert!(
                                     raw_layout.is_zero_argument_thunk(),
-                                    "but actually {:?}",
-                                    raw_layout
+                                    "but actually {raw_layout:?}"
                                 );
 
                                 let was_present = procs
@@ -8871,6 +9154,7 @@ fn call_specialized_proc<'a>(
                 // but now we need to remove it because the `match_on_lambda_set` will add it again
                 build_call(env, call, assigned, lambda_set.full_layout, hole)
             }
+            RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
             RawFunctionLayout::ZeroArgumentThunk(_) => {
                 unreachable!()
             }
@@ -9041,10 +9325,9 @@ where
             }
             None => {
                 eprintln!(
-                    "a function passed to `{:?}` LowLevel call has an empty lambda set!
+                    "a function passed to `{op:?}` LowLevel call has an empty lambda set!
                      The most likely reason is that some symbol you use is not in scope.
-                    ",
-                    op
+                    "
                 );
 
                 hole.clone()
@@ -9163,7 +9446,6 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -9401,7 +9683,6 @@ fn union_lambda_set_to_switch<'a>(
             let param = Param {
                 symbol: assigned,
                 layout: return_layout,
-                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -9568,7 +9849,6 @@ fn enum_lambda_set_to_switch<'a>(
             let param = Param {
                 symbol: assigned,
                 layout: return_layout,
-                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -9668,7 +9948,6 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -9711,16 +9990,17 @@ impl LambdaSetId {
     }
 }
 
-fn find_lambda_sets<'a>(
-    env: &mut crate::layout::Env<'a, '_>,
+pub fn find_lambda_sets(
+    arena: &Bump,
+    subs: &Subs,
     initial: Variable,
-) -> Vec<'a, (LambdaSetId, RawFunctionLayout<'a>)> {
-    let mut stack = bumpalo::collections::Vec::new_in(env.arena);
+) -> MutMap<Variable, LambdaSetId> {
+    let mut stack = bumpalo::collections::Vec::new_in(arena);
 
     // ignore the lambda set of top-level functions
-    match env.subs.get_without_compacting(initial).content {
+    match subs.get_without_compacting(initial).content {
         Content::Structure(FlatType::Func(arguments, _, result)) => {
-            let arguments = &env.subs.variables[arguments.indices()];
+            let arguments = &subs.variables[arguments.indices()];
 
             stack.extend(arguments.iter().copied());
             stack.push(result);
@@ -9730,24 +10010,10 @@ fn find_lambda_sets<'a>(
         }
     }
 
-    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
-    let mut answer =
-        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
-
-    for (variable, lambda_set_id) in lambda_set_variables {
-        let lambda_set = env.subs.get_lambda_set(variable);
-        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
-            .value()
-            .unwrap();
-
-        let key = (lambda_set_id, raw_function_layout);
-        answer.push(key);
-    }
-
-    answer
+    find_lambda_sets_help(subs, stack)
 }
 
-pub fn find_lambda_sets_help(
+fn find_lambda_sets_help(
     subs: &Subs,
     mut stack: Vec<'_, Variable>,
 ) -> MutMap<Variable, LambdaSetId> {
@@ -9771,8 +10037,12 @@ pub fn find_lambda_sets_help(
                     stack.extend(subs.get_subs_slice(*arguments).iter().rev());
                 }
                 FlatType::Func(arguments, lambda_set_var, ret_var) => {
-                    result.insert(*lambda_set_var, lambda_set_id);
-                    lambda_set_id = lambda_set_id.next();
+                    use std::collections::hash_map::Entry;
+                    // Only insert a lambda_set_var if we didn't already have a value for this key.
+                    if let Entry::Vacant(entry) = result.entry(*lambda_set_var) {
+                        entry.insert(lambda_set_id);
+                        lambda_set_id = lambda_set_id.next();
+                    }
 
                     let arguments = &subs.variables[arguments.indices()];
 
@@ -9825,6 +10095,7 @@ pub fn find_lambda_sets_help(
                     stack.extend(subs.variables[subs_slice.indices()].iter());
                 }
             }
+            Content::ErasedLambda => {}
         }
     }
 
@@ -9912,9 +10183,6 @@ where
                     stack.push(layout_interner.get(*in_layout));
                 }
             }
-            LayoutRepr::Boxed(boxed) => {
-                stack.push(layout_interner.get(boxed));
-            }
             LayoutRepr::Ptr(inner) => {
                 stack.push(layout_interner.get(inner));
             }
@@ -9966,6 +10234,8 @@ where
             LayoutRepr::RecursivePointer(_) => {
                 /* do nothing, we've already generated for this type through the Union(_) */
             }
+            LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
@@ -9985,8 +10255,9 @@ where
     I: LayoutInterner<'a>,
 {
     let interned_unboxed_struct_layout = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout =
-        Layout::no_semantic(LayoutRepr::Boxed(interned_unboxed_struct_layout).direct());
+    let union_layout =
+        UnionLayout::NonNullableUnwrapped(arena.alloc([interned_unboxed_struct_layout]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10026,7 +10297,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+        let unbox_expr = boxed::unbox(argument, arena.alloc(interned_unboxed_struct_layout));
 
         let unbox_stmt = Stmt::Let(
             unboxed,
@@ -10042,7 +10313,7 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         answer.push(GlueProc {
@@ -10072,7 +10343,7 @@ fn unique_glue_symbol(
     use std::fmt::Write;
     let mut string = bumpalo::collections::String::with_capacity_in(32, arena);
 
-    let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
+    let _result = write!(&mut string, "roc__getter_{module_name}_{unique_id}");
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
     let bump_string = string.into_bump_str();
@@ -10097,7 +10368,8 @@ where
     I: LayoutInterner<'a>,
 {
     let interned = layout_interner.insert(*unboxed_struct_layout);
-    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Boxed(interned).direct());
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([interned]));
+    let boxed_struct_layout = Layout::no_semantic(LayoutRepr::Union(box_union_layout).direct());
     let boxed_struct_layout = layout_interner.insert(boxed_struct_layout);
     let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
@@ -10126,8 +10398,7 @@ where
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
 
-        let unbox_expr = Expr::ExprUnbox { symbol: argument };
-
+        let unbox_expr = boxed::unbox(argument, arena.alloc(interned));
         let unbox_stmt = Stmt::Let(unboxed, unbox_expr, interned, arena.alloc(field_get_stmt));
 
         let proc = Proc {
@@ -10137,7 +10408,7 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            is_erased: false,
         };
 
         answer.push(GlueProc {

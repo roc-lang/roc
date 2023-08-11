@@ -847,29 +847,17 @@ fn can_annotation_help(
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
 
-            if vars.is_empty() && env.home == symbol.module_id() {
-                let actual_var = var_store.fresh();
-                introduced_variables.insert_host_exposed_alias(symbol, actual_var);
-                Type::HostExposedAlias {
-                    name: symbol,
-                    type_arguments: vars,
-                    lambda_set_variables: alias.lambda_set_variables.clone(),
-                    actual: Box::new(alias.typ.clone()),
-                    actual_var,
-                }
-            } else {
-                Type::Alias {
-                    symbol,
-                    type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
-                    lambda_set_variables: alias.lambda_set_variables.clone(),
-                    infer_ext_in_output_types: alias
-                        .infer_ext_in_output_variables
-                        .iter()
-                        .map(|v| Type::Variable(*v))
-                        .collect(),
-                    actual: Box::new(alias.typ.clone()),
-                    kind: alias.kind,
-                }
+            Type::Alias {
+                symbol,
+                type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
+                lambda_set_variables: alias.lambda_set_variables.clone(),
+                infer_ext_in_output_types: alias
+                    .infer_ext_in_output_variables
+                    .iter()
+                    .map(|v| Type::Variable(*v))
+                    .collect(),
+                actual: Box::new(alias.typ.clone()),
+                kind: alias.kind,
             }
         }
 

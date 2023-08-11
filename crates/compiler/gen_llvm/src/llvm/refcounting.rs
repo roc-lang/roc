@@ -14,16 +14,20 @@ use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicValueEnum, FunctionValue, InstructionValue, IntValue, PointerValue};
+use inkwell::values::{
+    BasicValueEnum, CallableValue, FunctionValue, InstructionValue, IntValue, PointerValue,
+};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::ErasedField;
 use roc_mono::layout::{
-    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
 use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
+use super::erased;
 
 pub struct PointerToRefcount<'ctx> {
     value: PointerValue<'ctx>,
@@ -132,7 +136,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let block = env.builder.get_insert_block().expect("to be in a function");
         let di_location = env.builder.get_current_debug_location().unwrap();
 
-        let fn_name = &format!("decrement_refcounted_ptr_{}", alignment);
+        let fn_name = &format!("decrement_refcounted_ptr_{alignment}");
 
         let function = match env.module.get_function(fn_name) {
             Some(function_value) => function_value,
@@ -388,6 +392,94 @@ fn modify_refcount_struct_help<'a, 'ctx>(
     builder.build_return(None);
 }
 
+fn modify_refcount_erased<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout_ids: &mut LayoutIds<'a>,
+    mode: Mode,
+) -> FunctionValue<'ctx> {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let (_, fn_name) = function_name_from_mode(
+        layout_ids,
+        &env.interns,
+        "increment_erased",
+        "decrement_erased",
+        layout_interner.get_repr(Layout::ERASED),
+        mode,
+    );
+
+    let function = match env.module.get_function(fn_name.as_str()) {
+        Some(function_value) => function_value,
+        None => {
+            let arg_type = erased::basic_type(env);
+            let function_value = build_header(env, arg_type.into(), mode, &fn_name);
+
+            modify_refcount_erased_help(env, mode, function_value);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+
+    function
+}
+
+fn modify_refcount_erased_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    mode: Mode,
+    fn_val: FunctionValue<'ctx>,
+) {
+    let builder = env.builder;
+    let ctx = env.context;
+
+    // Add a basic block for the entry point
+    let entry = ctx.append_basic_block(fn_val, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, fn_val);
+
+    // Add args to scope
+    let arg_symbol = Symbol::ARG_1;
+    let arg_val = fn_val.get_param_iter().next().unwrap().into_struct_value();
+
+    arg_val.set_name(arg_symbol.as_str(&env.interns));
+
+    let refcounter = erased::load_refcounter(env, arg_val, mode);
+    let refcounter_is_null = env.builder.build_is_null(refcounter, "refcounter_unset");
+
+    let call_refcounter_block = ctx.append_basic_block(fn_val, "call_refcounter");
+    let noop_block = ctx.append_basic_block(fn_val, "noop");
+
+    builder.build_conditional_branch(refcounter_is_null, noop_block, call_refcounter_block);
+    {
+        builder.position_at_end(call_refcounter_block);
+        let value = erased::load(
+            env,
+            arg_val,
+            ErasedField::Value,
+            erased::opaque_ptr_type(env),
+        );
+
+        builder.build_call(
+            CallableValue::try_from(refcounter).unwrap(),
+            &[value.into()],
+            "call_refcounter",
+        );
+
+        builder.build_return(None);
+    }
+
+    {
+        builder.position_at_end(noop_block);
+        builder.build_return(None);
+    }
+}
+
 pub fn increment_refcount_layout<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -561,12 +653,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             modify_refcount_builtin(env, layout_interner, layout_ids, mode, layout, &builtin)
         }
 
-        Boxed(inner) => {
-            let function = modify_refcount_boxed(env, layout_interner, layout_ids, mode, inner);
-
-            Some(function)
-        }
-
         Ptr(_inner) => {
             debug_assert_eq!(true, false);
 
@@ -630,6 +716,12 @@ fn modify_refcount_layout_build_function<'a, 'ctx>(
             mode,
             lambda_set.runtime_representation(),
         ),
+        FunctionPointer(_) => None,
+        Erased(_) => {
+            let function = modify_refcount_erased(env, layout_interner, layout_ids, mode);
+
+            Some(function)
+        }
     }
 }
 
@@ -897,130 +989,6 @@ fn modify_refcount_str_help<'a, 'ctx>(
     builder.build_return(None);
 }
 
-fn modify_refcount_boxed<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
-    inner_layout: InLayout<'a>,
-) -> FunctionValue<'ctx> {
-    let block = env.builder.get_insert_block().expect("to be in a function");
-    let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let boxed_layout = LayoutRepr::Boxed(inner_layout);
-
-    let (_, fn_name) = function_name_from_mode(
-        layout_ids,
-        &env.interns,
-        "increment_boxed",
-        "decrement_boxed",
-        boxed_layout,
-        mode,
-    );
-
-    let function = match env.module.get_function(fn_name.as_str()) {
-        Some(function_value) => function_value,
-        None => {
-            let basic_type = basic_type_from_layout(env, layout_interner, boxed_layout);
-            let function_value = build_header(env, basic_type, mode, &fn_name);
-
-            modify_refcount_box_help(
-                env,
-                layout_interner,
-                layout_ids,
-                mode,
-                inner_layout,
-                function_value,
-            );
-
-            function_value
-        }
-    };
-
-    env.builder.position_at_end(block);
-    env.builder.set_current_debug_location(di_location);
-
-    function
-}
-
-fn modify_refcount_box_help<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    layout_ids: &mut LayoutIds<'a>,
-    mode: Mode,
-    inner_layout: InLayout<'a>,
-    fn_val: FunctionValue<'ctx>,
-) {
-    let builder = env.builder;
-    let ctx = env.context;
-
-    // Add a basic block for the entry point
-    let entry = ctx.append_basic_block(fn_val, "entry");
-
-    builder.position_at_end(entry);
-
-    debug_info_init!(env, fn_val);
-
-    // Add args to scope
-    let arg_symbol = Symbol::ARG_1;
-    let arg_val = fn_val.get_param_iter().next().unwrap();
-    arg_val.set_name(arg_symbol.as_str(&env.interns));
-
-    let boxed = arg_val.into_pointer_value();
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, boxed);
-    let call_mode = mode_to_call_mode(fn_val, mode);
-    let boxed_layout = LayoutRepr::Boxed(inner_layout);
-
-    match mode {
-        Mode::Inc => {
-            refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
-            builder.build_return(None);
-        }
-        Mode::Dec => {
-            // if the box is unique, also decrement its inner value
-            let do_recurse_block = env.context.append_basic_block(fn_val, "do_recurse");
-            let no_recurse_block = env.context.append_basic_block(fn_val, "no_recurse");
-
-            builder.build_conditional_branch(
-                refcount_ptr.is_1(env),
-                do_recurse_block,
-                no_recurse_block,
-            );
-
-            {
-                env.builder.position_at_end(do_recurse_block);
-
-                let inner = load_roc_value(
-                    env,
-                    layout_interner,
-                    layout_interner.get_repr(inner_layout),
-                    boxed,
-                    "inner",
-                );
-
-                modify_refcount_layout(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    call_mode,
-                    inner,
-                    inner_layout,
-                );
-
-                refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
-                env.builder.build_return(None);
-            }
-
-            {
-                env.builder.position_at_end(no_recurse_block);
-
-                refcount_ptr.modify(call_mode, boxed_layout, env, layout_interner);
-                env.builder.build_return(None);
-            }
-        }
-    }
-}
-
 /// Build an increment or decrement function for a specific layout
 fn build_header<'ctx>(
     env: &Env<'_, 'ctx, '_>,
@@ -1278,7 +1246,7 @@ enum DecOrReuse {
 fn fields_need_no_refcounting(interner: &STLayoutInterner, field_layouts: &[InLayout]) -> bool {
     !field_layouts.iter().any(|x| {
         let x = interner.get_repr(*x);
-        x.is_refcounted() || x.contains_refcounted(interner)
+        x.is_refcounted(interner) || x.contains_refcounted(interner)
     })
 }
 
@@ -1528,7 +1496,7 @@ pub fn build_reset<'a, 'ctx>(
     let union_layout_repr = LayoutRepr::Union(union_layout);
     let layout_id = layout_ids.get(Symbol::DEC, &union_layout_repr);
     let fn_name = layout_id.to_symbol_string(Symbol::DEC, &env.interns);
-    let fn_name = format!("{}_reset", fn_name);
+    let fn_name = format!("{fn_name}_reset");
 
     let dec_function = build_rec_union(env, layout_interner, layout_ids, Mode::Dec, union_layout);
 
@@ -1795,7 +1763,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx>(
         // if none of the fields are or contain anything refcounted, just move on
         if !field_layouts.iter().any(|x| {
             let x = layout_interner.get_repr(*x);
-            x.is_refcounted() || x.contains_refcounted(layout_interner)
+            x.is_refcounted(layout_interner) || x.contains_refcounted(layout_interner)
         }) {
             continue;
         }

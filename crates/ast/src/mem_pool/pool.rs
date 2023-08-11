@@ -68,7 +68,7 @@ impl<T> Clone for NodeId<T> {
     fn clone(&self) -> Self {
         NodeId {
             index: self.index,
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         }
     }
 }
@@ -176,7 +176,7 @@ impl Pool {
 
             NodeId {
                 index,
-                _phantom: PhantomData::default(),
+                _phantom: PhantomData,
             }
         } else {
             todo!("pool ran out of capacity. TODO reallocate the nodes pointer to map to a bigger space. Can use mremap on Linux, but must memcpy lots of bytes on macOS and Windows.");

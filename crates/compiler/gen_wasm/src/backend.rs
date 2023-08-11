@@ -3,7 +3,7 @@ use bumpalo::collections::{String, Vec};
 
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -313,7 +313,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
             let fn_index = match self.module.linking.symbol_table[sym_index] {
                 SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                _ => panic!("linker symbol `{}` is not a function", START),
+                _ => panic!("linker symbol `{START}` is not a function"),
             };
             self.module.export.append(Export {
                 name: START,
@@ -463,7 +463,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if DEBUG_SETTINGS.storage_map {
             println!("\nStorage:");
             for (sym, storage) in self.storage.symbol_storage_map.iter() {
-                println!("{:?} => {:?}", sym, storage);
+                println!("{sym:?} => {storage:?}");
             }
         }
     }
@@ -509,7 +509,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .last()
             .map(|l| self.layout_interner.get_repr(*l))
         {
-            Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
+            Some(LayoutRepr::Ptr(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -540,8 +540,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
 
             let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
-                LayoutRepr::Boxed(inner) => inner,
-                x => internal_error!("Expected a Boxed layout, got {:?}", x),
+                LayoutRepr::Ptr(inner) => inner,
+                x => internal_error!("Expected a Ptr layout, got {:?}", x),
             };
             if self.layout_interner.stack_size(inner_layout) == 0 {
                 continue;
@@ -634,8 +634,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         let inner_layout = match self.layout_interner.get_repr(value_layout) {
-            LayoutRepr::Boxed(inner) => inner,
-            x => internal_error!("Expected a Boxed layout, got {:?}", x),
+            LayoutRepr::Ptr(inner) => inner,
+            x => internal_error!("Expected a Ptr layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
         self.dereference_boxed_value(inner_layout);
@@ -1136,13 +1136,18 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 storage,
             ),
 
-            Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
-
-            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::ErasedMake { .. } => todo_lambda_erasure!(),
+            Expr::ErasedLoad { .. } => todo_lambda_erasure!(),
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
             Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),
+
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => self.expr_alloca(*initializer, *element_layout, sym, storage),
 
             Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100, false))
@@ -1321,6 +1326,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 )
             }
 
+            CallType::ByPointer { .. } => {
+                todo_lambda_erasure!()
+            }
+
             CallType::LowLevel { op: lowlevel, .. } => {
                 self.expr_call_low_level(*lowlevel, arguments, ret_sym, ret_layout, ret_storage)
             }
@@ -1428,7 +1437,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .host_lookup
             .iter()
             .find(|(fn_name, _)| *fn_name == name)
-            .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
+            .unwrap_or_else(|| panic!("The Roc app tries to call `{name}` but I can't find it!"));
 
         self.called_fns.set(*fn_index as usize, true);
 
@@ -1618,7 +1627,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     ListLiteralElement::Literal(lit) => {
                         // This has no Symbol but our storage methods expect one.
                         // Let's just pretend it was defined in a `Let`.
-                        let debug_name = format!("{:?}_{}", sym, i);
+                        let debug_name = format!("{sym:?}_{i}");
                         let elem_sym = self.create_symbol(&debug_name);
                         let expr = Expr::Literal(*lit);
 
@@ -2005,40 +2014,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      * Box
      *******************************************************************/
 
-    pub fn expr_box(
-        &mut self,
-        ret_sym: Symbol,
-        arg_sym: Symbol,
-        layout: InLayout<'a>,
-        storage: &StoredValue,
-    ) {
-        // create a local variable for the heap pointer
-        let ptr_local_id = match self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            ret_sym,
-            storage.clone(),
-        ) {
-            StoredValue::Local { local_id, .. } => local_id,
-            _ => internal_error!("A heap pointer will always be an i32"),
-        };
-
-        // allocate heap memory and load its data address onto the value stack
-        let arg_layout = match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Boxed(arg) => arg,
-            _ => internal_error!("ExprBox should always produce a Boxed layout"),
-        };
-        let (size, alignment) = self.layout_interner.stack_size_and_alignment(arg_layout);
-        self.allocate_with_refcount(Some(size), alignment, 1);
-
-        // store the pointer value from the value stack into the local variable
-        self.code_builder.set_local(ptr_local_id);
-
-        // copy the argument to the pointer address
-        self.storage
-            .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
-    }
-
-    pub(crate) fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
+    pub(crate) fn ptr_load(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
         let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
             StoredValue::VirtualMachineStack { .. } => {
                 self.storage
@@ -2169,6 +2145,48 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         );
     }
 
+    fn expr_alloca(
+        &mut self,
+        initializer: Option<Symbol>,
+        element_layout: InLayout<'a>,
+        ret_symbol: Symbol,
+        ret_storage: &StoredValue,
+    ) {
+        // Alloca : a -> Ptr a
+        let (size, alignment_bytes) = self
+            .layout_interner
+            .stack_size_and_alignment(element_layout);
+
+        let (frame_ptr, offset) = self
+            .storage
+            .allocate_anonymous_stack_memory(size, alignment_bytes);
+
+        // write the default value into the stack memory
+        if let Some(initializer) = initializer {
+            self.storage.copy_value_to_memory(
+                &mut self.code_builder,
+                frame_ptr,
+                offset,
+                initializer,
+            );
+        }
+
+        // create a local variable for the pointer
+        let ptr_local_id = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            ret_symbol,
+            ret_storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A pointer will always be an i32"),
+        };
+
+        self.code_builder.get_local(frame_ptr);
+        self.code_builder.i32_const(offset as i32);
+        self.code_builder.i32_add();
+        self.code_builder.set_local(ptr_local_id);
+    }
+
     /// Generate a refcount helper procedure and return a pointer (table index) to it
     /// This allows it to be indirectly called from Zig code
     pub fn get_refcount_fn_index(&mut self, layout: InLayout<'a>, op: HelperOp) -> u32 {
@@ -2187,10 +2205,15 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
+        let layout_repr = self.layout_interner.runtime_representation(layout);
+        let same_layout =
+            |layout| self.layout_interner.runtime_representation(layout) == layout_repr;
         let proc_index = self
             .proc_lookup
             .iter()
-            .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
+            .position(|lookup| {
+                lookup.name == proc_symbol && same_layout(lookup.layout.arguments[0])
+            })
             .unwrap();
 
         self.fn_index_offset + proc_index as u32

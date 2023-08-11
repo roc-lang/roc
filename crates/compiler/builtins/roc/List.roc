@@ -1182,8 +1182,17 @@ mapTry = \list, toResult ->
         Result.map (toResult elem) \ok ->
             List.append state ok
 
-## This is the same as `iterate` but with [Result] instead of `[Continue, Break]`.
-## Using `Result` saves a conditional in `mapTry`.
+## Same as [List.walk], except you can stop walking early by returning `Err`.
+##
+## ## Performance Details
+##
+## Compared to [List.walk], this can potentially visit fewer elements (which can
+## improve performance) at the cost of making each step take longer.
+## However, the added cost to each step is extremely small, and can easily
+## be outweighed if it results in skipping even a small number of elements.
+##
+## As such, it is typically better for performance to use this over [List.walk]
+## if returning `Break` earlier than the last element is expected to be common.
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)

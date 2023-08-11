@@ -8,7 +8,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-bitflags.workspace = true
 
 [dependencies.roc_collections]
 path = "../collections"
@@ -27,3 +26,9 @@ path = "../debug_flags"
 
 [dependencies.roc_tracing]
 path = "../../tracing"
+
+[dependencies.roc_checkmate]
+path = "../checkmate"
+
+[dependencies.roc_solve_schema]
+path = "../solve_schema"

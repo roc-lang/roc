@@ -11,7 +11,7 @@ use roc_can::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_late_solve::AbilitiesView;
-use roc_load::LoadedModule;
+use roc_load::{FunctionKind, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
@@ -48,6 +48,7 @@ pub fn run_load_and_infer<'a>(
     src: &str,
     dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     no_promote: bool,
+    function_kind: FunctionKind,
 ) -> Result<(LoadedModule, String), std::io::Error> {
     use tempfile::tempdir;
 
@@ -79,6 +80,7 @@ pub fn run_load_and_infer<'a>(
             module_src,
             dir.path().to_path_buf(),
             roc_target::TargetInfo::default_x86_64(),
+            function_kind,
             roc_reporting::report::RenderTarget::Generic,
             RocCacheDir::Disallowed,
             roc_reporting::report::DEFAULT_PALETTE,
@@ -351,6 +353,7 @@ pub fn infer_queries<'a>(
     dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
     options: InferOptions,
     allow_can_errors: bool,
+    function_kind: FunctionKind,
 ) -> Result<InferredProgram, Box<dyn Error>> {
     let (
         LoadedModule {
@@ -364,7 +367,7 @@ pub fn infer_queries<'a>(
             ..
         },
         src,
-    ) = run_load_and_infer(src, dependencies, options.no_promote)?;
+    ) = run_load_and_infer(src, dependencies, options.no_promote, function_kind)?;
 
     let declarations = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();

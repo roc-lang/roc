@@ -455,6 +455,18 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ) {
         todo!("Loading returned complex symbols for AArch64");
     }
+
+    fn setjmp(_buf: &mut Vec<'_, u8>) {
+        todo!()
+    }
+
+    fn longjmp(_buf: &mut Vec<'_, u8>) {
+        todo!()
+    }
+
+    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
+        todo!()
+    }
 }
 
 impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
@@ -529,7 +541,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _fn_name: String,
         _dst: AArch64GeneralReg,
     ) {
-        todo!("calling functions literal for AArch64");
+        todo!("function pointer for AArch64");
+    }
+
+    #[inline(always)]
+    fn data_pointer(
+        _buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        _fn_name: String,
+        _dst: AArch64GeneralReg,
+    ) {
+        todo!("data pointer for AArch64");
     }
 
     #[inline(always)]
@@ -829,6 +851,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
+        todo!("saving floating point reg to base offset for AArch64");
+    }
+    #[inline(always)]
+    fn mov_base32_freg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
         todo!("saving floating point reg to base offset for AArch64");
     }
     #[inline(always)]
@@ -3160,7 +3186,7 @@ mod tests {
                     UsesZR => "xzr".to_owned(),
                     UsesSP => "sp".to_owned(),
                 },
-                _ => format!("{}", self),
+                _ => format!("{self}"),
             }
         }
     }

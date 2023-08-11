@@ -39,7 +39,7 @@ impl RenderContext {
                 .extend((0..self.indent_level * self.spaces_per_level).map(|_| ' '));
             self.pending_indent = false;
         }
-        write!(&mut self.content, "{}", to_write).expect("writing to string failed");
+        write!(&mut self.content, "{to_write}").expect("writing to string failed");
     }
 
     fn writeln(&mut self, to_write: impl std::fmt::Display) {
@@ -146,8 +146,7 @@ fn render_op(builder: &ExprBuilder, ctx: &mut RenderContext, op: &Op) {
     match op {
         Op::Arg | Op::ContinuationArg | Op::DeclareContinuation { .. } => {
             ctx.write(format_args!(
-                "/* internal error: {:?} should not be rendered as a value */",
-                op
+                "/* internal error: {op:?} should not be rendered as a value */"
             ));
         }
 
@@ -252,7 +251,7 @@ fn render_op(builder: &ExprBuilder, ctx: &mut RenderContext, op: &Op) {
         }
 
         Op::GetTupleField { field_idx } => {
-            ctx.write(format_args!("get_tuple_field {}", field_idx));
+            ctx.write(format_args!("get_tuple_field {field_idx}"));
         }
 
         Op::MakeUnion {
@@ -270,11 +269,11 @@ fn render_op(builder: &ExprBuilder, ctx: &mut RenderContext, op: &Op) {
                     ctx.write(type_ident(*variant_type));
                 },
             );
-            ctx.write(format_args!("> {}", variant_idx));
+            ctx.write(format_args!("> {variant_idx}"));
         }
 
         Op::UnwrapUnion { variant_idx } => {
-            ctx.write(format_args!("unwrap_union {}", variant_idx));
+            ctx.write(format_args!("unwrap_union {variant_idx}"));
         }
 
         Op::MakeNamed { named_mod, named } => {

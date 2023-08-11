@@ -596,7 +596,7 @@ pub mod test_big_sel_text {
                 assert_eq!(expected_post_lines, post_lines);
                 Ok(())
             }
-            Err(e) => Err(format!("{:?}", e)),
+            Err(e) => Err(format!("{e:?}")),
         }
     }
 

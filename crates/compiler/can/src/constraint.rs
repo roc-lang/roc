@@ -64,26 +64,6 @@ pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
 pub type TypeOrVar = EitherIndex<TypeTag, Variable>;
 
 impl Constraints {
-    pub fn empty() -> Self {
-        Self {
-            constraints: Default::default(),
-            type_slices: Default::default(),
-            variables: Default::default(),
-            loc_symbols: Default::default(),
-            let_constraints: Default::default(),
-            categories: Default::default(),
-            pattern_categories: Default::default(),
-            expectations: Default::default(),
-            pattern_expectations: Default::default(),
-            includes_tags: Default::default(),
-            strings: Default::default(),
-            sketched_rows: Default::default(),
-            eq: Default::default(),
-            pattern_eq: Default::default(),
-            cycles: Default::default(),
-        }
-    }
-
     pub fn new() -> Self {
         let constraints = Vec::new();
         let type_slices = Vec::with_capacity(16);
@@ -196,7 +176,7 @@ impl Constraints {
 
         let mut buf = String::new();
 
-        writeln!(buf, "Constraints statistics for module {:?}:", module_id)?;
+        writeln!(buf, "Constraints statistics for module {module_id:?}:")?;
 
         writeln!(buf, "   constraints length: {}:", self.constraints.len())?;
         writeln!(
@@ -853,16 +833,16 @@ impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Eq(Eq(arg0, arg1, arg2, arg3)) => {
-                write!(f, "Eq({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+                write!(f, "Eq({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Store(arg0, arg1, arg2, arg3) => {
-                write!(f, "Store({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+                write!(f, "Store({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Lookup(arg0, arg1, arg2) => {
-                write!(f, "Lookup({:?}, {:?}, {:?})", arg0, arg1, arg2)
+                write!(f, "Lookup({arg0:?}, {arg1:?}, {arg2:?})")
             }
             Self::Pattern(arg0, arg1, arg2, arg3) => {
-                write!(f, "Pattern({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+                write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
@@ -871,27 +851,19 @@ impl std::fmt::Debug for Constraint {
             Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
             Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
             Self::PatternPresence(arg0, arg1, arg2, arg3) => {
-                write!(
-                    f,
-                    "PatternPresence({:?}, {:?}, {:?}, {:?})",
-                    arg0, arg1, arg2, arg3
-                )
+                write!(f, "PatternPresence({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Exhaustive(arg0, arg1, arg2, arg3) => {
-                write!(
-                    f,
-                    "Exhaustive({:?}, {:?}, {:?}, {:?})",
-                    arg0, arg1, arg2, arg3
-                )
+                write!(f, "Exhaustive({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Resolve(arg0) => {
-                write!(f, "Resolve({:?})", arg0)
+                write!(f, "Resolve({arg0:?})")
             }
             Self::CheckCycle(arg0, arg1) => {
-                write!(f, "CheckCycle({:?}, {:?})", arg0, arg1)
+                write!(f, "CheckCycle({arg0:?}, {arg1:?})")
             }
             Self::IngestedFile(arg0, arg1, arg2) => {
-                write!(f, "IngestedFile({:?}, {:?}, {:?})", arg0, arg1, arg2)
+                write!(f, "IngestedFile({arg0:?}, {arg1:?}, {arg2:?})")
             }
         }
     }

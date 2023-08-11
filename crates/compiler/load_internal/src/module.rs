@@ -11,7 +11,7 @@ use roc_module::ident::Ident;
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, PQModuleName, PackageQualified, Symbol,
 };
-use roc_mono::ir::{GlueLayouts, LambdaSetId, Proc, ProcLayout, ProcsBase};
+use roc_mono::ir::{GlueLayouts, HostExposedLambdaSets, LambdaSetId, Proc, ProcLayout, ProcsBase};
 use roc_mono::layout::{LayoutCache, STLayoutInterner};
 use roc_parse::ast::{CommentOrNewline, Defs, TypeAnnotation, ValueDef};
 use roc_parse::header::{HeaderType, PackageName};
@@ -125,6 +125,9 @@ pub struct TypeCheckedModule<'a> {
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
     pub expectations: Option<Expectations>,
+
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
 }
 
 #[derive(Debug)]
@@ -164,6 +167,7 @@ pub struct MonomorphizedModule<'a> {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     pub toplevel_expects: ToplevelExpects,
     pub entry_point: EntryPoint<'a>,
     pub exposed_to_host: ExposedToHost,

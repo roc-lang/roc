@@ -168,6 +168,8 @@ fn build_eq<'a, 'ctx>(
         ),
 
         LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
+        LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
+        LayoutRepr::Erased(_) => unreachable!("cannot compare erased types"),
 
         LayoutRepr::Union(union_layout) => build_tag_eq(
             env,
@@ -179,7 +181,7 @@ fn build_eq<'a, 'ctx>(
             rhs_val,
         ),
 
-        LayoutRepr::Ptr(inner_layout) | LayoutRepr::Boxed(inner_layout) => build_box_eq(
+        LayoutRepr::Ptr(inner_layout) => build_box_eq(
             env,
             layout_interner,
             layout_ids,
@@ -329,8 +331,7 @@ fn build_neq<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     if lhs_layout != rhs_layout {
         panic!(
-            "Inequality of different layouts; did you have a type mismatch?\n{:?} != {:?}",
-            lhs_layout, rhs_layout
+            "Inequality of different layouts; did you have a type mismatch?\n{lhs_layout:?} != {rhs_layout:?}"
         );
     }
 
@@ -379,7 +380,7 @@ fn build_neq<'a, 'ctx>(
             result.into()
         }
 
-        LayoutRepr::Ptr(inner_layout) | LayoutRepr::Boxed(inner_layout) => {
+        LayoutRepr::Ptr(inner_layout) => {
             let is_equal = build_box_eq(
                 env,
                 layout_interner,
@@ -400,6 +401,8 @@ fn build_neq<'a, 'ctx>(
             unreachable!("recursion pointers should never be compared directly")
         }
         LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closure"),
+        LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
+        LayoutRepr::Erased(_) => unreachable!("cannot compare erased types"),
     }
 }
 
@@ -789,7 +792,7 @@ fn build_struct_eq_help<'a, 'ctx>(
             .into_int_value()
         };
 
-        current = ctx.append_basic_block(parent, &format!("eq_step_{}", index));
+        current = ctx.append_basic_block(parent, &format!("eq_step_{index}"));
 
         env.builder
             .build_conditional_branch(are_equal, current, return_false);
@@ -1365,7 +1368,7 @@ fn build_box_eq<'a, 'ctx>(
     env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+        .build_call(function, &[tag1.into(), tag2.into()], "box_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -1430,12 +1433,47 @@ fn build_box_eq_help<'a, 'ctx>(
         "compare_pointers",
     );
 
-    let compare_inner_value = ctx.append_basic_block(parent, "compare_inner_value");
+    let check_null_then_compare_inner_values =
+        ctx.append_basic_block(parent, "check_null_then_compare_inner_values");
+
+    env.builder.build_conditional_branch(
+        ptr_equal,
+        return_true,
+        check_null_then_compare_inner_values,
+    );
 
     env.builder
-        .build_conditional_branch(ptr_equal, return_true, compare_inner_value);
+        .position_at_end(check_null_then_compare_inner_values);
 
-    env.builder.position_at_end(compare_inner_value);
+    // Check for nullability, then compare inner values
+
+    let box1_is_null = env
+        .builder
+        .build_is_null(box1.into_pointer_value(), "box1_is_null");
+    let check_box2_is_null = ctx.append_basic_block(parent, "check_if_box2_is_null");
+    let return_false = ctx.append_basic_block(parent, "return_false");
+    let compare_inner_values = ctx.append_basic_block(parent, "compare_inner_values");
+
+    env.builder
+        .build_conditional_branch(box1_is_null, return_false, check_box2_is_null);
+
+    {
+        env.builder.position_at_end(check_box2_is_null);
+        let box2_is_null = env
+            .builder
+            .build_is_null(box2.into_pointer_value(), "box2_is_null");
+        env.builder
+            .build_conditional_branch(box2_is_null, return_false, compare_inner_values);
+    }
+
+    {
+        env.builder.position_at_end(return_false);
+        env.builder
+            .build_return(Some(&env.context.bool_type().const_zero()));
+    }
+
+    // Compare the inner values.
+    env.builder.position_at_end(compare_inner_values);
 
     // clear the tag_id so we get a pointer to the actual data
     let box1 = box1.into_pointer_value();

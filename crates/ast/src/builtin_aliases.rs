@@ -94,8 +94,7 @@ pub fn aliases() -> MutMap<Symbol, BuiltinAlias> {
     let mut add_alias = |symbol, alias| {
         debug_assert!(
             !aliases.contains_key(&symbol),
-            "Duplicate alias definition for {:?}",
-            symbol
+            "Duplicate alias definition for {symbol:?}"
         );
 
         // TODO instead of using Region::zero for all of these,

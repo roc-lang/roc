@@ -102,7 +102,7 @@ fn push_html_span(mut buf: Vec<String>, curr: &str, class: &str) -> Vec<String> 
     // html escape strings from source code
     let escaped = html_escape::encode_text(curr);
 
-    buf.push(format!("<span class=\"{}\">{}</span>", class, escaped));
+    buf.push(format!("<span class=\"{class}\">{escaped}</span>"));
 
     buf
 }
@@ -111,7 +111,7 @@ fn push_html(mut buf: Vec<String>, curr: &str) -> Vec<String> {
     // html escape strings from source code
     let escaped = html_escape::encode_text(curr);
 
-    buf.push(format!("{}", escaped));
+    buf.push(format!("{escaped}"));
 
     buf
 }

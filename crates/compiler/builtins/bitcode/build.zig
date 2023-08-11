@@ -25,18 +25,19 @@ pub fn build(b: *Builder) void {
     const host_target = b.standardTargetOptions(.{
         .default_target = CrossTarget{
             .cpu_model = .baseline,
-            // TODO allow for native target for maximum speed
         },
     });
     const linux32_target = makeLinux32Target();
-    const linux64_target = makeLinux64Target();
+    const linux_x64_target = makeLinuxX64Target();
+    const linux_aarch64_target = makeLinuxAarch64Target();
     const windows64_target = makeWindows64Target();
     const wasm32_target = makeWasm32Target();
 
     // LLVM IR
     generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
     generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
-    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
+    generateLlvmIrFile(b, mode, linux_x64_target, main_path, "ir-x86_64", "builtins-x86_64");
+    generateLlvmIrFile(b, mode, linux_aarch64_target, main_path, "ir-aarch64", "builtins-aarch64");
     generateLlvmIrFile(b, mode, windows64_target, main_path, "ir-windows-x86_64", "builtins-windows-x86_64");
     generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
 
@@ -89,6 +90,7 @@ fn generateObjectFile(
     obj.strip = true;
     obj.target = target;
     obj.link_function_sections = true;
+    obj.force_pic = true;
     const obj_step = b.step(step_name, "Build object file for linking");
     obj_step.dependOn(&obj.step);
 }
@@ -103,7 +105,17 @@ fn makeLinux32Target() CrossTarget {
     return target;
 }
 
-fn makeLinux64Target() CrossTarget {
+fn makeLinuxAarch64Target() CrossTarget {
+    var target = CrossTarget.parse(.{}) catch unreachable;
+
+    target.cpu_arch = std.Target.Cpu.Arch.aarch64;
+    target.os_tag = std.Target.Os.Tag.linux;
+    target.abi = std.Target.Abi.musl;
+
+    return target;
+}
+
+fn makeLinuxX64Target() CrossTarget {
     var target = CrossTarget.parse(.{}) catch unreachable;
 
     target.cpu_arch = std.Target.Cpu.Arch.x86_64;

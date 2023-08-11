@@ -7,7 +7,6 @@
 
 use std::hash::Hash;
 
-use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Expr, JoinPointId, ModifyRc, Param, Proc, ProcLayout, ReuseToken, Stmt,
     UpdateModeId, UpdateModeIds,
@@ -888,7 +887,6 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                         .into_iter()
                         .map(|(_reuse_layout, token)| Param {
                             symbol: token.token.symbol,
-                            ownership: Ownership::Owned,
                             layout: *token.inlayout,
                         });
 
@@ -1404,8 +1402,8 @@ fn drop_unused_reuse_tokens<'a>(
     })
 }
 
-fn get_reuse_layout_info<'a, 'i>(
-    layout_interner: &'i STLayoutInterner<'a>,
+fn get_reuse_layout_info<'a>(
+    layout_interner: &STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
 ) -> TokenLayout {
     let (size, alignment) = union_layout.data_size_and_alignment(layout_interner);

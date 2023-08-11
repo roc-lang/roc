@@ -743,8 +743,8 @@ impl<'a> CommentOrNewline<'a> {
         use CommentOrNewline::*;
         match self {
             Newline => "\n".to_owned(),
-            LineComment(comment_str) => format!("#{}", comment_str),
-            DocComment(comment_str) => format!("##{}", comment_str),
+            LineComment(comment_str) => format!("#{comment_str}"),
+            DocComment(comment_str) => format!("##{comment_str}"),
         }
     }
 

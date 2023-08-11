@@ -20,6 +20,7 @@ roc_parse = { path = "../compiler/parse" }
 roc_problem = { path = "../compiler/problem" }
 roc_region = { path = "../compiler/region" }
 roc_reporting = { path = "../reporting" }
+roc_solve = { path = "../compiler/solve" }
 roc_std = { path = "../roc_std" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }

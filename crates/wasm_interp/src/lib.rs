@@ -53,10 +53,7 @@ impl<'a> ImportDispatcher for DefaultImportDispatcher<'a> {
         if module_name == wasi::MODULE_NAME {
             self.wasi.dispatch(function_name, arguments, memory)
         } else {
-            panic!(
-                "DefaultImportDispatcher does not implement {}.{}",
-                module_name, function_name
-            );
+            panic!("DefaultImportDispatcher does not implement {module_name}.{function_name}");
         }
     }
 }
@@ -76,14 +73,12 @@ impl Error {
         match self {
             Error::Type(expected, actual) => {
                 format!(
-                    "ERROR: I found a type mismatch at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
-                    file_offset, expected, actual
+                    "ERROR: I found a type mismatch at file offset {file_offset:#x}. Expected {expected:?}, but found {actual:?}.\n"
                 )
             }
             Error::StackEmpty => {
                 format!(
-                    "ERROR: I tried to pop a value from the stack at file offset {:#x}, but it was empty.\n",
-                    file_offset
+                    "ERROR: I tried to pop a value from the stack at file offset {file_offset:#x}, but it was empty.\n"
                 )
             }
             Error::MemoryAccessOutOfBounds(addr, memory_size) => {
@@ -93,10 +88,7 @@ impl Error {
                 )
             }
             Error::UnreachableOp => {
-                format!(
-                    "WebAssembly `unreachable` instruction at file offset {:#x}.\n",
-                    file_offset
-                )
+                format!("WebAssembly `unreachable` instruction at file offset {file_offset:#x}.\n")
             }
         }
     }

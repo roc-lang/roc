@@ -30,8 +30,8 @@ use crate::llvm::{
     },
     build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
-        entry_block_alloca_zerofill, function_value_by_func_spec, load_roc_value,
-        roc_function_call, tag_pointer_clear_tag_id, BuilderExt, RocReturn,
+        function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
+        BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
@@ -1331,16 +1331,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             tag_pointer_clear_tag_id(env, ptr.into_pointer_value()).into()
         }
 
-        Alloca => {
-            arguments!(initial_value);
-
-            let ptr = entry_block_alloca_zerofill(env, initial_value.get_type(), "stack_value");
-
-            env.builder.build_store(ptr, initial_value);
-
-            ptr.into()
-        }
-
         RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
@@ -1354,7 +1344,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 "cast_to_i8_ptr",
             );
 
-            let value_ptr = match layout_interner.get_repr(data_layout) {
+            let value_ptr = match layout_interner.runtime_representation(data_layout) {
                 LayoutRepr::Union(union_layout)
                     if union_layout.stores_tag_id_in_pointer(env.target_info) =>
                 {
@@ -1396,6 +1386,8 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
         }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 
@@ -1832,7 +1824,7 @@ fn throw_on_overflow<'ctx>(
         .unwrap()
 }
 
-fn throw_because_overflow<'ctx>(env: &Env<'_, 'ctx, '_>, message: &str) {
+fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
@@ -2611,7 +2603,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
     } = higher_order;
 
     let PassedFunction {
-        argument_layouts,
+        argument_layouts: _,
         return_layout: result_layout,
         owns_captured_environment: function_owns_closure_data,
         name: function_name,
@@ -2624,11 +2616,8 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
         () => {{
             let function = function_value_by_func_spec(
                 env,
-                func_spec,
+                FuncBorrowSpec::Some(func_spec),
                 function_name.name(),
-                argument_layouts,
-                function_name.niche(),
-                return_layout,
             );
 
             let (closure, closure_layout) =
@@ -2892,6 +2881,6 @@ fn load_symbol_and_lambda_set<'a, 'ctx>(
     let (ptr, layout) = scope.load_symbol_and_layout(symbol);
     match layout_interner.get_repr(layout) {
         LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
-        other => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
+        other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
 }

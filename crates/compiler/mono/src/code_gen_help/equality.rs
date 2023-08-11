@@ -2,7 +2,6 @@ use bumpalo::collections::vec::Vec;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Symbol};
 
-use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
@@ -25,7 +24,7 @@ pub fn eq_generic<'a>(
     use crate::layout::Builtin::*;
     use LayoutRepr::*;
     let main_body = match layout_interner.get_repr(layout) {
-        Builtin(Int(_) | Float(_) | Bool | Decimal) => {
+        Builtin(Int(_) | Float(_) | Bool | Decimal) | FunctionPointer(_) => {
             unreachable!(
                 "No generated proc for `==`. Use direct code gen for {:?}",
                 layout
@@ -37,9 +36,9 @@ pub fn eq_generic<'a>(
         Builtin(List(elem_layout)) => eq_list(root, ident_ids, ctx, layout_interner, elem_layout),
         Struct(field_layouts) => eq_struct(root, ident_ids, ctx, layout_interner, field_layouts),
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
-        Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),
+        Erased(_) => unreachable!("`==` is not defined on erased types"),
         RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."
@@ -139,7 +138,7 @@ fn eq_struct<'a>(
 ) -> Stmt<'a> {
     let mut else_stmt = Stmt::Ret(Symbol::BOOL_TRUE);
     for (i, layout) in field_layouts.iter().enumerate().rev() {
-        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}", i));
+        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{i}"));
         let field1_expr = Expr::StructAtIndex {
             index: i as u64,
             field_layouts,
@@ -147,7 +146,7 @@ fn eq_struct<'a>(
         };
         let field1_stmt = |next| Stmt::Let(field1_sym, field1_expr, *layout, next);
 
-        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}", i));
+        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{i}"));
         let field2_expr = Expr::StructAtIndex {
             index: i as u64,
             field_layouts,
@@ -165,7 +164,7 @@ fn eq_struct<'a>(
             )
             .unwrap();
 
-        let eq_call_name = format!("eq_call_{}", i);
+        let eq_call_name = format!("eq_call_{i}");
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
         let eq_call_stmt = |next| Stmt::Let(eq_call_sym, eq_call_expr, LAYOUT_BOOL, next);
 
@@ -444,7 +443,6 @@ fn eq_tag_union_help<'a>(
 
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
-            ownership: Ownership::Borrowed,
             layout: union_layout,
         });
 
@@ -489,8 +487,8 @@ fn eq_tag_fields<'a>(
         Some(i) => {
             // Implement tail recursion on this RecursivePointer,
             // in the innermost `else` clause after all other fields have been checked
-            let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
-            let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}_{}", tag_id, i));
+            let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{tag_id}_{i}"));
+            let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{tag_id}_{i}"));
 
             let field1_expr = Expr::UnionAtIndex {
                 union_layout,
@@ -534,8 +532,8 @@ fn eq_tag_fields<'a>(
             continue; // the tail-recursive field is handled elsewhere
         }
 
-        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{}_{}", tag_id, i));
-        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{}_{}", tag_id, i));
+        let field1_sym = root.create_symbol(ident_ids, &format!("field_1_{tag_id}_{i}"));
+        let field2_sym = root.create_symbol(ident_ids, &format!("field_2_{tag_id}_{i}"));
 
         let field1_expr = Expr::UnionAtIndex {
             union_layout,
@@ -561,7 +559,7 @@ fn eq_tag_fields<'a>(
             )
             .unwrap();
 
-        let eq_call_name = format!("eq_call_{}", i);
+        let eq_call_name = format!("eq_call_{i}");
         let eq_call_sym = root.create_symbol(ident_ids, &eq_call_name);
 
         stmt = Stmt::Let(
@@ -744,13 +742,11 @@ fn eq_list<'a>(
 
     let param_addr1 = Param {
         symbol: addr1,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
     let param_addr2 = Param {
         symbol: addr2,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 

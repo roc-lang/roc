@@ -140,6 +140,7 @@ fn index_var(
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _)
             | Content::LambdaSet(_)
+            | Content::ErasedLambda
             | Content::RangedNumber(..) => return Err(TypeError),
             Content::Error => return Err(TypeError),
             Content::RecursionVar {

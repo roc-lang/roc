@@ -429,11 +429,11 @@ impl fmt::Display for GridNodeMap {
         for row in &self.lines {
             let row_str = row
                 .iter()
-                .map(|mark_node_id| format!(" {} ", mark_node_id))
+                .map(|mark_node_id| format!(" {mark_node_id} "))
                 .collect::<Vec<String>>()
                 .join(", ");
 
-            writeln!(f, "{}", row_str)?;
+            writeln!(f, "{row_str}")?;
         }
 
         writeln!(f, "(grid_node_map, {:?} lines)", self.lines.len())?;

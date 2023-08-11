@@ -563,7 +563,7 @@ fn test_call_import() {
         module.serialize(&mut buf);
         let filename = "/tmp/roc/call-return.wasm";
         std::fs::write(filename, buf).unwrap();
-        println!("Wrote to {}", filename);
+        println!("Wrote to {filename}");
     }
 
     let mut inst = Instance::for_module(&arena, &module, import_dispatcher, true).unwrap();
@@ -631,7 +631,7 @@ fn test_call_return_no_args() {
         module.serialize(&mut buf);
         let filename = "/tmp/roc/call-return.wasm";
         std::fs::write(filename, buf).unwrap();
-        println!("Wrote to {}", filename);
+        println!("Wrote to {filename}");
     }
 
     let mut inst =
@@ -771,9 +771,9 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
     if false {
         let mut outfile_buf = Vec::new_in(&arena);
         module.serialize(&mut outfile_buf);
-        let filename = format!("/tmp/roc/call_indirect_{}_{}.wasm", table_index, elem_index);
+        let filename = format!("/tmp/roc/call_indirect_{table_index}_{elem_index}.wasm");
         std::fs::write(&filename, outfile_buf).unwrap();
-        println!("\nWrote to {}\n", filename);
+        println!("\nWrote to {filename}\n");
     }
 
     let mut inst = Instance::for_module(

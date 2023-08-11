@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=9f4346eac544cc0db5eb7d889e71eac0f9c8b9eb";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=821c72743ceae44bdd09718d47cab98fd5fd90af";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -90,7 +90,7 @@
           llvmPkgs.clang
           libxkbcommon
           pkg-config
-          zig # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zig_0_9 # roc builtins are implemented in zig, see compiler/builtins/bitcode/
 
           # lib deps
           libffi
@@ -108,6 +108,13 @@
           wasm-pack # for repl_wasm
           jq
         ]);
+
+        aliases = ''
+          alias clippy='cargo clippy --workspace --tests --release -- --deny warnings'
+          alias fmt='cargo fmt --all'
+          alias fmtc='cargo fmt --all -- --check'
+        '';
+
       in {
 
         devShell = pkgs.mkShell {
@@ -127,6 +134,10 @@
               ++ linuxInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the editor with NVIDIA's closed source drivers
+          
+          shellHook = ''
+            source <(echo "${aliases}")
+          '';
         };
 
         formatter = pkgs.nixpkgs-fmt;

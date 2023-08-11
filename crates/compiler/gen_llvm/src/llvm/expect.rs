@@ -9,7 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
@@ -18,7 +18,7 @@ use roc_mono::layout::{
 use roc_region::all::Region;
 
 use super::build::BuilderExt;
-use super::build::{add_func, load_roc_value, FunctionSpec, LlvmBackendMode};
+use super::build::{add_func, FunctionSpec, LlvmBackendMode};
 use super::convert::struct_type_from_union_layout;
 use super::scope::Scope;
 use super::struct_::RocStruct;
@@ -353,43 +353,6 @@ fn build_clone<'a, 'ctx>(
             }
         }
 
-        LayoutRepr::Boxed(inner_layout) => {
-            // write the offset
-            build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
-
-            let source = value.into_pointer_value();
-            let value = load_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(inner_layout),
-                source,
-                "inner",
-            );
-
-            let inner_width = env
-                .ptr_int()
-                .const_int(layout_interner.stack_size(inner_layout) as u64, false);
-
-            let new_extra = env
-                .builder
-                .build_int_add(cursors.offset, inner_width, "new_extra");
-
-            let cursors = Cursors {
-                offset: cursors.extra_offset,
-                extra_offset: new_extra,
-            };
-
-            build_clone(
-                env,
-                layout_interner,
-                layout_ids,
-                ptr,
-                cursors,
-                value,
-                layout_interner.get_repr(inner_layout),
-            )
-        }
-
         LayoutRepr::Ptr(_) => {
             unreachable!("for internal use only")
         }
@@ -424,6 +387,8 @@ fn build_clone<'a, 'ctx>(
                 union_layout,
             )
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 
@@ -835,7 +800,7 @@ fn build_clone_tag_help<'a, 'ctx>(
                 let mut cases = Vec::with_capacity_in(other_tags.len(), env.arena);
 
                 for i in 0..other_tags.len() + 1 {
-                    if i == nullable_id as _ {
+                    if i == nullable_id as usize {
                         continue;
                     }
 

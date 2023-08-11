@@ -38,7 +38,7 @@ impl NumericRange {
         width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
-    pub(crate) fn width(&self) -> IntLitWidth {
+    pub fn min_width(&self) -> IntLitWidth {
         use NumericRange::*;
         match self {
             IntAtLeastSigned(w)
@@ -52,7 +52,7 @@ impl NumericRange {
     /// `None` if there is no common lower bound.
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         use NumericRange::*;
-        let (left, right) = (self.width(), other.width());
+        let (left, right) = (self.min_width(), other.min_width());
         let (constructor, is_negative): (fn(IntLitWidth) -> NumericRange, _) = match (self, other) {
             // Matching against a signed int, the intersection must also be a signed int
             (IntAtLeastSigned(_), _) | (_, IntAtLeastSigned(_)) => (IntAtLeastSigned, true),
@@ -154,9 +154,15 @@ impl NumericRange {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum IntSignedness {
+pub enum IntSignedness {
     Unsigned,
     Signed,
+}
+
+impl IntSignedness {
+    pub fn is_signed(&self) -> bool {
+        matches!(self, IntSignedness::Signed)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -184,7 +190,7 @@ pub enum IntLitWidth {
 
 impl IntLitWidth {
     /// Returns the `IntSignedness` and bit width of a variant.
-    fn signedness_and_width(&self) -> (IntSignedness, u32) {
+    pub fn signedness_and_width(&self) -> (IntSignedness, u32) {
         use IntLitWidth::*;
         use IntSignedness::*;
         match self {
@@ -207,7 +213,7 @@ impl IntLitWidth {
     }
 
     fn is_signed(&self) -> bool {
-        self.signedness_and_width().0 == IntSignedness::Signed
+        self.signedness_and_width().0.is_signed()
     }
 
     pub fn type_str(&self) -> &'static str {

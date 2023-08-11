@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
-use roc_solve::module::{SolveConfig, SolveOutput};
+use roc_solve::{
+    module::{SolveConfig, SolveOutput},
+    FunctionKind,
+};
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -335,7 +338,7 @@ fn assemble_derived_golden(
     specialization_lsets.sort_by_key(|(region, _)| *region);
     for (region, var) in specialization_lsets {
         let pretty_lset = print_var(var, false);
-        let _ = writeln!(pretty_buf, "#   @<{}>: {}", region, pretty_lset);
+        let _ = writeln!(pretty_buf, "#   @<{region}>: {pretty_lset}");
     }
 
     pretty_buf.push_str(derived_source);
@@ -426,9 +429,13 @@ fn check_derived_typechecks_and_golden(
         constraints: &constraints,
         root_constraint: constr,
         types,
+        function_kind: FunctionKind::LambdaSet,
         pending_derives: Default::default(),
         exposed_by_module: &exposed_for_module.exposed_by_module,
         derived_module: Default::default(),
+
+        #[cfg(debug_assertions)]
+        checkmate: None,
     };
 
     let SolveOutput {
@@ -476,10 +483,7 @@ fn check_derived_typechecks_and_golden(
             .render_raw(80, &mut roc_reporting::report::CiWrite::new(&mut buf))
             .unwrap();
 
-        panic!(
-            "Derived does not typecheck:\n{}\nDerived def:\n{}",
-            buf, derived_program
-        );
+        panic!("Derived does not typecheck:\n{buf}\nDerived def:\n{derived_program}");
     }
 
     let golden = assemble_derived_golden(
@@ -523,6 +527,7 @@ where
         path.parent().unwrap().to_path_buf(),
         Default::default(),
         target_info,
+        FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
         RocCacheDir::Disallowed,

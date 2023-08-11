@@ -2,11 +2,11 @@
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
 
-use crate::borrow::Ownership;
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
@@ -188,7 +188,8 @@ pub fn refcount_generic<'a>(
     match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-        ) => {
+        )
+        | LayoutRepr::FunctionPointer(_) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
@@ -230,67 +231,16 @@ pub fn refcount_generic<'a>(
                 structure,
             )
         }
+        LayoutRepr::Erased(_) => {
+            todo_lambda_erasure!()
+        }
         LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
-        ),
-        LayoutRepr::Boxed(inner_layout) => refcount_boxed(
-            root,
-            ident_ids,
-            ctx,
-            layout_interner,
-            layout,
-            inner_layout,
-            structure,
         ),
         LayoutRepr::Ptr(_) => {
             unreachable!("We should never call a refcounting helper on a Ptr layout directly")
         }
     }
-}
-
-fn if_unique<'a>(
-    root: &mut CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    value: Symbol,
-    when_unique: impl FnOnce(JoinPointId) -> Stmt<'a>,
-    when_done: Stmt<'a>,
-) -> Stmt<'a> {
-    //  joinpoint f =
-    //      <when_done>
-    //  in
-    //      if is_unique <value> then
-    //          <when_unique>(f)
-    //      else
-    //          jump f
-
-    let joinpoint = root.create_symbol(ident_ids, "is_unique_joinpoint");
-    let joinpoint = JoinPointId(joinpoint);
-
-    let is_unique = root.create_symbol(ident_ids, "is_unique");
-
-    let mut stmt = Stmt::if_then_else(
-        root.arena,
-        is_unique,
-        Layout::UNIT,
-        when_unique(joinpoint),
-        root.arena.alloc(Stmt::Jump(joinpoint, &[])),
-    );
-
-    stmt = Stmt::Join {
-        id: joinpoint,
-        parameters: &[],
-        body: root.arena.alloc(when_done),
-        remainder: root.arena.alloc(stmt),
-    };
-
-    let_lowlevel(
-        root.arena,
-        root.layout_isize,
-        is_unique,
-        LowLevel::RefCountIsUnique,
-        &[value],
-        root.arena.alloc(stmt),
-    )
 }
 
 pub fn refcount_reset_proc_body<'a>(
@@ -1023,14 +973,12 @@ fn refcount_list<'a>(
     let data_pointer = root.create_symbol(ident_ids, "data_pointer");
     let param_data_pointer = Param {
         symbol: data_pointer,
-        ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
 
     let first_element_pointer = root.create_symbol(ident_ids, "first_element_pointer");
     let param_first_element_pointer = Param {
         symbol: first_element_pointer,
-        ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
 
@@ -1095,23 +1043,22 @@ fn refcount_list<'a>(
     let modify_list = modify_refcount_stmt(Pointer::ToData(data_pointer));
 
     let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
-    let modify_elems_and_list =
-        if is_relevant_op && layout_interner.get_repr(elem_layout).is_refcounted() {
-            refcount_list_elems(
-                root,
-                ident_ids,
-                ctx,
-                layout_interner,
-                elem_layout,
-                LAYOUT_UNIT,
-                ptr_layout,
-                len,
-                first_element_pointer,
-                modify_list,
-            )
-        } else {
-            modify_list
-        };
+    let modify_elems_and_list = if is_relevant_op && layout_interner.is_refcounted(elem_layout) {
+        refcount_list_elems(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            elem_layout,
+            LAYOUT_UNIT,
+            ptr_layout,
+            len,
+            first_element_pointer,
+            modify_list,
+        )
+    } else {
+        modify_list
+    };
 
     //
     // JoinPoint for slice vs list
@@ -1216,7 +1163,6 @@ fn refcount_list_elems<'a>(
     let addr = root.create_symbol(ident_ids, "addr");
     let param_addr = Param {
         symbol: addr,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
@@ -1330,7 +1276,7 @@ fn refcount_struct<'a>(
 
     for (i, field_layout) in field_layouts.iter().enumerate().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
-            let field_val = root.create_symbol(ident_ids, &format!("field_val_{}", i));
+            let field_val = root.create_symbol(ident_ids, &format!("field_val_{i}"));
             let field_val_expr = Expr::StructAtIndex {
                 index: i as u64,
                 field_layouts,
@@ -1338,7 +1284,7 @@ fn refcount_struct<'a>(
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
 
-            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}", i));
+            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{i}"));
             let mod_args = refcount_args(root, ctx, field_val);
             let mod_expr = root
                 .call_specialized_op(ident_ids, ctx, layout_interner, *field_layout, mod_args)
@@ -1812,7 +1758,7 @@ fn refcount_union_tailrec<'a>(
                             filtered.push((i, *field));
                         } else {
                             let field_val =
-                                root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
+                                root.create_symbol(ident_ids, &format!("field_{tag_id}_{i}"));
                             let field_val_expr = Expr::UnionAtIndex {
                                 union_layout,
                                 tag_id,
@@ -1902,7 +1848,6 @@ fn refcount_union_tailrec<'a>(
 
         let jp_param = Param {
             symbol: next_ptr,
-            ownership: Ownership::Borrowed,
             layout,
         };
 
@@ -1923,7 +1868,6 @@ fn refcount_union_tailrec<'a>(
     let union_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
-        ownership: Ownership::Borrowed,
         layout: union_layout,
     };
 
@@ -1950,7 +1894,7 @@ fn refcount_tag_fields<'a>(
 
     for (i, field_layout) in field_layouts.iter().rev() {
         if layout_interner.contains_refcounted(*field_layout) {
-            let field_val = root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
+            let field_val = root.create_symbol(ident_ids, &format!("field_{tag_id}_{i}"));
             let field_val_expr = Expr::UnionAtIndex {
                 union_layout,
                 tag_id,
@@ -1959,7 +1903,7 @@ fn refcount_tag_fields<'a>(
             };
             let field_val_stmt = |next| Stmt::Let(field_val, field_val_expr, *field_layout, next);
 
-            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}_{}", tag_id, i));
+            let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{tag_id}_{i}"));
             let mod_args = refcount_args(root, ctx, field_val);
             let mod_expr = root
                 .call_specialized_op(ident_ids, ctx, layout_interner, *field_layout, mod_args)
@@ -1977,73 +1921,4 @@ fn refcount_tag_fields<'a>(
     }
 
     stmt
-}
-
-fn refcount_boxed<'a>(
-    root: &mut CodeGenHelp<'a>,
-    ident_ids: &mut IdentIds,
-    ctx: &mut Context<'a>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    inner_layout: InLayout<'a>,
-    outer: Symbol,
-) -> Stmt<'a> {
-    let arena = root.arena;
-
-    //
-    // modify refcount of the inner and outer structures
-    // RC on inner first, to avoid use-after-free for Dec
-    // We're defining statements in reverse, so define outer first
-    //
-
-    let alignment = layout_interner.allocation_alignment_bytes(layout);
-    let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
-    let modify_outer = modify_refcount(
-        root,
-        ident_ids,
-        ctx,
-        Pointer::ToData(outer),
-        alignment,
-        arena.alloc(ret_stmt),
-    );
-
-    // decrement the inner value if the operation is a decrement and the box itself is unique
-    if layout_interner.is_refcounted(inner_layout) && ctx.op.is_dec() {
-        let inner = root.create_symbol(ident_ids, "inner");
-        let inner_expr = Expr::ExprUnbox { symbol: outer };
-
-        let mod_inner_unit = root.create_symbol(ident_ids, "mod_inner_unit");
-        let mod_inner_args = refcount_args(root, ctx, inner);
-        let mod_inner_expr = root
-            .call_specialized_op(
-                ident_ids,
-                ctx,
-                layout_interner,
-                inner_layout,
-                mod_inner_args,
-            )
-            .unwrap();
-
-        if_unique(
-            root,
-            ident_ids,
-            outer,
-            |id| {
-                Stmt::Let(
-                    inner,
-                    inner_expr,
-                    inner_layout,
-                    arena.alloc(Stmt::Let(
-                        mod_inner_unit,
-                        mod_inner_expr,
-                        LAYOUT_UNIT,
-                        arena.alloc(Stmt::Jump(id, &[])),
-                    )),
-                )
-            },
-            modify_outer,
-        )
-    } else {
-        modify_outer
-    }
 }

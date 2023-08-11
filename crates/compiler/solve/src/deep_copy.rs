@@ -10,10 +10,15 @@ use roc_types::{
     types::{RecordField, Uls},
 };
 
-use crate::env::Env;
+use crate::env::SolveEnv;
 
 // TODO: eventually, we could possibly use the arena in Env instead.
-pub(crate) fn deep_copy_var_in(env: &mut Env, rank: Rank, var: Variable, arena: &Bump) -> Variable {
+pub(crate) fn deep_copy_var_in(
+    env: &mut SolveEnv,
+    rank: Rank,
+    var: Variable,
+    arena: &Bump,
+) -> Variable {
     let mut visited = bumpalo::collections::Vec::with_capacity_in(256, arena);
 
     let pool = env.pools.get_mut(rank);
@@ -257,7 +262,7 @@ fn deep_copy_var_help(
                 subs.set_content_unchecked(copy, Structure(new_flat_type));
             }
 
-            FlexVar(_) | FlexAbleVar(_, _) | Error => {
+            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda => {
                 subs.set_content_unchecked(copy, content);
             }
 

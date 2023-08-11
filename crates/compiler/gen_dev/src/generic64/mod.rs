@@ -5,7 +5,7 @@ use crate::{
 use bumpalo::collections::{CollectIn, Vec};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp, HelperOp};
 use roc_mono::ir::{
@@ -134,6 +134,10 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         sym: &Symbol,
         layout: &InLayout<'a>,
     );
+
+    fn setjmp(buf: &mut Vec<'_, u8>);
+    fn longjmp(buf: &mut Vec<'_, u8>);
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
 }
 
 pub enum CompareOperation {
@@ -238,6 +242,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: GeneralReg,
     );
 
+    fn data_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: GeneralReg,
+    );
+
     /// Jumps by an offset of offset bytes unconditionally.
     /// It should always generate the same number of bytes to enable replacement if offset changes.
     /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
@@ -321,6 +332,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
 
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
+    fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
 
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
     fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
@@ -713,6 +725,9 @@ impl<
     fn interner(&self) -> &STLayoutInterner<'a> {
         self.layout_interner
     }
+    fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
+        &mut self.relocs
+    }
     fn module_interns_helpers_mut(
         &mut self,
     ) -> (
@@ -886,10 +901,45 @@ impl<
         (out.into_bump_slice(), offset)
     }
 
+    fn build_roc_setjmp(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::setjmp(&mut out);
+
+        out.into_bump_slice()
+    }
+
+    fn build_roc_longjmp(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::longjmp(&mut out);
+
+        out.into_bump_slice()
+    }
+
+    fn build_roc_panic(&mut self) -> (&'a [u8], Vec<'a, Relocation>) {
+        let mut out = bumpalo::vec![in self.env.arena];
+        let mut relocs = bumpalo::vec![in self.env.arena];
+
+        CC::roc_panic(&mut out, &mut relocs);
+
+        (out.into_bump_slice(), relocs)
+    }
+
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String) {
         let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
         ASM::function_pointer(&mut self.buf, &mut self.relocs, fn_name, reg)
+    }
+
+    fn build_data_pointer(&mut self, dst: &Symbol, data_name: String) {
+        let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+
+        // now, this gives a pointer to the value
+        ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg);
+
+        // dereference
+        ASM::mov_reg64_mem64_offset32(&mut self.buf, reg, reg, 0);
     }
 
     fn build_fn_call(
@@ -935,7 +985,8 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            LayoutRepr::I128 | LayoutRepr::U128 => {
+            // Note that on windows there is only 1 general return register so we can't use this optimisation
+            LayoutRepr::I128 | LayoutRepr::U128 if CC::GENERAL_RETURN_REGS.len() > 1 => {
                 let offset = self.storage_manager.claim_stack_area(dst, 16);
 
                 ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
@@ -3006,11 +3057,17 @@ impl<
         ASM::and_reg64_reg64_reg64(buf, sym_reg, sym_reg, ptr_reg);
     }
 
-    fn build_alloca(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
+    fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>) {
         // 1. acquire some stack space
         let element_width = self.interner().stack_size(element_layout);
         let allocation = self.debug_symbol("stack_allocation");
         let ptr = self.debug_symbol("ptr");
+
+        if element_width == 0 {
+            self.storage_manager.claim_pointer_stack_area(sym);
+            return;
+        }
+
         let base_offset = self
             .storage_manager
             .claim_stack_area(&allocation, element_width);
@@ -3020,7 +3077,13 @@ impl<
         ASM::mov_reg64_reg64(&mut self.buf, ptr_reg, CC::BASE_PTR_REG);
         ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, base_offset);
 
-        self.build_ptr_store(sym, ptr, value, element_layout);
+        if let Some(value) = value {
+            self.build_ptr_store(sym, ptr, value, element_layout);
+        } else {
+            // this is now a pointer to uninitialized memory!
+            let r = self.storage_manager.claim_general_reg(&mut self.buf, &sym);
+            ASM::mov_reg64_reg64(&mut self.buf, r, ptr_reg);
+        }
     }
 
     fn expr_box(
@@ -3629,7 +3692,8 @@ impl<
                 }
                 LayoutRepr::Union(UnionLayout::NonRecursive(_))
                 | LayoutRepr::Builtin(_)
-                | LayoutRepr::Struct(_) => {
+                | LayoutRepr::Struct(_)
+                | LayoutRepr::Erased(_) => {
                     internal_error!("All primitive values should fit in a single register");
                 }
             }
@@ -4201,7 +4265,18 @@ impl<
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
                         // can we treat this as 2 u64's?
-                        todo!()
+                        storage_manager.with_tmp_general_reg(
+                            buf,
+                            |storage_manager, buf, tmp_reg| {
+                                let base_offset = storage_manager.claim_stack_area(&dst, 16);
+
+                                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
+                                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
+                                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                            },
+                        );
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
@@ -4239,6 +4314,15 @@ impl<
                 }
                 Builtin::Decimal => {
                     // same as 128-bit integer
+                    storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                        let base_offset = storage_manager.claim_stack_area(&dst, 16);
+
+                        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
+                        ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
+                        ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                    });
                 }
                 Builtin::Str | Builtin::List(_) => {
                     storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
@@ -4305,6 +4389,8 @@ impl<
                     dst,
                 );
             }
+
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
@@ -4518,8 +4604,7 @@ macro_rules! single_register_layouts {
 #[macro_export]
 macro_rules! pointer_layouts {
     () => {
-        LayoutRepr::Boxed(_)
-            | LayoutRepr::Ptr(_)
+        LayoutRepr::Ptr(_)
             | LayoutRepr::RecursivePointer(_)
             | LayoutRepr::Union(
                 UnionLayout::Recursive(_)
@@ -4527,5 +4612,6 @@ macro_rules! pointer_layouts {
                     | UnionLayout::NullableWrapped { .. }
                     | UnionLayout::NullableUnwrapped { .. },
             )
+            | LayoutRepr::FunctionPointer(_)
     };
 }

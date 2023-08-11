@@ -10,6 +10,7 @@ use roc_debug_flags::ROC_TRACE_COMPACTION;
 use roc_derive_key::{DeriveError, DeriveKey};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
@@ -17,12 +18,12 @@ use roc_types::{
     },
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
-use roc_unify::unify::{unify, Mode, MustImplementConstraints};
+use roc_unify::unify::{unify, MustImplementConstraints};
 
 use crate::{
     ability::builtin_module_with_unlisted_ability_impl,
     deep_copy::deep_copy_var_in,
-    env::{DerivedEnv, Env},
+    env::{DerivedEnv, SolveEnv},
 };
 
 /// What phase in the compiler is reaching out to specialize lambda sets?
@@ -187,9 +188,9 @@ fn trace_compaction_step_1(subs: &Subs, c_a: Variable, uls_a: &[Variable]) {
         .collect::<Vec<_>>()
         .join(",");
     eprintln!("===lambda set compaction===");
-    eprintln!("  concrete type: {:?}", c_a);
+    eprintln!("  concrete type: {c_a:?}");
     eprintln!("  step 1:");
-    eprintln!("    uls_a = {{ {} }}", uls_a);
+    eprintln!("    uls_a = {{ {uls_a} }}");
 }
 
 #[cfg(debug_assertions)]
@@ -205,7 +206,7 @@ fn trace_compaction_step_2(subs: &Subs, uls_a: &[Variable]) {
         .collect::<Vec<_>>()
         .join(",");
     eprintln!("  step 2:");
-    eprintln!("    uls_a' = {{ {} }}", uls_a);
+    eprintln!("    uls_a' = {{ {uls_a} }}");
 }
 
 #[cfg(debug_assertions)]
@@ -226,9 +227,9 @@ fn trace_compaction_step_3iter_start(
     );
     let t_f1 = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f1), subs);
     let t_f2 = roc_types::subs::SubsFmtContent(subs.get_content_without_compacting(t_f2), subs);
-    eprintln!("    - iteration: {:?}", iteration_lambda_set);
-    eprintln!("         {:?}", t_f1);
-    eprintln!("      ~  {:?}", t_f2);
+    eprintln!("    - iteration: {iteration_lambda_set:?}");
+    eprintln!("         {t_f1:?}");
+    eprintln!("      ~  {t_f2:?}");
 }
 
 #[cfg(debug_assertions)]
@@ -239,7 +240,7 @@ fn trace_compaction_step_3iter_end(subs: &Subs, t_f_result: Variable, skipped: b
     if skipped {
     eprintln!("      SKIP");
     }
-    eprintln!("      =  {:?}\n", t_f_result);
+    eprintln!("      =  {t_f_result:?}\n");
 }
 
 macro_rules! trace_compact {
@@ -295,7 +296,7 @@ fn unique_unspecialized_lambda(subs: &Subs, c_a: Variable, uls: &[Uls]) -> Optio
 
 #[must_use]
 pub fn compact_lambda_sets_of_vars<P: Phase>(
-    env: &mut Env,
+    env: &mut SolveEnv,
     uls_of_var: UlsOfVar,
     phase: &P,
 ) -> CompactionResult {
@@ -464,7 +465,7 @@ enum OneCompactionResult {
 #[must_use]
 #[allow(clippy::too_many_arguments)]
 fn compact_lambda_set<P: Phase>(
-    env: &mut Env,
+    env: &mut SolveEnv,
     resolved_concrete: Variable,
     this_lambda_set: Variable,
     phase: &P,
@@ -536,7 +537,7 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. env.subs, t_f1);
+            trace_compact!(3iter_end_skipped.env.subs, t_f1);
             return OneCompactionResult::Compacted {
                 new_obligations: Default::default(),
                 new_lambda_sets_to_specialize: Default::default(),
@@ -559,7 +560,7 @@ fn compact_lambda_set<P: Phase>(
         Err(()) => {
             // Do nothing other than to remove the concrete lambda to drop from the lambda set,
             // which we already did in 1b above.
-            trace_compact!(3iter_end_skipped. env.subs, t_f1);
+            trace_compact!(3iter_end_skipped.env.subs, t_f1);
             return OneCompactionResult::Compacted {
                 new_obligations: Default::default(),
                 new_lambda_sets_to_specialize: Default::default(),
@@ -572,16 +573,16 @@ fn compact_lambda_set<P: Phase>(
     let t_f2 = deep_copy_var_in(env, target_rank, t_f2, env.arena);
 
     // 3. Unify `t_f1 ~ t_f2`.
-    trace_compact!(3iter_start. env.subs, this_lambda_set, t_f1, t_f2);
+    trace_compact!(3iter_start.env.subs, this_lambda_set, t_f1, t_f2);
     let (vars, new_obligations, new_lambda_sets_to_specialize, _meta) = unify(
         &mut env.uenv(),
         t_f1,
         t_f2,
-        Mode::LAMBDA_SET_SPECIALIZATION,
+        UnificationMode::LAMBDA_SET_SPECIALIZATION,
         Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");
-    trace_compact!(3iter_end. env.subs, t_f1);
+    trace_compact!(3iter_end.env.subs, t_f1);
 
     env.introduce(target_rank, &vars);
 
@@ -690,6 +691,7 @@ fn make_specialization_decision<P: Phase>(
         | FlexVar(..)
         | RigidVar(..)
         | LambdaSet(..)
+        | ErasedLambda
         | RangedNumber(..) => {
             internal_error!("unexpected")
         }

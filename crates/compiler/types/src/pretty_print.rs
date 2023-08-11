@@ -402,7 +402,11 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error | Structure(EmptyRecord) | Structure(EmptyTuple) | Structure(EmptyTagUnion) => {
+        Error
+        | Structure(EmptyRecord)
+        | Structure(EmptyTuple)
+        | Structure(EmptyTagUnion)
+        | ErasedLambda => {
             // Errors and empty records don't need names.
         }
     }
@@ -820,7 +824,7 @@ fn write_content<'a>(
                     "".to_string()
                 };
                 if env.home == symbol.module_id() {
-                    format!("{}{}", ident_str, disambiguation,)
+                    format!("{ident_str}{disambiguation}",)
                 } else {
                     format!(
                         "{}.{}{}",
@@ -858,6 +862,12 @@ fn write_content<'a>(
             }
 
             buf.push(']');
+        }
+        ErasedLambda => {
+            debug_assert!(env.debug.print_lambda_sets);
+
+            // Easy mode 🤠
+            buf.push('?');
         }
         RangedNumber(range) => {
             buf.push_str("Range(");

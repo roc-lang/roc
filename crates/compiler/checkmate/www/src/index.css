@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.outline-event-col-1 {
+  box-shadow: inset 2px 0px 0px #3B82F6, /* Left */
+              inset -2px 0px 0px transparent, /* Right */
+              inset 0px 2px 0px #3B82F6, /* Bottom */
+              inset 0px -2px 0px #3B82F6; /* Top */
+}
+
+.outline-event-col-3 {
+  box-shadow: inset 2px 0px 0px transparent, /* Left */
+              inset -2px 0px 0px #3B82F6, /* Right */
+              inset 0px 2px 0px #3B82F6, /* Bottom */
+              inset 0px -2px 0px #3B82F6; /* Top */
+}

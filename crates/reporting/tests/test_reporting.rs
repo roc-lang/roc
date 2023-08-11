@@ -26,6 +26,7 @@ mod test_reporting {
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
+    use roc_solve::FunctionKind;
     use roc_solve_problem::TypeError;
     use roc_types::subs::Subs;
     use std::path::PathBuf;
@@ -86,7 +87,7 @@ mod test_reporting {
         path.push("snapshots");
         path.push("fail");
         let kind = if is_expr { "expr" } else { "header" };
-        path.push(format!("{}.{}.roc", test_name, kind));
+        path.push(format!("{test_name}.{kind}.roc"));
 
         std::fs::write(path, src).unwrap();
     }
@@ -113,20 +114,21 @@ mod test_reporting {
             // Use a deterministic temporary directory.
             // We can't have all tests use "tmp" because tests run in parallel,
             // so append the test name to the tmp path.
-            let tmp = format!("tmp/{}", subdir);
+            let tmp = format!("tmp/{subdir}");
             let dir = roc_test_utils::TmpDir::new(&tmp);
 
             let filename = PathBuf::from("Test.roc");
             let file_path = dir.path().join(filename);
             let full_file_path = file_path.clone();
             let mut file = File::create(file_path).unwrap();
-            writeln!(file, "{}", module_src).unwrap();
+            writeln!(file, "{module_src}").unwrap();
             let load_config = LoadConfig {
                 target_info: roc_target::TargetInfo::default_x86_64(),
                 render: RenderTarget::Generic,
                 palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
+                function_kind: FunctionKind::LambdaSet,
             };
             let result = roc_load::load_and_typecheck(
                 arena,
@@ -218,7 +220,7 @@ mod test_reporting {
                 buf
             }
             Err(other) => {
-                panic!("failed to load: {:?}", other);
+                panic!("failed to load: {other:?}");
             }
         }
     }
@@ -389,7 +391,7 @@ mod test_reporting {
         // convenient to copy-paste the generated message
         if buf != expected_rendering {
             for line in buf.split('\n') {
-                println!("                {}", line);
+                println!("                {line}");
             }
         }
 
@@ -5364,24 +5366,6 @@ Tab characters are not allowed."###,
     );
 
     test_report!(
-        interpolate_not_identifier,
-        r#""abc\(32)def""#,
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-    This string interpolation is invalid:
-
-    4│      "abc\(32)def"
-                  ^^
-
-    I was expecting an identifier, like \u(message) or
-    \u(LoremIpsum.text).
-
-    Learn more about string interpolation at TODO
-    "###
-    );
-
-    test_report!(
         unicode_too_large,
         r#""abc\u(110000)def""#,
         @r###"
@@ -10337,7 +10321,7 @@ In roc, functions are always written as a lambda, like{}
         optional_field_in_record_builder,
         indoc!(
             r#"
-            { 
+            {
                 a: <- apply "a",
                 b,
                 c ? "optional"
@@ -10353,7 +10337,7 @@ In roc, functions are always written as a lambda, like{}
     1│  app "test" provides [main] to "./platform"
     2│
     3│  main =
-    4│      { 
+    4│      {
     5│          a: <- apply "a",
     6│          b,
     7│          c ? "optional"
@@ -10442,7 +10426,7 @@ In roc, functions are always written as a lambda, like{}
             r#"
             succeed = \_ -> crash ""
 
-            succeed { 
+            succeed {
                 a: <- "a",
             }
             "#
@@ -13873,6 +13857,46 @@ In roc, functions are always written as a lambda, like{}
         (U8, U8 -> U8)
 
     Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+    "###
+    );
+
+    test_report!(
+        pizza_parens_right,
+        indoc!(
+            r#"
+            2 |> (Num.sub 3)
+            "#
+        ),
+        @r###"
+    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `sub` function expects 2 arguments, but it got only 1:
+
+    4│      2 |> (Num.sub 3)
+                  ^^^^^^^
+
+    Roc does not allow functions to be partially applied. Use a closure to
+    make partial application explicit.
+    "###
+    );
+
+    test_report!(
+        pizza_parens_middle,
+        indoc!(
+            r#"
+            2 |> (Num.sub 3) |> Num.sub 3
+            "#
+        ),
+        @r###"
+    ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
+
+    The `sub` function expects 2 arguments, but it got only 1:
+
+    4│      2 |> (Num.sub 3) |> Num.sub 3
+                  ^^^^^^^
+
+    Roc does not allow functions to be partially applied. Use a closure to
+    make partial application explicit.
     "###
     );
 }

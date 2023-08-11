@@ -29,6 +29,7 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
@@ -40,6 +41,7 @@ fn load_and_typecheck(
     filename: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
@@ -52,6 +54,7 @@ fn load_and_typecheck(
     )?;
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::Generic,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -106,9 +109,9 @@ fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModu
     let arena = &arena;
 
     match multiple_modules_help(subdir, arena, files) {
-        Err(io_error) => panic!("IO trouble: {:?}", io_error),
+        Err(io_error) => panic!("IO trouble: {io_error:?}"),
         Ok(Err(LoadingProblem::FormattedReport(buf))) => Err(buf),
-        Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
+        Ok(Err(loading_problem)) => Err(format!("{loading_problem:?}")),
         Ok(Ok(mut loaded_module)) => {
             let home = loaded_module.module_id;
             let (filepath, src) = loaded_module.sources.get(&home).unwrap();
@@ -148,7 +151,7 @@ fn multiple_modules_help<'a>(
     // Use a deterministic temporary directory.
     // We can't have all tests use "tmp" because tests run in parallel,
     // so append the test name to the tmp path.
-    let tmp = format!("tmp/{}", subdir);
+    let tmp = format!("tmp/{subdir}");
     let dir = roc_test_utils::TmpDir::new(&tmp);
 
     let app_module = files.pop().unwrap();
@@ -162,7 +165,7 @@ fn multiple_modules_help<'a>(
         fs::create_dir_all(file_path.parent().unwrap())?;
 
         let mut file = File::create(file_path)?;
-        writeln!(file, "{}", source)?;
+        writeln!(file, "{source}")?;
         file_handles.push(file);
     }
 
@@ -173,10 +176,16 @@ fn multiple_modules_help<'a>(
         let file_path = dir.path().join(filename);
         let full_file_path = file_path.clone();
         let mut file = File::create(file_path)?;
-        writeln!(file, "{}", source)?;
+        writeln!(file, "{source}")?;
         file_handles.push(file);
 
-        load_and_typecheck(arena, full_file_path, Default::default(), TARGET_INFO)
+        load_and_typecheck(
+            arena,
+            full_file_path,
+            Default::default(),
+            TARGET_INFO,
+            FunctionKind::LambdaSet,
+        )
     };
 
     Ok(result)
@@ -188,16 +197,22 @@ fn load_fixture(
     subs_by_module: ExposedByModule,
 ) -> LoadedModule {
     let src_dir = fixtures_dir().join(dir_name);
-    let filename = src_dir.join(format!("{}.roc", module_name));
+    let filename = src_dir.join(format!("{module_name}.roc"));
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
     let mut loaded_module = match loaded {
         Ok(x) => x,
         Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
-            println!("{}", report);
+            println!("{report}");
             panic!("{}", report);
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     };
 
     let home = loaded_module.module_id;
@@ -258,7 +273,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
                 let expected_type = expected_types
                     .remove(fully_qualified.as_str())
                     .unwrap_or_else(|| {
-                        panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                        panic!("Defs included an unexpected symbol: {fully_qualified:?}")
                     });
 
                 assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
@@ -273,7 +288,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
                     let expected_type = expected_types
                         .remove(fully_qualified.as_str())
                         .unwrap_or_else(|| {
-                            panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                            panic!("Defs included an unexpected symbol: {fully_qualified:?}")
                         });
 
                     assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
@@ -347,7 +362,13 @@ fn interface_with_deps() {
     let src_dir = fixtures_dir().join("interface_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
 
     let mut loaded_module = loaded.expect("Test module failed to load");
     let home = loaded_module.module_id;
@@ -705,8 +726,7 @@ fn platform_does_not_exist() {
             // assert!(report.contains("FILE NOT FOUND"), "report=({})", report);
             assert!(
                 report.contains("zzz-does-not-exist/main.roc"),
-                "report=({})",
-                report
+                "report=({report})"
             );
         }
         Ok(_) => unreachable!("we expect failure here"),

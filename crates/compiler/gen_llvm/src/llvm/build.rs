@@ -9,6 +9,7 @@ use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
 use crate::llvm::struct_::{struct_from_fields, RocStruct};
+use crate::llvm::{erased, fn_ptr};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
@@ -23,11 +24,11 @@ use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
 };
-use inkwell::values::BasicValueEnum;
 use inkwell::values::{
     BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
     StructValue,
 };
+use inkwell::values::{BasicValueEnum, CallableValue};
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::{
@@ -38,10 +39,11 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, GlueLayouts, HostExposedLambdaSet,
-    ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
+    HostExposedLambdaSets, ListLiteralElement, ModifyRc, OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
     Builtin, InLayout, LambdaName, LambdaSet, Layout, LayoutIds, LayoutInterner, LayoutRepr, Niche,
@@ -51,7 +53,7 @@ use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};
 use std::convert::TryInto;
 use std::path::Path;
-use target_lexicon::{Architecture, OperatingSystem, Triple};
+use target_lexicon::{Aarch64Architecture, Architecture, OperatingSystem, Triple};
 
 use super::convert::{struct_type_from_union_layout, RocUnion};
 use super::intrinsics::{
@@ -263,7 +265,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let fn_val = self
             .module
             .get_function(intrinsic_name)
-            .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {}", intrinsic_name));
+            .unwrap_or_else(|| panic!("Unrecognized intrinsic function: {intrinsic_name}"));
 
         let mut arg_vals: Vec<BasicMetadataValueEnum> =
             Vec::with_capacity_in(args.len(), self.arena);
@@ -289,10 +291,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let call = self.build_intrinsic_call(intrinsic_name, args);
 
         call.try_as_basic_value().left().unwrap_or_else(|| {
-            panic!(
-                "LLVM error: Invalid call by name for intrinsic {}",
-                intrinsic_name
-            )
+            panic!("LLVM error: Invalid call by name for intrinsic {intrinsic_name}")
         })
     }
 
@@ -492,23 +491,27 @@ pub fn module_from_builtins<'ctx>(
                 include_bytes!("../../../builtins/bitcode/builtins-x86_64.bc")
             }
             Triple {
+                architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
+                operating_system: OperatingSystem::Linux,
+                ..
+            } => {
+                include_bytes!("../../../builtins/bitcode/builtins-aarch64.bc")
+            }
+            Triple {
                 architecture: Architecture::X86_64,
                 operating_system: OperatingSystem::Windows,
                 ..
             } => {
                 include_bytes!("../../../builtins/bitcode/builtins-windows-x86_64.bc")
             }
-            _ => panic!(
-                "The zig builtins are not currently built for this target: {:?}",
-                target
-            ),
+            _ => panic!("The zig builtins are not currently built for this target: {target:?}"),
         }
     };
 
     let memory_buffer = MemoryBuffer::create_from_memory_range(bitcode_bytes, module_name);
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
-        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {:?}", err));
+        .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {err:?}"));
 
     // Add LLVM intrinsics.
     add_intrinsics(ctx, &module);
@@ -603,8 +606,7 @@ fn promote_to_main_function<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn =
-        function_value_by_func_spec(env, *func_spec, symbol, &[], Niche::NONE, Layout::UNIT);
+    let roc_main_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
     let main_fn_name = "$Test.main";
 
@@ -653,8 +655,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn =
-        function_value_by_func_spec(env, *func_spec, symbol, &[], Niche::NONE, Layout::UNIT);
+    let roc_main_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
     let output_type = match roc_main_fn.get_type().get_return_type() {
         Some(return_type) => {
@@ -689,7 +690,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         let entry = context.append_basic_block(c_function, "entry");
         builder.position_at_end(entry);
 
-        let roc_main_fn_result = call_roc_function(
+        let roc_main_fn_result = call_direct_roc_function(
             env,
             layout_interner,
             roc_main_fn,
@@ -766,7 +767,7 @@ pub fn build_exp_literal<'a, 'ctx>(
             LayoutRepr::Builtin(Builtin::Int(int_width)) => {
                 int_with_precision(env, i128::from_ne_bytes(*bytes), int_width).into()
             }
-            _ => panic!("Invalid layout for int literal = {:?}", layout),
+            _ => panic!("Invalid layout for int literal = {layout:?}"),
         },
 
         U128(bytes) => const_u128(env, u128::from_ne_bytes(*bytes)).into(),
@@ -775,7 +776,7 @@ pub fn build_exp_literal<'a, 'ctx>(
             LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                 float_with_precision(env, *float, float_width)
             }
-            _ => panic!("Invalid layout for float literal = {:?}", layout),
+            _ => panic!("Invalid layout for float literal = {layout:?}"),
         },
 
         Decimal(bytes) => {
@@ -911,7 +912,6 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
         CallType::ByName {
             name,
             specialization_id,
-            arg_layouts,
             ret_layout,
             ..
         } => {
@@ -926,14 +926,36 @@ pub(crate) fn build_exp_call<'a, 'ctx>(
             let callee_var = CalleeSpecVar(&bytes);
             let func_spec = func_spec_solutions.callee_spec(callee_var).unwrap();
 
-            roc_call_with_args(
+            roc_call_direct_with_args(
                 env,
                 layout_interner,
-                arg_layouts,
                 *ret_layout,
                 *name,
-                func_spec,
+                FuncBorrowSpec::Some(func_spec),
                 arg_tuples.into_bump_slice(),
+            )
+        }
+
+        CallType::ByPointer {
+            pointer,
+            arg_layouts,
+            ret_layout,
+        } => {
+            let mut args: Vec<BasicValueEnum> = Vec::with_capacity_in(arguments.len(), env.arena);
+
+            for symbol in arguments.iter() {
+                args.push(scope.load_symbol(symbol));
+            }
+
+            let pointer = scope.load_symbol(pointer).into_pointer_value();
+
+            roc_call_erased_with_args(
+                env,
+                layout_interner,
+                pointer,
+                arg_layouts,
+                *ret_layout,
+                args.into_bump_slice(),
             )
         }
 
@@ -1084,40 +1106,22 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             )
         }
 
-        ExprBox { symbol } => {
-            let (value, layout) = scope.load_symbol_and_layout(symbol);
-            let basic_type =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-            let allocation = reserve_with_refcount_help(
-                env,
-                basic_type,
-                layout_interner.stack_size(layout),
-                layout_interner.alignment_bytes(layout),
-            );
-
-            store_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(layout),
-                allocation,
-                value,
-            );
-
-            allocation.into()
+        FunctionPointer { lambda_name } => {
+            let alloca = fn_ptr::build(env, *lambda_name);
+            alloca.into()
         }
+        ErasedMake { value, callee } => {
+            let value = value.map(|sym| scope.load_symbol(&sym).into_pointer_value());
+            let callee = scope.load_symbol(callee).into_pointer_value();
+            erased::build(env, value, callee).into()
+        }
+        ErasedLoad { symbol, field } => {
+            let value = scope.load_symbol(symbol).into_struct_value();
+            let wanted_llvm_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .into_pointer_type();
 
-        ExprUnbox { symbol } => {
-            let value = scope.load_symbol(symbol);
-
-            debug_assert!(value.is_pointer_value());
-
-            load_roc_value(
-                env,
-                layout_interner,
-                layout_interner.get_repr(layout),
-                value.into_pointer_value(),
-                "load_boxed_value",
-            )
+            erased::load(env, value, *field, wanted_llvm_type).into()
         }
 
         Reset {
@@ -1596,6 +1600,24 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
             get_tag_id(env, layout_interner, parent, union_layout, argument).into()
         }
+
+        Alloca {
+            initializer,
+            element_layout,
+        } => {
+            let element_type = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(*element_layout),
+            );
+            let ptr = entry_block_alloca_zerofill(env, element_type, "stack_value");
+
+            if let Some(initializer) = initializer {
+                env.builder.build_store(ptr, scope.load_symbol(initializer));
+            }
+
+            ptr.into()
+        }
     }
 }
 
@@ -1886,7 +1908,7 @@ fn build_tag<'a, 'ctx>(
             let roc_union =
                 RocUnion::untagged_from_slices(layout_interner, env.context, &[other_fields]);
 
-            if tag_id == *nullable_id as _ {
+            if tag_id == *nullable_id as u16 {
                 let output_type = roc_union.struct_type().ptr_type(AddressSpace::default());
 
                 return output_type.const_null().into();
@@ -2092,7 +2114,7 @@ pub fn get_tag_id<'a, 'ctx>(
 
     match union_layout {
         UnionLayout::NonRecursive(_) => {
-            debug_assert!(argument.is_pointer_value(), "{:?}", argument);
+            debug_assert!(argument.is_pointer_value(), "{argument:?}");
 
             let argument_ptr = argument.into_pointer_value();
             get_tag_id_wrapped(env, layout_interner, *union_layout, argument_ptr)
@@ -2868,8 +2890,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 DecRef(symbol) => {
                     let (value, layout) = scope.load_symbol_and_layout(symbol);
 
-                    let lay = layout_interner.get_repr(layout);
-                    match lay {
+                    match layout_interner.runtime_representation(layout) {
                         LayoutRepr::Builtin(Builtin::Str) => todo!(),
                         LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                             debug_assert!(value.is_struct_value());
@@ -2879,16 +2900,19 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             build_list::decref(env, value.into_struct_value(), alignment);
                         }
 
-                        _ if lay.is_refcounted() => {
+                        other_layout if other_layout.is_refcounted(layout_interner) => {
                             if value.is_pointer_value() {
-                                let value_ptr = match lay {
-                                    LayoutRepr::Union(union_layout)
-                                        if union_layout
-                                            .stores_tag_id_in_pointer(env.target_info) =>
-                                    {
-                                        tag_pointer_clear_tag_id(env, value.into_pointer_value())
+                                let clear_tag_id = match other_layout {
+                                    LayoutRepr::Union(union_layout) => {
+                                        union_layout.stores_tag_id_in_pointer(env.target_info)
                                     }
-                                    _ => value.into_pointer_value(),
+                                    _ => false,
+                                };
+
+                                let value_ptr = if clear_tag_id {
+                                    tag_pointer_clear_tag_id(env, value.into_pointer_value())
+                                } else {
+                                    value.into_pointer_value()
                                 };
 
                                 let then_block = env.context.append_basic_block(parent, "then");
@@ -2941,7 +2965,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                     debug_assert!(value.is_pointer_value());
                     let value = value.into_pointer_value();
 
-                    let clear_tag_id = match layout_interner.chase_recursive(layout) {
+                    let clear_tag_id = match layout_interner.runtime_representation(layout) {
                         LayoutRepr::Union(union) => union.stores_tag_id_in_pointer(env.target_info),
                         _ => false,
                     };
@@ -3550,10 +3574,7 @@ fn build_switch_ir<'a, 'ctx>(
             layout_interner,
             layout_interner.get_repr(stored_layout)
         ),
-        "This switch matches on {:?}, but the matched-on symbol {:?} has layout {:?}",
-        cond_layout,
-        cond_symbol,
-        stored_layout
+        "This switch matches on {cond_layout:?}, but the matched-on symbol {cond_symbol:?} has layout {stored_layout:?}"
     );
 
     let cont_block = context.append_basic_block(parent, "cont");
@@ -3659,7 +3680,7 @@ fn build_switch_ir<'a, 'ctx>(
                 condition_int_type.const_int(*int, false)
             };
 
-            let block = context.append_basic_block(parent, format!("branch{}", int).as_str());
+            let block = context.append_basic_block(parent, format!("branch{int}").as_str());
 
             cases.push((int_val, block));
         }
@@ -3887,7 +3908,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         builder.position_at_end(entry);
 
         let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
-        call_roc_function(
+        call_direct_roc_function(
             env,
             layout_interner,
             roc_function,
@@ -3895,7 +3916,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
             arguments_for_call,
         )
     } else {
-        call_roc_function(
+        call_direct_roc_function(
             env,
             layout_interner,
             roc_function,
@@ -4033,7 +4054,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
 
         let wrapper_result = roc_call_result_layout(env.arena, return_layout);
 
-        let roc_value = call_roc_function(
+        let roc_value = call_direct_roc_function(
             env,
             layout_interner,
             roc_wrapper_function,
@@ -4068,7 +4089,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
         &[],
     );
 
-    let size_function_name: String = format!("roc__{}_size", ident_string);
+    let size_function_name: String = format!("roc__{ident_string}_size");
 
     let size_function = add_func(
         env.context,
@@ -4286,7 +4307,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
 
     let arguments = Vec::from_iter_in(it, env.arena);
 
-    let value = call_roc_function(
+    let value = call_direct_roc_function(
         env,
         layout_interner,
         roc_function,
@@ -4368,7 +4389,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
         roc_function,
         arguments,
         return_layout,
-        &format!("{}_generic", c_function_name),
+        &format!("{c_function_name}_generic"),
     );
 
     let c_function = expose_function_to_host_help_c_abi_v2(
@@ -4387,7 +4408,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
         Some(env.context.i64_type().as_basic_type_enum()),
         &[],
     );
-    let size_function_name: String = format!("{}_size", c_function_name);
+    let size_function_name: String = format!("{c_function_name}_size");
 
     let size_function = add_func(
         env.context,
@@ -4596,7 +4617,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     {
         builder.position_at_end(then_block);
 
-        let call_result = call_roc_function(
+        let call_result = call_direct_roc_function(
             env,
             layout_interner,
             roc_function,
@@ -4864,15 +4885,19 @@ pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
 
         let it = func_solutions.specs();
         let mut function_values = std::vec::Vec::with_capacity(it.size_hint().0);
+
+        let is_erased = proc.is_erased;
+        debug_assert!(!is_erased || func_solutions.specs().count() == 1);
+
         for specialization in it {
-            let fn_val = build_proc_header(
-                env,
-                layout_interner,
-                *specialization,
-                symbol,
-                &proc,
-                layout_ids,
-            );
+            let func_spec = if is_erased {
+                FuncBorrowSpec::Erased
+            } else {
+                FuncBorrowSpec::Some(*specialization)
+            };
+
+            let fn_val =
+                build_proc_header(env, layout_interner, func_spec, symbol, &proc, layout_ids);
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
@@ -4895,6 +4920,7 @@ pub fn build_procedures<'a>(
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
     glue_layouts: &GlueLayouts<'a>,
@@ -4904,6 +4930,7 @@ pub fn build_procedures<'a>(
         layout_interner,
         opt_level,
         procedures,
+        host_exposed_lambda_sets,
         entry_point,
         debug_output_file,
     );
@@ -4927,8 +4954,7 @@ pub fn build_procedures<'a>(
         );
 
         // NOTE fake layout; it is only used for debug prints
-        let getter_fn =
-            function_value_by_func_spec(env, *func_spec, symbol, &[], niche, Layout::UNIT);
+        let getter_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = getter_fn.get_name().to_str().unwrap();
         let getter_name = symbol.as_str(&env.interns);
@@ -4958,6 +4984,7 @@ pub fn build_wasm_test_wrapper<'a, 'ctx>(
         layout_interner,
         opt_level,
         procedures,
+        vec![],
         EntryPoint::Single(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
@@ -4976,6 +5003,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     entry_point: SingleEntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(
@@ -4983,6 +5011,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         layout_interner,
         opt_level,
         procedures,
+        host_exposed_lambda_sets,
         EntryPoint::Single(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
@@ -5010,6 +5039,7 @@ pub fn build_procedures_expose_expects<'a>(
         layout_interner,
         opt_level,
         procedures,
+        vec![],
         entry_point,
         Some(&std::env::temp_dir().join("test.ll")),
     );
@@ -5034,7 +5064,7 @@ pub fn build_procedures_expose_expects<'a>(
         let mut it = func_solutions.specs();
         let func_spec = match it.next() {
             Some(spec) => spec,
-            None => panic!("no specialization for expect {}", symbol),
+            None => panic!("no specialization for expect {symbol}"),
         };
 
         debug_assert!(
@@ -5044,11 +5074,11 @@ pub fn build_procedures_expose_expects<'a>(
 
         // NOTE fake layout; it is only used for debug prints
         let roc_main_fn =
-            function_value_by_func_spec(env, *func_spec, symbol, &[], captures_niche, Layout::UNIT);
+            function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
         let name = roc_main_fn.get_name().to_str().unwrap();
 
-        let expect_name = &format!("Expect_{}", name);
+        let expect_name = &format!("Expect_{name}");
         let expect_name = env.arena.alloc_str(expect_name);
         expect_names.push(&*expect_name);
 
@@ -5060,7 +5090,7 @@ pub fn build_procedures_expose_expects<'a>(
             roc_main_fn,
             top_level.arguments,
             top_level.result,
-            &format!("Expect_{}", name),
+            &format!("Expect_{name}"),
         );
     }
 
@@ -5072,22 +5102,25 @@ fn build_procedures_help<'a>(
     layout_interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
     let mut scope = Scope::default();
 
-    let it = procedures.iter().map(|x| x.1);
+    let it1 = procedures.iter().map(|x| x.1);
+    let it2 = host_exposed_lambda_sets.iter().map(|(_, _, hels)| hels);
 
     let solutions = match roc_alias_analysis::spec_program(
         env.arena,
         layout_interner,
         opt_level,
         entry_point,
-        it,
+        it1,
+        it2,
     ) {
-        Err(e) => panic!("Error in alias analysis: {}", e),
+        Err(e) => panic!("Error in alias analysis: {e}"),
         Ok(solutions) => solutions,
     };
 
@@ -5123,7 +5156,6 @@ fn build_procedures_help<'a>(
             build_proc(
                 env,
                 layout_interner,
-                mod_solutions,
                 &mut layout_ids,
                 func_spec_solutions,
                 scope.clone(),
@@ -5168,14 +5200,42 @@ fn build_procedures_help<'a>(
         }
     }
 
+    use LlvmBackendMode::*;
+    match env.mode {
+        GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
+        Binary | BinaryDev | BinaryGlue => {
+            for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
+                let ident_string = proc_name.name().as_str(&env.interns);
+                let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
+
+                expose_alias_to_host(
+                    env,
+                    layout_interner,
+                    mod_solutions,
+                    &fn_name,
+                    *alias_name,
+                    hels,
+                )
+            }
+        }
+    }
+
     mod_solutions
+}
+
+pub enum FuncBorrowSpec {
+    /// This function has an specialization due to alias analysis.
+    Some(FuncSpec),
+    /// This function does not have a specialization due to alias analysis,
+    /// because it is type-erased, and thus has no statically determined AA specialization.
+    Erased,
 }
 
 fn func_spec_name<'a>(
     arena: &'a Bump,
     interns: &Interns,
     symbol: Symbol,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
 ) -> bumpalo::collections::String<'a> {
     use std::fmt::Write;
 
@@ -5183,10 +5243,15 @@ fn func_spec_name<'a>(
 
     let ident_string = symbol.as_str(interns);
     let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
-    write!(buf, "{}_{}_", module_string, ident_string).unwrap();
+    write!(buf, "{module_string}_{ident_string}_").unwrap();
 
-    for byte in func_spec.0.iter() {
-        write!(buf, "{:x?}", byte).unwrap();
+    match func_spec {
+        FuncBorrowSpec::Some(func_spec) => {
+            for byte in func_spec.0.iter() {
+                write!(buf, "{byte:x?}").unwrap();
+            }
+        }
+        FuncBorrowSpec::Erased => write!(buf, "erased").unwrap(),
     }
 
     buf
@@ -5195,7 +5260,7 @@ fn func_spec_name<'a>(
 fn build_proc_header<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
     symbol: Symbol,
     proc: &roc_mono::ir::Proc<'a>,
     layout_ids: &mut LayoutIds<'a>,
@@ -5298,14 +5363,7 @@ fn expose_alias_to_host<'a>(
                         "we expect only one specialization of this symbol"
                     );
 
-                    function_value_by_func_spec(
-                        env,
-                        *func_spec,
-                        hels.symbol,
-                        hels.proc_layout.arguments,
-                        Niche::NONE,
-                        hels.proc_layout.result,
-                    )
+                    function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), hels.symbol)
                 }
                 None => {
                     // morphic did not generate a specialization for this function,
@@ -5328,6 +5386,7 @@ fn expose_alias_to_host<'a>(
             )
         }
 
+        RawFunctionLayout::ErasedFunction(..) => todo_lambda_erasure!(),
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             // Define only the return value size, since this is a thunk
             //
@@ -5391,7 +5450,7 @@ fn build_closure_caller<'a, 'ctx>(
     // STEP 1: build function header
 
     // e.g. `roc__mainForHost_0_caller` (def_name is `mainForHost_0`)
-    let function_name = format!("roc__{}_caller", def_name);
+    let function_name = format!("roc__{def_name}_caller");
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
 
@@ -5438,7 +5497,7 @@ fn build_closure_caller<'a, 'ctx>(
 
         builder.build_store(output, call_result);
     } else {
-        let call_result = call_roc_function(
+        let call_result = call_direct_roc_function(
             env,
             layout_interner,
             evaluator,
@@ -5503,9 +5562,9 @@ fn build_host_exposed_alias_size_help<'a, 'ctx>(
     let i64 = env.context.i64_type().as_basic_type_enum();
     let size_function_spec = FunctionSpec::cconv(env, CCReturn::Return, Some(i64), &[]);
     let size_function_name: String = if let Some(label) = opt_label {
-        format!("roc__{}_{}_size", def_name, label)
+        format!("roc__{def_name}_{label}_size")
     } else {
-        format!("roc__{}_size", def_name,)
+        format!("roc__{def_name}_size",)
     };
 
     let size_function = add_func(
@@ -5527,43 +5586,12 @@ fn build_host_exposed_alias_size_help<'a, 'ctx>(
 fn build_proc<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    mod_solutions: &'a ModSolutions,
     layout_ids: &mut LayoutIds<'a>,
     func_spec_solutions: &FuncSpecSolutions,
     mut scope: Scope<'a, 'ctx>,
     proc: &roc_mono::ir::Proc<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
-    use roc_mono::ir::HostExposedLayouts;
-
-    match &proc.host_exposed_layouts {
-        HostExposedLayouts::NotHostExposed => {}
-        HostExposedLayouts::HostExposed { aliases, .. } => {
-            use LlvmBackendMode::*;
-
-            match env.mode {
-                GenTest | WasmGenTest | CliTest => {
-                    /* no host, or exposing types is not supported */
-                }
-                Binary | BinaryDev | BinaryGlue => {
-                    for (alias_name, hels) in aliases.iter() {
-                        let ident_string = proc.name.name().as_str(&env.interns);
-                        let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
-
-                        expose_alias_to_host(
-                            env,
-                            layout_interner,
-                            mod_solutions,
-                            &fn_name,
-                            *alias_name,
-                            hels,
-                        )
-                    }
-                }
-            }
-        }
-    };
-
     let args = proc.args;
     let context = &env.context;
 
@@ -5609,79 +5637,43 @@ pub fn verify_fn(fn_val: FunctionValue<'_>) {
     }
 }
 
-pub(crate) fn function_value_by_func_spec<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    func_spec: FuncSpec,
+pub(crate) fn function_value_by_func_spec<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    func_spec: FuncBorrowSpec,
     symbol: Symbol,
-    arguments: &[InLayout<'a>],
-    niche: Niche<'a>,
-    result: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name = func_spec_name(env.arena, &env.interns, symbol, func_spec);
     let fn_name = fn_name.as_str();
 
-    function_value_by_name_help(env, arguments, niche, result, symbol, fn_name)
+    function_value_by_name_help(env, symbol, fn_name)
 }
 
-fn function_value_by_name_help<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    arguments: &[InLayout<'a>],
-    _niche: Niche<'a>,
-    result: InLayout<'a>,
+fn function_value_by_name_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     symbol: Symbol,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     env.module.get_function(fn_name).unwrap_or_else(|| {
         if symbol.is_builtin() {
-            eprintln!(
-                "Unrecognized builtin function: {:?}\nLayout: {:?}\n",
-                fn_name,
-                (arguments, result)
-            );
-            eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
-
-            panic!(
-                "Unrecognized builtin function: {:?} (symbol: {:?})",
-                fn_name, symbol,
-            )
+            panic!("Unrecognized builtin function: {fn_name:?} (symbol: {symbol:?})")
         } else {
-            // Unrecognized non-builtin function:
-            eprintln!(
-                "Unrecognized non-builtin function: {:?}\n\nSymbol: {:?}\nLayout: {:?}\n",
-                fn_name,
-                symbol,
-                (arguments, result)
-            );
-            eprintln!("Is the function defined? If so, maybe there is a problem with the layout");
-
-            panic!(
-                "Unrecognized non-builtin function: {:?} (symbol: {:?})",
-                fn_name, symbol,
-            )
+            panic!("Unrecognized non-builtin function: {fn_name:?} (symbol: {symbol:?})")
         }
     })
 }
 
 #[inline(always)]
-fn roc_call_with_args<'a, 'ctx>(
+fn roc_call_direct_with_args<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    argument_layouts: &[InLayout<'a>],
     result_layout: InLayout<'a>,
     name: LambdaName<'a>,
-    func_spec: FuncSpec,
+    func_spec: FuncBorrowSpec,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let fn_val = function_value_by_func_spec(
-        env,
-        func_spec,
-        name.name(),
-        argument_layouts,
-        name.niche(),
-        result_layout,
-    );
+    let fn_val = function_value_by_func_spec(env, func_spec, name.name());
 
-    call_roc_function(
+    call_direct_roc_function(
         env,
         layout_interner,
         fn_val,
@@ -5690,14 +5682,70 @@ fn roc_call_with_args<'a, 'ctx>(
     )
 }
 
-pub fn call_roc_function<'a, 'ctx>(
+#[inline(always)]
+fn roc_call_erased_with_args<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    pointer: PointerValue<'ctx>,
+    argument_layouts: &[InLayout<'a>],
+    result_layout: InLayout<'a>,
+    arguments: &[BasicValueEnum<'ctx>],
+) -> BasicValueEnum<'ctx> {
+    let function_type =
+        fn_ptr::function_type(env, layout_interner, argument_layouts, result_layout);
+    let function_ptr_type = function_type.ptr_type(AddressSpace::default());
+
+    let function_pointer = fn_ptr::cast_to_function_ptr_type(env, pointer, function_ptr_type);
+    let callable_function_pointer = CallableValue::try_from(function_pointer).unwrap();
+
+    let build_call = |arguments: &[BasicMetadataValueEnum<'ctx>]| {
+        env.builder
+            .build_call(callable_function_pointer, arguments, "call")
+    };
+
+    call_roc_function_help(
+        env,
+        layout_interner,
+        build_call,
+        function_type,
+        layout_interner.get_repr(result_layout),
+        arguments,
+    )
+}
+
+pub(crate) fn call_direct_roc_function<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     result_layout: LayoutRepr<'a>,
     arguments: &[BasicValueEnum<'ctx>],
 ) -> BasicValueEnum<'ctx> {
-    let pass_by_pointer = roc_function.get_type().get_param_types().len() == arguments.len() + 1;
+    let function_type = roc_function.get_type();
+
+    let build_call = |arguments: &[BasicMetadataValueEnum<'ctx>]| {
+        env.builder.build_call(roc_function, arguments, "call")
+    };
+    debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
+
+    call_roc_function_help(
+        env,
+        layout_interner,
+        build_call,
+        function_type,
+        result_layout,
+        arguments,
+    )
+}
+
+fn call_roc_function_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    build_call: impl FnOnce(&[BasicMetadataValueEnum<'ctx>]) -> CallSiteValue<'ctx>,
+    roc_function_type: FunctionType<'ctx>,
+    result_layout: LayoutRepr<'a>,
+    arguments: &[BasicValueEnum<'ctx>],
+) -> BasicValueEnum<'ctx> {
+    let pass_by_pointer = roc_function_type.get_param_types().len() == arguments.len() + 1;
 
     match RocReturn::from_layout(layout_interner, result_layout) {
         RocReturn::ByPointer if !pass_by_pointer => {
@@ -5711,14 +5759,10 @@ pub fn call_roc_function<'a, 'ctx>(
 
             arguments.push(result_alloca.into());
 
-            debug_assert_eq!(
-                roc_function.get_type().get_param_types().len(),
-                arguments.len()
-            );
-            let call = env.builder.build_call(roc_function, &arguments, "call");
+            debug_assert_eq!(roc_function_type.get_param_types().len(), arguments.len());
+            let call = build_call(&arguments);
 
             // roc functions should have the fast calling convention
-            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
             env.builder
@@ -5733,14 +5777,10 @@ pub fn call_roc_function<'a, 'ctx>(
 
             arguments.push(result_alloca.into());
 
-            debug_assert_eq!(
-                roc_function.get_type().get_param_types().len(),
-                arguments.len()
-            );
-            let call = env.builder.build_call(roc_function, &arguments, "call");
+            debug_assert_eq!(roc_function_type.get_param_types().len(), arguments.len());
+            let call = build_call(&arguments);
 
             // roc functions should have the fast calling convention
-            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
             if result_layout.is_passed_by_reference(layout_interner) {
@@ -5754,25 +5794,18 @@ pub fn call_roc_function<'a, 'ctx>(
             }
         }
         RocReturn::Return => {
-            debug_assert_eq!(
-                roc_function.get_type().get_param_types().len(),
-                arguments.len()
-            );
+            debug_assert_eq!(roc_function_type.get_param_types().len(), arguments.len());
             let it = arguments.iter().map(|x| (*x).into());
             let arguments = Vec::from_iter_in(it, env.arena);
 
-            let call = env.builder.build_call(roc_function, &arguments, "call");
+            let call = build_call(&arguments);
 
             // roc functions should have the fast calling convention
-            debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            call.try_as_basic_value().left().unwrap_or_else(|| {
-                panic!(
-                    "LLVM error: Invalid call by name for name {:?}",
-                    roc_function.get_name()
-                )
-            })
+            call.try_as_basic_value()
+                .left()
+                .unwrap_or_else(|| internal_error!("LLVM error: Invalid call by name",))
         }
     }
 }
@@ -5949,7 +5982,7 @@ pub enum CCReturn {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FunctionSpec<'ctx> {
+pub(crate) struct FunctionSpec<'ctx> {
     /// The function type
     pub typ: FunctionType<'ctx>,
     call_conv: u32,
@@ -6019,7 +6052,7 @@ impl<'ctx> FunctionSpec<'ctx> {
     }
 
     /// Fastcc calling convention
-    fn fastcc<'a, 'env>(
+    pub fn fastcc<'a, 'env>(
         env: &Env<'a, 'ctx, 'env>,
         roc_return: RocReturn,
         return_type: BasicTypeEnum<'ctx>,
@@ -6267,7 +6300,7 @@ fn build_foreign_symbol<'a, 'ctx>(
         }
     };
 
-    call_roc_function(
+    call_direct_roc_function(
         env,
         layout_interner,
         fastcc_function,
@@ -6318,7 +6351,7 @@ fn define_global_str_literal<'ctx>(
         message.hash(&mut hasher);
         let hash = hasher.finish();
 
-        format!("_str_literal_{}", hash)
+        format!("_str_literal_{hash}")
     };
 
     match module.get_global(&name) {
@@ -6410,7 +6443,7 @@ fn get_foreign_symbol<'ctx>(
 /// Add a function to a module, after asserting that the function is unique.
 /// We never want to define the same function twice in the same module!
 /// The result can be bugs that are difficult to track down.
-pub fn add_func<'ctx>(
+pub(crate) fn add_func<'ctx>(
     ctx: &Context,
     module: &Module<'ctx>,
     name: &str,
@@ -6419,7 +6452,7 @@ pub fn add_func<'ctx>(
 ) -> FunctionValue<'ctx> {
     if cfg!(debug_assertions) {
         if let Some(func) = module.get_function(name) {
-            panic!("Attempting to redefine LLVM function {}, which was already defined in this module as:\n\n{:#?}", name, func);
+            panic!("Attempting to redefine LLVM function {name}, which was already defined in this module as:\n\n{func:#?}");
         }
     }
 
