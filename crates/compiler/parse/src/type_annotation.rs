@@ -426,7 +426,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
                 EType::TIndentEnd,
             ),
             zero_or_more!(skip_first!(
-                word1(b'&', EType::THasClause),
+                word1(b'&', EType::TImplementsClause),
                 space0_before_optional_after(
                     specialize(EType::TApply, loc!(concrete_type())),
                     EType::TIndentStart,
@@ -459,7 +459,7 @@ fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'
             ),
             skip_first!(
                 // Parse "implements"; we don't care about this keyword
-                word(crate::keyword::IMPLEMENTS, EType::THasClause),
+                word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain())
             )
@@ -494,7 +494,7 @@ fn implements_clause_chain<'a>(
         let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
 
         let (_, mut clauses, state) = zero_or_more!(skip_first!(
-            word1(b',', EType::THasClause),
+            word1(b',', EType::TImplementsClause),
             implements_clause()
         ))
         .parse(arena, state, min_indent)?;
@@ -514,7 +514,7 @@ fn implements_clause_chain<'a>(
 pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first!(
         // Parse "implements"; we don't care about this keyword
-        word(crate::keyword::IMPLEMENTS, EType::THasClause),
+        word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc!(map!(

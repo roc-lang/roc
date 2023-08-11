@@ -599,7 +599,7 @@ pub enum EType<'a> {
     TEnd(Position),
     TFunctionArgument(Position),
     TWhereBar(Position),
-    THasClause(Position),
+    TImplementsClause(Position),
     TAbilityImpl(ETypeAbilityImpl<'a>, Position),
     ///
     TIndentStart(Position),

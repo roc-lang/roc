@@ -1286,7 +1286,7 @@ mod ability {
         Exact(u32),
     }
 
-    /// Parses an ability demand like `hash : a -> U64 | a implements Hash`, in the context of a larger
+    /// Parses an ability demand like `hash : a -> U64 where a implements Hash`, in the context of a larger
     /// ability definition.
     /// This is basically the same as parsing a free-floating annotation, but with stricter rules.
     pub fn parse_demand<'a>(
