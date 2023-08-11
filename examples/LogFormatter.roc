@@ -5,14 +5,14 @@ interface LogFormatter
     ]
     imports [
         Inspect.{
-            Formatter,
+            InspectFormatter,
             Inspector,
         },
     ]
 
 LogFormatter := { data : Str }
      has [
-         Formatter {
+         InspectFormatter {
              init: init,
              list: list,
              set: set,

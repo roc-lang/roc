@@ -8,7 +8,7 @@ interface Community
         walkFriendNames,
     ]
     imports [
-        Inspect.{ Formatter, Inspector, Inspect },
+        Inspect.{ InspectFormatter, Inspector, Inspect },
     ]
 
 Community := {
@@ -90,7 +90,7 @@ walkFriendNames = \@Community { people, friends }, s0, nextFn ->
         (nextFn s1 personName friendNames, id + 1)
     out
 
-inspectCommunity : Community -> Inspector f | f has Formatter
+inspectCommunity : Community -> Inspector f | f has InspectFormatter
 inspectCommunity = \@Community { people, friends } ->
     f0 <- Inspect.custom
     [
@@ -115,7 +115,7 @@ inspectCommunity = \@Community { people, friends } ->
     |> Inspect.record
     |> Inspect.apply f0
 
-inspectPerson : Person -> Inspector f | f has Formatter
+inspectPerson : Person -> Inspector f | f has InspectFormatter
 inspectPerson = \@Person { firstName, lastName, age, hasBeard, favoriteColor } ->
     # In practice, this would never be done manually due to autoderive.
     # Instead you would just write:
