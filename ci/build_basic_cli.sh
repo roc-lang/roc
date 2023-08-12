@@ -9,7 +9,7 @@ git checkout new-abilities-syntax
 cd ..
 
 if [ "$(uname -s)" == "Linux" ]; then
-    sudo apt-get install musl-tools
+    sudo apt-get install -y musl-tools
     cd basic-cli/src # we cd to install the target for the right rust version
     if [ "$(uname -m)" == "x86_64" ]; then
         rustup target add x86_64-unknown-linux-musl

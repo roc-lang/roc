@@ -110,7 +110,7 @@ jobs:
             basic-cli/src/macos-arm64.o
 
   create-release-archive:
-    needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    needs: [build-linux-x86_64-files, build-linux-arm64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
@@ -139,6 +139,8 @@ jobs:
       - run: cp macos-apple-silicon-files/* ./basic-cli/src
       
       - run: cp linux-x86_64-files/* ./basic-cli/src
+
+      - run: cp linux-arm64-files/* ./basic-cli/src
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
