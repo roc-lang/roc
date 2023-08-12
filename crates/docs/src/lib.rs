@@ -261,7 +261,13 @@ fn render_module_documentation(
                     let type_ann = &doc_def.type_annotation;
 
                     if !matches!(type_ann, TypeAnnotation::NoTypeAnn) {
-                        content.push_str(" : ");
+                        // Ability declarations don't have ":" after the name, just `implements`
+                        if !matches!(type_ann, TypeAnnotation::Ability { .. }) {
+                            content.push_str(" :");
+                        }
+
+                        content.push(' ');
+
                         type_annotation_to_html(0, &mut content, type_ann, false);
                     }
 
@@ -668,8 +674,54 @@ fn type_annotation_to_html(
                 buf.push(')');
             }
         }
-        TypeAnnotation::Ability { members: _ } => {
-            // TODO(abilities): fill me in
+        TypeAnnotation::Ability { members } => {
+            buf.push_str(keyword::IMPLEMENTS);
+
+            for member in members {
+                new_line(buf);
+                indent(buf, indent_level + 1);
+
+                // TODO use member.docs somehow. This doesn't look good though:
+                // if let Some(docs) = &member.docs {
+                //     buf.push_str("## ");
+                //     buf.push_str(docs);
+
+                //     new_line(buf);
+                //     indent(buf, indent_level + 1);
+                // }
+
+                buf.push_str(&member.name);
+                buf.push_str(" : ");
+
+                type_annotation_to_html(indent_level + 1, buf, &member.type_annotation, false);
+
+                if !member.able_variables.is_empty() {
+                    new_line(buf);
+                    indent(buf, indent_level + 2);
+                    buf.push_str(keyword::WHERE);
+
+                    for (index, (name, type_anns)) in member.able_variables.iter().enumerate() {
+                        if index != 0 {
+                            buf.push(',');
+                        }
+
+                        buf.push(' ');
+                        buf.push_str(name);
+                        buf.push(' ');
+                        buf.push_str(keyword::IMPLEMENTS);
+
+                        for (index, ann) in type_anns.iter().enumerate() {
+                            if index != 0 {
+                                buf.push_str(" &");
+                            }
+
+                            buf.push(' ');
+
+                            type_annotation_to_html(indent_level + 2, buf, ann, false);
+                        }
+                    }
+                }
+            }
         }
         TypeAnnotation::ObscuredTagUnion => {
             buf.push_str("[@..]");
