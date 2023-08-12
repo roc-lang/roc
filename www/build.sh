@@ -107,7 +107,7 @@ export ROC_DOCS_URL_ROOT=/packages/basic-cli
 
 rm -rf ./downloaded-basic-cli
 
-git clone --branch new-abilities-syntax --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
 cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
 
