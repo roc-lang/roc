@@ -123,7 +123,7 @@ jobs:
         uses: actions/download-artifact@v3
 
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -164,7 +164,7 @@ jobs:
         uses: actions/download-artifact@v3
 
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
