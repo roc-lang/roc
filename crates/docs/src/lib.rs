@@ -651,9 +651,11 @@ fn type_annotation_to_html(
             if is_multiline {
                 new_line(buf);
                 indent(buf, indent_level + 1);
+            } else {
+                buf.push(' ');
             }
 
-            buf.push_str(" -> ");
+            buf.push_str("-> ");
 
             let mut next_indent_level = indent_level;
 
