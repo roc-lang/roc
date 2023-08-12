@@ -4,9 +4,6 @@
 set -euxo pipefail
 
 git clone https://github.com/roc-lang/basic-cli.git
-cd basic-cli
-git checkout new-abilities-syntax
-cd ..
 
 if [ "$(uname -s)" == "Linux" ]; then
     sudo apt-get install -y musl-tools

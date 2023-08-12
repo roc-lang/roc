@@ -192,8 +192,9 @@ jobs:
           cd examples
           curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
           sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
-          ./roc_nightly/roc build http-get.roc
+          
           cd ..
+          ./roc_nightly/roc build examples/http-get.roc
           curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
 
       - run: sudo apt install -y expect
