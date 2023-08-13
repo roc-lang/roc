@@ -96,7 +96,7 @@ circulate about how to unlock those speed boosts. If Roc had this feature, it's 
 piece of advice would eventually circulate: "don't use this feature because it slows down your builds."
 
 If a feature exists in a language, but the common recommendation is never to use it, that's cause for reconsidering
-whether the feature should be in the language at all. In the case of this feature, I think it's simpler if the
+whether the feature should be in the language at all. In the case of this feature, it's simpler if the
 language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
 performance-boosting advice not to use it.
 
@@ -148,7 +148,7 @@ On a historical note, `Maybe` may have been thought of as a substitute for null 
 
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
-_Since this is a FAQ answer, I'm going to assume familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
+_Since this is a FAQ answer, it assumes familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
 
 A valuable aspect of Roc's type system is that it has decidable [principal](https://en.wikipedia.org/wiki/Principal_type)
 type inference. This means that:
@@ -210,7 +210,7 @@ language will inevitably follow. If the language does support HKP, one or more a
 around monads will inevitably follow, along with corresponding cultural changes. (See Scala for example.)
 Culturally, to support HKP is to take a side, and to decline to support it is also to take a side.
 
-Given this, language designers have three options:
+Given this, languages have three options:
 
 - Have HKP and have Monad in the standard library. Embrace them and build a culture and ecosystem around them.
 - Have HKP and don't have Monad in the standard library. An alternate standard library built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
@@ -220,22 +220,18 @@ Considering that these are the only three options, an early decision in Roc's de
 level, but on a cultural level as well—was to make it clear that the plan is for Roc never to support HKP.
 The hope is that this clarity can save a lot of community members' time that would otherwise be spent on advocacy or
 arguing between the two sides of the divide. Again, it's completely reasonable for anyone to have a different preference,
-but given that language designers can only choose one of these options, it seems clear that the right choice for Roc
+but given that languages can only choose one of these options, it seems clear that the right choice for Roc
 is for it to never have higher-kinded polymorphism.
 
 ## Why aren't Roc functions curried by default?
 
 Although technically any language with first-class functions makes it possible to curry
-any function (e.g. I can manually curry a Roc function `\x, y, z ->` by writing `\x -> \y -> \z ->` instead),
+any function (e.g. anyone can manually curry a Roc function `\x, y, z ->` by writing `\x -> \y -> \z ->` instead),
 typically what people mean when they say Roc isn't a curried language is that Roc functions aren't curried
-by default. For the rest of this section, I'll use "currying" as a shorthand for "functions that are curried
+by default. The rest of this section will use "currying" as a shorthand for "functions that are curried
 by default" for the sake of brevity.
 
-As I see it, currying has one major upside and several major downsides. The upside:
-
-- It makes function calls more concise in some cases.
-
-The downsides:
+Currying makes function calls more concise in some cases, but it has several significant downsides:
 
 - It lowers error message quality, because there can no longer be an error for "function called with too few arguments." (Calling a function with fewer arguments is always valid in curried functions; the error you get instead will unavoidably be some other sort of type mismatch, and it will be up to you to figure out that the real problem was that you forgot an argument.)
 - It makes the `|>` operator more error-prone in some cases.
@@ -244,10 +240,10 @@ The downsides:
 - It facilitates pointfree function composition. (More on why this is listed as a downside later.)
 
 There's also a downside that it would make runtime performance of compiled programs worse by default,
-but I assume it would be possible to optimize that away at the cost of slightly longer compile times.
+but it would most likely be possible to optimize that away at the cost of slightly longer compile times.
 
-I consider the one upside (conciseness in some places) extremely minor, and have almost never missed it in Roc.
-Here are some more details about the downsides as I see them.
+These downsides seem to outweigh the one upside (conciseness in some places). Here are some more details about each of
+the downsides.
 
 ### Currying and the `|>` operator
 
@@ -262,11 +258,19 @@ Str.concat "Hello, " "World!"
 |> Str.concat "World!"
 ```
 
-In curried languages with a `|>` operator, the first expression still returns `"Hello, World!"` but the second one returns `"World!Hello, "`. This is because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument, whereas in curried languages, `|>` uses it as the _last_ argument.
+It's unsurprising to most beginners that these work the same way; it's common for a beginner who has recently learned
+how `|>` works to expect that `|> Str.concat "!"` would concatenate `!` onto the end of a string.
 
-(For example, this is how `|>` works in both [F#](https://docs.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators) and in [Elm](https://package.elm-lang.org/packages/elm/core/1.0.5/Basics#|%3E), both of which are curried languages. In contrast, Roc's `|>` design uses the same argument ordering as [Elixir](https://hexdocs.pm/elixir/1.14.0/Kernel.html#%7C%3E/2) and [Gleam](https://gleam.run/book/tour/functions.html#pipe-operator), neither of which is a curried language.)
+This is not how it works in curried languages, however. In curried languages with a `|>` operator, the first expression
+still returns `"Hello, World!"` but the second one returns `"World!Hello, "` instead. This can be an unpleasant surprise
+for beginners, but even experienced users commonly find that this behavior is less useful than having both of
+these expressions evaluate to the same thing.
 
-This comes up in other situations as well. For example, consider subtraction and division:
+In Roc, both expressions evaluate to the same thing in Roc because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument, whereas in curried languages, `|>` uses it as the _last_ argument.
+
+(For example, this is how `|>` works in both [F#](https://docs.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators) and in [Elm](https://package.elm-lang.org/packages/elm/core/1.0.5/Basics#|%3E), both of which are curried languages. In contrast, Roc's `|>` design uses the same argument ordering as [Elixir](https://hexdocs.pm/elixir/1.14.0/Kernel.html#%7C%3E/2) and [Gleam](https://gleam.run/book/tour/functions.html#pipe-operator), none of which are curried languages.)
+
+This comes up in other situations besides string concatenation. For example, consider subtraction and division:
 
 ```elixir
 someNumber
@@ -278,9 +282,12 @@ someNumber
 |> Num.sub 1
 ```
 
-What do you expect these expressions to do?
-
-In Roc, the first  divides `someNumber` by 2 and the second one subtracts 1 from `someNumber`.  In languages where `|>` uses the other argument ordering, the first example instead takes 2 and divides it by `someNumber`, while the second takes 1 and subtracts `someNumber` from it. This was a pain point I ran into with curried languages, and I was pleasantly surprised that changing the argument ordering in `|>` addressed the pain point.
+Again, it's reasonable to expect that `|> Num.div 2` will divide a number by 2, and that
+`|> Num.sub 1` will subtract 1 from a number. In Roc, this is how they work, but in
+curried languages they work the opposite way: `|> Num.div 2` takes the number 2 and
+divides it by a number, and `|> Num.sub 1` takes the number 1 and subtracts a number
+from it. This is once again both more surprising to beginners and less useful to
+experienced users.
 
 This style has a second benefit when it comes to higher-order functions. Consider these two examples:
 
@@ -325,29 +332,26 @@ answer =
         numbers
 ```
 
-This was also a pain point I'd encountered in curried languages. I prefer the way the former example reads, but that style doesn't work with the argument order that currying encourages for higher-order functions like `List.map`. (Prior to using curried languages, I'd used [CoffeeScript](https://coffeescript.org/) in a functional style with [`_.map`](https://underscorejs.org/#map), and was disappointed to realize that I could no longer use the enjoyable style of `answer = _.map numbers (num) -> …` as I had before. In Roc, this style works.)
-
 As a historical note, these stylistic benefits (of `|> Num.sub 1` working as expected, and being able to write `List.map numbers \num ->`) were not among the original reasons Roc did not have currying. These benefits were discovered after the decision had already been made that Roc would not be a curried language, and they served to reinforce after the fact that the decision was the right one for Roc given the language's goals.
 
 ### Currying and learning curve
 
-Prior to designing Roc, I taught a lot of beginner [Elm](https://elm-lang.org/) workshops. Sometimes at
-conferences, sometimes for [Frontend Masters](https://frontendmasters.com/courses/intro-elm/),
-sometimes for free at local coding bootcamps or meetup groups.
-In total I've spent well over 100 hours standing in front of a class, introducing the students to their
-first pure functional programming language.
+Currying leads to function signatures that look surprising to beginners. For example, in Roc, the
+[`Bool.and`](https://www.roc-lang.org/builtins/Bool#and) function has the type `Bool, Bool -> Bool`. If Roc were a
+curried language, this function would instead have the type `Bool -> Bool -> Bool`. Since no mainstream programming
+languages today are curried, anyone who knows a mainstream language and is learning their first curried language will
+require additional explaination about why function types look this way.
 
-Here was my experience teaching currying:
+This explanation is nontrivial. It requires explaining partial application, how curried functions facilitate partial
+application, how function signatures accurately reflect that they're curried, and going through examples for all of these.
+All of it builds up to the punchline that "technically, all functions in this language have a single argument," which
+some percentage of learners find interesting, and some percentage still find confusing even after all that explanation.
 
-- The only way to avoid teaching it is to refuse to explain why multi-argument functions have multiple `->`s in them. (If you don't explain it, at least one student will ask about it - and many if not all of the others will wonder.)
-- Teaching currying properly takes a solid chunk of time, because it requires explaining partial application, explaining how curried functions facilitate partial application, how function signatures accurately reflect that they're curried, and going through examples for all of these.
-- Even after doing all this, and iterating on my approach each time to try to explain it more effectively than I had the time before, I'd estimate that under 50% of the class ended up actually understanding currying. I consistently heard that in practice it only "clicked" for most people after spending significantly more time writing code with it.
-
-This is not the end of the world, especially because it's easy enough to think "okay, I still don't totally get this
-even after that explanation, but I can remember that function arguments are separated by `->` in this language
-and maybe I'll understand the rest later." (Which they almost always do, if they stick with the language.)
-Clearly currying doesn't preclude a language from being easy to learn, because Elm has currying, and Elm's learning
-curve is famously gentle.
+It's common for beginners to report that currying only "clikced" for them after spending significant time writing code
+in a curried language. This is not the end of the world, especially because it's easy enough to think "I still don't
+totally get this even after that explanation, but I can remember that function arguments are separated by `->` in this
+language and maybe I'll understand the rest later." Clearly currying doesn't preclude a language from being easy to learn,
+because Elm has currying, and Elm's learning curve is famously gentle.
 
 That said, beginners who feel confused while learning the language are less likely to continue with it.
 And however easy Roc would be to learn if it had currying, the language is certainly easier to learn without it.
@@ -366,37 +370,27 @@ compose : (a -> b), (c -> a) -> (c -> b)
 compose = \f, g, x -> f (g x)
 ```
 
-Here's how I would instead write this:
+Here's a way to write it without pointfree function composition:
 
 ```elm
 reverseSort : List elem -> List elem
 reverseSort = \list -> List.reverse (List.sort list)
 ```
 
-I've consistently found that I can more quickly and accurately understand function definitions that use
-named arguments, even though the code is longer. I suspect this is because I'm faster at reading than I am at
-eta-expanding ( e.g. converting `List.sort` into `\l -> List.sort l` ). Whenever I read
-the top version I end up needing to mentally eta-expand it into the bottom version.
-In more complex examples (this is among the tamest pointfree function composition examples I've seen), I make
-a mistake in my mental eta-expansion, and misunderstand what the function is doing - which can cause bugs.
+It's very common for programmers to build a mental model of what `compose List.reverse List.sort` does by
+mentally translating it into `\list -> List.reverse (List.sort list)`. This makes it take longer to read
+and to understand despite being technically more concise. Worse, in more complex examples (this is among
+the tamest of pointfree function composition examples), the chances increase of making a mistake in the mental
+translation step, leading to a misundesrtanding of what the function is doing—which can cause bugs.
 
-I assumed I would get faster and more accurate at this over time. However, by now it's been about a decade
-since I first learned about the technique, and I'm still slower and less accurate at reading code that uses
-pointfree function composition (including if I wrote it - but even moreso if I didn't) than code written with
-with named arguments. I've asked a lot of other programmers about their experiences with pointfree function
-composition over the years, and the overwhelming majority of responses have been consistent with my experience.
-
-As such, my opinion about pointfree function composition has gotten less and less nuanced over time. I've now moved
-past "it's the right tool for the job, sometimes" to concluding it's best thought of as an antipattern. This is
-because I realized how much time I was spending evaluating on a case-by-case basis whether it might be the
-right fit for a given situation. The time spent on this analysis alone vastly outweighed the sum of all the
-benefits I got in the rare cases where I concluded it was a fit. So I've found the way to get the most out of
-pointfree function composition is to never even think about using it; every other strategy leads to a worse outcome.
-
-Currying facilitates the antipattern of pointfree function composition, which I view as a downside of currying.
+In these ways, pointfree function composition makes code take longer to read and to understand, while increasing the
+odds of misunderstanding what the code is doing. Some languages place such a high value on conciseness that they would
+consider the conciceness upside to outweigh these downsides, but Roc is not one of those languages. It's considered
+stylistically better in Roc to write the second version above. Given this, since currying facilitates pointfree function
+composition, making Roc a curried language would have the downside of facilitating an antipattern in the language.
 
 Stacking up all these downsides of currying against the one upside of making certain function calls more concise,
-I concluded that it would be a mistake to have it in Roc.
+it seems clear that Roc should not be a curried language.
 
 ## Will Roc ever have linear types, dependent types, refinement types, or uniqueness types?
 
