@@ -162,34 +162,33 @@ would be unable to infer a type—and you'd have to write a type annotation. Thi
 situations where the editor would not be able to reliably tell you the type of part of your program, unlike today
 where it can accurately tell you the type of anything, even if you have no type annotations in your entire code base.
 
-assuming that's right, here is a proposed new FAQ entry:
+This is one factor that higher-rank and higher-kinded types have in common. There are other factors which are specific
+to each.
 
 ### Higher-rank types
 
-Roc uses a Rank-1 type system. Other languages, like Haskell, support Rank-2 or even arbitrary-rank (aka "Rank-N") types. Supporting higher-rank types in Roc has been discussed before, but it has several important downsides:
- 
-- It would remove principal decidable type inference. (Only Rank-1 types are compatible with principal decidable type inference; Rank-2 types are decidable but the inferred types are not principal, and Rank 3+ types are not even fully decidable.)
+Supporting higher-rank types in Roc has been discussed before, but it has several important downsides:
+
 - It would increase the complexity of the language.
 - It would make some compiler error messages more confusing (e.g. they might mention `forall` because that was the most general type that could be inferred, even if that wasn't helpful or related to the actual problem).
 - It would substantially increase the complexity of the type checker, which would necessarily slow it down.
-- Most significantly, it would make the runtime slower, because Roc compiles programs by fully specializing all function calls to their type instances (this is sometimes called monomorphization). It's unclear how we could fully specialize programs containing Rank-2 types, which means compiling programs that included Rank-2 types (or higher) would require losing specialization in general—which would substantially degrade runtime performance.
+- It would make some Roc programs run significantly more slowly. Roc compiles programs by [monomorphizing](https://en.wikipedia.org/wiki/Monomorphization), and it's unclear how we could fully monomorphize programs containing Rank-2 types. This means compiling programs which include Rank-2 types (or higher) would require sacrificing monomorphization, which would substantially degrade runtime performance.
 
 As such, the plan is for Roc to stick with Rank-1 types indefinitely.
 
 ### Higher-kinded polymorphism
 
-I want to be really clear about this one: the explicit plan is that Roc will never support higher-kinded polymorphism.
+The explicit plan is that Roc will never support higher-kinded polymorphism.
 
-On the technical side, the reasons for this are ordinary: I understand the practical benefits and
-drawbacks of HKP, and I think the drawbacks outweigh the benefits when it comes to Roc. (Those who come to a
-different conclusion may think HKP's drawbacks would be less of a big a deal in Roc than I do. That's reasonable;
-we programmers often weigh the same trade-offs differently.) To be clear, I think this in the specific context of
-Roc; there are plenty of other languages where HKP seems like a great fit. For example, it's hard to imagine Haskell
-without it. Similarly, I think lifetime annotations are a great fit for Rust, but don't think they'd be right
-for Roc either.
+On the technical side, the reasons for this are ordinary: like any language feature, HKP has both benefits and drawbacks,
+and in the context of Roc, the drawbacks seem to outweigh the benefits. (Those who come to a different conclusion may
+think HKP's drawbacks would be less of a big a deal in Roc. That's reasonable; we programmers often weigh the same
+trade-offs differently.) To be clear, this analysis of HKP is in the specific context of Roc; there are plenty of
+other languages where HKP seems like a great fit. For example, it's hard to imagine Haskell without it. Similarly,
+lifetime annotations might be a natural fit for Rust, but they wouldn't be a good fit for Roc either.
 
-I also think it's important to consider the cultural implications of deciding whether or not to support HKP.
-To illustrate what I mean, imagine this conversation:
+It's also important to consider the cultural implications of deciding whether or not to support HKP.
+To illustrate these implications, imagine this conversation:
 
 **Programmer 1:** "How do you feel about higher-kinded polymorphism?"
 
@@ -199,9 +198,9 @@ To illustrate what I mean, imagine this conversation:
 
 **Programmer 2:** "OH NO."
 
-I've had several variations of this conversation: I'm talking about higher-kinded types,
-another programmer asks what that means, I give monads as an example, and their reaction is strongly negative.
-I've also had plenty of conversations with programmers who love HKP and vigorously advocate for its addition
+For some, this conversation does not require imagining, because it's so familiar: higher-kinded types come up in
+conversation, another programmer asks what that means, monads are given as an example, and their reaction is
+strongly negative. On the flip side, plenty of programmers love HKP and vigorously advocate for its addition
 to languages they use which don't have it. Feelings about HKP seem strongly divided, maybe more so
 than any other type system feature besides static and dynamic types.
 
@@ -217,12 +216,12 @@ Given this, language designers have three options:
 - Have HKP and don't have Monad in the standard library. An alternate standard library built around monads will inevitably emerge, and both the community and ecosystem will divide themselves along pro-monad and anti-monad lines.
 - Don't have HKP; build a culture and ecosystem around other things.
 
-Considering that these are the only three options, I think the best choice for Roc—not only on a technical
-level, but on a cultural level as well—is to make it clear that the plan is for Roc never to support HKP.
-I hope this clarity can save a lot of community members' time that would otherwise be spent on advocacy or
-arguing between the two sides of the divide. Again, I think it's completely reasonable for anyone to have a
-different preference, but given that language designers can only choose one of these options, I'm confident
-I've made the right choice for Roc by designing it never to have higher-kinded polymorphism.
+Considering that these are the only three options, an early decision in Roc's design—not only on a technical
+level, but on a cultural level as well—was to make it clear that the plan is for Roc never to support HKP.
+The hope is that this clarity can save a lot of community members' time that would otherwise be spent on advocacy or
+arguing between the two sides of the divide. Again, it's completely reasonable for anyone to have a different preference,
+but given that language designers can only choose one of these options, it seems clear that the right choice for Roc
+is for it to never have higher-kinded polymorphism.
 
 ## Why do Roc's syntax and standard library differ from Elm's?
 
