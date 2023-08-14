@@ -22,6 +22,17 @@ updateDotToml = \path, version ->
     |> Str.joinWith "\n"
     |> \x -> File.writeUtf8 path x
 
+updateEarthFile = \path, version ->
+    contents <- File.readUtf8 path |> await
+    Str.split contents "\n"
+    |> List.map \line ->
+        split = Str.split line " "
+        when split is
+            ["FROM", ..] -> "FROM rust:" |> Str.concat version |> Str.concat "-slim-buster"
+            _ -> line
+    |> Str.joinWith "\n"
+    |> \x -> File.writeUtf8 path x
+
 run =
     cwd <- Env.cwd |> await
     basename <- Path.display cwd
@@ -33,6 +44,7 @@ run =
         version = "1.71.0"
         {} <- Path.fromStr "rust-toolchain.toml" |> updateDotToml version |> await
         {} <- Path.fromStr "examples/platform-switching/rust-platform/rust-toolchain.toml" |> updateDotToml version |> await
+        {} <- Path.fromStr "Earthfile" |> updateEarthFile version |> await
         Task.succeed {}
     else
         Task.fail NotInRocDir
