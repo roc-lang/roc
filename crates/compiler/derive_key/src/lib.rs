@@ -16,6 +16,7 @@
 pub mod decoding;
 pub mod encoding;
 pub mod hash;
+pub mod inspect;
 mod util;
 
 use decoding::{FlatDecodable, FlatDecodableKey};
@@ -40,6 +41,7 @@ pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
     Decoder(FlatDecodableKey),
     Hash(FlatHashKey),
+    ToInspector(FlatInspectableKey),
 }
 
 impl DeriveKey {
@@ -77,6 +79,7 @@ pub enum DeriveBuiltin {
     Decoder,
     Hash,
     IsEq,
+    ToInspector,
 }
 
 impl TryFrom<Symbol> for DeriveBuiltin {
@@ -88,6 +91,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
             Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
             Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
+            Symbol::INSPECT_TO_INSPECTOR => Ok(DeriveBuiltin::ToInspector),
             _ => Err(value),
         }
     }
@@ -121,6 +125,10 @@ impl Derived {
                     Symbol::BOOL_STRUCTURAL_EQ,
                 ))
             }
+            DeriveBuiltin::ToInspector => match inspect::FlatInspectable::from_var(subs, var)? {
+                FlatInspectable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatInspectable::Key(repr) => Ok(Derived::Key(DeriveKey::ToInspector(repr))),
+            },
         }
     }
 
