@@ -36,6 +36,8 @@ interface Inspect
     imports [
         Bool.{ Bool },
         Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
+        List,
+        Str,
     ]
 
 KeyValWalker state collection key val : collection, state, (state, key, val -> state) -> state
