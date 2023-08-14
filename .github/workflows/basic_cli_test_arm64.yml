@@ -17,5 +17,7 @@ jobs:
           repository: roc-lang/basic-cli
           ref: main
       
-      - name: Run all tests with latest roc release + latest basic-cli release
-        run: ./ci/test_latest_release.sh
+      - name: Run all tests with latest roc nightly + latest basic-cli release
+        run: |
+          sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
+          ./ci/test_latest_release.sh
