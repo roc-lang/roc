@@ -56,7 +56,7 @@ stringBody : [MimeType Str], Str -> Body
 stringBody = \mimeType, str ->
     Body mimeType (Str.toUtf8 str)
 
-# jsonBody : a -> Body | a has Encoding
+# jsonBody : a -> Body where a implements Encoding
 # jsonBody = \val ->
 #     Body (MimeType "application/json") (Encode.toBytes val TotallyNotJson.format)
 #

@@ -1,6 +1,6 @@
 app "test" provides [isEqQ] to "./platform"
 
-Q := [ F (Str -> Str), G ] has [Eq { isEq: isEqQ }]
+Q := [ F (Str -> Str), G ] implements [Eq { isEq: isEqQ }]
 
 isEqQ = \@Q q1, @Q q2 -> when T q1 q2 is
 #^^^^^{-1} Q, Q -[[isEqQ(0)]]-> Bool

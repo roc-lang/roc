@@ -31,61 +31,6 @@ fantastical, and it has incredible potential for puns. Here are some different w
 
 Fun fact: "roc" translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."
 
-## Why make a new editor instead of making an LSP plugin for VSCode, Vim or Emacs?
-
-The Roc editor is one of the key areas where we want to innovate. Constraining ourselves to a plugin for existing editors would severely limit our possibilities for innovation.
-
-A key part of our editor will be the use of plugins that are shipped with libraries. Think of a regex visualizer, parser debugger, or color picker. For library authors, it would be most convenient to write these plugins in Roc. Trying to dynamically load library plugins (written in Roc) in for example VSCode seems very difficult.
-
-## Is there syntax highlighting for Vim/Emacs/VS Code or a LSP?
-
-Not currently. Although they will presumably exist someday, while Roc is in the early days there's actually a conscious
-effort to focus on the Roc Editor _instead of_ adding Roc support to other editors - specifically in order to give the Roc
-Editor the best possible chance at kickstarting a virtuous cycle of plugin authorship.
-
-This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
-
-In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
-
-## Why won't the editor be able to edit non-roc files like .md, .gitignore, .yml, ... ?
-
-The downside of having the Roc editor support files other than .roc is that it seems extremely difficult to avoid scope creep if we allow it. For example, it starts with just editing json as plaintext but then it's annoying that there's no syntax highlighting, so maybe we add the capability to do syntax highlighting for json but of course then some people want it for toml, .md, etc, so we need to add a way to specify custom syntax highlighting rules for all of those.
-
-Then of course people don't want to be copy/pasting syntax highlighting rules from online, so maybe someone develops a third party "plugin manager" for the editor to distribute these syntax highlighting definitions.
-So maybe we add sharing syntax highlighting as a first-class thing, so people don't have to download a separate tool to use their editor normally but then some people who are using it for .json and .yaml start using it for .css too. Syntax highlighting is okay but it's annoying that they don't get error reporting when they mess up syntax or type an invalid selector or import and pretty soon there's demand for the Roc editor to do all the hardest parts of VS code.
-
-We have to draw the line somewhere in there...but where to draw it?
-It seems like drawing a bright line at .roc files is the most straightforward. It means the roc editor is the absolute best at editing .roc files and it isn't a weak editor for anything else because it doesn't try to be an editor for anything else and it means the scope is very clear.
-
-## Why is there no way to specify "import everything this module exposes" in `imports`?
-
-In [Elm](https://elm-lang.org), it's possible to import a module in a way that brings everything that module
-exposes into scope. It can be convenient, but like all programming language features, it has downsides.
-
-A minor reason Roc doesn't have this feature is that exposing everything can make it more difficult
-outside the editor (e.g. on a website) to tell where something comes from, especially if multiple imports are
-using this. ("I don't see `blah` defined in this module, so it must be coming from an import...but which of
-these several import-exposing-everything modules could it be? I'll have to check all of them, or
-download this code base and open it up in the editor so I can jump to definition!")
-
-The main reason for this design, though, is compiler performance.
-
-Currently, the name resolution step in compilation can be parallelized across modules, because it's possible to
-tell if there's a naming error within a module using only the contents of that module. If "expose everything" is
-allowed, then it's no longer clear whether anything is a naming error or not, until all the "expose everything"
-modules have been processed, so we know exactly which names they expose. Because that feature doesn't exist in Roc,
-all modules can do name resolution in parallel.
-
-Of note, allowing this feature would only slow down modules that used it; modules that didn't use it would still be
-parallelizable. However, when people find out ways to speed up their builds (in any language), advice starts to
-circulate about how to unlock those speed boosts. If Roc had this feature, it's predictable that a commonly-accepted
-piece of advice would eventually circulate: "don't use this feature because it slows down your builds."
-
-If a feature exists in a language, but the common recommendation is never to use it, that's cause for reconsidering
-whether the feature should be in the language at all. In the case of this feature, I think it's simpler if the
-language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
-performance-boosting advice not to use it.
-
 ## Why can't functions be compared for equality using the `==` operator?
 
 Function equality has been proven to be undecidable in the general case because of the [halting problem](https://en.wikipedia.org/wiki/Halting_problem).
@@ -125,6 +70,35 @@ The first of these problems could be addressed by having function equality alway
 
 Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
 brittle to change. Disallowing function equality at compile time eliminates all of these drawbacks.
+
+## Why is there no way to specify "import everything this module exposes" in `imports`?
+
+In [Elm](https://elm-lang.org), it's possible to import a module in a way that brings everything that module
+exposes into scope. It can be convenient, but like all programming language features, it has downsides.
+
+A minor reason Roc doesn't have this feature is that exposing everything can make it more difficult
+outside the editor (e.g. on a website) to tell where something comes from, especially if multiple imports are
+using this. ("I don't see `blah` defined in this module, so it must be coming from an import...but which of
+these several import-exposing-everything modules could it be? I'll have to check all of them, or
+download this code base and open it up in the editor so I can jump to definition!")
+
+The main reason for this design, though, is compiler performance.
+
+Currently, the name resolution step in compilation can be parallelized across modules, because it's possible to
+tell if there's a naming error within a module using only the contents of that module. If "expose everything" is
+allowed, then it's no longer clear whether anything is a naming error or not, until all the "expose everything"
+modules have been processed, so we know exactly which names they expose. Because that feature doesn't exist in Roc,
+all modules can do name resolution in parallel.
+
+Of note, allowing this feature would only slow down modules that used it; modules that didn't use it would still be
+parallelizable. However, when people find out ways to speed up their builds (in any language), advice starts to
+circulate about how to unlock those speed boosts. If Roc had this feature, it's predictable that a commonly-accepted
+piece of advice would eventually circulate: "don't use this feature because it slows down your builds."
+
+If a feature exists in a language, but the common recommendation is never to use it, that's cause for reconsidering
+whether the feature should be in the language at all. In the case of this feature, I think it's simpler if the
+language doesn't have it; that way nobody has to learn (or spend time spreading the word) about the
+performance-boosting advice not to use it.
 
 ## Why doesn't Roc have a `Maybe` or `Option` or `Optional` type, or `null` or `nil` or `undefined`?
 

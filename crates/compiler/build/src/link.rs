@@ -4,6 +4,7 @@ use roc_command_utils::{cargo, clang, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -785,11 +786,25 @@ fn get_target_str(target: &Triple) -> &str {
     }
 }
 
-fn nix_path_opt() -> Option<String> {
-    env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap())
+fn nix_paths() -> Vec<String> {
+    let mut paths = vec![];
+
+    if let Some(nix_libgcc_s_path) = env::var_os("NIX_LIBGCC_S_PATH") {
+        paths.push(nix_libgcc_s_path.into_string().unwrap())
+    }
+
+    if let Some(nix_glibc_path) = nix_glibc_path_opt() {
+        paths.push(nix_glibc_path.into_string().unwrap())
+    }
+
+    paths
 }
 
-fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
+fn nix_glibc_path_opt() -> Option<OsString> {
+    env::var_os("NIX_GLIBC_PATH")
+}
+
+fn build_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
     let mut guess_path = PathBuf::new();
     for s in segments {
         guess_path.push(s);
@@ -812,20 +827,19 @@ fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
 /// match will be returned.
 ///
 /// If there are no matches, [`None`] will be returned.
-fn look_for_library(lib_dirs: &[&[&str]], lib_filename: &str) -> Option<PathBuf> {
+fn look_for_library(lib_dirs: &[PathBuf], lib_filename: &str) -> Option<PathBuf> {
     lib_dirs
         .iter()
-        .map(|lib_dir| {
-            lib_dir.iter().fold(PathBuf::new(), |mut path, segment| {
-                path.push(segment);
-                path
-            })
-        })
-        .map(|mut path| {
-            path.push(lib_filename);
-            path
+        .map(|path| {
+            let mut path_cl = path.clone();
+            path_cl.push(lib_filename);
+            path_cl
         })
         .find(|path| path.exists())
+}
+
+fn strs_to_path(strs: &[&str]) -> PathBuf {
+    strs.iter().collect()
 }
 
 fn link_linux(
@@ -862,50 +876,37 @@ fn link_linux(
         ));
     }
 
-    // Some things we'll need to build a list of dirs to check for libraries
-    let maybe_nix_path = nix_path_opt();
-    let usr_lib_arch = ["/usr", "lib", &architecture];
-    let lib_arch = ["/lib", &architecture];
-    let nix_path_segments;
-    let lib_dirs_if_nix: [&[&str]; 5];
-    let lib_dirs_if_nonix: [&[&str]; 4];
+    let nix_paths_vec_string = nix_paths();
+    let nix_paths_vec: Vec<PathBuf> = nix_paths_vec_string.iter().map(PathBuf::from).collect();
+    let usr_lib_arch_path = strs_to_path(&["/usr", "lib", &architecture]);
+    let lib_arch_path = strs_to_path(&["/lib", &architecture]);
 
-    // Build the aformentioned list
-    let lib_dirs: &[&[&str]] =
-        // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = &maybe_nix_path {
-            nix_path_segments = [nix_path.as_str()];
-            lib_dirs_if_nix = [
-                &nix_path_segments,
-                &usr_lib_arch,
-                &lib_arch,
-                &["/usr", "lib"],
-                &["/usr", "lib64"],
-            ];
-            &lib_dirs_if_nix
-        } else {
-            lib_dirs_if_nonix = [
-                &usr_lib_arch,
-                &lib_arch,
-                &["/usr", "lib"],
-                &["/usr", "lib64"],
-            ];
-            &lib_dirs_if_nonix
-        };
+    let mut lib_dirs: Vec<PathBuf> = vec![];
+
+    // start with nix paths, this prevents version incompatibility
+    if !nix_paths_vec.is_empty() {
+        lib_dirs.extend(nix_paths_vec)
+    }
+
+    lib_dirs.extend([
+        usr_lib_arch_path,
+        lib_arch_path,
+        strs_to_path(&["/usr", "lib"]),
+        strs_to_path(&["/usr", "lib64"]),
+    ]);
 
     // Look for the libraries we'll need
-
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = look_for_library(lib_dirs, libgcc_name);
+    let libgcc_path = look_for_library(&lib_dirs, libgcc_name);
 
     let crti_name = "crti.o";
-    let crti_path = look_for_library(lib_dirs, crti_name);
+    let crti_path = look_for_library(&lib_dirs, crti_name);
 
     let crtn_name = "crtn.o";
-    let crtn_path = look_for_library(lib_dirs, crtn_name);
+    let crtn_path = look_for_library(&lib_dirs, crtn_name);
 
     let scrt1_name = "Scrt1.o";
-    let scrt1_path = look_for_library(lib_dirs, scrt1_name);
+    let scrt1_path = look_for_library(&lib_dirs, scrt1_name);
 
     // Unwrap all the paths at once so we can inform the user of all missing libs at once
     let (libgcc_path, crti_path, crtn_path, scrt1_path) =
@@ -925,7 +926,13 @@ fn link_linux(
 
                 let dirs = lib_dirs
                     .iter()
-                    .map(|segments| segments.join("/"))
+                    .map(|path_buf| {
+                        path_buf
+                            .as_path()
+                            .to_str()
+                            .unwrap_or("FAILED TO CONVERT PATH TO STR")
+                            .to_string()
+                    })
                     .collect::<Vec<String>>()
                     .join("\n");
                 eprintln!("We looked in the following directories:\n{dirs}");
@@ -936,13 +943,16 @@ fn link_linux(
     let ld_linux = match target.architecture {
         Architecture::X86_64 => {
             // give preference to nix_path if it's defined, this prevents bugs
-            if let Some(nix_path) = nix_path_opt() {
-                library_path([&nix_path, "ld-linux-x86-64.so.2"])
+            if let Some(nix_glibc_path) = nix_glibc_path_opt() {
+                build_path([
+                    &nix_glibc_path.into_string().unwrap(),
+                    "ld-linux-x86-64.so.2",
+                ])
             } else {
-                library_path(["/lib64", "ld-linux-x86-64.so.2"])
+                build_path(["/lib64", "ld-linux-x86-64.so.2"])
             }
         }
-        Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Aarch64(_) => build_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture

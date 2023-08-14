@@ -136,8 +136,8 @@ fn find_names_needed(
             if !root_appearances.contains_key(&root) {
                 roots.push(root);
             }
-            // Able vars are always printed at least twice (in the signature, and in the "has"
-            // clause set).
+            // Able vars are always printed at least twice (in the signature, and in the
+            // "implements" clause set).
             root_appearances.insert(root, Appearances::Multiple);
         }
         RecursionVar {
@@ -606,9 +606,16 @@ fn variable_to_string(
     ctx.able_variables.sort();
     ctx.able_variables.dedup();
     for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
-        buf.push_str(if i == 0 { " | " } else { ", " });
+        if i == 0 {
+            buf.push(' ');
+            buf.push_str(roc_parse::keyword::WHERE)
+        } else {
+            buf.push(',');
+        }
+        buf.push(' ');
         buf.push_str(var);
-        buf.push_str(" has");
+        buf.push(' ');
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
                 buf.push_str(" &");

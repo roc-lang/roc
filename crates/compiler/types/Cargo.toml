@@ -14,6 +14,7 @@ roc_error_macros = { path = "../../error_macros" }
 roc_module = { path = "../module" }
 roc_region = { path = "../region" }
 roc_serialize = { path = "../serialize" }
+roc_parse = { path = "../parse" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
