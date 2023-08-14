@@ -6,7 +6,7 @@ interface LogFormatter
     imports []
 
 LogFormatter := { data : Str }
-    has [
+    implements [
         InspectFormatter {
             init: init,
             list: list,

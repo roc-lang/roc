@@ -1687,7 +1687,7 @@ pub enum Type {
 }
 
 /// A lambda set under an arrow in a ability member signature. For example, in
-///   Default has default : {} -> a | a has Default
+///   Default has default : {} -> a where a implements Default
 /// the unspecialized lambda set for the arrow "{} -> a" would be `a:default:1`.
 ///
 /// Lambda sets in member signatures are never known until those members are specialized at a
@@ -3819,7 +3819,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            write!(buf, "has {symbol:?}").unwrap();
+            write!(buf, "{} {:?}", roc_parse::keyword::IMPLEMENTS, symbol).unwrap();
             if write_parens {
                 buf.push(')');
             }

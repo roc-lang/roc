@@ -12,8 +12,8 @@ ButtonStyles : { bgColor : Rgba, borderColor : Rgba, borderWidth : F32, textColo
 Elem : [Button Elem ButtonStyles, Col (List Elem), Row (List Elem), Text Str]
 
 GuiFormatter := { nodes : List Elem }
-    has [
-        Formatter {
+    implements [
+        InspectFormatter {
             init: init,
             list: list,
             set: set,

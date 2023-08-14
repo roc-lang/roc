@@ -1,6 +1,7 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
+    ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -14,7 +15,7 @@ use crate::parser::{
     word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
     EType, EWhen, Either, ParseResult, Parser,
 };
-use crate::pattern::{closure_param, loc_has_parser};
+use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
 use crate::type_annotation;
@@ -616,14 +617,14 @@ pub fn parse_single_def<'a>(
             };
 
             if let Some((name, name_region, args)) = opt_tag_and_args {
-                if let Ok((_, loc_has, state)) =
-                    loc_has_parser().parse(arena, state.clone(), min_indent)
+                if let Ok((_, loc_implements, state)) =
+                    loc_implements_parser().parse(arena, state.clone(), min_indent)
                 {
                     let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
                         min_indent,
                         Loc::at(name_region, name),
                         args,
-                        loc_has,
+                        loc_implements,
                         arena,
                         state,
                     )?;
@@ -1063,8 +1064,14 @@ fn alias_signature_with_space_before<'a>() -> impl Parser<'a, Loc<TypeAnnotation
     ))
 }
 
-fn opaque_signature_with_space_before<'a>(
-) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<Loc<HasAbilities<'a>>>), EExpr<'a>> {
+fn opaque_signature_with_space_before<'a>() -> impl Parser<
+    'a,
+    (
+        Loc<TypeAnnotation<'a>>,
+        Option<Loc<ImplementsAbilities<'a>>>,
+    ),
+    EExpr<'a>,
+> {
     and!(
         specialize(
             EExpr::Type,
@@ -1075,7 +1082,7 @@ fn opaque_signature_with_space_before<'a>(
         ),
         optional(backtrackable(specialize(
             EExpr::Type,
-            space0_before_e(type_annotation::has_abilities(), EType::TIndentStart,),
+            space0_before_e(type_annotation::implements_abilities(), EType::TIndentStart,),
         )))
     )
 }
@@ -1279,7 +1286,7 @@ mod ability {
         Exact(u32),
     }
 
-    /// Parses an ability demand like `hash : a -> U64 | a has Hash`, in the context of a larger
+    /// Parses an ability demand like `hash : a -> U64 where a implements Hash`, in the context of a larger
     /// ability definition.
     /// This is basically the same as parsing a free-floating annotation, but with stricter rules.
     pub fn parse_demand<'a>(
@@ -1363,7 +1370,7 @@ fn finish_parsing_ability_def_help<'a>(
     start_column: u32,
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
-    loc_has: Loc<Has<'a>>,
+    loc_implements: Loc<Implements<'a>>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, (TypeDef<'a>, Region), EExpr<'a>> {
@@ -1401,7 +1408,7 @@ fn finish_parsing_ability_def_help<'a>(
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
     let type_def = TypeDef::Ability {
         header: TypeHeader { name, vars: args },
-        loc_has,
+        loc_implements,
         members: demands.into_bump_slice(),
     };
 
@@ -1634,13 +1641,13 @@ fn parse_expr_end<'a>(
                 value:
                     Expr::Var {
                         module_name: "",
-                        ident: "has",
+                        ident: crate::keyword::IMPLEMENTS,
                     },
                 ..
             },
             state,
         )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
-            // This is an ability definition, `Ability arg1 ... has ...`.
+            // This is an ability definition, `Ability arg1 ... implements ...`.
 
             let name = expr_state.expr.map_owned(|e| match e {
                 Expr::Tag(name) => name,
@@ -1661,13 +1668,13 @@ fn parse_expr_end<'a>(
                 }
             }
 
-            // Attach any spaces to the `has` keyword
+            // Attach any spaces to the `implements` keyword
             let has = if !expr_state.spaces_after.is_empty() {
                 arena
-                    .alloc(Has::Has)
+                    .alloc(Implements::Implements)
                     .with_spaces_before(expr_state.spaces_after, has.region)
             } else {
-                Loc::at(has.region, Has::Has)
+                Loc::at(has.region, Implements::Implements)
             };
 
             let args = arguments.into_bump_slice();

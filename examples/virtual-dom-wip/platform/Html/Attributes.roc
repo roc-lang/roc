@@ -134,7 +134,7 @@ interface Html.Attributes
         width,
         wrap,
     ]
-    imports [Html.Internal.{ Attribute }]
+    imports [Html.Internal.Shared.{ Attribute }]
 
 attribute : Str -> (Str -> Attribute state)
 attribute = \attrType ->

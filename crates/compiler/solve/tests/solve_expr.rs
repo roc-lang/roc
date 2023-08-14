@@ -3146,7 +3146,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict k v, k, v -> Dict k v | k has Hash & Eq",
+            "Dict k v, k, v -> Dict k v where k implements Hash & Eq",
         );
     }
 
@@ -3407,7 +3407,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                reconstructPath : Dict position position, position -> List position | position has Hash & Eq
+                reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
                 reconstructPath = \cameFrom, goal ->
                     when Dict.get cameFrom goal is
                         Err KeyNotFound ->
@@ -3419,7 +3419,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Dict position position, position -> List position | position has Hash & Eq",
+            "Dict position position, position -> List position where position implements Hash & Eq",
         );
     }
 
@@ -3454,7 +3454,7 @@ mod solve_expr {
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound] | position has Hash & Eq
+                cheapestOpen : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3469,14 +3469,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [KeyNotFound] | position has Hash & Eq
+                astar : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [KeyNotFound] | position has Hash & Eq",
+            "Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
         );
     }
 
@@ -4118,7 +4118,7 @@ mod solve_expr {
 
                 Key k : Num k
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -4232,7 +4232,7 @@ mod solve_expr {
                     _ ->
                       Empty
 
-                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
+                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4320,7 +4320,7 @@ mod solve_expr {
 
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
-                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v | k has Hash & Eq
+                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v where k implements Hash & Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4355,7 +4355,7 @@ mod solve_expr {
 
                 removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->

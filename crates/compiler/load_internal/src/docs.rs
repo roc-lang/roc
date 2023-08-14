@@ -450,7 +450,7 @@ fn contains_unexposed_type(
             false
         }
         Where(loc_ann, _loc_has_clauses) => {
-            // We assume all the abilities in the `has` clause are from exported modules.
+            // We assume all the abilities in the `implements` clause are from exported modules.
             // TODO don't assume this! Instead, look them up and verify.
             contains_unexposed_type(&loc_ann.value, exposed_module_ids, module_ids)
         }
@@ -553,7 +553,7 @@ fn ability_member_type_to_docs(
             let has_clauses = has_clauses
                 .iter()
                 .map(|hc| {
-                    let ast::HasClause { var, abilities } = hc.value;
+                    let ast::ImplementsClause { var, abilities } = hc.value;
                     (
                         var.value.extract_spaces().item.to_string(),
                         abilities

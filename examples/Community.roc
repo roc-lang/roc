@@ -13,7 +13,7 @@ Community := {
     people : List Person,
     friends : List (Set Nat),
 }
-    has [
+    implements [
         Inspect {
             toInspector: inspectCommunity,
         },
@@ -26,7 +26,7 @@ Person := {
     hasBeard : Bool,
     favoriteColor : Color,
 }
-    has [
+    implements [
         Inspect {
             toInspector: inspectPerson,
         },
@@ -88,7 +88,7 @@ walkFriendNames = \@Community { people, friends }, s0, nextFn ->
         (nextFn s1 personName friendNames, id + 1)
     out
 
-inspectCommunity : Community -> Inspector f | f has InspectFormatter
+inspectCommunity : Community -> Inspector f where f implements InspectFormatter
 inspectCommunity = \@Community { people, friends } ->
     f0 <- Inspect.custom
     [
@@ -113,7 +113,7 @@ inspectCommunity = \@Community { people, friends } ->
     |> Inspect.record
     |> Inspect.apply f0
 
-inspectPerson : Person -> Inspector f | f has InspectFormatter
+inspectPerson : Person -> Inspector f where f implements InspectFormatter
 inspectPerson = \@Person { firstName, lastName, age, hasBeard, favoriteColor } ->
     # In practice, this would never be done manually due to autoderive.
     # Instead you would just write:
