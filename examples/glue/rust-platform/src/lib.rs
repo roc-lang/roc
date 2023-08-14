@@ -1,15 +1,13 @@
 #![allow(non_snake_case)]
 
-mod test_glue;
-
 use core::ffi::c_void;
+use roc_app::Op;
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::io::Write;
 use std::os::raw::c_char;
-use test_glue::Op;
 
-use test_glue::mainForHost as roc_main;
+use roc_app::mainForHost as roc_main;
 
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
@@ -80,7 +78,7 @@ pub unsafe extern "C" fn roc_shm_open(
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    use test_glue::discriminant_Op::*;
+    use roc_app::discriminant_Op::*;
 
     println!("Let's do things!");
 
@@ -91,7 +89,7 @@ pub extern "C" fn rust_main() -> i32 {
             StdoutWrite => {
                 let stdout_write = op.get_StdoutWrite();
                 let output: RocStr = stdout_write.f0;
-                op = unsafe { stdout_write.f1.force_thunk(()) };
+                op = unsafe { stdout_write.f1.force_thunk() };
 
                 if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
                     panic!("Writing to stdout failed! {:?}", e);
@@ -100,7 +98,7 @@ pub extern "C" fn rust_main() -> i32 {
             StderrWrite => {
                 let stderr_write = op.get_StderrWrite();
                 let output: RocStr = stderr_write.f0;
-                op = unsafe { stderr_write.f1.force_thunk(()) };
+                op = unsafe { stderr_write.f1.force_thunk() };
 
                 if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
                     panic!("Writing to stdout failed! {:?}", e);
