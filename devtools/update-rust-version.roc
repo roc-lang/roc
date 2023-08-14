@@ -37,6 +37,7 @@ main =
 
             Task.err 1
 
+run : Task {} _
 run =
     currentDirPath <- Env.cwd |> await
     currentDir <- Path.display currentDirPath
