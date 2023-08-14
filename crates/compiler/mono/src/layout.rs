@@ -580,14 +580,10 @@ impl<'a> RawFunctionLayout<'a> {
                 cacheable(Ok(Self::ZeroArgumentThunk(Layout::usize(env.target_info))))
             }
 
-            Alias(Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_FRAC | Symbol::NUM_DEC | Symbol::BOOL_BOOL | Symbol::RESULT_RESULT | Symbol::JSON_FIELD_NAME_MAPPING | Symbol::JSON_JSON | Symbol::JSON_NUMBER_STATE | Symbol::JSON_STRING_STATE | Symbol::JSON_ARRAY_OPENING_STATE | Symbol::JSON_ARRAY_CLOSING_STATE | Symbol::JSON_OBJECT_STATE, _, _, _) => {
-                Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk)
-            }
-
             Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var),
 
-            Alias(symbol, _, _, _) if symbol.is_builtin() => {
-                unreachable!("The named builtin type {:?} does not have an explicit entry for whether it's a zero-arg thunk or type alias.", symbol);
+            Alias(symbol, _, var, _) if symbol.is_builtin() => {
+                Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk)
             }
 
             Alias(_, _, var, _) => Self::from_var(env, var),
