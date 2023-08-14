@@ -1624,6 +1624,12 @@ define_builtins! {
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"
+        1 JSON_FIELD_NAME_MAPPING: "FieldNameMapping"
+        2 JSON_NUMBER_STATE: "NumberState"
+        3 JSON_STRING_STATE: "StringState"
+        4 JSON_ARRAY_OPENING_STATE: "ArrayOpeningState"
+        5 JSON_ARRAY_CLOSING_STATE: "ArrayClosingState"
+        6 JSON_OBJECT_STATE: "ObjectState"
     }
 
     num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
