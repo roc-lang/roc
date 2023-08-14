@@ -400,7 +400,7 @@ expect (Str.fromUtf8 [255]) |> Result.isErr
 ## ```
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]
 fromUtf8Range = \bytes, config ->
-    if config.start + config.count <= List.len bytes then
+    if Num.addSaturated config.start config.count <= List.len bytes then
         result = fromUtf8RangeLowlevel bytes config.start config.count
 
         if result.cIsOk then
@@ -721,7 +721,7 @@ splitFirst = \haystack, needle ->
             remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
 
             before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
+            after = Str.substringUnsafe haystack (Num.addWrap index (Str.countUtf8Bytes needle)) remaining
 
             Ok { before, after }
 
@@ -757,7 +757,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
         if matchesAt haystack index needle then
             Some index
         else
-            firstMatchHelp haystack needle (index + 1) lastPossible
+            firstMatchHelp haystack needle (inc index) lastPossible
     else
         None
 
@@ -775,7 +775,7 @@ splitLast = \haystack, needle ->
             remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
 
             before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
+            after = Str.substringUnsafe haystack (Num.addWrap index (Str.countUtf8Bytes needle)) remaining
 
             Ok { before, after }
 
@@ -820,7 +820,7 @@ matchesAt : Str, Nat, Str -> Bool
 matchesAt = \haystack, haystackIndex, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
-    endIndex = min (haystackIndex + needleLength) haystackLength
+    endIndex = min (Num.addSaturated haystackIndex needleLength) haystackLength
 
     matchesAtHelp {
         haystack,
@@ -847,8 +847,8 @@ matchesAtHelp = \state ->
         doesRestMatch =
             matchesAtHelp
                 { state &
-                    haystackIndex: haystackIndex + 1,
-                    needleIndex: needleIndex + 1,
+                    haystackIndex: inc haystackIndex,
+                    needleIndex: inc needleIndex,
                 }
 
         doesThisMatch && doesRestMatch
@@ -871,7 +871,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
         byte = Str.getUnsafe string index
         newState = step state byte index
 
-        walkUtf8WithIndexHelp string newState step (index + 1) length
+        walkUtf8WithIndexHelp string newState step (inc index) length
     else
         state
 
@@ -892,7 +892,7 @@ walkUtf8Help = \str, state, step, index, length ->
         byte = Str.getUnsafe str index
         newState = step state byte
 
-        walkUtf8Help str newState step (index + 1) length
+        walkUtf8Help str newState step (inc index) length
     else
         state
 
@@ -942,7 +942,7 @@ walkScalarsHelp = \string, state, step, index, length ->
         { scalar, bytesParsed } = getScalarUnsafe string index
         newState = step state scalar
 
-        walkScalarsHelp string newState step (index + bytesParsed) length
+        walkScalarsHelp string newState step (Num.addWrap index bytesParsed) length
     else
         state
 
@@ -970,7 +970,7 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
 
         when step state scalar is
             Continue newState ->
-                walkScalarsUntilHelp string newState step (index + bytesParsed) length
+                walkScalarsUntilHelp string newState step (Num.addWrap index bytesParsed) length
 
             Break newState ->
                 newState
@@ -995,3 +995,5 @@ strToNumHelp = \string ->
 ## ```
 withPrefix : Str, Str -> Str
 withPrefix = \str, prefix -> Str.concat prefix str
+
+inc = \num -> Num.addWrap num 1
