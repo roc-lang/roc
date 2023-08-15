@@ -757,7 +757,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
         if matchesAt haystack index needle then
             Some index
         else
-            firstMatchHelp haystack needle (inc index) lastPossible
+            firstMatchHelp haystack needle (Num.addWrap index 1) lastPossible
     else
         None
 
@@ -847,8 +847,8 @@ matchesAtHelp = \state ->
         doesRestMatch =
             matchesAtHelp
                 { state &
-                    haystackIndex: inc haystackIndex,
-                    needleIndex: inc needleIndex,
+                    haystackIndex: Num.addWrap haystackIndex 1,
+                    needleIndex: Num.addWrap needleIndex 1,
                 }
 
         doesThisMatch && doesRestMatch
@@ -871,7 +871,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
         byte = Str.getUnsafe string index
         newState = step state byte index
 
-        walkUtf8WithIndexHelp string newState step (inc index) length
+        walkUtf8WithIndexHelp string newState step (Num.addWrap index 1) length
     else
         state
 
@@ -892,7 +892,7 @@ walkUtf8Help = \str, state, step, index, length ->
         byte = Str.getUnsafe str index
         newState = step state byte
 
-        walkUtf8Help str newState step (inc index) length
+        walkUtf8Help str newState step (Num.addWrap index 1) length
     else
         state
 
@@ -995,5 +995,3 @@ strToNumHelp = \string ->
 ## ```
 withPrefix : Str, Str -> Str
 withPrefix = \str, prefix -> Str.concat prefix str
-
-inc = \num -> Num.addWrap num 1
