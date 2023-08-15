@@ -68,8 +68,8 @@ run =
             |> updateEarthFile newRustVersion
             |> await
 
-        str <- fetchNightlyByDate {year: 2023, month: 4, day: 15} |> await
-        Stdout.line str
+        version <- getNightlyVersion {year: 2023, month: 4, day: 15} |> await
+        Stdout.line (versionToStr version)
     else
         Task.err NotInRocDir
 
@@ -144,3 +144,35 @@ fetchNightlyByDate = \date ->
         url: Url.toStr urlWithDate,
     }
     |> Http.send
+
+RustVersion := Str
+
+versionFromStr : Str -> RustVersion
+versionFromStr = \str ->
+    @RustVersion str
+
+versionToStr : RustVersion -> Str
+versionToStr = \@RustVersion str ->
+    str
+
+# TODO: maybe it could be possible to make some assertions here in case the format changes
+parseVersionFromNix : Str -> Result RustVersion _
+parseVersionFromNix = \nixStr ->
+    # nixStr: {v="1.70.0-nightly";d="2023-04-15";r=5;p=5;cargo={_0="6 ...
+
+    { before: _, after } <- Str.splitFirst nixStr "\"" |> Result.try
+    # after: 1.70.0-nightly";d="2023-04-15";r=5;p=5;cargo={_0="6 ...
+
+    { before, after: _ } <- Str.splitFirst after "-" |> Result.try
+    # before: 1.70.0
+
+    Ok (versionFromStr before)
+
+getNightlyVersion : Date -> Task RustVersion _
+getNightlyVersion = \date ->
+    nightlyNix <- fetchNightlyByDate date |> Task.attempt
+    nightlyNix
+    |> Result.try parseVersionFromNix
+    |> Result.mapErr \err -> Err { err, nightlyNix }
+    |> Task.fromResult
+
