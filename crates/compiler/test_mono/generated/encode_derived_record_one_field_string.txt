@@ -1028,10 +1028,6 @@ procedure TotallyNotJson.189 (TotallyNotJson.1579, TotallyNotJson.192):
             ret TotallyNotJson.1604;
     
 
-procedure TotallyNotJson.2 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
-
 procedure TotallyNotJson.215 (TotallyNotJson.216, TotallyNotJson.217):
     let TotallyNotJson.1550 : List U8 = CallByName TotallyNotJson.27 TotallyNotJson.217;
     let TotallyNotJson.1549 : List U8 = CallByName List.8 TotallyNotJson.216 TotallyNotJson.1550;
@@ -1183,6 +1179,10 @@ procedure TotallyNotJson.27 (TotallyNotJson.218):
 procedure TotallyNotJson.29 (TotallyNotJson.233):
     let TotallyNotJson.1173 : List {Str, Str} = CallByName Encode.23 TotallyNotJson.233;
     ret TotallyNotJson.1173;
+
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret TotallyNotJson.1172;
 
 procedure TotallyNotJson.82 (TotallyNotJson.802, TotallyNotJson.803):
     let TotallyNotJson.1522 : U8 = GetTagId TotallyNotJson.803;
@@ -1370,7 +1370,7 @@ procedure TotallyNotJson.98 (#Derived_gen.10):
 
 procedure Test.0 ():
     let Test.11 : Str = "foo";
-    let Test.10 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.2;
+    let Test.10 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
     let Test.8 : List U8 = CallByName Encode.26 Test.11 Test.10;
     let Test.1 : [C {U64, U8}, C Str] = CallByName Str.9 Test.8;
     let Test.5 : U8 = 1i64;

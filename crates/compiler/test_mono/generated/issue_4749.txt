@@ -255,7 +255,7 @@ procedure Str.9 (Str.79):
 
 procedure Test.3 ():
     let Test.0 : List U8 = Array [82i64, 111i64, 99i64];
-    let Test.8 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.2;
+    let Test.8 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
     inc Test.0;
     let Test.1 : [C [C List U8, C ], C Str] = CallByName Decode.27 Test.0 Test.8;
     let Test.7 : Str = "Roc";
@@ -267,10 +267,6 @@ procedure Test.3 ():
     dec Test.0;
     let Test.4 : {} = Struct {};
     ret Test.4;
-
-procedure TotallyNotJson.2 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
 
 procedure TotallyNotJson.525 (TotallyNotJson.526, TotallyNotJson.1175):
     joinpoint TotallyNotJson.1458:
@@ -835,3 +831,7 @@ procedure TotallyNotJson.70 (#Derived_gen.0):
             ret TotallyNotJson.1276;
     in
     jump TotallyNotJson.1198 #Derived_gen.0;
+
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret TotallyNotJson.1172;

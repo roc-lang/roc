@@ -343,10 +343,6 @@ procedure TotallyNotJson.189 (TotallyNotJson.1270, TotallyNotJson.192):
             ret TotallyNotJson.1295;
     
 
-procedure TotallyNotJson.2 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
-
 procedure TotallyNotJson.215 (TotallyNotJson.216, TotallyNotJson.217):
     let TotallyNotJson.1241 : List U8 = CallByName TotallyNotJson.27 TotallyNotJson.217;
     let TotallyNotJson.1240 : List U8 = CallByName List.8 TotallyNotJson.216 TotallyNotJson.1241;
@@ -505,8 +501,12 @@ procedure TotallyNotJson.32 (TotallyNotJson.262, TotallyNotJson.263):
     let TotallyNotJson.1214 : {Str, List Str} = CallByName Encode.23 TotallyNotJson.1215;
     ret TotallyNotJson.1214;
 
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret TotallyNotJson.1172;
+
 procedure Test.0 ():
     let Test.12 : {Str, Str} = CallByName Test.3;
-    let Test.13 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.2;
+    let Test.13 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
     let Test.11 : List U8 = CallByName Encode.26 Test.12 Test.13;
     ret Test.11;
