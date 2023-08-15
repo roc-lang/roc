@@ -12,8 +12,9 @@ app "update-rust-version"
         pf.Path.{ Path },
         pf.Env,
         pf.Stdout,
+        pf.Stderr,
         pf.Url,
-        pf.Http
+        pf.Http,
     ]
     provides [main] to pf
 
@@ -119,27 +120,27 @@ updateEarthFile = \path, newRustVersion ->
 
 padLeftWithZero : Str -> Str
 padLeftWithZero = \str ->
-    if Str.countUtf8Bytes str == 1 then 
-        Str.concat "0" str  
-    else 
+    if Str.countUtf8Bytes str == 1 then
+        Str.concat "0" str
+    else
         str
 
-# TODO dateFromStr 
-Date : { year: U16, month: U8, day: U8 }
+# TODO dateFromStr
+Date : { year : U16, month : U8, day : U8 }
 dateToStr : Date -> Str
-dateToStr = \{year, month, day} -> 
+dateToStr = \{ year, month, day } ->
     yearStr = Num.toStr year
     monthStr = Num.toStr month |> padLeftWithZero
     dayStr = Num.toStr day |> padLeftWithZero
     "\(yearStr)-\(monthStr)-\(dayStr)"
 
 fetchNightlyByDate : Date -> Task Str _
-fetchNightlyByDate = \date -> 
+fetchNightlyByDate = \date ->
     nightlyVersionsUrl = Url.fromStr "https://raw.githubusercontent.com/oxalica/rust-overlay/master/manifests/nightly"
     fileName = Str.concat (dateToStr date) ".nix"
     urlWithDate = Url.append nightlyVersionsUrl (Num.toStr date.year) |> Url.append fileName
     {} <- Stdout.line "Fetching \(Url.toStr urlWithDate)" |> await
     { Http.defaultRequest &
-        url: Url.toStr urlWithDate 
+        url: Url.toStr urlWithDate,
     }
     |> Http.send
