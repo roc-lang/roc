@@ -33,11 +33,10 @@ entryPoints = \@Types { entrypoints } -> entrypoints
 
 walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
 walkShapes = \@Types { types: shapes }, originalState, update ->
-    List.walk shapes { index: 0, state: originalState } \{ index, state }, elem ->
+    List.walkWithIndex shapes originalState \state, elem, index ->
         id = InternalTypeId.fromNat index
 
-        { index: index + 1, state: update state elem id }
-    |> .state
+        update state elem id
 
 shape : Types, TypeId -> Shape
 shape = \@Types types, id ->
