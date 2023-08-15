@@ -532,10 +532,10 @@ walkBackwardsUntil = \list, initial, func ->
 ## Walks to the end of the list from a specified starting index
 walkFrom : List elem, Nat, state, (state, elem -> state) -> state
 walkFrom = \list, index, state, func ->
-    walkHelp : _, _ -> [Continue _, Break []]
-    walkHelp = \currentState, element -> Continue (func currentState element)
+    step : _, _ -> [Continue _, Break []]
+    step = \currentState, element -> Continue (func currentState element)
 
-    when List.iterHelp list state walkHelp index (List.len list) is
+    when List.iterHelp list state step index (List.len list) is
         Continue new -> new
 
 ## A combination of [List.walkFrom] and [List.walkUntil]
