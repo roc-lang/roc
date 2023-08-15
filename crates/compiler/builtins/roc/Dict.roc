@@ -130,7 +130,7 @@ hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 ## ```
 ## emptyDict = Dict.empty {}
 ## ```
-empty : {} -> Dict k v where k implements Hash & Eq
+empty : {} -> Dict * *
 empty = \{} ->
     @Dict {
         metadata: List.repeat emptySlot 8,
@@ -156,7 +156,7 @@ capacity = \@Dict { dataIndices } ->
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Dict k v where k implements Hash & Eq
+withCapacity : Nat -> Dict * *
 withCapacity = \_ ->
     # TODO: power of 2 * 8 and actual implementation
     empty {}
