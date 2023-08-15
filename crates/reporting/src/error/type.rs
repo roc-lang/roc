@@ -4115,21 +4115,21 @@ mod report_text {
                 alloc.text("()")
             } else {
                 alloc
-                    .text("( ")
-                    .append(alloc.ellipsis().append(alloc.text(" }")))
+                    .text("(")
+                    .append(alloc.ellipsis().append(alloc.text(")")))
             }
             .append(ext_doc)
         } else if entries.len() == 1 {
             // Single-field records get printed on one line; multi-field records get multiple lines
             alloc
-                .text("( ")
+                .text("(")
                 .append(entries.into_iter().next().unwrap())
                 .append(if fields_omitted == 0 {
                     alloc.text("")
                 } else {
                     alloc.text(", ").append(alloc.ellipsis())
                 })
-                .append(alloc.text(" )"))
+                .append(alloc.text(")"))
                 .append(ext_doc)
         } else {
             let ending = if fields_omitted == 0 {
@@ -4142,7 +4142,7 @@ mod report_text {
             }
             .append(ext_doc);
 
-            // Multi-elem tuple get printed on multiple lines
+            // Multi-elem tuples get printed on multiple lines
             alloc.vcat(
                 std::iter::once(alloc.reflow("(")).chain(
                     entries
