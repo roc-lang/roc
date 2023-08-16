@@ -5,6 +5,8 @@ interface LogFormatter
     ]
     imports []
 
+## Creates String representations of Roc values, for use in inspect-logging.roc
+
 LogFormatter := { data : Str }
     implements [
         InspectFormatter {

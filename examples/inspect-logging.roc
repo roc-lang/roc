@@ -1,5 +1,9 @@
+#
+# Shows how Roc values can be logged
+#
+
 app "inspect-logging"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.3.2/tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
     imports [
         pf.Stdout,
         LogFormatter,

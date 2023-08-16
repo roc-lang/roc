@@ -1,3 +1,7 @@
+#
+# Visualizes Roc values in a basic GUI
+#
+
 app "inspect-gui"
     packages { pf: "gui/platform/main.roc" }
     imports [

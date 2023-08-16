@@ -9,6 +9,8 @@ interface Community
     ]
     imports []
 
+## Datatype representing a community for demonstration purposes in inspect-gui.roc and inspect-logging.roc
+
 Community := {
     people : List Person,
     friends : List (Set Nat),
@@ -88,6 +90,7 @@ walkFriendNames = \@Community { people, friends }, s0, nextFn ->
         (nextFn s1 personName friendNames, id + 1)
     out
 
+# The functions below will be auto-generated in the future
 inspectCommunity : Community -> Inspector f where f implements InspectFormatter
 inspectCommunity = \@Community { people, friends } ->
     f0 <- Inspect.custom

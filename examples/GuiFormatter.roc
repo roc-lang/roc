@@ -5,6 +5,8 @@ interface GuiFormatter
     ]
     imports []
 
+## Creates GUI representations of Roc values, for use in inspect-gui.roc
+
 ## This can't depend on the platform, so I just copied all of this.
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }
