@@ -38,6 +38,13 @@ impl<'a, T> Spaced<'a, T> {
             }
         }
     }
+
+    pub fn item(&self) -> &T {
+        match self {
+            Spaced::Item(answer) => answer,
+            Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
+        }
+    }
 }
 
 impl<'a, T: Debug> Debug for Spaced<'a, T> {

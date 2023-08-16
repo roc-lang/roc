@@ -28,7 +28,7 @@ interface Hash
         Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, Nat, Dec },
     ]
 
-## A value that can hashed.
+## A value that can be hashed.
 Hash implements
     ## Hashes a value into a [Hasher].
     ## Note that [hash] does not produce a hash value itself; the hasher must be
