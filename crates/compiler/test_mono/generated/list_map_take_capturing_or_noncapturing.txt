@@ -1,23 +1,23 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.522 : U8 = GetTagId #Attr.3;
-    joinpoint List.523 List.521:
-        ret List.521;
+    let List.523 : U8 = GetTagId #Attr.3;
+    joinpoint List.524 List.522:
+        ret List.522;
     in
-    switch List.522:
+    switch List.523:
         case 0:
-            let List.524 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
+            let List.525 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
             decref #Attr.2;
-            jump List.523 List.524;
+            jump List.524 List.525;
     
         case 1:
-            let List.525 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
+            let List.526 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
             decref #Attr.2;
-            jump List.523 List.525;
+            jump List.524 List.526;
     
         default:
-            let List.526 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
+            let List.527 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
             decref #Attr.2;
-            jump List.523 List.526;
+            jump List.524 List.527;
     
 
 procedure Num.19 (#Attr.2, #Attr.3):
