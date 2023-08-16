@@ -1171,7 +1171,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                 }
             }
 
-            fn unmasked_pointer(&self) -> *mut union_Op {
+            fn unmasked_pointer(&self) -> *mut union_\(escapedName) {
                 debug_assert!(!self.0.is_null());
 
                 let mask = match std::mem::size_of::<usize>() {
@@ -1180,10 +1180,10 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                     _ => unreachable!(),
                 };
 
-                ((self.0 as usize) & mask) as *mut union_Op
+                ((self.0 as usize) & mask) as *mut union_\(escapedName)
             }
 
-            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_Op> {
+            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_\(escapedName)> {
                 let ptr = self.unmasked_pointer();
 
                 core::mem::ManuallyDrop::new(unsafe { std::ptr::read(ptr) })
