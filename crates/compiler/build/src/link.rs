@@ -1081,6 +1081,8 @@ fn link_macos(
         .env_clear()
         .args(&link_type_args)
         .args([
+            // fixes #5765
+            "-ld64", 
             // NOTE: we don't do --gc-sections on macOS because the default
             // macOS linker doesn't support it, but it's a performance
             // optimization, so if we ever switch to a different linker,
