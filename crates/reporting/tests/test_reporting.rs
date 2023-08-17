@@ -658,9 +658,9 @@ mod test_reporting {
 
     Did you mean one of these?
 
-        Str
         Frac
         Num
+        Str
         Err
     "###
     );
@@ -8201,8 +8201,8 @@ In roc, functions are always written as a lambda, like{}
 
         Type
         Unsigned8
-        Unsigned32
         Unsigned16
+        Unsigned64
 
     ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
@@ -8215,8 +8215,8 @@ In roc, functions are always written as a lambda, like{}
 
         Type
         Unsigned8
-        Unsigned32
         Unsigned16
+        Unsigned64
     "###
     );
 
