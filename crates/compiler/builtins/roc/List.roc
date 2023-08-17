@@ -28,6 +28,7 @@ interface List
         map2,
         map3,
         product,
+        walkWithIndex,
         walkUntil,
         walkFrom,
         walkFromUntil,
@@ -459,12 +460,33 @@ contains = \list, needle ->
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
-walk = \list, state, func ->
-    walkHelp : _, _ -> [Continue _, Break []]
-    walkHelp = \currentState, element -> Continue (func currentState element)
+walk = \list, init, func ->
+    walkHelp list init func 0 (List.len list)
 
-    when List.iterate list state walkHelp is
-        Continue newState -> newState
+## internal helper
+walkHelp : List elem, s, (s, elem -> s), Nat, Nat -> s
+walkHelp = \list, state, f, index, length ->
+    if index < length then
+        nextState = f state (List.getUnsafe list index)
+
+        walkHelp list nextState f (Num.addWrap index 1) length
+    else
+        state
+
+## Like [walk], but at each step the function also receives the index of the current element.
+walkWithIndex : List elem, state, (state, elem, Nat -> state) -> state
+walkWithIndex = \list, init, func ->
+    walkWithIndexHelp list init func 0 (List.len list)
+
+## internal helper
+walkWithIndexHelp : List elem, s, (s, elem, Nat -> s), Nat, Nat -> s
+walkWithIndexHelp = \list, state, f, index, length ->
+    if index < length then
+        nextState = f state (List.getUnsafe list index) index
+
+        walkWithIndexHelp list nextState f (Num.addWrap index 1) length
+    else
+        state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -510,10 +532,10 @@ walkBackwardsUntil = \list, initial, func ->
 ## Walks to the end of the list from a specified starting index
 walkFrom : List elem, Nat, state, (state, elem -> state) -> state
 walkFrom = \list, index, state, func ->
-    walkHelp : _, _ -> [Continue _, Break []]
-    walkHelp = \currentState, element -> Continue (func currentState element)
+    step : _, _ -> [Continue _, Break []]
+    step = \currentState, element -> Continue (func currentState element)
 
-    when List.iterHelp list state walkHelp index (List.len list) is
+    when List.iterHelp list state step index (List.len list) is
         Continue new -> new
 
 ## A combination of [List.walkFrom] and [List.walkUntil]

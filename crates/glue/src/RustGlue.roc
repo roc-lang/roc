@@ -339,7 +339,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     buf
     |> generateDeriveStr types enumType ExcludeDebug
     |> Str.concat "#[repr(u\(reprBits))]\npub enum \(escapedName) {\n"
-    |> \b -> walkWithIndex tags b generateEnumTags
+    |> \b -> List.walkWithIndex tags b generateEnumTags
     |>
     # Enums require a custom debug impl to ensure naming is identical on all platforms.
     Str.concat
@@ -354,7 +354,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
 
-generateEnumTags = \accum, index, name ->
+generateEnumTags = \accum, name, index ->
     indexStr = Num.toStr index
 
     Str.concat accum "\(indent)\(name) = \(indexStr),\n"
@@ -1969,15 +1969,6 @@ roundUpToAlignment = \width, alignment ->
             else
                 width
 
-walkWithIndex = \list, originalState, f ->
-    stateWithId =
-        List.walk list { id: 0nat, state: originalState } \{ id, state }, elem ->
-            nextState = f state id elem
-
-            { id: id + 1, state: nextState }
-
-    stateWithId.state
-
 archName = \arch ->
     when arch is
         Aarch32 ->
@@ -2099,23 +2090,18 @@ isUnit = \shape ->
 
 toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
 toArgStr = \args, types, fmt ->
-    answer = List.walk args { state: "", index: 0 } \{ state, index }, argId ->
-        newState =
-            shape = Types.shape types argId
+    List.walkWithIndex args "" \state, argId, index ->
+        shape = Types.shape types argId
 
-            # Drop `()` args; they aren't FFI-safe, and nothing will get passed anyway.
-            if isUnit shape then
-                state
+        # Drop `()` args; they aren't FFI-safe, and nothing will get passed anyway.
+        if isUnit shape then
+            state
+        else
+            argStr = fmt argId shape index
+
+            if Str.isEmpty state then
+                argStr # Don't prepend a comma if this is the first one
             else
-                argStr = fmt argId shape index
-
-                if Str.isEmpty state then
-                    argStr # Don't prepend a comma if this is the first one
-                else
-                    state
-                    |> Str.concat ", "
-                    |> Str.concat argStr
-
-        { state: newState, index: index + 1 }
-
-    answer.state
+                state
+                |> Str.concat ", "
+                |> Str.concat argStr
