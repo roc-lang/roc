@@ -147,7 +147,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.600 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.600;
 
-procedure List.80 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20):
+procedure List.80 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17):
     joinpoint List.575 List.440 List.441 List.442 List.443 List.444:
         let List.577 : Int1 = CallByName Num.22 List.443 List.444;
         if List.577 then
@@ -160,7 +160,7 @@ procedure List.80 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_g
             dec List.440;
             ret List.441;
     in
-    jump List.575 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20;
+    jump List.575 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
 
 procedure List.80 (#Derived_gen.21, #Derived_gen.22, #Derived_gen.23, #Derived_gen.24, #Derived_gen.25):
     joinpoint List.628 List.440 List.441 List.442 List.443 List.444:
@@ -349,10 +349,6 @@ procedure TotallyNotJson.189 (TotallyNotJson.1267, TotallyNotJson.192):
             ret TotallyNotJson.1292;
     
 
-procedure TotallyNotJson.2 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
-
 procedure TotallyNotJson.215 (TotallyNotJson.216, TotallyNotJson.217):
     let TotallyNotJson.1238 : List U8 = CallByName TotallyNotJson.27 TotallyNotJson.217;
     let TotallyNotJson.1237 : List U8 = CallByName List.8 TotallyNotJson.216 TotallyNotJson.1238;
@@ -511,9 +507,13 @@ procedure TotallyNotJson.32 (TotallyNotJson.262, TotallyNotJson.263):
     let TotallyNotJson.1173 : {Str, List Str} = CallByName Encode.23 TotallyNotJson.1174;
     ret TotallyNotJson.1173;
 
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret TotallyNotJson.1172;
+
 procedure Test.0 ():
     let Test.12 : Str = "foo";
-    let Test.11 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.2;
+    let Test.11 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
     let Test.10 : List U8 = CallByName Encode.26 Test.12 Test.11;
     let Test.2 : [C {U64, U8}, C Str] = CallByName Str.9 Test.10;
     let Test.7 : U8 = 1i64;

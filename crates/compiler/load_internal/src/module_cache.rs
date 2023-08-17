@@ -85,6 +85,7 @@ impl Default for ModuleCache<'_> {
             ENCODE,
             DECODE,
             HASH,
+            INSPECT,
             JSON,
         }
 

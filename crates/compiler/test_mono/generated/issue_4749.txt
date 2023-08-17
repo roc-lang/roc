@@ -259,7 +259,7 @@ procedure Str.9 (Str.79):
 
 procedure Test.3 ():
     let Test.0 : List U8 = Array [82i64, 111i64, 99i64];
-    let Test.8 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.2;
+    let Test.8 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
     inc Test.0;
     let Test.1 : [C [C List U8, C ], C Str] = CallByName Decode.27 Test.0 Test.8;
     let Test.7 : Str = "Roc";
@@ -267,14 +267,10 @@ procedure Test.3 ():
     let Test.5 : Int1 = CallByName Bool.11 Test.1 Test.6;
     dec Test.7;
     expect Test.5;
-    dec Test.0;
     dec Test.1;
+    dec Test.0;
     let Test.4 : {} = Struct {};
     ret Test.4;
-
-procedure TotallyNotJson.2 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
 
 procedure TotallyNotJson.525 (TotallyNotJson.526, TotallyNotJson.1175):
     joinpoint TotallyNotJson.1458:
@@ -285,8 +281,8 @@ procedure TotallyNotJson.525 (TotallyNotJson.526, TotallyNotJson.1175):
         inc TotallyNotJson.529;
         let TotallyNotJson.1323 : Int1 = CallByName List.1 TotallyNotJson.529;
         if TotallyNotJson.1323 then
-            dec TotallyNotJson.529;
             dec TotallyNotJson.530;
+            dec TotallyNotJson.529;
             let TotallyNotJson.1326 : {} = Struct {};
             let TotallyNotJson.1325 : [C {}, C Str] = TagId(0) TotallyNotJson.1326;
             let TotallyNotJson.1324 : {List U8, [C {}, C Str]} = Struct {TotallyNotJson.526, TotallyNotJson.1325};
@@ -313,8 +309,8 @@ procedure TotallyNotJson.525 (TotallyNotJson.526, TotallyNotJson.1175):
                 let TotallyNotJson.1181 : {List U8, [C {}, C Str]} = Struct {TotallyNotJson.530, TotallyNotJson.1182};
                 ret TotallyNotJson.1181;
             else
-                dec TotallyNotJson.533;
                 dec TotallyNotJson.530;
+                dec TotallyNotJson.533;
                 let TotallyNotJson.1185 : {} = Struct {};
                 let TotallyNotJson.1184 : [C {}, C Str] = TagId(0) TotallyNotJson.1185;
                 let TotallyNotJson.1183 : {List U8, [C {}, C Str]} = Struct {TotallyNotJson.526, TotallyNotJson.1184};
@@ -839,3 +835,7 @@ procedure TotallyNotJson.70 (#Derived_gen.5):
             ret TotallyNotJson.1276;
     in
     jump TotallyNotJson.1198 #Derived_gen.5;
+
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret TotallyNotJson.1172;

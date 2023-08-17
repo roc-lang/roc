@@ -136,22 +136,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.599 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.599;
 
-procedure List.80 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
-    joinpoint List.574 List.440 List.441 List.442 List.443 List.444:
-        let List.576 : Int1 = CallByName Num.22 List.443 List.444;
-        if List.576 then
-            let List.583 : U8 = CallByName List.66 List.440 List.443;
-            let List.577 : List U8 = CallByName List.145 List.441 List.583 List.442;
-            let List.580 : U64 = 1i64;
-            let List.579 : U64 = CallByName Num.51 List.443 List.580;
-            jump List.574 List.440 List.577 List.442 List.579 List.444;
-        else
-            dec List.440;
-            ret List.441;
-    in
-    jump List.574 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
-
-procedure List.80 (#Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_gen.22, #Derived_gen.23):
+procedure List.80 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20):
     joinpoint List.554 List.440 List.441 List.442 List.443 List.444:
         let List.556 : Int1 = CallByName Num.22 List.443 List.444;
         if List.556 then
@@ -165,7 +150,7 @@ procedure List.80 (#Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_g
             dec List.440;
             ret List.441;
     in
-    jump List.554 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23;
+    jump List.554 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20;
 
 procedure List.80 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.6, #Derived_gen.7):
     joinpoint List.627 List.440 List.441 List.442 List.443 List.444:
@@ -192,6 +177,21 @@ procedure List.80 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.
             ret List.628;
     in
     jump List.627 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7;
+
+procedure List.80 (#Derived_gen.8, #Derived_gen.9, #Derived_gen.10, #Derived_gen.11, #Derived_gen.12):
+    joinpoint List.574 List.440 List.441 List.442 List.443 List.444:
+        let List.576 : Int1 = CallByName Num.22 List.443 List.444;
+        if List.576 then
+            let List.583 : U8 = CallByName List.66 List.440 List.443;
+            let List.577 : List U8 = CallByName List.145 List.441 List.583 List.442;
+            let List.580 : U64 = 1i64;
+            let List.579 : U64 = CallByName Num.51 List.443 List.580;
+            jump List.574 List.440 List.577 List.442 List.579 List.444;
+        else
+            dec List.440;
+            ret List.441;
+    in
+    jump List.574 #Derived_gen.8 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12;
 
 procedure List.93 (List.437, List.438, List.439):
     let List.552 : U64 = 0i64;
@@ -351,10 +351,6 @@ procedure TotallyNotJson.189 (TotallyNotJson.1270, TotallyNotJson.192):
             ret TotallyNotJson.1295;
     
 
-procedure TotallyNotJson.2 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
-
 procedure TotallyNotJson.215 (TotallyNotJson.216, TotallyNotJson.217):
     let TotallyNotJson.1241 : List U8 = CallByName TotallyNotJson.27 TotallyNotJson.217;
     let TotallyNotJson.1240 : List U8 = CallByName List.8 TotallyNotJson.216 TotallyNotJson.1241;
@@ -513,8 +509,12 @@ procedure TotallyNotJson.32 (TotallyNotJson.262, TotallyNotJson.263):
     let TotallyNotJson.1214 : {Str, List Str} = CallByName Encode.23 TotallyNotJson.1215;
     ret TotallyNotJson.1214;
 
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
+    ret TotallyNotJson.1172;
+
 procedure Test.0 ():
     let Test.12 : {Str, Str} = CallByName Test.3;
-    let Test.13 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.2;
+    let Test.13 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
     let Test.11 : List U8 = CallByName Encode.26 Test.12 Test.13;
     ret Test.11;

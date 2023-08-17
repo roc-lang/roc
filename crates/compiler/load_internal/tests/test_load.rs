@@ -940,8 +940,8 @@ fn issue_2863_module_type_does_not_exist() {
                         Did you mean one of these?
 
                             Decoding
-                            Result
                             Dict
+                            Result
                             DecodeError
                         "
                       )
