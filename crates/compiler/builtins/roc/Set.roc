@@ -60,13 +60,13 @@ hashSet = \hasher, @Set inner -> Hash.hash hasher inner
 ##
 ## expect countValues == 0
 ## ```
-empty : {} -> Set k where k implements Hash & Eq
+empty : {} -> Set *
 empty = \{} -> @Set (Dict.empty {})
 
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Set k where k implements Hash & Eq
+withCapacity : Nat -> Set *
 withCapacity = \cap ->
     @Set (Dict.withCapacity cap)
 

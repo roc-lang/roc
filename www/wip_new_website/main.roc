@@ -1,13 +1,13 @@
 app "roc-website"
-    packages { pf: "../../examples/static-site-gen/platform/main.roc" }    
+    packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, footer, br, div, main, text, nav, a, link, meta },
+        pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta },
         pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset },
     ]
     provides [transformFileContent] to pf
 
-pageData =  
-    Dict.empty {} 
+pageData =
+    Dict.empty {}
     |> Dict.insert "community.html" { title: "Community", description: "The Roc community" }
     |> Dict.insert "design_goals.html" { title: "Design Goals", description: "Roc's design goals" }
     |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
@@ -22,11 +22,11 @@ getPage = \current ->
     |> Result.withDefault { title: "", description: ""}
 
 getTitle : Str -> Str
-getTitle = \current -> 
+getTitle = \current ->
     getPage current |> .title
 
 getDescription : Str -> Str
-getDescription = \current -> 
+getDescription = \current ->
     getPage current |> .description
 
 transformFileContent : Str, Str -> Str
@@ -78,7 +78,7 @@ viewNavbar =
         ],
     ]
 
-rocLogo = 
+rocLogo =
     (Html.element "svg") [
             (Html.attribute "viewBox") "0 -6 51 58",
             (Html.attribute "xmlns") "http://www.w3.org/2000/svg",
