@@ -1060,7 +1060,7 @@ You can choose any name you like for a type variable, but it has to be lowercase
 
 You can tell some interesting things about functions based on the type parameters involved. For example, any function that returns `List *` definitely always returns an empty list. You don't need to look at the rest of the type annotation, or even the function's implementation! The only way to have a function that returns `List *` is if it returns an empty list.
 
-Similarly, the only way to have a function whose type is `a -> a` is if the function's implementation returns its argument without modifying it in any way. This is known as [the identity function](https://en.wikipedia.org/wiki/Identity_function).
+Similarly, the only way to write a function whose type is `a -> a` is if the function's implementation returns its argument without modifying it in any way. You can think about it this way: The function must accept any value you could think of, and return an object of the same type, without knowing what exactly it will receive! There's only one way to do it in Roc, it's known as [the identity function](https://en.wikipedia.org/wiki/Identity_function).
 
 ### [Tag Union Types](#tag-union-types) {#tag-union-types}
 
