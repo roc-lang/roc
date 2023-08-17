@@ -1,7 +1,7 @@
 
 # Roc
 
-Work in progress! 
+A work-in-progress programming language that aims to be fast, friendly, and functional.
 
 <!-- TODO turn these into nice buttons -->
 - [tutorial](/wip/tutorial.html)
@@ -10,27 +10,26 @@ Work in progress!
 
 - [help / group chat](https://roc.zulipchat.com), we're friendly!
 
-## Goals 
-
+## Goals
 <section class="home-goals-container">
     <div class="home-goals-column">
-      <h3 class="home-goals-title">Fast</h3>
-      <p class="home-goals-description">Runs fast, compiles fast. <br><a class="home-goals-learn-more" href="/design_goals.html#fast">Learn more</a></p>
+      <h3 class="home-goals-title">Fast</h4>
+      <p class="home-goals-description">Roc aims to help you make delightful software, and delightful software feels snappy. The Roc compiler should run fast, and the programs it produces should also be able to run fast. The goal is not to make the fastest possible language, but it is a goal to generally outperform mainstream garbage-collected languages.<a class="home-goals-learn-more" href="/design_goals.html#fast">Learn more</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Friendly</h3>
-      <p class="home-goals-description">User-friendly language, friendly community. <br><a class="home-goals-learn-more" href="/design_goals.html#friendly">Learn more</a></p>
+      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. This involves the set of tools Roc ships with, how helpful those tools are, as well as the values of the community of Roc programmers around the world.<a class="home-goals-learn-more" href="/design_goals.html#friendly">Learn more</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Functional</h3>
-      <p class="home-goals-description">Pure functional programming, keep it simple.<br><a class="home-goals-learn-more" href="/design_goals.html#functional">Learn more</a></p>
+      <p class="home-goals-description">Roc is a purely functional programming language. All Roc values are semantically immutable constants, and all effects are asynchronous. These create helpful guarantees and can make testing effects faster and more reliable. <a class="home-goals-learn-more" href="/design_goals.html#functional">Learn more</a></p>
 </section>
 
 ## Try Roc
 
 <!-- TODO WebREPL to go here -->
 
-The code below shows a Roc application which prints `Hello World!` to the terminal. It does this using the [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) platform. 
+The code below shows a Roc application which prints `Hello World!` to the terminal. It does this using the [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) platform.
 
 ```roc
 app "hello-world"
@@ -38,7 +37,7 @@ app "hello-world"
     imports [pf.Stdout]
     provides [main] to pf
 
-main = 
+main =
     Stdout.line "Hello, World!"
 ```
 
