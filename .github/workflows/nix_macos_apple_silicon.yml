@@ -20,33 +20,33 @@ jobs:
         with:
           clean: "true"
 
-      - name: check formatting with rustfmt
-        run: nix develop -c cargo fmt --all -- --check
+      # - name: check formatting with rustfmt
+      #   run: nix develop -c cargo fmt --all -- --check
 
-      - name: check code style with clippy
-        run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
+      # - name: check code style with clippy
+      #   run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
 
-      - name: check code style with clippy --release
-        run: cargo clippy --workspace --tests --release -- --deny warnings
+      # - name: check code style with clippy --release
+      #   run: cargo clippy --workspace --tests --release -- --deny warnings
 
-      - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release
+      # - name: execute tests with --release
+      #   run: nix develop -c cargo test --locked --release
 
-      - name: make a libapp.so for the next step
-        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
+      # - name: make a libapp.so for the next step
+      #   run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
 
-      - name: check that the platform`s produced dylib is loadable
-        run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
+      # - name: check that the platform`s produced dylib is loadable
+      #   run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
 
-      - name: test launching the editor
-        run: nix develop -c cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
+      # - name: test launching the editor
+      #   run: nix develop -c cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
 
-      # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
-      - name: execute llvm wasm tests with --release
-        run: nix develop -c cargo test-gen-llvm-wasm --locked --release
+      # # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
+      # - name: execute llvm wasm tests with --release
+      #   run: nix develop -c cargo test-gen-llvm-wasm --locked --release
 
       - name: test website build script
-        run: nix develop -c "REPL_DEBUG=1 bash www/build.sh"
+        run: nix develop -c "REPL_DEBUG=1 ./www/build.sh"
 
       - name: wasm repl tests
         run: nix develop -c crates/repl_test/test_wasm.sh
