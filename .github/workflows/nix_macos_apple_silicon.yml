@@ -48,7 +48,7 @@ jobs:
       - name: test website build script
         run: |
           ls www
-          sed -i "" '1a\REPL_DEBUG=1' www/build.sh
+          awk 'NR==1 {print; print "REPL_DEBUG=1"; next} 1' www/build.sh > tmpfile.txt && mv tmpfile.txt www/build.sh
           cat www/build.sh
           nix develop -c bash www/build.sh
 
