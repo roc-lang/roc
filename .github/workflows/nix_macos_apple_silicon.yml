@@ -47,7 +47,6 @@ jobs:
 
       - name: set env var and test website build script
         run: |
-          awk 'NR==1 {print; print "REPL_DEBUG=1"; next} 1' www/build.sh > tmpfile.txt && mv tmpfile.txt www/build.sh
           nix develop -c bash www/build.sh
 
       - name: wasm repl tests
