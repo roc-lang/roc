@@ -40,10 +40,9 @@ run_zig_test=true
 if [[ "$(uname)" == "Darwin" ]]; then
     macos_version=$(sw_vers -productVersion)
     major_version=$(echo $macos_version | cut -d. -f1)
-    minor_version=$(echo $macos_version | cut -d. -f2)
 
     # If macOS 13, then set the flag to skip
-    if [[ $major_version -eq 10 && $minor_version -eq 13 ]]; then
+    if [[ $major_version -eq 13 ]]; then
         echo "Skipping zig test on macOS 13 due to https://github.com/roc-lang/roc/issues/5590..."
         run_zig_test=false
     fi
