@@ -212,6 +212,7 @@ const BOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Box.dat")) as &[_];
 const ENCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Encode.dat")) as &[_];
 const DECODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Decode.dat")) as &[_];
 const HASH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Hash.dat")) as &[_];
+const INSPECT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Inspect.dat")) as &[_];
 
 fn deserialize_help(bytes: &[u8]) -> TypeState {
     let (state, _offset) = TypeState::deserialize(bytes);
@@ -242,6 +243,7 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
         output.insert(ModuleId::DECODE, deserialize_help(DECODE));
 
         output.insert(ModuleId::HASH, deserialize_help(HASH));
+        output.insert(ModuleId::INSPECT, deserialize_help(INSPECT));
     }
 
     output

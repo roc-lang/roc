@@ -1431,6 +1431,7 @@ define_builtins! {
         80 LIST_ITER_HELP: "iterHelp"
         81 LIST_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
         82 LIST_UPDATE: "update"
+        83 LIST_WALK_WITH_INDEX: "walkWithIndex"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1588,9 +1589,49 @@ define_builtins! {
         20 HASH_HASH_LIST: "hashList"
         21 HASH_HASH_UNORDERED: "hashUnordered"
     }
-    14 JSON: "TotallyNotJson" => {
+    14 INSPECT: "Inspect" => {
+        0 INSPECT_INSPECT_ABILITY: "Inspect" exposed_type=true
+        1 INSPECT_INSPECTOR: "Inspector" exposed_type=true
+        2 INSPECT_INSPECT_FORMATTER: "InspectFormatter" exposed_type=true
+        3 INSPECT_ELEM_WALKER: "ElemWalker" exposed_type=true
+        4 INSPECT_KEY_VAL_WALKER: "KeyValWalker" exposed_type=true
+        5 INSPECT_INSPECT: "inspect"
+        6 INSPECT_INIT: "init"
+        7 INSPECT_LIST: "list"
+        8 INSPECT_SET: "set"
+        9 INSPECT_DICT: "dict"
+        10 INSPECT_TAG: "tag"
+        11 INSPECT_TUPLE: "tuple"
+        12 INSPECT_RECORD: "record"
+        13 INSPECT_BOOL: "bool"
+        14 INSPECT_STR: "str"
+        15 INSPECT_OPAQUE: "opaque"
+        16 INSPECT_U8: "u8"
+        17 INSPECT_I8: "i8"
+        18 INSPECT_U16: "u16"
+        19 INSPECT_I16: "i16"
+        20 INSPECT_U32: "u32"
+        21 INSPECT_I32: "i32"
+        22 INSPECT_U64: "u64"
+        23 INSPECT_I64: "i64"
+        24 INSPECT_U128: "u128"
+        25 INSPECT_I128: "i128"
+        26 INSPECT_F32: "f32"
+        27 INSPECT_F64: "f64"
+        28 INSPECT_DEC: "dec"
+        29 INSPECT_CUSTOM: "custom"
+        30 INSPECT_APPLY: "apply"
+        31 INSPECT_TO_INSPECTOR: "toInspector"
+    }
+    15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"
+        1 JSON_FIELD_NAME_MAPPING: "FieldNameMapping"
+        2 JSON_NUMBER_STATE: "NumberState"
+        3 JSON_STRING_STATE: "StringState"
+        4 JSON_ARRAY_OPENING_STATE: "ArrayOpeningState"
+        5 JSON_ARRAY_CLOSING_STATE: "ArrayClosingState"
+        6 JSON_OBJECT_STATE: "ObjectState"
     }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

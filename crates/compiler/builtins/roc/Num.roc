@@ -540,7 +540,7 @@ bytesToU16 = \bytes, index ->
     # we need at least 1 more byte
     offset = 1
 
-    if index + offset < List.len bytes then
+    if Num.addSaturated index offset < List.len bytes then
         Ok (bytesToU16Lowlevel bytes index)
     else
         Err OutOfBounds
@@ -550,7 +550,7 @@ bytesToU32 = \bytes, index ->
     # we need at least 3 more bytes
     offset = 3
 
-    if index + offset < List.len bytes then
+    if Num.addSaturated index offset < List.len bytes then
         Ok (bytesToU32Lowlevel bytes index)
     else
         Err OutOfBounds
@@ -560,7 +560,7 @@ bytesToU64 = \bytes, index ->
     # we need at least 7 more bytes
     offset = 7
 
-    if index + offset < List.len bytes then
+    if Num.addSaturated index offset < List.len bytes then
         Ok (bytesToU64Lowlevel bytes index)
     else
         Err OutOfBounds
@@ -570,7 +570,7 @@ bytesToU128 = \bytes, index ->
     # we need at least 15 more bytes
     offset = 15
 
-    if index + offset < List.len bytes then
+    if Num.addSaturated index offset < List.len bytes then
         Ok (bytesToU128Lowlevel bytes index)
     else
         Err OutOfBounds

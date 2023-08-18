@@ -580,7 +580,9 @@ impl<'a> RawFunctionLayout<'a> {
                 cacheable(Ok(Self::ZeroArgumentThunk(Layout::usize(env.target_info))))
             }
 
-            Alias(symbol, _, _, _) if symbol.is_builtin() => {
+            Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var),
+
+            Alias(symbol, _, var, _) if symbol.is_builtin() => {
                 Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk)
             }
 
