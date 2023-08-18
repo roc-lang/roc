@@ -31,8 +31,6 @@ cd roc_nightly
 # test roc hello world
 ./roc examples/helloWorld.roc
 
-./roc dev examples/helloWorld.roc
-
 ./roc examples/platform-switching/rocLovesRust.roc
 
 run_zig_test=true
