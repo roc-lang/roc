@@ -9,7 +9,7 @@ concurrency:
   
 # use .tar.gz for quick testing
 env:
-  ARCHIVE_FORMAT: .tar.br
+  ARCHIVE_FORMAT: .tar.gz
 
 jobs:
   fetch-releases:
@@ -194,8 +194,17 @@ jobs:
           sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
           
           cd ..
-          ./roc_nightly/roc build examples/http-get.roc
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
+          
+      #./roc_nightly/roc build examples/http-get.roc
+      #curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
+
+      # temp for debugging
+      - name: Save basic-cli-platform 
+        uses: actions/upload-artifact@v3
+        with:
+          name: basic-cli-platform-debug
+          path: |
+            basic-cli-platform
 
       - run: sudo apt install -y expect
 
