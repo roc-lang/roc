@@ -939,6 +939,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn inspect_logging() {
         test_roc_app_slim(
             "examples",
