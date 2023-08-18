@@ -29,11 +29,29 @@ mv roc_nightly* roc_nightly
 cd roc_nightly
 
 # test roc hello world
-./roc examples/helloWorld.roc 
+./roc examples/helloWorld.roc
+
+./roc dev examples/helloWorld.roc
 
 ./roc examples/platform-switching/rocLovesRust.roc
 
-./roc examples/platform-switching/rocLovesZig.roc
+run_zig_test=true
+# Detect macOS version
+if [[ "$(uname)" == "Darwin" ]]; then
+    macos_version=$(sw_vers -productVersion)
+    major_version=$(echo $macos_version | cut -d. -f1)
+    minor_version=$(echo $macos_version | cut -d. -f2)
+
+    # If macOS 13, then set the flag to skip
+    if [[ $major_version -eq 10 && $minor_version -eq 13 ]]; then
+        echo "Skipping zig test on macOS 13 due to https://github.com/roc-lang/roc/issues/5590..."
+        run_zig_test=false
+    fi
+fi
+
+if $run_zig_test ; then
+    ./roc examples/platform-switching/rocLovesZig.roc
+fi
 
 ./roc examples/platform-switching/rocLovesC.roc
 
