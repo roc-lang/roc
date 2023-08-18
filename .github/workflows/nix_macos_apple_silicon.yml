@@ -48,7 +48,7 @@ jobs:
       - name: test website build script
         run: |
           ls www
-          sed -i "1aREPL_DEBUG=1" www/build.sh
+          sed -i "" "1aREPL_DEBUG=1" www/build.sh
           cat www/build.sh
           nix develop -c bash www/build.sh
 
