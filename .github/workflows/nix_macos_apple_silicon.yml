@@ -49,7 +49,7 @@ jobs:
         run: |
           sed -i '1aREPL_DEBUG=1' ./www/build.sh
           cat ./www/build.sh
-          nix develop -c ./www/build.sh
+          nix develop -c bash www/build.sh
 
       - name: wasm repl tests
         run: nix develop -c crates/repl_test/test_wasm.sh
