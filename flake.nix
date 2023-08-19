@@ -56,6 +56,7 @@
             Foundation
             Metal
             Security
+            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
           ]);
 
         # For debugging LLVM IR
