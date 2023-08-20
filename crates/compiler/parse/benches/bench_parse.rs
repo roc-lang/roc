@@ -10,13 +10,12 @@ pub fn parse_benchmark(c: &mut Criterion) {
         path.push("cli");
         path.push("false-interpreter");
         path.push("False.roc");
-        let src = std::fs::read_to_string(&path).unwrap();
+        let src = State::read_file(&path).unwrap();
 
         b.iter(|| {
             let arena = Bump::new();
 
-            let (_actual, state) =
-                module::parse_header(&arena, State::new(src.as_bytes())).unwrap();
+            let (_actual, state) = module::parse_header(&arena, State::new(&src)).unwrap();
 
             let min_indent = 0;
             let res = module_defs()
@@ -35,13 +34,12 @@ pub fn parse_benchmark(c: &mut Criterion) {
         path.push("builtins");
         path.push("roc");
         path.push("Num.roc");
-        let src = std::fs::read_to_string(&path).unwrap();
+        let src = State::read_file(&path).unwrap();
 
         b.iter(|| {
             let arena = Bump::new();
 
-            let (_actual, state) =
-                module::parse_header(&arena, State::new(src.as_bytes())).unwrap();
+            let (_actual, state) = module::parse_header(&arena, State::new(&src)).unwrap();
 
             let min_indent = 0;
             let res = module_defs()

@@ -64,7 +64,7 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
     for file in files {
         let arena = Bump::new();
 
-        let src = std::fs::read_to_string(&file).unwrap();
+        let src = State::read_file(&file).unwrap();
 
         let ast = arena.alloc(parse_all(&arena, &src).unwrap_or_else(|e| {
             user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
@@ -72,18 +72,20 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
         let mut buf = Buf::new_in(&arena);
         fmt_all(&mut buf, ast);
 
-        let reparsed_ast = arena.alloc(parse_all(&arena, buf.as_str()).unwrap_or_else(|e| {
-            let mut fail_file = file.clone();
-            fail_file.set_extension("roc-format-failed");
-            std::fs::write(&fail_file, buf.as_str()).unwrap();
-            internal_error!(
-                "Formatting bug; formatted code isn't valid\n\n\
+        let reparsed_ast = arena.alloc(parse_all(&arena, buf.as_str().as_bytes()).unwrap_or_else(
+            |e| {
+                let mut fail_file = file.clone();
+                fail_file.set_extension("roc-format-failed");
+                std::fs::write(&fail_file, buf.as_str()).unwrap();
+                internal_error!(
+                    "Formatting bug; formatted code isn't valid\n\n\
                 I wrote the incorrect result to this file for debugging purposes:\n{}\n\n\
                 Parse error was: {:?}\n\n",
-                fail_file.display(),
-                e
-            );
-        }));
+                    fail_file.display(),
+                    e
+                );
+            },
+        ));
 
         let ast_normalized = ast.remove_spaces(&arena);
         let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
@@ -138,7 +140,7 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
         match mode {
             FormatMode::CheckOnly => {
                 // If we notice that this file needs to be formatted, return early
-                if buf.as_str() != src {
+                if buf.as_str().as_bytes() != src {
                     return Err("One or more files need to be reformatted.".to_string());
                 }
             }
@@ -153,9 +155,9 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
     Ok(())
 }
 
-fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
-        .map_err(|e| SyntaxError::Header(e.problem))?;
+fn parse_all<'a>(arena: &'a Bump, src: &'a [u8]) -> Result<Ast<'a>, SyntaxError<'a>> {
+    let (module, state) =
+        module::parse_header(arena, State::new(src)).map_err(|e| SyntaxError::Header(e.problem))?;
 
     let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
 

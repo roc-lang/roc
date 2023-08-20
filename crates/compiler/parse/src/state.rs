@@ -1,5 +1,5 @@
 use roc_region::all::{Position, Region};
-use std::fmt;
+use std::{fmt, fs::File, io, path::Path};
 
 use crate::parser::Progress;
 
@@ -128,6 +128,29 @@ impl<'a> State<'a> {
     /// and thus wanting a Region while not having access to loc().
     pub fn len_region(&self, length: u32) -> Region {
         Region::new(self.pos(), self.pos().bump_column(length))
+    }
+
+    pub fn read_file(path: &Path) -> io::Result<Vec<u8>> {
+        use std::io::Read;
+
+        let mut file = File::open(path)?;
+        let file_len = file.metadata()?.len() as usize;
+        let align = 16; // An alignment of 16 is necessary for certain SIMD instructions in parsing.
+        let layout = std::alloc::Layout::from_size_align(file_len, align).unwrap();
+        let buffer_ptr = unsafe { std::alloc::alloc(layout) };
+
+        if buffer_ptr.is_null() {
+            return Err(io::Error::new(io::ErrorKind::Other, "Allocation failed"));
+        }
+
+        // vec now owns the allocated memory and will deallocate it when dropped.
+        // We set the vec's length to be file_len because we're about to read_exact that
+        // many bytes into it.
+        let mut vec = unsafe { Vec::from_raw_parts(buffer_ptr, file_len, file_len) };
+
+        file.read_exact(vec.as_mut_slice())?;
+
+        Ok(vec)
     }
 }
 

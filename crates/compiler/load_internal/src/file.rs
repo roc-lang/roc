@@ -3238,7 +3238,7 @@ fn load_package_from_disk<'a>(
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = module_start_time;
-    let read_result = fs::read(filename);
+    let read_result = roc_parse::state::State::read_file(filename);
     let file_io_duration = file_io_start.elapsed();
 
     match read_result {
@@ -4038,7 +4038,7 @@ fn load_filename<'a>(
     module_start_time: Instant,
 ) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let file_io_start = Instant::now();
-    let file = fs::read(&filename);
+    let file = roc_parse::state::State::read_file(&filename);
     let file_io_duration = file_io_start.elapsed();
 
     match file {
