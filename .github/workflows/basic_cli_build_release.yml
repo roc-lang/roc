@@ -195,16 +195,8 @@ jobs:
           
           cd ..
           
-      #./roc_nightly/roc build examples/http-get.roc
-      #curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
-
-      # temp for debugging
-      - name: Save basic-cli-platform 
-        uses: actions/upload-artifact@v3
-        with:
-          name: basic-cli-platform-debug
-          path: |
-            basic-cli-platform
+          ./roc_nightly/roc build examples/http-get.roc --prebuilt-platform
+          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
 
       - run: sudo apt install -y expect
 
