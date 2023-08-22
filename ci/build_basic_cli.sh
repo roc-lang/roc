@@ -11,7 +11,7 @@ if [ "$(uname -s)" == "Linux" ]; then
     if [ "$(uname -m)" == "x86_64" ]; then
         rustup target add x86_64-unknown-linux-musl
     elif [ "$(uname -m)" == "aarch64" ]; then
-        rustup target add aarch64-unknown-linux-gnu
+        rustup target add aarch64-unknown-linux-musl
     fi
     cd ../..
 fi

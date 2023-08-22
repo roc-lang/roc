@@ -60,9 +60,9 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
 
-      - name: build basic-cli with surgical linker and also with legacy linker
+      - name: build basic-cli
         env:
-          CARGO_BUILD_TARGET: aarch64-unknown-linux-gnu
+          CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
         run: ./ci/build_basic_cli.sh linux_arm64
 
       - name: Save .o file 
@@ -73,7 +73,7 @@ jobs:
             basic-cli/src/linux-arm64.o
 
   build-macos-x86_64-files:
-    runs-on: [macos-11] # I expect the generated files to work on macOS 12
+    runs-on: [macos-11] # I expect the generated files to work on macOS 12 and 13
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
