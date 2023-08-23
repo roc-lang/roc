@@ -3965,7 +3965,7 @@ fn build_specialized_proc<'a>(
                     }
                 }
                 Ordering::Less => panic!(
-                    "more argument symbols than arguments (according to the layout) for {proc_name:?}"
+                    "more argument symbols than arguments (according to the layout) for {proc_name:?}. Pattern symbols: {:?}\n\nPattern layouts: {:?}", pattern_symbols, pattern_layouts_len,
                 ),
             }
         }

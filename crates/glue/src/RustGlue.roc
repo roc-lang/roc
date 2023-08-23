@@ -1,7 +1,10 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
     imports [
-        pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId },
+        pf.Types.{ Types },
+        pf.Shape.{ Shape, RocFn },
+        pf.File.{ File },
+        pf.TypeId.{ TypeId },
         "../static/Cargo.toml" as rocAppCargoToml : Str,
         "../../roc_std/Cargo.toml" as rocStdCargoToml : Str,
         "../../roc_std/src/lib.rs" as rocStdLib : Str,
@@ -39,18 +42,17 @@ makeGlue = \typesByArch ->
 
 ## These are always included, and don't depend on the specifics of the app.
 staticFiles : List File
-staticFiles =
-    [
-        { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
-        { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
-        { name: "roc_std/src/lib.rs", content: rocStdLib },
-        { name: "roc_std/src/roc_box.rs", content: rocStdBox },
-        { name: "roc_std/src/roc_list.rs", content: rocStdList },
-        { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
-        { name: "roc_std/src/roc_set.rs", content: rocStdSet },
-        { name: "roc_std/src/roc_str.rs", content: rocStdStr },
-        { name: "roc_std/src/storage.rs", content: rocStdStorage },
-    ]
+staticFiles = [
+    { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
+    { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
+    { name: "roc_std/src/lib.rs", content: rocStdLib },
+    { name: "roc_std/src/roc_box.rs", content: rocStdBox },
+    { name: "roc_std/src/roc_list.rs", content: rocStdList },
+    { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
+    { name: "roc_std/src/roc_set.rs", content: rocStdSet },
+    { name: "roc_std/src/roc_str.rs", content: rocStdStr },
+    { name: "roc_std/src/storage.rs", content: rocStdStorage },
+]
 
 convertTypesToFile : Types -> File
 convertTypesToFile = \types ->
@@ -339,7 +341,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     buf
     |> generateDeriveStr types enumType ExcludeDebug
     |> Str.concat "#[repr(u\(reprBits))]\npub enum \(escapedName) {\n"
-    |> \b -> walkWithIndex tags b generateEnumTags
+    |> \b -> List.walkWithIndex tags b generateEnumTags
     |>
     # Enums require a custom debug impl to ensure naming is identical on all platforms.
     Str.concat
@@ -354,7 +356,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
 
-generateEnumTags = \accum, index, name ->
+generateEnumTags = \accum, name, index ->
     indexStr = Num.toStr index
 
     Str.concat accum "\(indent)\(name) = \(indexStr),\n"
@@ -845,6 +847,32 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                 None ->
                     []
 
+        fieldGetters =
+            List.walk payloadFields { i: 0, accum: "" } \{ i, accum }, fieldTypeId ->
+                fieldTypeName = typeName types fieldTypeId
+                fieldIndex = Num.toStr i
+
+                {
+                    i: i + 1,
+                    accum:
+                    """
+                    \(accum)
+                        pub fn get_\(tagName)_f\(fieldIndex)(&self) -> &\(fieldTypeName) {
+                            debug_assert!(self.is_\(tagName)());
+
+                            // extern "C" {
+                            //     fn foobar(tag_id: u16, field_index: usize) -> usize;
+                            // }
+
+                            // let offset = unsafe { foobar(\(fieldIndex)) };
+                            let offset = 0;
+                            unsafe { &*self.unmasked_pointer().add(offset).cast() }
+                        }
+
+                    """,
+                }
+            |> .accum
+
         payloadFieldNames =
             commaSeparated "" payloadFields \_, i ->
                 n = Num.toStr i
@@ -896,6 +924,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
 
                     Self((ptr as usize | tag_id as usize) as *mut _)
                 }
+            \(fieldGetters)
 
                 pub fn get_\(tagName)(mut self) -> \(escapedName)_\(tagName) {
                     debug_assert!(self.is_\(tagName)());
@@ -1040,8 +1069,6 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> List.mapWithIndex hashCase
         |> Str.joinWith "\n"
 
-
-
     hashImpl =
         if canSupportPartialEqOrd types (Types.shape types id) then
             """
@@ -1144,7 +1171,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                 }
             }
 
-            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_\(escapedName)> {
+            fn unmasked_pointer(&self) -> *mut union_\(escapedName) {
                 debug_assert!(!self.0.is_null());
 
                 let mask = match std::mem::size_of::<usize>() {
@@ -1153,7 +1180,11 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                     _ => unreachable!(),
                 };
 
-                let ptr = ((self.0 as usize) & mask) as *mut union_\(escapedName);
+                ((self.0 as usize) & mask) as *mut union_\(escapedName)
+            }
+
+            unsafe fn ptr_read_union(&self) -> core::mem::ManuallyDrop<union_\(escapedName)> {
+                let ptr = self.unmasked_pointer();
 
                 core::mem::ManuallyDrop::new(unsafe { std::ptr::read(ptr) })
             }
@@ -1803,12 +1834,11 @@ canDeriveCopy = \types, type ->
 cannotSupportDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
-        RocStr | Bool | Num _  -> Bool.false
+        RocStr | Bool | Num _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
             cannotSupportDefault types (Types.shape types id)
 
         TagUnionPayload { fields: HasClosure _ } -> Bool.true
-
         RocDict keyId valId ->
             cannotSupportCopy types (Types.shape types keyId)
             || cannotSupportCopy types (Types.shape types valId)
@@ -1969,15 +1999,6 @@ roundUpToAlignment = \width, alignment ->
             else
                 width
 
-walkWithIndex = \list, originalState, f ->
-    stateWithId =
-        List.walk list { id: 0nat, state: originalState } \{ id, state }, elem ->
-            nextState = f state id elem
-
-            { id: id + 1, state: nextState }
-
-    stateWithId.state
-
 archName = \arch ->
     when arch is
         Aarch32 ->
@@ -2090,7 +2111,6 @@ nextMultipleOf = \lhs, rhs ->
         0 -> lhs
         r -> lhs + (rhs - r)
 
-
 isUnit : Shape -> Bool
 isUnit = \shape ->
     when shape is
@@ -2099,23 +2119,18 @@ isUnit = \shape ->
 
 toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
 toArgStr = \args, types, fmt ->
-    answer = List.walk args { state: "", index: 0 } \{ state, index }, argId ->
-        newState =
-            shape = Types.shape types argId
+    List.walkWithIndex args "" \state, argId, index ->
+        shape = Types.shape types argId
 
-            # Drop `()` args; they aren't FFI-safe, and nothing will get passed anyway.
-            if isUnit shape then
-                state
+        # Drop `()` args; they aren't FFI-safe, and nothing will get passed anyway.
+        if isUnit shape then
+            state
+        else
+            argStr = fmt argId shape index
+
+            if Str.isEmpty state then
+                argStr # Don't prepend a comma if this is the first one
             else
-                argStr = fmt argId shape index
-
-                if Str.isEmpty state then
-                    argStr # Don't prepend a comma if this is the first one
-                else
-                    state
-                    |> Str.concat ", "
-                    |> Str.concat argStr
-
-        { state: newState, index: index + 1 }
-
-    answer.state
+                state
+                |> Str.concat ", "
+                |> Str.concat argStr

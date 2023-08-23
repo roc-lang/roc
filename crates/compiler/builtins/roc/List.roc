@@ -28,6 +28,7 @@ interface List
         map2,
         map3,
         product,
+        walkWithIndex,
         walkUntil,
         walkFrom,
         walkFromUntil,
@@ -391,7 +392,7 @@ repeat = \value, count ->
 repeatHelp : a, Nat, List a -> List a
 repeatHelp = \value, count, accum ->
     if count > 0 then
-        repeatHelp value (count - 1) (List.appendUnsafe accum value)
+        repeatHelp value (Num.subWrap count 1) (List.appendUnsafe accum value)
     else
         accum
 
@@ -405,7 +406,7 @@ reverse = \list ->
 
 reverseHelp = \list, left, right ->
     if left < right then
-        reverseHelp (List.swap list left right) (left + 1) (right - 1)
+        reverseHelp (List.swap list left right) (Num.addWrap left 1) (Num.subWrap right 1)
     else
         list
 
@@ -418,9 +419,9 @@ reverseHelp = \list, left, right ->
 join : List (List a) -> List a
 join = \lists ->
     totalLength =
-        List.walk lists 0 (\state, list -> state + List.len list)
+        List.walk lists 0 (\state, list -> Num.addWrap state (List.len list))
 
-    List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
+    List.walk lists (List.withCapacity totalLength) \state, list -> List.concat state list
 
 contains : List a, a -> Bool where a implements Eq
 contains = \list, needle ->
@@ -459,12 +460,33 @@ contains = \list, needle ->
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
-walk = \list, state, func ->
-    walkHelp : _, _ -> [Continue _, Break []]
-    walkHelp = \currentState, element -> Continue (func currentState element)
+walk = \list, init, func ->
+    walkHelp list init func 0 (List.len list)
 
-    when List.iterate list state walkHelp is
-        Continue newState -> newState
+## internal helper
+walkHelp : List elem, s, (s, elem -> s), Nat, Nat -> s
+walkHelp = \list, state, f, index, length ->
+    if index < length then
+        nextState = f state (List.getUnsafe list index)
+
+        walkHelp list nextState f (Num.addWrap index 1) length
+    else
+        state
+
+## Like [walk], but at each step the function also receives the index of the current element.
+walkWithIndex : List elem, state, (state, elem, Nat -> state) -> state
+walkWithIndex = \list, init, func ->
+    walkWithIndexHelp list init func 0 (List.len list)
+
+## internal helper
+walkWithIndexHelp : List elem, s, (s, elem, Nat -> s), Nat, Nat -> s
+walkWithIndexHelp = \list, state, f, index, length ->
+    if index < length then
+        nextState = f state (List.getUnsafe list index) index
+
+        walkWithIndexHelp list nextState f (Num.addWrap index 1) length
+    else
+        state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -478,7 +500,7 @@ walkBackwardsHelp = \list, state, f, indexPlusOne ->
     if indexPlusOne == 0 then
         state
     else
-        index = indexPlusOne - 1
+        index = Num.subWrap indexPlusOne 1
         nextState = f state (getUnsafe list index)
 
         walkBackwardsHelp list nextState f index
@@ -510,10 +532,10 @@ walkBackwardsUntil = \list, initial, func ->
 ## Walks to the end of the list from a specified starting index
 walkFrom : List elem, Nat, state, (state, elem -> state) -> state
 walkFrom = \list, index, state, func ->
-    walkHelp : _, _ -> [Continue _, Break []]
-    walkHelp = \currentState, element -> Continue (func currentState element)
+    step : _, _ -> [Continue _, Break []]
+    step = \currentState, element -> Continue (func currentState element)
 
-    when List.iterHelp list state walkHelp index (List.len list) is
+    when List.iterHelp list state step index (List.len list) is
         Continue new -> new
 
 ## A combination of [List.walkFrom] and [List.walkUntil]
@@ -590,9 +612,9 @@ keepIfHelp : List a, (a -> Bool), Nat, Nat, Nat -> List a
 keepIfHelp = \list, predicate, kept, index, length ->
     if index < length then
         if predicate (List.getUnsafe list index) then
-            keepIfHelp (List.swap list kept index) predicate (kept + 1) (index + 1) length
+            keepIfHelp (List.swap list kept index) predicate (Num.addWrap kept 1) (Num.addWrap index 1) length
         else
-            keepIfHelp list predicate kept (index + 1) length
+            keepIfHelp list predicate kept (Num.addWrap index 1) length
     else
         List.takeFirst list kept
 
@@ -619,7 +641,7 @@ countIf : List a, (a -> Bool) -> Nat
 countIf = \list, predicate ->
     walkState = \state, elem ->
         if predicate elem then
-            state + 1
+            Num.addWrap state 1
         else
             state
 
@@ -712,7 +734,7 @@ mapWithIndexHelp = \src, dest, func, index, length ->
         mappedElem = func elem index
         newDest = List.appendUnsafe dest mappedElem
 
-        mapWithIndexHelp src newDest func (index + 1) length
+        mapWithIndexHelp src newDest func (Num.addWrap index 1) length
     else
         dest
 
@@ -817,7 +839,7 @@ rangeLengthHelp = \accum, i, remaining, calcNext ->
     else
         when i is
             Ok val ->
-                rangeLengthHelp (List.appendUnsafe accum val) (calcNext val) (remaining - 1) calcNext
+                rangeLengthHelp (List.appendUnsafe accum val) (calcNext val) (Num.subWrap remaining 1) calcNext
 
             Err _ ->
                 # We went past the end of the numeric range and there is no next.
@@ -1036,7 +1058,7 @@ findFirstIndex = \list, matcher ->
         if matcher elem then
             Break index
         else
-            Continue (index + 1)
+            Continue (Num.addWrap index 1)
 
     when foundIndex is
         Break index -> Ok index
@@ -1048,10 +1070,12 @@ findFirstIndex = \list, matcher ->
 findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
 findLastIndex = \list, matches ->
     foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
+        answer = Num.subWrap prevIndex 1
+
         if matches elem then
-            Break (prevIndex - 1)
+            Break answer
         else
-            Continue (prevIndex - 1)
+            Continue answer
 
     when foundIndex is
         Break index -> Ok index
@@ -1137,7 +1161,7 @@ split = \elements, userSplitIndex ->
     length = List.len elements
     splitIndex = if length > userSplitIndex then userSplitIndex else length
     before = List.sublist elements { start: 0, len: splitIndex }
-    others = List.sublist elements { start: splitIndex, len: length - splitIndex }
+    others = List.sublist elements { start: splitIndex, len: Num.subWrap length splitIndex }
 
     { before, others }
 
@@ -1151,7 +1175,7 @@ splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
             before = List.sublist list { start: 0, len: index }
-            after = List.sublist list { start: index + 1, len: List.len list - index - 1 }
+            after = List.sublist list { start: Num.addWrap index 1, len: Num.subWrap (List.len list) index |> Num.subWrap 1 }
 
             Ok { before, after }
 
@@ -1167,7 +1191,7 @@ splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->
             before = List.sublist list { start: 0, len: index }
-            after = List.sublist list { start: index + 1, len: List.len list - index - 1 }
+            after = List.sublist list { start: Num.addWrap index 1, len: Num.subWrap (List.len list) index |> Num.subWrap 1 }
 
             Ok { before, after }
 
@@ -1202,7 +1226,7 @@ walkTryHelp : List elem, state, (state, elem -> Result state err), Nat, Nat -> R
 walkTryHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) is
-            Ok nextState -> walkTryHelp list nextState f (index + 1) length
+            Ok nextState -> walkTryHelp list nextState f (Num.addWrap index 1) length
             Err b -> Err b
     else
         Ok state
@@ -1217,7 +1241,7 @@ iterHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat, Nat -> [Contin
 iterHelp = \list, state, f, index, length ->
     if index < length then
         when f state (List.getUnsafe list index) is
-            Continue nextState -> iterHelp list nextState f (index + 1) length
+            Continue nextState -> iterHelp list nextState f (Num.addWrap index 1) length
             Break b -> Break b
     else
         Continue state
@@ -1232,7 +1256,7 @@ iterateBackwards = \list, init, func ->
 iterBackwardsHelp : List elem, s, (s, elem -> [Continue s, Break b]), Nat -> [Continue s, Break b]
 iterBackwardsHelp = \list, state, f, prevIndex ->
     if prevIndex > 0 then
-        index = prevIndex - 1
+        index = Num.subWrap prevIndex 1
 
         when f state (List.getUnsafe list index) is
             Continue nextState -> iterBackwardsHelp list nextState f index

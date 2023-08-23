@@ -31,3 +31,9 @@ jobs:
 
       - name: test the dev backend # these tests require an explicit feature flag
         run: nix develop -c cargo test --locked --release --package test_gen --no-default-features --features gen-dev
+
+      - name: wasm repl tests
+        run: nix develop -c crates/repl_test/test_wasm.sh
+
+      - name: test building wasm repl
+        run: nix develop -c ./ci/www-repl.sh

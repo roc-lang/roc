@@ -130,7 +130,7 @@ hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 ## ```
 ## emptyDict = Dict.empty {}
 ## ```
-empty : {} -> Dict k v where k implements Hash & Eq
+empty : {} -> Dict * *
 empty = \{} ->
     @Dict {
         metadata: List.repeat emptySlot 8,
@@ -151,12 +151,12 @@ capacity : Dict * * -> Nat
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
-    cap - Num.shiftRightZfBy cap 3
+    Num.subWrap cap (Num.shiftRightZfBy cap 3)
 
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Dict k v where k implements Hash & Eq
+withCapacity : Nat -> Dict * *
 withCapacity = \_ ->
     # TODO: power of 2 * 8 and actual implementation
     empty {}
@@ -401,7 +401,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
                             metadata,
                             dataIndices,
                             data,
-                            size: size + 1,
+                            size: Num.addWrap size 1,
                         }
                     )
 
@@ -430,7 +430,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 
     when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
-            last = List.len data - 1
+            last = Num.subWrap (List.len data) 1
             dataIndex = listGetUnsafe dataIndices index
 
             if dataIndex == last then
@@ -438,7 +438,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
                     metadata: List.set metadata index deletedSlot,
                     dataIndices,
                     data: List.dropLast data,
-                    size: size - 1,
+                    size: Num.subWrap size 1,
                 }
             else
                 swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data, size }) index last
@@ -626,7 +626,7 @@ swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIn
                 # Update index of swaped element.
                 dataIndices: List.set dataIndices index dataIndex,
                 data: nextData,
-                size: size - 1,
+                size: Num.subWrap size 1,
             }
 
         Err NotFound ->
@@ -701,7 +701,7 @@ maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
     cap = List.len dataIndices
     maxLoadCap =
         # This is 7/8 * capacity, which is the max load factor.
-        cap - Num.shiftRightZfBy cap 3
+        Num.subWrap cap (Num.shiftRightZfBy cap 3)
 
     if size > maxLoadCap then
         rehash (@Dict { metadata, dataIndices, data, size })
@@ -737,7 +737,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
                     # Empty or deleted data
                     dict
 
-            rehashHelper nextDict oldMetadata oldDataIndices oldData (index + 1)
+            rehashHelper nextDict oldMetadata oldDataIndices oldData (Num.addWrap index 1)
 
         Err OutOfBounds ->
             # Walked entire list, complete now.

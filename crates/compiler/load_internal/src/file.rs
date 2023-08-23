@@ -2290,6 +2290,7 @@ fn update<'a>(
                 extend_header_with_builtin(header, ModuleId::ENCODE);
                 extend_header_with_builtin(header, ModuleId::DECODE);
                 extend_header_with_builtin(header, ModuleId::HASH);
+                extend_header_with_builtin(header, ModuleId::INSPECT);
             }
 
             state
@@ -3494,6 +3495,7 @@ fn load_module<'a>(
         "Encode", ModuleId::ENCODE
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
+        "Inspect", ModuleId::INSPECT
         "TotallyNotJson", ModuleId::JSON
     }
 
@@ -5257,6 +5259,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::DICT
                         | ModuleId::SET
                         | ModuleId::HASH
+                        | ModuleId::INSPECT
                 );
 
                 if !name.is_builtin() || should_include_builtin {
