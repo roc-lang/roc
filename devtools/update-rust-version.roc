@@ -13,8 +13,6 @@ app "update-rust-version"
         pf.Env,
         pf.Stdout,
         pf.Stderr,
-        pf.Url,
-        pf.Http,
     ]
     provides [main] to pf
 
@@ -134,17 +132,6 @@ dateToStr = \{ year, month, day } ->
     dayStr = Num.toStr day |> padLeftWithZero
     "\(yearStr)-\(monthStr)-\(dayStr)"
 
-fetchNightlyByDate : Date -> Task Str _
-fetchNightlyByDate = \date ->
-    nightlyVersionsUrl = Url.fromStr "https://raw.githubusercontent.com/oxalica/rust-overlay/master/manifests/nightly"
-    fileName = Str.concat (dateToStr date) ".nix"
-    urlWithDate = Url.append nightlyVersionsUrl (Num.toStr date.year) |> Url.append fileName
-    {} <- Stdout.line "Fetching \(Url.toStr urlWithDate)" |> await
-    { Http.defaultRequest &
-        url: Url.toStr urlWithDate,
-    }
-    |> Http.send
-
 RustVersion := Str
 
 versionFromStr : Str -> RustVersion
@@ -167,12 +154,4 @@ parseVersionFromNix = \nixStr ->
     # before: 1.70.0
 
     Ok (versionFromStr before)
-
-getNightlyVersion : Date -> Task RustVersion _
-getNightlyVersion = \date ->
-    nightlyNix <- fetchNightlyByDate date |> Task.attempt
-    nightlyNix
-    |> Result.try parseVersionFromNix
-    |> Result.mapErr \err -> Err { err, nightlyNix }
-    |> Task.fromResult
 
