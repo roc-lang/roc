@@ -1,34 +1,65 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,700;1,700&family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
 
 # Roc
 
 A work-in-progress programming language that aims to be fast, friendly, and functional.
 
-<!-- TODO turn these into nice buttons -->
-- [tutorial](/wip/tutorial.html)
-
-- [install](/wip/install.html)
-
-- [help / group chat](https://roc.zulipchat.com), we're friendly!
-
-## Goals
 <section class="home-goals-container">
     <div class="home-goals-column">
       <h3 class="home-goals-title">Fast</h4>
-      <p class="home-goals-description">Delightful software runs fast. The Roc compiler should run fast, and it should be able to produce programs that run fast too. <a class="home-goals-learn-more" href="/design_goals.html#fast">What does <i>fast</i> mean here?</a></p>
+      <p class="home-goals-description">Delightful software runs fast. Roc’s compiler should run fast, and it should help you create software that runs fast too.</p>
+      <p><a class="home-goals-learn-more" href="/design_goals.html#fast">What does <i>fast</i> mean?</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Friendly</h3>
-      <h2 class="home-goals-title">Friendly</h2>
-      <p class="home-goals-description">Roc aims to be a user-friendly language with a friendly community of users. This involves the set of tools Roc includes, and also the spirit of the community of Roc programmers. <a class="home-goals-learn-more" href="/design_goals.html#friendly">What does <i>friendly</i> mean here?</a></p>
+      <p class="home-goals-description">Software should delight the people who use it. Roc aims to be a user-friendly language with a friendly community of users.</p>
+      <p><a class="home-goals-learn-more" href="/design_goals.html#friendly">What does <i>friendly</i> mean?</a></p>
     </div>
     <div class="home-goals-column">
       <h3 class="home-goals-title">Functional</h3>
-      <p class="home-goals-description">Roc is a purely functional programming language. The language is built on a small set of simple primitives, which together give you a toolset that's more than the sum of its parts. <a class="home-goals-learn-more" href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
+      <p class="home-goals-description">Roc is a functional programming language. It’s built on a small set of primitives that work delightfully well together.</p><p><a class="home-goals-learn-more" href="/design_goals.html#functional">What does <i>functional</i> mean?</a></p>
 </section>
+
+
+```elixir
+# Hover over anything here to see an explanatio
+main =
+    cacheUserInfo (Path.fromStr "url.txt")
+    |> Task.onErr handleErr
+
+cacheUserInfo = \filename -> # Defining a function
+    url <- File.readUtf8 filename |> Task.await
+    { username, email } <- Http.get url Json.codec |> Task.await
+
+    File.writeUtf8 "\(username).txt" email
+
+handleErr = \err ->
+    when err is
+        FileReadErr path _ -> Stderr.line "Error reading \(Path.display path)"
+        FileWriteErr path _ -> Stderr.line "Error writing \(Path.display path)"
+        HttpErr url _ -> Stderr.line "Error getting \(url)"
+```
+
+> TODO maybe make some notes about the above code, e.g. it uses basic-cli and Luke's JSON package,
+> this is demonstrating how type annotations are optional; this code is 100% type-checked even though
+> there are no types mentioned anywhere. That also includes the JSON decoding, which is done via
+> type inference, and which is not specific to JSON (or any particular encoding).
 
 ## Try Roc
 
-<!-- TODO WebREPL to go here -->
+> TODO only show this if you have JavaScript enabled!
+The fastest way to try Roc is in this REPL. It runs in your browser via WebAssembly, and will keep working if you lose your connection.
+
+```
+TODO Web REPL goes here!
+```
+
+Roc is still a work in progress. It doesn't have a numbered release yet, but you can download a [nightly release](https://github.com/roc-lang/roc/releases/tag/nightly) to try out building things with it. In the (likely) event that you encounter a bug, we’d really appreciate if you’d [open an issue](https://github.com/roc-lang/roc/issues) to let us know about it.
 
 The code below shows a Roc application which prints `Hello World!` to the terminal. It does this using the [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) platform.
 
