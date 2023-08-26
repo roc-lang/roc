@@ -51,6 +51,10 @@ run =
     if currentDir == "roc" then
         newRustVersion = "1.71.0"
 
+        {} <- Stdout.line "Checking current rust versions..." |> await
+        {stable, nightly} <- getCurrentVersionsFromToml |> await
+        {} <- Stdout.line "Found:\n\tstable: \(versionToStr stable)\n\tnightly: from \(dateToStr nightly)" |> await
+
         # TODO can we avoid boiler plate of `{} <-` and `await` here?
         {} <-
             Path.fromStr "rust-toolchain.toml"
@@ -71,6 +75,30 @@ run =
         Task.ok {}
     else
         Task.err NotInRocDir
+
+getCurrentVersionsFromToml : Task { stable : RustVersion, nightly : Date } _
+getCurrentVersionsFromToml =
+    fileContent <-
+        Path.fromStr "rust-toolchain.toml"
+        |> File.readUtf8
+        |> await
+
+    Str.split fileContent "\n"
+    |> List.walk { stable: versionFromStr "1.70.0", nightly: { year: 2023, month: 1, day: 1 } } \state, line ->
+        when Str.split line "\"" is
+            ["channel = ", version, ..] ->
+                { state & stable: versionFromStr version }
+
+            ["# channel = ", version, ..] ->
+                # here, `version` should look like "nightly-2023-04-15"
+                # so split by "-" and keep natural numbers
+                dateParts = Str.split version "-" |> List.keepOks Str.toNat
+                when dateParts is
+                    [year, month, day] -> { state & nightly: { year, month, day } }
+                    _ -> state
+
+            _ -> state
+    |> Task.ok
 
 # TODO try to avoid repition of same code in updateToml and updateEarthFile
 updateToml : Path, Str -> Task {} _
@@ -125,7 +153,7 @@ padLeftWithZero = \str ->
         str
 
 # TODO dateFromStr
-Date : { year : U16, month : U8, day : U8 }
+Date : { year : Nat, month : Nat, day : Nat }
 dateToStr : Date -> Str
 dateToStr = \{ year, month, day } ->
     yearStr = Num.toStr year
@@ -133,6 +161,7 @@ dateToStr = \{ year, month, day } ->
     dayStr = Num.toStr day |> padLeftWithZero
     "\(yearStr)-\(monthStr)-\(dayStr)"
 
+# stable rust version
 RustVersion := Str
 
 versionFromStr : Str -> RustVersion
