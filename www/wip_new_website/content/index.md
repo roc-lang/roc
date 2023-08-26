@@ -4,30 +4,49 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,700;1,700&family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600;1,700;1,800&family=Merriweather:ital,wght@0,400;0,700;1,700&family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Merriweather+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600;1,700;1,800&family=Merriweather:ital,wght@0,400;0,700;1,700&family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,300;0,400;1,300;1,400&family=Merriweather+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600;1,700;1,800&family=Merriweather:ital,wght@0,400;0,700;1,700&family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Sans:ital,wght@0,300;0,400;1,300;1,400&family=Merriweather+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,600;1,700;1,800&family=Merriweather:ital,wght@0,400;0,700;1,700&family=PT+Sans:ital,wght@0,400;0,700;1,400;1,700&family=PT+Serif:ital,wght@0,400;0,700;1,400;1,700&family=Ubuntu:ital,wght@0,400;0,500;0,700;1,300;1,400;1,500;1,700&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
 
 # Roc
 
-A work-in-progress programming language that aims to be fast, friendly, and functional.
+<section id="tagline-and-code-sample">
+    <p id="tagline">A language designed to be <span class="nowrap">fast, friendly, and functional.</span></p>
+    <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> <span class="upperident">List</span><span class="kw">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
+        <span class="literal">"Artist: </span><span class="kw">\(</span>song<span class="kw">.</span>artist<span class="kw">)</span><span class="literal">"</span></samp></pre>
+</section>
 
 <section class="home-goals-container">
     <div class="home-goals-column">
-      <h3 class="home-goals-title">Fast</h4>
-      <p class="home-goals-description">Delightful software runs fast. Roc’s compiler should run fast, and it should help you create software that runs fast too.</p>
-      <p><a class="home-goals-learn-more" href="/design_goals.html#fast">What does <i>fast</i> mean?</a></p>
+      <h3 class="home-goals-title">fast</h4>
+      <p class="home-goals-description">Delightful software runs fast. <span class="nowrap">Roc’s compiler</span> should run fast, <span class="nowrap">and it</span> should help you create software that <span class="nowrap">runs fast</span> too.</p>
+      <p><a class="home-goals-learn-more" href="/design_goals.html#fast">More on what <i>fast</i> means</a></p>
     </div>
     <div class="home-goals-column">
-      <h3 class="home-goals-title">Friendly</h3>
-      <p class="home-goals-description">Software should delight the people who use it. Roc aims to be a user-friendly language with a friendly community of users.</p>
-      <p><a class="home-goals-learn-more" href="/design_goals.html#friendly">What does <i>friendly</i> mean?</a></p>
+      <h3 class="home-goals-title">friendly</h3>
+      <p class="home-goals-description">Software should delight the people who use it. Roc aims to be a <span class="nowrap">user-friendly</span> language with <span class="nowrap">a friendly</span> community <span class="nowrap">of users.</span></p>
+      <p><a class="home-goals-learn-more" href="/design_goals.html#friendly">More on what <i>friendly</i> means</a></p>
     </div>
     <div class="home-goals-column">
-      <h3 class="home-goals-title">Functional</h3>
-      <p class="home-goals-description">Roc is a functional programming language. It’s built on a small set of primitives that work delightfully well together.</p><p><a class="home-goals-learn-more" href="/design_goals.html#functional">What does <i>functional</i> mean?</a></p>
+      <h3 class="home-goals-title">functional</h3>
+      <p class="home-goals-description">Roc is a functional programming language. It’s built on a small set of primitives that work delightfully well together.</p><p><a class="home-goals-learn-more" href="/design_goals.html#functional">More on what <i>functional</i> means</a></p>
 </section>
 
 
 ```elixir
-# Hover over anything here to see an explanatio
+# Hover over anything here to see an explanation
 main =
     cacheUserInfo (Path.fromStr "url.txt")
     |> Task.onErr handleErr
@@ -98,3 +117,5 @@ If you'd like to learn more about Roc check out one of these videos:
 *   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
 *   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
 *   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language)
+
+<script src="repl.js"></script>

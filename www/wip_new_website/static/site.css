@@ -1,17 +1,18 @@
 :root {
-    /* WCAG AAA Compliant colors */
+    /* WCAG AA Compliant colors */
     --gray-bg: #f4f8f9;
     --gray: #717171;
     --orange: #bf5000;
     --green: #0b8400;
     --cyan: #067c94;
-    --blue: #05006d;
+    --blue: #086AD2;
     --violet: #7c38f5;
     --violet-bg: #ece2fd;
-    --magenta: #a20031;
+    --magenta: #B000FF;
 
     --primary-1: #9b6bf2;
     --primary-2: #7c38f5;
+    --secondary: #6b91f2;
     --link-color: var(--primary-2);
     --code-link-color: var(--primary-2);
     --text-color: #000;
@@ -26,14 +27,14 @@
     --top-header-height: 67px;
     --sidebar-width: 280px;
 
-    --font-size-normal: 18px;
+    --font-size-normal: 20px;
 }
 
 html {
     line-height: 1.5rem;
     background: var(--body-bg-color);
     color: var(--text-color);
-    font-family: "Merriweather", sans-serif;
+    font-family: "Source Sans 3", sans-serif;
 }
 
 html,
@@ -76,11 +77,14 @@ li {
     margin-bottom: 0.5rem;
 }
 
+.nowrap {
+    white-space: nowrap;
+}
+
 h1,
 h2,
 h3,
 h4 {
-    font-family: "PT Serif";
     padding: 0;
 }
 
@@ -88,17 +92,21 @@ h1 {
     color: var(--primary-1);
     font-size: 5rem;
     text-shadow: 1px 1px 1px #010101;
+    font-family: "PT Serif";
+    margin-bottom: 30px;
 }
 
 h2 {
     color: var(--primary-1);
     font-size: 3rem;
     text-shadow: 1px 1px 1px #010101;
+    font-family: "PT Serif";
 }
 
 h3 {
-    color: var(--cyan);
+    color: var(--primary-1);
     font-size: 1.5rem;
+    font-family: "Source Sans 3";
 }
 
 #top-bar {
@@ -239,8 +247,65 @@ li {
     line-height: 1.85rem;
 }
 
+#tagline-and-code-sample {
+    position: relative;
+    display: inline-block;
+}
+
+#first-code-sample {
+    width: 100%;
+    border: 1px solid #ddd;
+    margin-top: 42px;
+    margin-bottom: 24px;
+}
+
+#first-code-sample samp {
+    background: inherit;
+    display: inline-block;
+}
+
+#tagline {
+    margin: 18px 0;
+}
+
+.roc-logo {
+    width: 40px;
+    height: 40px;
+    margin: 0 auto;
+    fill: var(--primary-1);
+    text-shadow: 1px 1px 1px #010101;
+}
+
+.home-goals-container {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 12px;
+}
+
+.home-goals-column {
+    flex-basis: 27%;
+    margin-bottom: 42px;
+}
+
+.home-goals-title {
+    padding: 0;
+    font-weight: bold;
+    margin-top: 8px;
+    margin-bottom: 24px;
+    font-size: 2.5rem;
+    font-style: italic;
+}
+
+.home-goals-description {
+    margin: 12px 0;
+}
+
 /* Mobile-friendly screen width */
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
+    #tagline {
+        margin: 30px 0;
+        font-size: 20px;
+    }
 
     p,
     aside,
@@ -262,6 +327,29 @@ li {
 
     code {
         white-space: normal;
+    }
+
+    .home-goals-container {
+        display: block;
+    }
+
+    .home-goals-title {
+        margin-bottom: 0;
+    }
+
+    #first-code-sample {
+        padding: 0;
+        margin: 0;
+        margin-bottom: 18px;
+    }
+
+    #first-code-sample samp {
+        padding: 0 4px;
+        /* For some reason, there's padding at the bottom otherwise. */
+        height: 60px;
+        overflow-y: clip;
+        /* Needed to avoid horizontal scroll bar  */
+        font-size: 14px;
     }
 
     #tutorial-toc-toggle-label,
@@ -297,13 +385,18 @@ li {
         word-break: break-word !important;
     }
 
-    h1,
     h2,
     h3,
     h4,
     h5 {
         line-height: 1.2em !important;
         font-size: 2rem !important;
+    }
+
+    h1 {
+        margin: 0;
+        line-height: 1.2em !important;
+        font-size: 3rem !important;
     }
 
     #top-bar-links a,
@@ -424,7 +517,7 @@ li {
         --gray: #b6b6b6;
         --orange: #fd6e08;
         --green: #8ecc88;
-        --cyan: #12c9be;
+        --cyan: #33b0a8;
         --blue: #b1afdf;
         --violet-bg: #332944;
         --magenta: #f39bac;
@@ -523,7 +616,7 @@ samp .meta.block,
 code .meta.block,
 samp .lowerident,
 code .lowerident {
-    color: var(--blue);
+    color: var(--green);
 }
 
 /* Types, Tags, and Modules */
@@ -533,7 +626,7 @@ samp .meta.path,
 code .meta.path,
 samp .upperident,
 code .upperident {
-    color: var(--green);
+    color: var(--blue);
 }
 
 samp .dim,
@@ -559,38 +652,4 @@ code .dim {
 .copy-button:hover {
     border-color: var(--green);
     color: var(--green);
-}
-
-.roc-logo {
-    width: 40px;
-    height: 40px;
-    margin: 0 auto;
-    fill: var(--primary-1);
-    text-shadow: 1px 1px 1px #010101;
-}
-
-.home-goals-container {
-    display: flex;
-    justify-content: space-between;
-}
-
-.home-goals-column {
-    flex-basis: 30%;
-    padding: 18px;
-    background-color: var(--gray-bg);
-    margin-right: 20px;
-}
-
-.home-goals-column:last-child {
-    margin-right: 0;
-}
-
-.home-goals-title {
-    padding: 0;
-    font-weight: bold;
-    margin-bottom: 10px;
-}
-
-.home-goals-description {
-    margin-bottom: 10px;
 }
