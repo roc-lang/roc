@@ -52,8 +52,12 @@ run =
         newRustVersion = "1.71.0"
 
         {} <- Stdout.line "Checking current rust versions..." |> await
-        {stable, nightly} <- getCurrentVersionsFromToml |> await
-        {} <- Stdout.line "Found:\n\tstable: \(versionToStr stable)\n\tnightly: from \(dateToStr nightly)" |> await
+        { stable: currentStable, nightly: currentNightly } <- getCurrentVersionsFromToml |> await
+        {} <- Stdout.line "Found:\n\tstable: \(versionToStr currentStable)\n\tnightly: from \(dateToStr currentNightly)" |> await
+
+        {} <- Stdout.line "Searching for nightly matching stable-\(newRustVersion)" |> await
+        newNightly <- findMatchingNigthly (versionFromStr newRustVersion) currentNightly |> await
+        {} <- Stdout.line "New nightly: nightly-\(dateToStr newNightly)" |> await
 
         # TODO can we avoid boiler plate of `{} <-` and `await` here?
         {} <-
@@ -71,7 +75,6 @@ run =
             |> updateEarthFile newRustVersion
             |> await
 
-        {} <- updateNightly |> await
         Task.ok {}
     else
         Task.err NotInRocDir
@@ -99,6 +102,23 @@ getCurrentVersionsFromToml =
 
             _ -> state
     |> Task.ok
+
+findMatchingNigthly : RustVersion, Date -> Task Date _
+findMatchingNigthly = \desiredVersion, startingDate ->
+    step = \date ->
+        version <- getNightlyVersion date |> await
+        if versionsEqual version desiredVersion then
+            Done date |> Task.ok
+        else
+            # TODO: find a better and correct way to get next date
+            # maybe list all files under 'manifests/nightly/{year}/'
+            # and check them one by one
+            nextDate date |> Step |> Task.ok
+
+    {} <- cloneRustOverlay |> await
+    nightly <- Task.loop startingDate step |> await
+    {} <- rmRustOverlay |> await
+    Task.ok nightly
 
 # TODO try to avoid repition of same code in updateToml and updateEarthFile
 updateToml : Path, Str -> Task {} _
@@ -161,6 +181,11 @@ dateToStr = \{ year, month, day } ->
     dayStr = Num.toStr day |> padLeftWithZero
     "\(yearStr)-\(monthStr)-\(dayStr)"
 
+nextDate : Date -> Date
+nextDate = \{ year, month, day } ->
+    # this is totally wrong, to be fixed
+    { year, month, day: day + 1 }
+
 # stable rust version
 RustVersion := Str
 
@@ -171,6 +196,10 @@ versionFromStr = \str ->
 versionToStr : RustVersion -> Str
 versionToStr = \@RustVersion str ->
     str
+
+versionsEqual : RustVersion, RustVersion -> Bool
+versionsEqual = \l, r ->
+    versionToStr l == versionToStr r
 
 # TODO: maybe it could be possible to make some assertions here in case the format changes
 parseVersionFromNix : Str -> Result RustVersion _
@@ -220,12 +249,4 @@ rmRustOverlay =
     |> Cmd.args ["-fr", path]
     |> Cmd.status
     |> Task.onErr \err -> Stderr.line "Failed to remove \(path)"
-
-updateNightly : Task {} _
-updateNightly =
-    {} <- cloneRustOverlay |> await
-    version <- getNightlyVersion { year: 2023, month: 4, day: 15 } |> await
-    {} <- Stdout.line (versionToStr version) |> await
-    {} <- rmRustOverlay |> await
-    Task.ok {}
 
