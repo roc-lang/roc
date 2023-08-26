@@ -237,7 +237,7 @@ cloneRustOverlay =
     url = "https://github.com/oxalica/rust-overlay.git"
     {} <- Stdout.line "Cloning \(url) into ./rust-overlay" |> await
     Cmd.new "git"
-    |> Cmd.args ["clone", "--depth=1", url]
+    |> Cmd.args ["clone", "-q", "--depth=1", url]
     |> Cmd.status
     |> Task.onErr \err -> Stderr.line "Failed to clone \(url)"
 
