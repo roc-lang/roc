@@ -32,6 +32,7 @@ main =
                 when err is
                     NotInRocDir ->
                         "This script should be run from the root of the roc repository folder."
+
                     _ ->
                         "" # TODO improve error message
 
@@ -139,7 +140,6 @@ updateToml = \tomlPath, newRustVersion ->
 
             _ ->
                 line
-
     |> Str.joinWith "\n"
     |> \newFileContent -> File.writeUtf8 tomlPath newFileContent
 
@@ -161,7 +161,6 @@ updateEarthFile = \path, newRustVersion ->
 
             _ ->
                 line
-
     |> Str.joinWith "\n"
     |> \newFileContent -> File.writeUtf8 path newFileContent
 
