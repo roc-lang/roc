@@ -13,6 +13,7 @@ app "update-rust-version"
         pf.Env,
         pf.Stdout,
         pf.Stderr,
+        pf.Cmd,
     ]
     provides [main] to pf
 
@@ -66,8 +67,8 @@ run =
             |> updateEarthFile newRustVersion
             |> await
 
-        version <- getNightlyVersion {year: 2023, month: 4, day: 15} |> await
-        Stdout.line (versionToStr version)
+        {} <- updateNightly |> await
+        Task.ok {}
     else
         Task.err NotInRocDir
 
@@ -154,4 +155,48 @@ parseVersionFromNix = \nixStr ->
     # before: 1.70.0
 
     Ok (versionFromStr before)
+
+getNightlyVersion : Date -> Task RustVersion _
+getNightlyVersion = \date ->
+    nightlyFilePrefix = "rust-overlay/manifests/nightly/"
+    nightlyFilePath =
+        Str.joinWith [nightlyFilePrefix, "\(Num.toStr date.year)/", dateToStr date, ".nix"] ""
+        |> Path.fromStr
+
+    nighltyFileContents <- File.readUtf8 nightlyFilePath |> await
+    result =
+        nighltyFileContents
+        |> parseVersionFromNix
+
+    when result is
+        Ok version -> Task.ok version
+        Err err ->
+            {} <- Stderr.line "Failed to parse nightly version from file \(Path.display nightlyFilePath)" |> await
+            Task.err err
+
+cloneRustOverlay : Task {} _
+cloneRustOverlay =
+    url = "https://github.com/oxalica/rust-overlay.git"
+    {} <- Stdout.line "Cloning \(url) into ./rust-overlay" |> await
+    Cmd.new "git"
+    |> Cmd.args ["clone", "--depth=1", url]
+    |> Cmd.status
+    |> Task.onErr \err -> Stderr.line "Failed to clone \(url)"
+
+rmRustOverlay : Task {} _
+rmRustOverlay =
+    path = "./rust-overlay"
+    {} <- Stdout.line "Removing \(path)" |> await
+    Cmd.new "rm"
+    |> Cmd.args ["-fr", path]
+    |> Cmd.status
+    |> Task.onErr \err -> Stderr.line "Failed to remove \(path)"
+
+updateNightly : Task {} _
+updateNightly =
+    {} <- cloneRustOverlay |> await
+    version <- getNightlyVersion { year: 2023, month: 4, day: 15 } |> await
+    {} <- Stdout.line (versionToStr version) |> await
+    {} <- rmRustOverlay |> await
+    Task.ok {}
 
