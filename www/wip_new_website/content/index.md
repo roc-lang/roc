@@ -22,28 +22,11 @@
 
 # Roc
 
-<section id="tagline-and-code-sample">
-    <p id="tagline">A language designed to be <span class="nowrap">fast, friendly, and functional.</span></p>
-    <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> <span class="upperident">List</span><span class="kw">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
-        <span class="literal">"Artist: </span><span class="kw">\(</span>song<span class="kw">.</span>artist<span class="kw">)</span><span class="literal">"</span></samp></pre>
-</section>
+<p id="tagline">A fast, friendly, functional programming language.</p>
 
-<section class="home-goals-container">
-    <div class="home-goals-column">
-      <h3 class="home-goals-title">fast</h4>
-      <p class="home-goals-description">Delightful software runs fast. <span class="nowrap">Roc’s compiler</span> should run fast, <span class="nowrap">and it</span> should help you create software that <span class="nowrap">runs fast</span> too.</p>
-      <p><a class="home-goals-learn-more" href="/design_goals.html#fast">More on what <i>fast</i> means</a></p>
-    </div>
-    <div class="home-goals-column">
-      <h3 class="home-goals-title">friendly</h3>
-      <p class="home-goals-description">Software should delight the people who use it. Roc aims to be a <span class="nowrap">user-friendly</span> language with <span class="nowrap">a friendly</span> community <span class="nowrap">of users.</span></p>
-      <p><a class="home-goals-learn-more" href="/design_goals.html#friendly">More on what <i>friendly</i> means</a></p>
-    </div>
-    <div class="home-goals-column">
-      <h3 class="home-goals-title">functional</h3>
-      <p class="home-goals-description">Roc is a functional programming language. It’s built on a small set of primitives that work delightfully well together.</p><p><a class="home-goals-learn-more" href="/design_goals.html#functional">More on what <i>functional</i> means</a></p>
-</section>
-
+<img src="roc-rocket.png" width=36><p><b>Fast</b> - Roc code is designed to compile fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
+<p><img src="roc-rocket.png" width=36>Friendly</p>
+<p><img src="roc-rocket.png" width=36>Functional</p>
 
 ```elixir
 # Hover over anything here to see an explanation
