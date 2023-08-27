@@ -23,6 +23,9 @@ const LAYOUT_UNIT: InLayout = Layout::UNIT;
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
 const ARG_3: Symbol = Symbol::ARG_3;
+const ARG_4: Symbol = Symbol::ARG_4;
+const ARG_5: Symbol = Symbol::ARG_5;
+const ARG_6: Symbol = Symbol::ARG_6;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
@@ -665,6 +668,17 @@ impl<'a> CallerProc<'a> {
         passed_function: &PassedFunction<'a>,
         capture_layout: Option<InLayout<'a>>,
     ) -> Self {
+        assert!(passed_function.argument_layouts.len() <= 4);
+        const ARG_SYMBOLS: &[Symbol] = &[ARG_1, ARG_2, ARG_3, ARG_4, ARG_5, ARG_6];
+
+        let argument_layouts = match capture_layout {
+            None => &passed_function.argument_layouts,
+            Some(_) => &passed_function.argument_layouts[1..],
+        };
+
+        let capture_symbol = ARG_SYMBOLS[0];
+        let return_symbol = ARG_SYMBOLS[1 + argument_layouts.len()];
+
         let mut ctx = Context {
             new_linker_data: Vec::new_in(arena),
             recursive_union: None,
@@ -677,14 +691,21 @@ impl<'a> CallerProc<'a> {
             layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(Layout::UNIT))
         };
 
-        let ptr_argument_layout = layout_interner
-            .insert_direct_no_semantic(LayoutRepr::Ptr(passed_function.argument_layouts[0]));
+        let it = argument_layouts
+            .iter()
+            .map(|l| layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(*l)));
+        let ptr_argument_layouts = Vec::from_iter_in(it, arena);
 
         let ptr_return_layout = layout_interner
             .insert_direct_no_semantic(LayoutRepr::Ptr(passed_function.return_layout));
 
+        let mut arguments = Vec::with_capacity_in(1 + ptr_argument_layouts.len() + 1, arena);
+        arguments.push(ptr_capture_layout);
+        arguments.extend(ptr_argument_layouts.iter().copied());
+        arguments.push(ptr_return_layout);
+
         let proc_layout = ProcLayout {
-            arguments: arena.alloc([ptr_capture_layout, ptr_argument_layout, ptr_return_layout]),
+            arguments: arguments.into_bump_slice(),
             result: Layout::UNIT,
             niche: Niche::NONE,
         };
@@ -694,14 +715,23 @@ impl<'a> CallerProc<'a> {
 
         ctx.new_linker_data.push((proc_symbol, proc_layout));
 
-        let load_capture = Expr::ptr_load(arena.alloc(Symbol::ARG_1));
-        let load_argument = Expr::ptr_load(arena.alloc(Symbol::ARG_2));
+        let load_capture = Expr::ptr_load(arena.alloc(capture_symbol));
 
         let loaded_capture = Self::create_symbol(home, ident_ids, "loaded_capture");
-        let loaded_argument = Self::create_symbol(home, ident_ids, "loaded_argument");
         let call_result = Self::create_symbol(home, ident_ids, "call_result");
         let unit_symbol = Self::create_symbol(home, ident_ids, "unit_symbol");
         let ignored = Self::create_symbol(home, ident_ids, "ignored");
+
+        let loaded_arguments = Vec::from_iter_in(
+            (0..argument_layouts.len())
+                .map(|i| Self::create_symbol(home, ident_ids, &format!("loaded_argument_{i}"))),
+            arena,
+        );
+
+        let mut arguments = loaded_arguments.clone();
+        if capture_layout.is_some() {
+            arguments.push(loaded_capture);
+        }
 
         let call = Expr::Call(Call {
             call_type: CallType::ByName {
@@ -710,11 +740,7 @@ impl<'a> CallerProc<'a> {
                 arg_layouts: passed_function.argument_layouts,
                 specialization_id: passed_function.specialization_id,
             },
-            arguments: if capture_layout.is_some() {
-                arena.alloc([loaded_argument, loaded_capture])
-            } else {
-                arena.alloc([loaded_argument])
-            },
+            arguments: arguments.into_bump_slice(),
         });
 
         let ptr_write = Expr::Call(Call {
@@ -722,30 +748,42 @@ impl<'a> CallerProc<'a> {
                 op: LowLevel::PtrStore,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: arena.alloc([Symbol::ARG_3, call_result]),
+            arguments: arena.alloc([return_symbol, call_result]),
         });
 
         let mut body = Stmt::Let(
-            loaded_argument,
-            load_argument,
-            passed_function.argument_layouts[0],
+            call_result,
+            call,
+            passed_function.return_layout,
             arena.alloc(Stmt::Let(
-                call_result,
-                call,
-                passed_function.return_layout,
+                ignored,
+                ptr_write,
+                ptr_return_layout,
                 arena.alloc(Stmt::Let(
-                    ignored,
-                    ptr_write,
-                    ptr_return_layout,
-                    arena.alloc(Stmt::Let(
-                        unit_symbol,
-                        Expr::Struct(&[]),
-                        Layout::UNIT,
-                        arena.alloc(Stmt::Ret(unit_symbol)),
-                    )),
+                    unit_symbol,
+                    Expr::Struct(&[]),
+                    Layout::UNIT,
+                    arena.alloc(Stmt::Ret(unit_symbol)),
                 )),
             )),
         );
+
+        let it = loaded_arguments
+            .iter()
+            .zip(ARG_SYMBOLS.iter().skip(1))
+            .zip(argument_layouts.iter())
+            .rev();
+
+        for ((loaded_argument, load_argument), argument_layout) in it {
+            let load_argument = Expr::ptr_load(arena.alloc(load_argument));
+
+            body = Stmt::Let(
+                *loaded_argument,
+                load_argument,
+                *argument_layout,
+                arena.alloc(body),
+            );
+        }
 
         if let Some(capture_layout) = capture_layout {
             body = Stmt::Let(
@@ -756,17 +794,18 @@ impl<'a> CallerProc<'a> {
             );
         }
 
-        let args: &'a [(InLayout<'a>, Symbol)] = {
-            arena.alloc([
-                (ptr_capture_layout, ARG_1),
-                (ptr_argument_layout, ARG_2),
-                (ptr_return_layout, ARG_3),
-            ])
-        };
+        let mut arg_symbols = ARG_SYMBOLS.iter();
+        let mut args = Vec::with_capacity_in(1 + ptr_argument_layouts.len() + 1, arena);
+
+        args.push((ptr_capture_layout, *arg_symbols.next().unwrap()));
+        for l in &ptr_argument_layouts {
+            args.push((*l, *arg_symbols.next().unwrap()));
+        }
+        args.push((ptr_return_layout, *arg_symbols.next().unwrap()));
 
         let proc = Proc {
             name: LambdaName::no_niche(proc_symbol),
-            args,
+            args: args.into_bump_slice(),
             body,
             closure_data_layout: None,
             ret_layout: Layout::UNIT,
@@ -774,20 +813,9 @@ impl<'a> CallerProc<'a> {
             is_erased: false,
         };
 
-        if false {
-            let allocator = ven_pretty::BoxAllocator;
-            let doc = proc
-                .to_doc::<_, (), _>(
-                    &allocator,
-                    layout_interner,
-                    true,
-                    crate::ir::Parens::NotNeeded,
-                )
-                .1
-                .pretty(80)
-                .to_string();
-
-            println!("{doc}");
+        if true {
+            home.register_debug_idents(ident_ids);
+            println!("{}", proc.to_pretty(layout_interner, 200, true));
         }
 
         Self {
