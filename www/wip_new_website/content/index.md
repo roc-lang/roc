@@ -20,11 +20,25 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,400;0,500;0,600;0,700;0,800;0,900;1,400;1,500;1,600;1,700;1,800;1,900&display=swap" rel="stylesheet">
 
-# Roc
+<h1 id="homepage-h1">Roc</h1>
 
-<p id="tagline">A fast, friendly, functional programming language.</p>
+<p id="tagline">A fast, friendly, functional language.</p>
 
-<img src="roc-rocket.png" width=36><p><b>Fast</b> - Roc code is designed to compile fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
+<!-- This exact sample was chosen for several reasons:
+
+1. It's plausible to figure out what it's doing even if you don't know the language yet.
+2. It implements a familiar operation across a variety of domains: filtering a list of files based on extension.
+3. It uses a higher-order function, giving a functional first impression.
+4. It shows some things not found in most mainstream languages, e.g. `|>`, function calls without parens, lambda syntax.
+5. It's horizontally small enough that it can be read on mobile without a scroll bar or shrinking the font size.
+6. It's stylistically idiomatic (`|> Str.endsWith` is always fine; `endsWith` reads well in that style!)
+7. It can be syntax-highlighted with 1 color without looking weird (e.g. string interpolation looks weird in 1 color).
+   This simplifies the color palette of the homepage and doesn't excessively draw attention to the code snippet.
+-->
+<pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>keepIf paths <span class="kw">\</span>path <span class="kw">-></span>
+    path <span class="kw">|></span> Str<span class="punctuation section">.</span>endsWith <span class="kw">".roc"</span></samp></pre>
+
+<p><b>Fast</b> - Roc code is designed to compile fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
 <p><img src="roc-rocket.png" width=36>Friendly</p>
 <p><img src="roc-rocket.png" width=36>Functional</p>
 

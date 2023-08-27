@@ -300,6 +300,11 @@ li {
     margin: 12px 0;
 }
 
+#homepage-h1 {
+    text-align: center;
+    margin-top: 80px;
+}
+
 /* Mobile-friendly screen width */
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
     #tagline {

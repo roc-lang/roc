@@ -33,8 +33,6 @@ main =
     # TODO copy this inline into index.html instead of having a separate network request for this tiny file!
     {} <- cp "../public/repl/repl.js"  "dist/wip/" |> Task.await
 
-    {} <- cp "static/roc-rocket.png"  "dist/wip/" |> Task.await
-
     # Copy font files - assume that www/build.sh has been run previously and the
     # fonts are available locally in ../build/fonts
     {} <-
