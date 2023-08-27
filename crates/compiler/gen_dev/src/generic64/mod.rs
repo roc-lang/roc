@@ -2005,14 +2005,27 @@ impl<
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let caller_proc = CallerProc::new(
-            self.env.arena,
-            self.env.module_id,
-            ident_ids,
-            self.layout_interner,
-            &higher_order.passed_function,
-            higher_order.closure_env_layout,
-        );
+        let caller_proc = match higher_order.op {
+            HigherOrder::ListMap { .. }
+            | HigherOrder::ListMap2 { .. }
+            | HigherOrder::ListMap3 { .. }
+            | HigherOrder::ListMap4 { .. } => CallerProc::new_list_map(
+                self.env.arena,
+                self.env.module_id,
+                ident_ids,
+                self.layout_interner,
+                &higher_order.passed_function,
+                higher_order.closure_env_layout,
+            ),
+            HigherOrder::ListSortWith { .. } => CallerProc::new_compare(
+                self.env.arena,
+                self.env.module_id,
+                ident_ids,
+                self.layout_interner,
+                &higher_order.passed_function,
+                higher_order.closure_env_layout,
+            ),
+        };
 
         let caller = self.debug_symbol("caller");
         let caller_string = self.lambda_name_to_string(
@@ -2025,7 +2038,7 @@ impl<
         self.caller_procs.push(caller_proc);
 
         let argument_layouts = match higher_order.closure_env_layout {
-            None => &higher_order.passed_function.argument_layouts,
+            None => higher_order.passed_function.argument_layouts,
             Some(_) => &higher_order.passed_function.argument_layouts[1..],
         };
 
@@ -2445,7 +2458,71 @@ impl<
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
             }
-            HigherOrder::ListSortWith { xs } => todo!(),
+            HigherOrder::ListSortWith { xs } => {
+                let element_layout = argument_layouts[0];
+
+                let input_list_layout = LayoutRepr::Builtin(Builtin::List(element_layout));
+                let input_list_in_layout = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout);
+
+                let alignment = self.debug_symbol("alignment");
+                let element_width = self.debug_symbol("old_element_width");
+
+                self.load_layout_alignment(element_layout, alignment);
+                self.load_layout_stack_size(element_layout, element_width);
+
+                self.build_fn_pointer(&caller, caller_string);
+
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
+                self.load_literal(
+                    &Symbol::DEV_TMP2,
+                    &Layout::BOOL,
+                    &Literal::Bool(data_is_owned),
+                );
+
+                //    input: RocList,
+                //    caller: CompareFn,
+                //    data: Opaque,
+                //    inc_n_data: IncN,
+                //    data_is_owned: bool,
+                //    alignment: u32,
+                //    element_width: usize,
+
+                let arguments = [
+                    xs,
+                    caller,
+                    data,
+                    inc_n_data,
+                    Symbol::DEV_TMP2,
+                    alignment,
+                    element_width,
+                ];
+
+                let layouts = [
+                    input_list_in_layout,
+                    ptr,
+                    ptr,
+                    ptr,
+                    Layout::BOOL,
+                    Layout::U32,
+                    usize_,
+                ];
+
+                self.build_fn_call_stack_return(
+                    bitcode::LIST_SORT_WITH.to_string(),
+                    &arguments,
+                    &layouts,
+                    ret_layout,
+                    *dst,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
         }
     }
 

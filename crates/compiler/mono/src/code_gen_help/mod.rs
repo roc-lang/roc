@@ -660,7 +660,7 @@ impl<'a> CallerProc<'a> {
         Self::create_symbol(home, ident_ids, &debug_name)
     }
 
-    pub fn new(
+    pub fn new_list_map(
         arena: &'a Bump,
         home: ModuleId,
         ident_ids: &mut IdentIds,
@@ -672,7 +672,7 @@ impl<'a> CallerProc<'a> {
         const ARG_SYMBOLS: &[Symbol] = &[ARG_1, ARG_2, ARG_3, ARG_4, ARG_5, ARG_6];
 
         let argument_layouts = match capture_layout {
-            None => &passed_function.argument_layouts,
+            None => passed_function.argument_layouts,
             Some(_) => &passed_function.argument_layouts[1..],
         };
 
@@ -809,6 +809,148 @@ impl<'a> CallerProc<'a> {
             body,
             closure_data_layout: None,
             ret_layout: Layout::UNIT,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            is_erased: false,
+        };
+
+        if true {
+            home.register_debug_idents(ident_ids);
+            println!("{}", proc.to_pretty(layout_interner, 200, true));
+        }
+
+        Self {
+            proc_symbol,
+            proc_layout,
+            proc,
+        }
+    }
+
+    pub fn new_compare(
+        arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        passed_function: &PassedFunction<'a>,
+        capture_layout: Option<InLayout<'a>>,
+    ) -> Self {
+        const ARG_SYMBOLS: &[Symbol] = &[ARG_1, ARG_2, ARG_3];
+
+        let argument_layouts = match capture_layout {
+            None => passed_function.argument_layouts,
+            Some(_) => &passed_function.argument_layouts[1..],
+        };
+
+        let capture_symbol = ARG_SYMBOLS[0];
+
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(arena),
+            recursive_union: None,
+            op: HelperOp::Eq,
+        };
+
+        let ptr_capture_layout = if let Some(capture_layout) = capture_layout {
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(capture_layout))
+        } else {
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(Layout::UNIT))
+        };
+
+        let it = argument_layouts
+            .iter()
+            .map(|l| layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(*l)));
+        let ptr_argument_layouts = Vec::from_iter_in(it, arena);
+
+        let mut arguments = Vec::with_capacity_in(1 + ptr_argument_layouts.len(), arena);
+        arguments.push(ptr_capture_layout);
+        arguments.extend(ptr_argument_layouts.iter().copied());
+
+        let proc_layout = ProcLayout {
+            arguments: arguments.into_bump_slice(),
+            result: Layout::UNIT,
+            niche: Niche::NONE,
+        };
+
+        let proc_symbol = Self::create_caller_proc_symbol(
+            home,
+            ident_ids,
+            "compare",
+            passed_function.name.name(),
+        );
+
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
+
+        let load_capture = Expr::ptr_load(arena.alloc(capture_symbol));
+
+        let loaded_capture = Self::create_symbol(home, ident_ids, "loaded_capture");
+        let call_result = Self::create_symbol(home, ident_ids, "call_result");
+
+        let loaded_arguments = Vec::from_iter_in(
+            (0..argument_layouts.len())
+                .map(|i| Self::create_symbol(home, ident_ids, &format!("loaded_argument_{i}"))),
+            arena,
+        );
+
+        let mut arguments = loaded_arguments.clone();
+        if capture_layout.is_some() {
+            arguments.push(loaded_capture);
+        }
+
+        let call = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: passed_function.name,
+                ret_layout: passed_function.return_layout,
+                arg_layouts: passed_function.argument_layouts,
+                specialization_id: passed_function.specialization_id,
+            },
+            arguments: arguments.into_bump_slice(),
+        });
+
+        let mut body = Stmt::Let(
+            call_result,
+            call,
+            passed_function.return_layout,
+            arena.alloc(Stmt::Ret(call_result)),
+        );
+
+        let it = loaded_arguments
+            .iter()
+            .zip(ARG_SYMBOLS.iter().skip(1))
+            .zip(argument_layouts.iter())
+            .rev();
+
+        for ((loaded_argument, load_argument), argument_layout) in it {
+            let load_argument = Expr::ptr_load(arena.alloc(load_argument));
+
+            body = Stmt::Let(
+                *loaded_argument,
+                load_argument,
+                *argument_layout,
+                arena.alloc(body),
+            );
+        }
+
+        if let Some(capture_layout) = capture_layout {
+            body = Stmt::Let(
+                loaded_capture,
+                load_capture,
+                capture_layout,
+                arena.alloc(body),
+            );
+        }
+
+        let mut arg_symbols = ARG_SYMBOLS.iter();
+        let mut args = Vec::with_capacity_in(1 + ptr_argument_layouts.len(), arena);
+
+        args.push((ptr_capture_layout, *arg_symbols.next().unwrap()));
+        for l in &ptr_argument_layouts {
+            args.push((*l, *arg_symbols.next().unwrap()));
+        }
+
+        let proc = Proc {
+            name: LambdaName::no_niche(proc_symbol),
+            args: args.into_bump_slice(),
+            body,
+            closure_data_layout: None,
+            ret_layout: Layout::BOOL,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
             is_erased: false,
         };
