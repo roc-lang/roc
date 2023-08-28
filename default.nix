@@ -8,10 +8,8 @@
 }:
 # we only use this file to release a nix package, use flake.nix for development
 let
-  rustPlatform = pkgs.rustPlatform;
-
   desiredRustVersion = (builtins.fromTOML (builtins.readFile (./rust-toolchain.toml))).toolchain.channel;
-  actualRustVersion = rustPlatform.rust.rustc;
+  actualRustVersion = pkgs.rustc;
   rustVersionsMatch = pkgs.lib.strings.hasSuffix desiredRustVersion actualRustVersion;
 
   llvmPkgs = pkgs.llvmPackages_13;
@@ -28,9 +26,10 @@ in
     5. Find the long SHA by executing `git rev-parse <PASTE>`
     6. Copy the long SHA
     7. Paste it in place of the old SHA(rev) in flake.nix:inputs:nixpkgs.url
+    8. execute `nix flake lock --update-input rust-overlay`
   '';
 
-  rustPlatform.buildRustPackage {
+  pkgs.rustPlatform.buildRustPackage {
     pname = "roc";
     version = "0.0.1";
 

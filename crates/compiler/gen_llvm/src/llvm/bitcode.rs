@@ -296,7 +296,7 @@ fn build_transform_caller_help<'a, 'ctx>(
         }
     }
 
-    let result = crate::llvm::build::call_roc_function(
+    let result = crate::llvm::build::call_direct_roc_function(
         env,
         layout_interner,
         roc_function,

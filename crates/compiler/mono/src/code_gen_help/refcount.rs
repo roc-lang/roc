@@ -2,11 +2,11 @@
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::collections::CollectIn;
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
 
-use crate::borrow::Ownership;
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
@@ -188,7 +188,8 @@ pub fn refcount_generic<'a>(
     match layout_interner.get_repr(layout) {
         LayoutRepr::Builtin(
             Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal,
-        ) => {
+        )
+        | LayoutRepr::FunctionPointer(_) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
@@ -229,6 +230,9 @@ pub fn refcount_generic<'a>(
                 runtime_layout,
                 structure,
             )
+        }
+        LayoutRepr::Erased(_) => {
+            todo_lambda_erasure!()
         }
         LayoutRepr::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
@@ -969,14 +973,12 @@ fn refcount_list<'a>(
     let data_pointer = root.create_symbol(ident_ids, "data_pointer");
     let param_data_pointer = Param {
         symbol: data_pointer,
-        ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
 
     let first_element_pointer = root.create_symbol(ident_ids, "first_element_pointer");
     let param_first_element_pointer = Param {
         symbol: first_element_pointer,
-        ownership: Ownership::Owned,
         layout: Layout::OPAQUE_PTR,
     };
 
@@ -1041,23 +1043,22 @@ fn refcount_list<'a>(
     let modify_list = modify_refcount_stmt(Pointer::ToData(data_pointer));
 
     let is_relevant_op = ctx.op.is_dec() || ctx.op.is_inc();
-    let modify_elems_and_list =
-        if is_relevant_op && layout_interner.get_repr(elem_layout).is_refcounted() {
-            refcount_list_elems(
-                root,
-                ident_ids,
-                ctx,
-                layout_interner,
-                elem_layout,
-                LAYOUT_UNIT,
-                ptr_layout,
-                len,
-                first_element_pointer,
-                modify_list,
-            )
-        } else {
-            modify_list
-        };
+    let modify_elems_and_list = if is_relevant_op && layout_interner.is_refcounted(elem_layout) {
+        refcount_list_elems(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            elem_layout,
+            LAYOUT_UNIT,
+            ptr_layout,
+            len,
+            first_element_pointer,
+            modify_list,
+        )
+    } else {
+        modify_list
+    };
 
     //
     // JoinPoint for slice vs list
@@ -1162,7 +1163,6 @@ fn refcount_list_elems<'a>(
     let addr = root.create_symbol(ident_ids, "addr");
     let param_addr = Param {
         symbol: addr,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
@@ -1848,7 +1848,6 @@ fn refcount_union_tailrec<'a>(
 
         let jp_param = Param {
             symbol: next_ptr,
-            ownership: Ownership::Borrowed,
             layout,
         };
 
@@ -1869,7 +1868,6 @@ fn refcount_union_tailrec<'a>(
     let union_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Union(union_layout));
     let loop_param = Param {
         symbol: current,
-        ownership: Ownership::Borrowed,
         layout: union_layout,
     };
 

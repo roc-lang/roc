@@ -9,7 +9,7 @@ procedure Test.10 (Test.11):
 
 procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
     let #Derived_gen.3 : [<rnu><null>, C I64 *self] = NullPointer;
-    let #Derived_gen.2 : Ptr([<rnu><null>, C I64 *self]) = lowlevel Alloca #Derived_gen.3;
+    let #Derived_gen.2 : Ptr([<rnu><null>, C I64 *self]) = Alloca #Derived_gen.3;
     joinpoint #Derived_gen.4 Test.4 Test.5 #Derived_gen.5 #Derived_gen.6:
         let Test.22 : U8 = 1i64;
         let Test.23 : U8 = GetTagId Test.5;

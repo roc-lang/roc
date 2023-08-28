@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: Nix macOS x86_64 cargo test
 

@@ -3,10 +3,10 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, RecordBuilderField, Spaced,
-        Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-        WhenBranch,
+        AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
+        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Module,
+        Pattern, RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation,
+        TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -507,14 +507,14 @@ impl<'a> RemoveSpaces<'a> for TypeDef<'a> {
             },
             Ability {
                 header: TypeHeader { name, vars },
-                loc_has,
+                loc_implements: loc_has,
                 members,
             } => Ability {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
-                loc_has: loc_has.remove_spaces(arena),
+                loc_implements: loc_has.remove_spaces(arena),
                 members: members.remove_spaces(arena),
             },
         }
@@ -569,9 +569,9 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Has<'a> {
+impl<'a> RemoveSpaces<'a> for Implements<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
-        Has::Has
+        Implements::Implements
     }
 }
 
@@ -870,9 +870,9 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasClause<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsClause<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        HasClause {
+        ImplementsClause {
             var: self.var.remove_spaces(arena),
             abilities: self.abilities.remove_spaces(arena),
         }
@@ -893,38 +893,43 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasImpls<'a> {
+impl<'a> RemoveSpaces<'a> for AbilityImpls<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasImpls::HasImpls(impls) => HasImpls::HasImpls(impls.remove_spaces(arena)),
-            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => {
+            AbilityImpls::AbilityImpls(impls) => {
+                AbilityImpls::AbilityImpls(impls.remove_spaces(arena))
+            }
+            AbilityImpls::SpaceBefore(has, _) | AbilityImpls::SpaceAfter(has, _) => {
                 has.remove_spaces(arena)
             }
         }
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasAbility<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsAbility<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasAbility::HasAbility { ability, impls } => HasAbility::HasAbility {
-                ability: ability.remove_spaces(arena),
-                impls: impls.remove_spaces(arena),
-            },
-            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
+                ImplementsAbility::ImplementsAbility {
+                    ability: ability.remove_spaces(arena),
+                    impls: impls.remove_spaces(arena),
+                }
+            }
+            ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
                 has.remove_spaces(arena)
             }
         }
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasAbilities<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsAbilities<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasAbilities::Has(derived) => HasAbilities::Has(derived.remove_spaces(arena)),
-            HasAbilities::SpaceBefore(derived, _) | HasAbilities::SpaceAfter(derived, _) => {
-                derived.remove_spaces(arena)
+            ImplementsAbilities::Implements(derived) => {
+                ImplementsAbilities::Implements(derived.remove_spaces(arena))
             }
+            ImplementsAbilities::SpaceBefore(derived, _)
+            | ImplementsAbilities::SpaceAfter(derived, _) => derived.remove_spaces(arena),
         }
     }
 }

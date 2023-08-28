@@ -16,6 +16,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
+use roc_load::FunctionKind;
 use roc_load::LoadConfig;
 use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
@@ -104,6 +105,8 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
 
     let load_config = LoadConfig {
         target_info: TARGET_INFO,
+        // TODO parameterize
+        function_kind: FunctionKind::LambdaSet,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,
@@ -1346,10 +1349,10 @@ fn specialize_ability_call() {
         r#"
         app "test" provides [main] to "./platform"
 
-        MHash has
-            hash : a -> U64 | a has MHash
+        MHash implements
+            hash : a -> U64 where a implements MHash
 
-        Id := U64 has [MHash {hash}]
+        Id := U64 implements [MHash {hash}]
 
         hash : Id -> U64
         hash = \@Id n -> n
@@ -1382,20 +1385,20 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
-        MEncoding has
-          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+        MEncoding implements
+          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
-        Format has
-          u8 : U8 -> MEncoder fmt | fmt has Format
+        Format implements
+          u8 : U8 -> MEncoder fmt where fmt implements Format
 
 
-        Linear := {} has [Format {u8}]
+        Linear := {} implements [Format {u8}]
 
         u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 has [MEncoding {toEncoder}]
+        MyU8 := U8 implements [MEncoding {toEncoder}]
 
         toEncoder = \@MyU8 n -> u8 n
 
@@ -2328,32 +2331,6 @@ fn issue_4557() {
 }
 
 #[mono_test]
-fn nullable_wrapped_with_non_nullable_singleton_tags() {
-    indoc!(
-        r###"
-        app "test" provides [main] to "./platform"
-
-        F : [
-            A F,
-            B,
-            C,
-        ]
-
-        g : F -> Str
-        g = \f -> when f is
-                A _ -> "A"
-                B -> "B"
-                C -> "C"
-
-        main =
-            g (A (B))
-            |> Str.concat (g B)
-            |> Str.concat (g C)
-        "###
-    )
-}
-
-#[mono_test]
 fn nullable_wrapped_with_nullable_not_last_index() {
     indoc!(
         r###"
@@ -2602,20 +2579,20 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" provides [main] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
-        MEncoding has
-          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+        MEncoding implements
+          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
-        Format has
-          u8 : {} -> MEncoder fmt | fmt has Format
-          str : {} -> MEncoder fmt | fmt has Format
-          tag : MEncoder fmt -> MEncoder fmt | fmt has Format
+        Format implements
+          u8 : {} -> MEncoder fmt where fmt implements Format
+          str : {} -> MEncoder fmt where fmt implements Format
+          tag : MEncoder fmt -> MEncoder fmt where fmt implements Format
 
-        Linear := {} has [Format {u8: lU8, str: lStr, tag: lTag}]
+        Linear := {} implements [Format {u8: lU8, str: lStr, tag: lTag}]
 
-        MU8 := U8 has [MEncoding {toEncoder: toEncoderU8}]
-        MStr := Str has [MEncoding {toEncoder: toEncoderStr}]
+        MU8 := U8 implements [MEncoding {toEncoder: toEncoderU8}]
+        MStr := Str implements [MEncoding {toEncoder: toEncoderStr}]
 
         Q a b := { a: a, b: b }
 
@@ -2665,7 +2642,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -2703,7 +2680,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
         r#"
         app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -3257,6 +3234,27 @@ fn capture_void_layout_task() {
         main : Task {} []
         main =
             forEach [] \_ -> succeed {}
+        "#
+    )
+}
+
+#[mono_test]
+fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Ast : [ A, B, C Str Ast ]
+
+        main : Str
+        main =
+            x : Ast
+            x = A
+
+            when x is
+                A -> "A"
+                B -> "B"
+                C _ _ -> "C"
         "#
     )
 }

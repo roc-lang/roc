@@ -24,6 +24,7 @@ pub use roc_load_internal::file::{
 pub use roc_load_internal::module::{
     EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
 };
+pub use roc_solve::FunctionKind;
 
 #[allow(clippy::too_many_arguments)]
 fn load<'a>(
@@ -51,6 +52,7 @@ pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     render: RenderTarget,
     palette: Palette,
     roc_cache_dir: RocCacheDir<'_>,
@@ -64,6 +66,7 @@ pub fn load_single_threaded<'a>(
         load_start,
         exposed_types,
         target_info,
+        function_kind,
         cached_subs,
         render,
         palette,
@@ -170,6 +173,7 @@ pub fn load_and_typecheck_str<'a>(
     source: &'a str,
     src_dir: PathBuf,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
     render: RenderTarget,
     roc_cache_dir: RocCacheDir<'_>,
     palette: Palette,
@@ -185,6 +189,7 @@ pub fn load_and_typecheck_str<'a>(
         arena,
         load_start,
         target_info,
+        function_kind,
         render,
         palette,
         roc_cache_dir,
@@ -207,6 +212,7 @@ const BOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Box.dat")) as &[_];
 const ENCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Encode.dat")) as &[_];
 const DECODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Decode.dat")) as &[_];
 const HASH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Hash.dat")) as &[_];
+const INSPECT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Inspect.dat")) as &[_];
 
 fn deserialize_help(bytes: &[u8]) -> TypeState {
     let (state, _offset) = TypeState::deserialize(bytes);
@@ -237,6 +243,7 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
         output.insert(ModuleId::DECODE, deserialize_help(DECODE));
 
         output.insert(ModuleId::HASH, deserialize_help(HASH));
+        output.insert(ModuleId::INSPECT, deserialize_help(INSPECT));
     }
 
     output

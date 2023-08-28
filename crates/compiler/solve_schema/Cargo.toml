@@ -1,0 +1,11 @@
+[package]
+name = "roc_solve_schema"
+description = "Types used in the solver."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+bitflags.workspace = true

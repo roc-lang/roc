@@ -993,6 +993,24 @@ fn undefined_variable() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = "User crash with message: \"a crash\"")]
+fn a_crash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            if Bool.true then
+                crash "a crash"
+            else
+                0u64
+            "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn annotation_without_body() {

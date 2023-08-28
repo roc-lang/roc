@@ -2,7 +2,6 @@ use bumpalo::collections::vec::Vec;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Symbol};
 
-use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
@@ -25,7 +24,7 @@ pub fn eq_generic<'a>(
     use crate::layout::Builtin::*;
     use LayoutRepr::*;
     let main_body = match layout_interner.get_repr(layout) {
-        Builtin(Int(_) | Float(_) | Bool | Decimal) => {
+        Builtin(Int(_) | Float(_) | Bool | Decimal) | FunctionPointer(_) => {
             unreachable!(
                 "No generated proc for `==`. Use direct code gen for {:?}",
                 layout
@@ -39,6 +38,7 @@ pub fn eq_generic<'a>(
         Union(union_layout) => eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout),
         Ptr(inner_layout) => eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout),
         LambdaSet(_) => unreachable!("`==` is not defined on functions"),
+        Erased(_) => unreachable!("`==` is not defined on erased types"),
         RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."
@@ -443,7 +443,6 @@ fn eq_tag_union_help<'a>(
 
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
-            ownership: Ownership::Borrowed,
             layout: union_layout,
         });
 
@@ -743,13 +742,11 @@ fn eq_list<'a>(
 
     let param_addr1 = Param {
         symbol: addr1,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
     let param_addr2 = Param {
         symbol: addr2,
-        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 

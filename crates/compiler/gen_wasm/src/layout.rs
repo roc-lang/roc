@@ -1,4 +1,5 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_error_macros::todo_lambda_erasure;
 use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout};
 
 use crate::{PTR_SIZE, PTR_TYPE};
@@ -99,6 +100,8 @@ impl WasmLayout {
             )
             | LayoutRepr::Ptr(_)
             | LayoutRepr::RecursivePointer(_) => Self::Primitive(PTR_TYPE, PTR_SIZE),
+            LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 

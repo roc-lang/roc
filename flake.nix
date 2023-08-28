@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=d7887373fe0731719365831cd254c1e5948307d3";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=821c72743ceae44bdd09718d47cab98fd5fd90af";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -56,6 +56,7 @@
             Foundation
             Metal
             Security
+            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
           ]);
 
         # For debugging LLVM IR
@@ -108,6 +109,13 @@
           wasm-pack # for repl_wasm
           jq
         ]);
+
+        aliases = ''
+          alias clippy='cargo clippy --workspace --tests --release -- --deny warnings'
+          alias fmt='cargo fmt --all'
+          alias fmtc='cargo fmt --all -- --check'
+        '';
+
       in {
 
         devShell = pkgs.mkShell {
@@ -118,15 +126,25 @@
               [ ]);
 
           LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+
           # nix does not store libs in /usr/lib or /lib
+          # for libgcc_s.so.1
+          NIX_LIBGCC_S_PATH =
+            if pkgs.stdenv.isLinux then "${pkgs.stdenv.cc.cc.lib}/lib" else "";
+          # for crti.o, crtn.o, and Scrt1.o
           NIX_GLIBC_PATH =
             if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
+
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
             ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the editor with NVIDIA's closed source drivers
+          
+          shellHook = ''
+            ${aliases}
+          '';
         };
 
         formatter = pkgs.nixpkgs-fmt;

@@ -537,7 +537,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         LayoutRepr::Ptr(_) => {
             unreachable!("Ptr will never be visible to users")
         }
-        LayoutRepr::LambdaSet(_) => OPAQUE_FUNCTION,
+        LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_) => {
+            OPAQUE_FUNCTION
+        }
     };
 
     apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
@@ -575,7 +577,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
     let raw_content = env.subs.get_content_without_compacting(raw_var);
 
     let expr = match (raw_content, layout) {
-        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_)) => {
+        (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_)) => {
             OPAQUE_FUNCTION
         }
         (_, LayoutRepr::Builtin(Builtin::Bool)) => {

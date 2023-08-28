@@ -6,12 +6,12 @@ use roc_module::symbol::Symbol;
 
 use crate::{
     ir::{
-        Call, CallSpecId, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-        ModifyRc, Param, Proc, ProcLayout, Stmt,
+        Call, CallSpecId, CallType, ErasedField, Expr, HigherOrderLowLevel, JoinPointId,
+        ListLiteralElement, ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
-        UnionLayout,
+        Builtin, FunctionPointer, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
+        TagIdIntType, UnionLayout,
     },
 };
 
@@ -27,6 +27,10 @@ pub enum UseKind {
     SwitchCond,
     ExpectCond,
     ExpectLookup,
+    ErasedMake(ErasedField),
+    Erased,
+    FunctionPointer,
+    Alloca,
 }
 
 pub enum ProblemKind<'a> {
@@ -69,6 +73,9 @@ pub enum ProblemKind<'a> {
         symbol: Symbol,
         proc_layout: ProcLayout<'a>,
         similar: Vec<ProcLayout<'a>>,
+    },
+    PtrToUndefinedProc {
+        symbol: Symbol,
     },
     DuplicateCallSpecId {
         old_call_line: usize,
@@ -113,6 +120,24 @@ pub enum ProblemKind<'a> {
     CreateTagPayloadMismatch {
         num_needed: usize,
         num_given: usize,
+    },
+    ErasedMakeValueNotBoxed {
+        symbol: Symbol,
+        def_layout: InLayout<'a>,
+        def_line: usize,
+    },
+    ErasedMakeCalleeNotFunctionPointer {
+        symbol: Symbol,
+        def_layout: InLayout<'a>,
+        def_line: usize,
+    },
+    ErasedLoadValueNotBoxed {
+        symbol: Symbol,
+        target_layout: InLayout<'a>,
+    },
+    ErasedLoadCalleeNotFunctionPointer {
+        symbol: Symbol,
+        target_layout: InLayout<'a>,
     },
 }
 
@@ -271,7 +296,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
         match body {
             Stmt::Let(x, e, x_layout, rest) => {
-                if let Some(e_layout) = self.check_expr(e) {
+                if let Some(e_layout) = self.check_expr(e, *x_layout) {
                     if self.not_equiv(e_layout, *x_layout) {
                         self.problem(ProblemKind::SymbolDefMismatch {
                             symbol: *x,
@@ -350,12 +375,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     self.problem(ProblemKind::RedefinedJoinPoint { id, old_line })
                 }
                 self.in_scope(|ctx| {
-                    for Param {
-                        symbol,
-                        layout,
-                        ownership: _,
-                    } in parameters
-                    {
+                    for Param { symbol, layout } in parameters {
                         ctx.insert(*symbol, *layout);
                     }
                     ctx.check_stmt(body)
@@ -373,11 +393,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         });
                     }
                     for (arg, param) in symbols.iter().zip(parameters.iter()) {
-                        let Param {
-                            symbol: _,
-                            ownership: _,
-                            layout,
-                        } = param;
+                        let Param { symbol: _, layout } = param;
                         self.check_sym_layout(*arg, *layout, UseKind::JumpArg);
                     }
                 } else {
@@ -388,7 +404,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
-    fn check_expr(&mut self, e: &Expr<'a>) -> Option<InLayout<'a>> {
+    fn check_expr(&mut self, e: &Expr<'a>, target_layout: InLayout<'a>) -> Option<InLayout<'a>> {
         match e {
             Expr::Literal(_) => None,
             Expr::NullPointer => None,
@@ -464,6 +480,40 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 // TODO don't know what the element layout is
                 None
             }
+            &Expr::ErasedMake { value, callee } => Some(self.check_erased_make(value, callee)),
+            &Expr::ErasedLoad { symbol, field } => {
+                Some(self.check_erased_load(symbol, field, target_layout))
+            }
+            &Expr::FunctionPointer { lambda_name } => {
+                let lambda_symbol = lambda_name.name();
+                let proc = self.procs.iter().find(|((name, proc), _)| {
+                    *name == lambda_symbol && proc.niche == lambda_name.niche()
+                });
+                match proc {
+                    None => {
+                        self.problem(ProblemKind::PtrToUndefinedProc {
+                            symbol: lambda_symbol,
+                        });
+                        Some(target_layout)
+                    }
+                    Some(((_, proc_layout), _)) => {
+                        let ProcLayout {
+                            arguments, result, ..
+                        } = proc_layout;
+
+                        let fn_ptr =
+                            self.interner
+                                .insert_direct_no_semantic(LayoutRepr::FunctionPointer(
+                                    FunctionPointer {
+                                        args: arguments,
+                                        ret: *result,
+                                    },
+                                ));
+
+                        Some(fn_ptr)
+                    }
+                }
+            }
             &Expr::Reset {
                 symbol,
                 update_mode: _,
@@ -473,6 +523,17 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 update_mode: _,
             } => {
                 self.check_sym_exists(symbol);
+                None
+            }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                if let Some(initializer) = initializer {
+                    self.check_sym_exists(*initializer);
+                    self.check_sym_layout(*initializer, *element_layout, UseKind::Alloca);
+                }
+
                 None
             }
             Expr::RuntimeErrorFunction(_) => None,
@@ -642,6 +703,23 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 }
                 Some(*ret_layout)
             }
+            CallType::ByPointer {
+                pointer,
+                ret_layout,
+                arg_layouts,
+            } => {
+                let expected_layout =
+                    self.interner
+                        .insert_direct_no_semantic(LayoutRepr::FunctionPointer(FunctionPointer {
+                            args: arg_layouts,
+                            ret: *ret_layout,
+                        }));
+                self.check_sym_layout(*pointer, expected_layout, UseKind::FunctionPointer);
+                for (arg, wanted_layout) in arguments.iter().zip(arg_layouts.iter()) {
+                    self.check_sym_layout(*arg, *wanted_layout, UseKind::CallArg);
+                }
+                Some(*ret_layout)
+            }
             CallType::HigherOrder(HigherOrderLowLevel {
                 op: _,
                 closure_env_layout: _,
@@ -700,6 +778,84 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
         }
     }
+
+    fn check_erased_make(&mut self, value: Option<Symbol>, callee: Symbol) -> InLayout<'a> {
+        if let Some(value) = value {
+            self.with_sym_layout(value, |this, def_line, layout| {
+                let repr = this.interner.get_repr(layout);
+                if !matches!(
+                    repr,
+                    LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+                ) {
+                    this.problem(ProblemKind::ErasedMakeValueNotBoxed {
+                        symbol: value,
+                        def_layout: layout,
+                        def_line,
+                    });
+                }
+
+                Option::<()>::None
+            });
+        }
+        self.with_sym_layout(callee, |this, def_line, layout| {
+            let repr = this.interner.get_repr(layout);
+            if !matches!(repr, LayoutRepr::FunctionPointer(_)) {
+                this.problem(ProblemKind::ErasedMakeCalleeNotFunctionPointer {
+                    symbol: callee,
+                    def_layout: layout,
+                    def_line,
+                });
+            }
+
+            Option::<()>::None
+        });
+
+        Layout::ERASED
+    }
+
+    fn check_erased_load(
+        &mut self,
+        symbol: Symbol,
+        field: ErasedField,
+        target_layout: InLayout<'a>,
+    ) -> InLayout<'a> {
+        self.check_sym_layout(symbol, Layout::ERASED, UseKind::Erased);
+
+        match field {
+            ErasedField::Value => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(
+                    repr,
+                    LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+                ) {
+                    self.problem(ProblemKind::ErasedLoadValueNotBoxed {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+            ErasedField::ValuePtr => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::Ptr(_)) {
+                    self.problem(ProblemKind::ErasedLoadValueNotBoxed {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+            ErasedField::Callee => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::FunctionPointer(_)) {
+                    self.problem(ProblemKind::ErasedLoadCalleeNotFunctionPointer {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+        }
+
+        target_layout
+    }
 }
 
 enum TagPayloads<'a> {
@@ -757,7 +913,7 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
             nullable_id,
             other_fields,
         } => {
-            if tag_id == nullable_id as _ {
+            if tag_id == nullable_id as u16 {
                 TagPayloads::Payloads(&[])
             } else {
                 check_tag_id_oob!(2);

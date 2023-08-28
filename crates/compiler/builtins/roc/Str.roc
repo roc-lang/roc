@@ -400,7 +400,7 @@ expect (Str.fromUtf8 [255]) |> Result.isErr
 ## ```
 fromUtf8Range : List U8, { start : Nat, count : Nat } -> Result Str [BadUtf8 Utf8ByteProblem Nat, OutOfBounds]
 fromUtf8Range = \bytes, config ->
-    if config.start + config.count <= List.len bytes then
+    if Num.addSaturated config.start config.count <= List.len bytes then
         result = fromUtf8RangeLowlevel bytes config.start config.count
 
         if result.cIsOk then
@@ -638,12 +638,13 @@ countUtf8Bytes : Str -> Nat
 substringUnsafe : Str, Nat, Nat -> Str
 
 ## Returns the given [Str] with each occurrence of a substring replaced.
-## Returns [Err NotFound] if the substring is not found.
+## If the substring is not found, returns the original string.
+##
 ## ```
-## expect Str.replaceEach "foo/bar/baz" "/" "_" == Ok "foo_bar_baz"
-## expect Str.replaceEach "not here" "/" "_" == Err NotFound
+## expect Str.replaceEach "foo/bar/baz" "/" "_" == "foo_bar_baz"
+## expect Str.replaceEach "not here" "/" "_" == "not here"
 ## ```
-replaceEach : Str, Str, Str -> Result Str [NotFound]
+replaceEach : Str, Str, Str -> Str
 replaceEach = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
@@ -653,9 +654,8 @@ replaceEach = \haystack, needle, flower ->
             |> Str.concat before
             |> Str.concat flower
             |> replaceEachHelp after needle flower
-            |> Ok
 
-        Err err -> Err err
+        Err NotFound -> haystack
 
 replaceEachHelp : Str, Str, Str, Str -> Str
 replaceEachHelp = \buf, haystack, needle, flower ->
@@ -668,39 +668,44 @@ replaceEachHelp = \buf, haystack, needle, flower ->
 
         Err NotFound -> Str.concat buf haystack
 
-expect Str.replaceEach "abXdeXghi" "X" "_" == Ok "ab_de_ghi"
+expect Str.replaceEach "abXdeXghi" "X" "_" == "ab_de_ghi"
+expect Str.replaceEach "abcdefg" "nothing" "_" == "abcdefg"
 
 ## Returns the given [Str] with the first occurrence of a substring replaced.
-## Returns [Err NotFound] if the substring is not found.
+## If the substring is not found, returns the original string.
+##
 ## ```
-## expect Str.replaceFirst "foo/bar/baz" "/" "_" == Ok "foo_bar/baz"
-## expect Str.replaceFirst "no slashes here" "/" "_" == Err NotFound
+## expect Str.replaceFirst "foo/bar/baz" "/" "_" == "foo_bar/baz"
+## expect Str.replaceFirst "no slashes here" "/" "_" == "no slashes here"
 ## ```
-replaceFirst : Str, Str, Str -> Result Str [NotFound]
+replaceFirst : Str, Str, Str -> Str
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
-            Ok "\(before)\(flower)\(after)"
+            "\(before)\(flower)\(after)"
 
-        Err err -> Err err
+        Err NotFound -> haystack
 
-expect Str.replaceFirst "abXdeXghi" "X" "_" == Ok "ab_deXghi"
+expect Str.replaceFirst "abXdeXghi" "X" "_" == "ab_deXghi"
+expect Str.replaceFirst "abcdefg" "nothing" "_" == "abcdefg"
 
 ## Returns the given [Str] with the last occurrence of a substring replaced.
-## Returns [Err NotFound] if the substring is not found.
+## If the substring is not found, returns the original string.
+##
 ## ```
-## expect Str.replaceLast "foo/bar/baz" "/" "_" == Ok "foo/bar_baz"
-## expect Str.replaceLast "no slashes here" "/" "_" == Err NotFound
+## expect Str.replaceLast "foo/bar/baz" "/" "_" == "foo/bar_baz"
+## expect Str.replaceLast "no slashes here" "/" "_" == "no slashes here"
 ## ```
-replaceLast : Str, Str, Str -> Result Str [NotFound]
+replaceLast : Str, Str, Str -> Str
 replaceLast = \haystack, needle, flower ->
     when splitLast haystack needle is
         Ok { before, after } ->
-            Ok "\(before)\(flower)\(after)"
+            "\(before)\(flower)\(after)"
 
-        Err err -> Err err
+        Err NotFound -> haystack
 
-expect Str.replaceLast "abXdeXghi" "X" "_" == Ok "abXde_ghi"
+expect Str.replaceLast "abXdeXghi" "X" "_" == "abXde_ghi"
+expect Str.replaceLast "abcdefg" "nothing" "_" == "abcdefg"
 
 ## Returns the given [Str] before the first occurrence of a [delimiter](https://www.computerhope.com/jargon/d/delimite.htm), as well
 ## as the rest of the string after that occurrence.
@@ -716,7 +721,7 @@ splitFirst = \haystack, needle ->
             remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
 
             before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
+            after = Str.substringUnsafe haystack (Num.addWrap index (Str.countUtf8Bytes needle)) remaining
 
             Ok { before, after }
 
@@ -752,7 +757,7 @@ firstMatchHelp = \haystack, needle, index, lastPossible ->
         if matchesAt haystack index needle then
             Some index
         else
-            firstMatchHelp haystack needle (index + 1) lastPossible
+            firstMatchHelp haystack needle (Num.addWrap index 1) lastPossible
     else
         None
 
@@ -770,7 +775,7 @@ splitLast = \haystack, needle ->
             remaining = Str.countUtf8Bytes haystack - Str.countUtf8Bytes needle - index
 
             before = Str.substringUnsafe haystack 0 index
-            after = Str.substringUnsafe haystack (index + Str.countUtf8Bytes needle) remaining
+            after = Str.substringUnsafe haystack (Num.addWrap index (Str.countUtf8Bytes needle)) remaining
 
             Ok { before, after }
 
@@ -815,7 +820,7 @@ matchesAt : Str, Nat, Str -> Bool
 matchesAt = \haystack, haystackIndex, needle ->
     haystackLength = Str.countUtf8Bytes haystack
     needleLength = Str.countUtf8Bytes needle
-    endIndex = min (haystackIndex + needleLength) haystackLength
+    endIndex = min (Num.addSaturated haystackIndex needleLength) haystackLength
 
     matchesAtHelp {
         haystack,
@@ -842,8 +847,8 @@ matchesAtHelp = \state ->
         doesRestMatch =
             matchesAtHelp
                 { state &
-                    haystackIndex: haystackIndex + 1,
-                    needleIndex: needleIndex + 1,
+                    haystackIndex: Num.addWrap haystackIndex 1,
+                    needleIndex: Num.addWrap needleIndex 1,
                 }
 
         doesThisMatch && doesRestMatch
@@ -866,7 +871,7 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
         byte = Str.getUnsafe string index
         newState = step state byte index
 
-        walkUtf8WithIndexHelp string newState step (index + 1) length
+        walkUtf8WithIndexHelp string newState step (Num.addWrap index 1) length
     else
         state
 
@@ -887,7 +892,7 @@ walkUtf8Help = \str, state, step, index, length ->
         byte = Str.getUnsafe str index
         newState = step state byte
 
-        walkUtf8Help str newState step (index + 1) length
+        walkUtf8Help str newState step (Num.addWrap index 1) length
     else
         state
 
@@ -937,7 +942,7 @@ walkScalarsHelp = \string, state, step, index, length ->
         { scalar, bytesParsed } = getScalarUnsafe string index
         newState = step state scalar
 
-        walkScalarsHelp string newState step (index + bytesParsed) length
+        walkScalarsHelp string newState step (Num.addWrap index bytesParsed) length
     else
         state
 
@@ -965,7 +970,7 @@ walkScalarsUntilHelp = \string, state, step, index, length ->
 
         when step state scalar is
             Continue newState ->
-                walkScalarsUntilHelp string newState step (index + bytesParsed) length
+                walkScalarsUntilHelp string newState step (Num.addWrap index bytesParsed) length
 
             Break newState ->
                 newState

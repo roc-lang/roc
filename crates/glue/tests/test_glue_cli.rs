@@ -133,9 +133,6 @@ mod glue_cli_run {
             Answer was: "Hello World!"
             Answer was: discriminant_U1::None
         "#),
-        return_function:"return-function" => indoc!(r#"
-            Answer was: 43 41
-        "#),
     }
 
     fn check_for_tests(all_fixtures: &mut roc_collections::VecSet<String>) {

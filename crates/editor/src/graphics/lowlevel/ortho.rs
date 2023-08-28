@@ -59,8 +59,7 @@ pub fn update_ortho_buffer(
         0,
         ortho_buffer,
         0,
-        (std::mem::size_of::<Uniforms>() * vec![new_uniforms].as_slice().len())
-            as wgpu::BufferAddress,
+        std::mem::size_of_val(vec![new_uniforms].as_slice()) as wgpu::BufferAddress,
     );
 
     cmd_queue.submit(Some(encoder.finish()));

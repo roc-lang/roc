@@ -29,6 +29,7 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
@@ -40,6 +41,7 @@ fn load_and_typecheck(
     filename: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
@@ -52,6 +54,7 @@ fn load_and_typecheck(
     )?;
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::Generic,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -176,7 +179,13 @@ fn multiple_modules_help<'a>(
         writeln!(file, "{source}")?;
         file_handles.push(file);
 
-        load_and_typecheck(arena, full_file_path, Default::default(), TARGET_INFO)
+        load_and_typecheck(
+            arena,
+            full_file_path,
+            Default::default(),
+            TARGET_INFO,
+            FunctionKind::LambdaSet,
+        )
     };
 
     Ok(result)
@@ -190,7 +199,13 @@ fn load_fixture(
     let src_dir = fixtures_dir().join(dir_name);
     let filename = src_dir.join(format!("{module_name}.roc"));
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
     let mut loaded_module = match loaded {
         Ok(x) => x,
         Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
@@ -347,7 +362,13 @@ fn interface_with_deps() {
     let src_dir = fixtures_dir().join("interface_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
 
     let mut loaded_module = loaded.expect("Test module failed to load");
     let home = loaded_module.module_id;
@@ -493,12 +514,12 @@ fn load_astar() {
     expect_types(
         loaded_module,
         hashmap! {
-            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] | position has Hash & Eq",
-            "initialModel" => "position -> Model position | position has Hash & Eq",
-            "reconstructPath" => "Dict position position, position -> List position | position has Hash & Eq",
-            "updateCost" => "position, position, Model position -> Model position | position has Hash & Eq",
-            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] | position has Hash & Eq",
-            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Hash & Eq",
+            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] where position implements Hash & Eq",
+            "initialModel" => "position -> Model position where position implements Hash & Eq",
+            "reconstructPath" => "Dict position position, position -> List position where position implements Hash & Eq",
+            "updateCost" => "position, position, Model position -> Model position where position implements Hash & Eq",
+            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
+            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] where position implements Hash & Eq",
         },
     );
 }
@@ -919,8 +940,8 @@ fn issue_2863_module_type_does_not_exist() {
                         Did you mean one of these?
 
                             Decoding
-                            Result
                             Dict
+                            Result
                             DecodeError
                         "
                       )

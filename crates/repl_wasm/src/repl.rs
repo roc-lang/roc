@@ -180,6 +180,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
+    let function_kind = roc_solve::FunctionKind::LambdaSet;
     // TODO use this to filter out problems and warnings in wrapped defs.
     // See the variable by the same name in the CLI REPL for how to do this!
     let mono = match compile_to_mono(
@@ -187,6 +188,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         std::iter::empty(),
         &src,
         target_info,
+        function_kind,
         DEFAULT_PALETTE_HTML,
     ) {
         (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible

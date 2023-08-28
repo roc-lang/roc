@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: Nix apple silicon cargo test
 
@@ -38,11 +39,18 @@ jobs:
         run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
 
       - name: test launching the editor
-        run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
+        run: nix develop -c cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
 
       # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
       - name: execute llvm wasm tests with --release
         run: nix develop -c cargo test-gen-llvm-wasm --locked --release
 
-      - name: test website build script
-        run: REPL_DEBUG=1 bash www/build.sh
+      - name: set env var and test website build script
+        run: |
+          nix develop -c bash www/build.sh
+
+      - name: wasm repl tests
+        run: nix develop -c crates/repl_test/test_wasm.sh
+
+      - name: test building wasm repl
+        run: nix develop -c ./ci/www-repl.sh

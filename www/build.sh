@@ -23,7 +23,7 @@ DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
 DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-curl -fLJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT  
+curl -fLJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
 tar -xzf $DESIGN_ASSETS_TARFILE
 mv $DESIGN_ASSETS_DIR/fonts build/
 rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
@@ -51,11 +51,8 @@ cargo --version
 export ROC_DOCS_URL_ROOT=/builtins
 
 cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
-mv generated-docs/*.js www/build # move all .js files to build/
-mv generated-docs/*.css www/build
-mv generated-docs/*.svg www/build
 
-mv generated-docs/ www/build/builtins # move all the rest to build/builtins/
+mv generated-docs/ www/build/builtins # move everything to build/builtins/
 
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
@@ -70,10 +67,11 @@ if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   mkdir www/build/tutorial
 
   cargo build --release --bin roc
+
   roc=target/release/roc
 else
   echo 'Fetching latest roc nightly...'
-  
+
   # get roc release archive
   curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
   # extract archive
@@ -82,6 +80,7 @@ else
   ls | grep "roc_nightly.*tar.gz" | xargs rm
   # simplify dir name
   mv roc_nightly* roc_nightly
+
   roc='./roc_nightly/roc'
 
   echo 'Building tutorial.html from tutorial.md...'
@@ -96,6 +95,7 @@ mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 mkdir www/build/wip
 $roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
 cp -r www/wip_new_website/static/site.css www/build/wip
+cp -r www/build/fonts www/build/wip/fonts
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
@@ -115,17 +115,30 @@ rm -rf ./downloaded-basic-cli
 
 BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
 mkdir -p $BASIC_CLI_PACKAGE_DIR
-mv generated-docs/index.html $BASIC_CLI_PACKAGE_DIR
-rm generated-docs/*.* # we already copied over the *.js and *.css files earlier for the builtins, so just drop these.
 mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
-# set up docs for basic-cli 0.3.2
-BASIC_CLI_DIR_0_3_2=$BASIC_CLI_PACKAGE_DIR/0.3.2
-mkdir -p $BASIC_CLI_DIR_0_3_2
-curl -fL --output $BASIC_CLI_DIR_0_3_2/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/0.3.2/docs.tar.gz
-tar -xf $BASIC_CLI_DIR_0_3_2/docs.tar.gz -C $BASIC_CLI_DIR_0_3_2/
-rm $BASIC_CLI_DIR_0_3_2/docs.tar.gz
-mv $BASIC_CLI_DIR_0_3_2/generated-docs/* $BASIC_CLI_DIR_0_3_2
-rm -rf $BASIC_CLI_DIR_0_3_2/generated-docs
+# set up docs for older basic-cli versions
+# we need a github token
+if [ -v GITHUB_TOKEN_READ_ONLY ]; then
+
+  curl -v -H "Authorization: $GITHUB_TOKEN_READ_ONLY" -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
+
+  DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
+
+  rm basic_cli_releases.json
+
+  VERSION_NUMBERS=$(echo "$DOCS_LINKS" | grep -oP '(?<=/download/)[^/]+(?=/docs.tar.gz)')
+
+  while read -r VERSION_NR; do
+      echo $VERSION_NR
+      BASIC_CLI_DIR=$BASIC_CLI_PACKAGE_DIR/$VERSION_NR
+      mkdir -p $BASIC_CLI_DIR
+      curl -fL --output $BASIC_CLI_DIR/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/$VERSION_NR/docs.tar.gz
+      tar -xf $BASIC_CLI_DIR/docs.tar.gz -C $BASIC_CLI_DIR/
+      rm $BASIC_CLI_DIR/docs.tar.gz
+      mv $BASIC_CLI_DIR/generated-docs/* $BASIC_CLI_DIR
+      rm -rf $BASIC_CLI_DIR/generated-docs
+  done <<< "$VERSION_NUMBERS"
+fi
 
 popd

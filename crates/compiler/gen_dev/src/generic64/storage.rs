@@ -6,7 +6,7 @@ use crate::{
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::Symbol;
 use roc_mono::{
     ir::{JoinPointId, Param},
@@ -807,7 +807,13 @@ impl<
                         }
                     }
                 }
-                Builtin::Decimal => todo!(),
+                Builtin::Decimal => {
+                    let (from_offset, size) = self.stack_offset_and_size(sym);
+                    debug_assert_eq!(from_offset % 8, 0);
+                    debug_assert_eq!(size % 8, 0);
+                    debug_assert_eq!(size, layout_interner.stack_size(*layout));
+                    self.copy_to_stack_offset(buf, size, from_offset, to_offset)
+                }
                 Builtin::Str | Builtin::List(_) => {
                     let (from_offset, size) = self.stack_offset_and_size(sym);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
@@ -830,6 +836,7 @@ impl<
 
                 self.copy_to_stack_offset(buf, size, from_offset, to_offset)
             }
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
             pointer_layouts!() => {
                 // like a 64-bit integer
                 debug_assert_eq!(to_offset % 8, 0);
@@ -1168,12 +1175,7 @@ impl<
     ) {
         let mut param_storage = bumpalo::vec![in self.env.arena];
         param_storage.reserve(params.len());
-        for Param {
-            symbol,
-            ownership: _,
-            layout,
-        } in params
-        {
+        for Param { symbol, layout } in params {
             // Claim a location for every join point parameter to be loaded at.
             // Put everything on the stack for simplicity.
             self.joinpoint_argument_stack_storage(layout_interner, *symbol, *layout);

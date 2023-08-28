@@ -2,12 +2,14 @@
 #![allow(dead_code)]
 use bumpalo::Bump;
 use roc_can::expected::{Expected, PExpected};
+use roc_checkmate::with_checkmate;
 use roc_collections::all::{BumpMap, BumpMapDefault, MutMap};
 use roc_error_macros::internal_error;
 use roc_module::ident::TagName;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve::module::Solved;
+use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
     Subs, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
@@ -17,9 +19,8 @@ use roc_types::types::{
     RecordField,
 };
 use roc_unify::unify::unify;
-use roc_unify::unify::Env as UEnv;
-use roc_unify::unify::Mode;
 use roc_unify::unify::Unified::*;
+use roc_unify::Env as UEnv;
 
 use crate::constrain::{Constraint, PresenceConstraint};
 use crate::lang::core::types::Type2;
@@ -228,10 +229,13 @@ fn solve<'a>(
             );
 
             match unify(
-                &mut UEnv::new(subs),
+                &mut with_checkmate!({
+                    on => UEnv::new(subs, None),
+                    off => UEnv::new(subs),
+                }),
                 actual,
                 expected,
-                Mode::EQ,
+                UnificationMode::EQ,
                 Polarity::OF_VALUE,
             ) {
                 Success {
@@ -326,10 +330,13 @@ fn solve<'a>(
                     );
 
                     match unify(
-                        &mut UEnv::new(subs),
+                        &mut with_checkmate!({
+                            on => UEnv::new(subs, None),
+                            off => UEnv::new(subs),
+                        }),
                         actual,
                         expected,
-                        Mode::EQ,
+                        UnificationMode::EQ,
                         Polarity::OF_VALUE,
                     ) {
                         Success {
@@ -402,10 +409,13 @@ fn solve<'a>(
 
             // TODO(ayazhafiz): presence constraints for Expr2/Type2
             match unify(
-                &mut UEnv::new(subs),
+                &mut with_checkmate!({
+                    on => UEnv::new(subs, None),
+                    off => UEnv::new(subs),
+                }),
                 actual,
                 expected,
-                Mode::EQ,
+                UnificationMode::EQ,
                 Polarity::OF_PATTERN,
             ) {
                 Success {
@@ -718,10 +728,13 @@ fn solve<'a>(
             let includes = type_to_var(arena, mempool, subs, rank, pools, cached_aliases, &tag_ty);
 
             match unify(
-                &mut UEnv::new(subs),
+                &mut with_checkmate!({
+                    on => UEnv::new(subs, None),
+                    off => UEnv::new(subs),
+                }),
                 actual,
                 includes,
-                Mode::PRESENT,
+                UnificationMode::PRESENT,
                 Polarity::OF_PATTERN,
             ) {
                 Success {
@@ -1489,6 +1502,8 @@ fn adjust_rank_content(
             rank
         }
 
+        ErasedLambda => group_rank,
+
         RangedNumber(_vars) => group_rank,
     }
 }
@@ -1669,6 +1684,7 @@ fn instantiate_rigids_help(
             }
         }
 
+        ErasedLambda => {}
         RangedNumber(_vars) => {}
     }
 
@@ -1977,6 +1993,12 @@ fn deep_copy_var_help(
             });
 
             subs.set(copy, make_descriptor(new_content));
+
+            copy
+        }
+
+        ErasedLambda => {
+            subs.set(copy, make_descriptor(ErasedLambda));
 
             copy
         }

@@ -8,6 +8,7 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::{MutMap, VecMap};
+use roc_error_macros::todo_lambda_erasure;
 use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
@@ -1243,8 +1244,7 @@ impl<'a> Env<'a> {
     }
 
     fn find_lambda_sets(&self, root: Variable) -> MutMap<Variable, LambdaSetId> {
-        let stack = bumpalo::vec![in self.arena; root];
-        roc_mono::ir::find_lambda_sets_help(self.subs, stack)
+        roc_mono::ir::find_lambda_sets(self.arena, self.subs, root)
     }
 
     fn add_toplevel_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
@@ -1288,8 +1288,13 @@ fn add_function_type<'a>(
 
     let name = format!("RocFunction_{closure_var:?}");
 
-    let id = env.lambda_set_ids.get(&closure_var).unwrap();
-    let extern_name = format!("roc__mainForHost_{}_caller", id.0);
+    let extern_name = match env.lambda_set_ids.get(&closure_var) {
+        Some(id) => format!("roc__mainForHost_{}_caller", id.0),
+        None => {
+            debug_assert!(is_toplevel);
+            String::from("this_extern_should_not_be_used_this_is_a_bug")
+        }
+    };
 
     for arg_var in args {
         let arg_layout = env
@@ -1613,6 +1618,7 @@ fn add_type_help<'a>(
 
             type_id
         }
+        Content::ErasedLambda => todo_lambda_erasure!(),
         Content::LambdaSet(lambda_set) => {
             let tags = lambda_set.solved;
 
@@ -2144,6 +2150,8 @@ fn tag_union_type_from_layout<'a>(
             // been turned into an error earlier in the process.
             unreachable!();
         }
+        LayoutRepr::FunctionPointer(_) => todo_lambda_erasure!(),
+        LayoutRepr::Erased(_) => todo_lambda_erasure!(),
     }
 }
 

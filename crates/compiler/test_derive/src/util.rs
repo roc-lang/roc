@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
-use roc_solve::module::{SolveConfig, SolveOutput};
+use roc_solve::{
+    module::{SolveConfig, SolveOutput},
+    FunctionKind,
+};
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -184,7 +187,7 @@ macro_rules! v {
          use roc_types::subs::{Subs, Content};
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
-     ($name:ident has $ability:path) => {{
+     ($name:ident implements $ability:path) => {{
          use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
          |subs: &mut Subs| {
              let name_index =
@@ -426,9 +429,13 @@ fn check_derived_typechecks_and_golden(
         constraints: &constraints,
         root_constraint: constr,
         types,
+        function_kind: FunctionKind::LambdaSet,
         pending_derives: Default::default(),
         exposed_by_module: &exposed_for_module.exposed_by_module,
         derived_module: Default::default(),
+
+        #[cfg(debug_assertions)]
+        checkmate: None,
     };
 
     let SolveOutput {
@@ -520,6 +527,7 @@ where
         path.parent().unwrap().to_path_buf(),
         Default::default(),
         target_info,
+        FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
         RocCacheDir::Disallowed,

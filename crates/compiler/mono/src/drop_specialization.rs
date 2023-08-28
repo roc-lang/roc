@@ -17,8 +17,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Proc,
-    ProcLayout, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, ErasedField, Expr, JoinPointId, ListLiteralElement, Literal,
+    ModifyRc, Proc, ProcLayout, Stmt, UpdateModeId,
 };
 use crate::layout::{
     Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
@@ -228,9 +228,28 @@ fn specialize_drops_stmt<'a, 'i>(
                             environment.add_list_child(*binding, *child, index as u64);
                         }
                     }
-                    Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
-                    RuntimeErrorFunction(_) | GetTagId { .. } | EmptyArray | NullPointer => { /* do nothing */
+                    ErasedMake { value, callee: _ } => {
+                        if let Some(value) = value {
+                            environment.add_struct_child(*binding, *value, 0);
+                        }
                     }
+                    ErasedLoad { symbol, field } => {
+                        match field {
+                            ErasedField::Value => {
+                                environment.add_struct_child(*symbol, *binding, 0);
+                            }
+                            ErasedField::Callee | ErasedField::ValuePtr => {
+                                // nothing to own
+                            }
+                        }
+                    }
+                    Reset { .. } | Expr::ResetRef { .. } => { /* do nothing */ }
+                    RuntimeErrorFunction(_)
+                    | FunctionPointer { .. }
+                    | GetTagId { .. }
+                    | Alloca { .. }
+                    | EmptyArray
+                    | NullPointer => { /* do nothing */ }
                 }
 
                 // now store the let binding for later
@@ -1595,12 +1614,14 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         // only inserted for internal purposes. RC should not touch it
         PtrStore => RC::NoRc,
         PtrLoad => RC::NoRc,
-        Alloca => RC::NoRc,
+        PtrCast => RC::NoRc,
 
-        PtrClearTagId | PtrCast | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
+        PtrClearTagId | RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr
         | RefCountDecDataPtr | RefCountIsUnique => {
             unreachable!("Only inserted *after* borrow checking: {:?}", lowlevel);
         }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 

@@ -1,4 +1,4 @@
-Hash has
+Hash implements
   hash : a 
          -> U64
 
