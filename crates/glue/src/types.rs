@@ -1405,26 +1405,41 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
-        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_repr(layout) {
-            LayoutRepr::Builtin(builtin) => {
-                add_builtin_type(env, builtin, var, opt_name, types, layout)
-            }
-            _ => {
-                if symbol.is_builtin() {
-                    todo!(
-                        "Handle Apply for builtin symbol {:?} and layout {:?}",
-                        symbol,
-                        layout
-                    )
-                } else {
-                    todo!(
-                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
-                        symbol,
-                        layout
-                    )
+        Content::Structure(FlatType::Apply(symbol, type_arguments)) => {
+            match env.layout_cache.get_repr(layout) {
+                LayoutRepr::Builtin(builtin) => {
+                    add_builtin_type(env, builtin, var, opt_name, types, layout)
+                }
+                LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(field_layouts))
+                    if *symbol == Symbol::BOX_BOX_TYPE =>
+                {
+                    let payload_vars = &subs.variables[type_arguments.indices()];
+
+                    let payload_id =
+                        add_type_help(env, field_layouts[0], payload_vars[0], None, types);
+
+                    let typ = RocType::RocBox(payload_id);
+                    let type_id = types.add_anonymous(&env.layout_cache.interner, typ, layout);
+
+                    type_id
+                }
+                _ => {
+                    if symbol.is_builtin() {
+                        todo!(
+                            "Handle Apply for builtin symbol {:?} and layout {:?}",
+                            symbol,
+                            layout
+                        )
+                    } else {
+                        todo!(
+                            "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                            symbol,
+                            layout
+                        )
+                    }
                 }
             }
-        },
+        }
         Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
