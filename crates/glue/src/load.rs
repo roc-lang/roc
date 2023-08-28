@@ -340,7 +340,6 @@ pub fn load_types(
     let function_kind = FunctionKind::LambdaSet;
     let arena = &Bump::new();
     let LoadedModule {
-        module_id: home,
         mut can_problems,
         mut type_problems,
         mut declarations_by_id,
@@ -371,6 +370,13 @@ pub fn load_types(
             todo!("{:?}", problem);
         }
     });
+
+    // find the platform's main module
+    let home = declarations_by_id
+        .keys()
+        .find(|id| format!("{id:?}").trim_start_matches("pf.").is_empty())
+        .copied()
+        .unwrap();
 
     let decls = declarations_by_id.remove(&home).unwrap();
     let subs = solved.inner_mut();
