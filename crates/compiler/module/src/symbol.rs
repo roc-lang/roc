@@ -1625,6 +1625,7 @@ define_builtins! {
         29 INSPECT_CUSTOM: "custom"
         30 INSPECT_APPLY: "apply"
         31 INSPECT_TO_INSPECTOR: "toInspector"
+        32 INSPECT_NAT: "nat"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"

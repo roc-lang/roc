@@ -26,6 +26,7 @@ interface Inspect
         i64,
         u128,
         i128,
+        nat,
         f32,
         f64,
         dec,
@@ -73,6 +74,7 @@ InspectFormatter implements
     i64 : I64 -> Inspector f where f implements InspectFormatter
     u128 : U128 -> Inspector f where f implements InspectFormatter
     i128 : I128 -> Inspector f where f implements InspectFormatter
+    nat : Nat -> Inspector f where f implements InspectFormatter
     f32 : F32 -> Inspector f where f implements InspectFormatter
     f64 : F64 -> Inspector f where f implements InspectFormatter
     dec : Dec -> Inspector f where f implements InspectFormatter
