@@ -213,6 +213,42 @@ fn is_eq<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
     )
 }
 
+fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
+    let alloc_pat = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
+    let alloc_expr = |it| env.arena.alloc(Loc::at(DERIVED_REGION, it));
+
+    let payload = "#payload";
+
+    // \@Opaq payload
+    let opaque_ref = alloc_pat(ast::Pattern::OpaqueRef(at_opaque));
+    let opaque_apply_pattern = ast::Pattern::Apply(
+        opaque_ref,
+        &*env
+            .arena
+            .alloc([Loc::at(DERIVED_REGION, ast::Pattern::Identifier(payload))]),
+    );
+
+    // Inspect.toInspector payload
+    let call_member = alloc_expr(ast::Expr::Apply(
+        alloc_expr(ast::Expr::Var {
+            module_name: "Inspect",
+            ident: "toInspector",
+        }),
+        &*env.arena.alloc([&*alloc_expr(ast::Expr::Var {
+            module_name: "",
+            ident: payload,
+        })]),
+        roc_module::called_via::CalledVia::Space,
+    ));
+
+    // \@Opaq payload -> Inspect.toInspector payload
+    ast::Expr::Closure(
+        env.arena
+            .alloc([Loc::at(DERIVED_REGION, opaque_apply_pattern)]),
+        call_member,
+    )
+}
+
 pub const DERIVED_REGION: Region = Region::zero();
 
 pub(crate) fn synthesize_member_impl<'a>(
@@ -232,6 +268,10 @@ pub(crate) fn synthesize_member_impl<'a>(
         Symbol::DECODE_DECODER => (format!("#{opaque_name}_decoder"), decoder(env, at_opaque)),
         Symbol::HASH_HASH => (format!("#{opaque_name}_hash"), hash(env, at_opaque)),
         Symbol::BOOL_IS_EQ => (format!("#{opaque_name}_isEq"), is_eq(env, at_opaque)),
+        Symbol::INSPECT_TO_INSPECTOR => (
+            format!("#{opaque_name}_toInspector"),
+            to_inspector(env, at_opaque),
+        ),
         other => internal_error!("{:?} is not a derivable ability member!", other),
     };
 

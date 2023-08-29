@@ -8,7 +8,7 @@ use roc_can::expr::Expr;
 use roc_can::pattern::Pattern;
 use roc_can::{def::Def, module::ExposedByModule};
 use roc_collections::{MutMap, VecMap};
-use roc_derive_key::DeriveKey;
+use roc_derive_key::{inspect, DeriveKey};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_region::all::Loc;
 use roc_types::subs::{
@@ -79,6 +79,9 @@ fn build_derived_body(
             decoding::derive_decoder(&mut env, decoder_key, derived_symbol)
         }
         DeriveKey::Hash(hash_key) => hash::derive_hash(&mut env, hash_key, derived_symbol),
+        DeriveKey::ToInspector(to_inspector_key) => {
+            inspect::derive_to_inspector(&mut env, to_inspector_key, derived_symbol)
+        }
     };
 
     let def = Def {
