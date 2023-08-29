@@ -373,7 +373,11 @@ impl ObligationCache {
 
         let ImplKey { opaque, ability } = impl_key;
 
-        let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
+        // Every type has the Inspect ability automatically, even opaques with no `implements` declaration.
+        // (Those opaques get a default implementation that returns something along the lines of "<opaque>")
+        let is_inspect = ability == Symbol::INSPECT_INSPECT_ABILITY;
+        let has_known_impl =
+            is_inspect || abilities_store.has_declared_implementation(opaque, ability);
 
         // Some builtins, like Float32 and Bool, would have a cyclic dependency on Encode/Decode/etc.
         // if their Roc implementations explicitly defined some abilities they support.
@@ -385,15 +389,13 @@ impl ObligationCache {
             _ => false,
         };
 
-        let has_declared_impl = has_declared_impl || builtin_opaque_impl_ok();
-
-        let obligation_result = if !has_declared_impl {
+        let obligation_result = if has_known_impl || builtin_opaque_impl_ok() {
+            Ok(())
+        } else {
             Err(Unfulfilled::OpaqueDoesNotImplement {
                 typ: opaque,
                 ability,
             })
-        } else {
-            Ok(())
         };
 
         self.impl_cache.insert(impl_key, obligation_result);
