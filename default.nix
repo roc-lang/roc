@@ -14,7 +14,10 @@ let
 
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
-  nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
+  glibcPath =
+    if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
+  libGccSPath =
+    if pkgs.stdenv.isLinux then "${pkgs.stdenv.cc.cc.lib}/lib" else "";
 in
 
   assert pkgs.lib.assertMsg rustVersionsMatch ''
@@ -104,7 +107,7 @@ in
     # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
     postInstall =
       if pkgs.stdenv.isLinux then ''
-        wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
+        wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${glibcPath} --set NIX_LIBGCC_S_PATH ${libGccSPath} --prefix PATH : ${
           pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
         }
       '' else ''
