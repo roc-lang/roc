@@ -1394,11 +1394,14 @@ impl AbilityResolver for AbilitiesStore {
     }
 }
 
-/// Whether this a module whose types' ability implementations should be checked via derive_key,
+/// Whether this is a module whose types' ability implementations should be checked via derive_key,
 /// because they do not explicitly list ability implementations due to circular dependencies.
 #[inline]
 pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> bool {
-    matches!(module_id, ModuleId::NUM | ModuleId::BOOL)
+    matches!(
+        module_id,
+        ModuleId::NUM | ModuleId::BOOL | ModuleId::INSPECT
+    )
 }
 
 #[derive(Debug)]
