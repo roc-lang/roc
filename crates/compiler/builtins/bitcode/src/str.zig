@@ -1638,7 +1638,12 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
             });
         }
 
-        @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
+        const src: []const u8 = string.asSlice();
+        const dest: []u8 = ret_string.asSliceWithCapacityMut()[i * bytes_len ..];
+
+        std.mem.copy(u8, dest, src);
+
+        // @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
     }
 
     return ret_string;
