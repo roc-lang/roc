@@ -1603,8 +1603,27 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 
 // Str.repeat
 pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
+    const builtin = @import("builtin");
+
+    if (builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("input: {s} {*} {} {} {}\n", .{
+            string.asSlice(),
+            string.str_bytes,
+            string.str_len,
+            string.str_capacity,
+            count,
+        });
+    }
+
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
+
+    if (builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("input: {*} {}\n", .{
+            bytes_ptr,
+            bytes_len,
+        });
+    }
 
     var ret_string = RocStr.allocate(count * bytes_len);
     var ret_string_ptr = ret_string.asU8ptrMut();
