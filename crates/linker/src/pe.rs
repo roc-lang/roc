@@ -1114,7 +1114,7 @@ impl<'a> AppSections<'a> {
                         _ if name.starts_with(".rdata") => SectionKind::ReadOnlyData,
                         _ => continue,
                     }
-                },
+                }
                 Err(_) => continue,
             };
 
