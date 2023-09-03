@@ -1630,6 +1630,14 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
+        if (builtin.target.cpu.arch != .wasm32) {
+            std.debug.print("input: {*} <- {*} {}\n", .{
+                ret_string_ptr + (i * bytes_len),
+                bytes_ptr,
+                bytes_len,
+            });
+        }
+
         @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
     }
 
