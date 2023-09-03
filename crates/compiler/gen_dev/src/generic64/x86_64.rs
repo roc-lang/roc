@@ -1578,12 +1578,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         type ASM = X86_64Assembler;
 
         // a *const RocStr
-        let roc_str_ptr = R11;
-        ASM::add_reg64_reg64_imm32(buf, roc_str_ptr, RSP, 16 + 24); // 24 is width of a rocstr
+        let roc_str_ptr = RCX;
+        debug_assert_eq!(roc_str_ptr, Self::GENERAL_PARAM_REGS[0]);
 
         // a 32-bit integer
-        let panic_tag = RCX;
-        debug_assert_eq!(panic_tag, Self::GENERAL_PARAM_REGS[0]);
+        let panic_tag = RDX;
+        debug_assert_eq!(panic_tag, Self::GENERAL_PARAM_REGS[1]);
+
+        // move the crash tag into a temporary register. We add 1 to it because the 0 value
+        // is already used for "no crash occurred"
+        ASM::add_reg64_reg64_imm32(buf, R10, panic_tag, 0x01);
 
         // the setlongjmp_buffer
         let env = R8;
@@ -1617,16 +1621,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         ASM::mov_reg64_mem64_offset32(buf, result_pointer, env, 0x58);
 
         // a pointer to the error message
-        ASM::mov_reg64_imm64(buf, R10, 0x60);
-        ASM::add_reg64_reg64_reg64(buf, R10, R10, env);
+        ASM::add_reg64_reg64_imm32(buf, R11, env, 0x60);
 
         // write a pointer to the error message into result_pointer
-        ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R10);
+        ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R11);
 
-        // the panic_tag; 1 is added to differentiate from 0 (which indicates success)
-        ASM::add_reg64_reg64_imm32(buf, R10, panic_tag, 1);
-
-        // write the panic tag into the result_pointer
+        // write the panic tag (now in R10) into the result_pointer
         ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x08, R10);
 
         jmp_reg64_offset8(buf, env, 0x50)
