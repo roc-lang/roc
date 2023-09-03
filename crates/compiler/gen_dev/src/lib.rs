@@ -45,6 +45,13 @@ impl AssemblyBackendMode {
             AssemblyBackendMode::Test => true,
         }
     }
+
+    fn generate_roc_panic(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+        }
+    }
 }
 
 pub struct Env<'a> {
