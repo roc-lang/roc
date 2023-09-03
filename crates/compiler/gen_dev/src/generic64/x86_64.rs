@@ -600,9 +600,8 @@ where
     size
 }
 
-fn copy_to_base_offset<'a, 'r, GeneralReg, FloatReg, ASM, CC>(
-    buf: &mut Vec<'a, u8>,
-    storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+fn copy_to_base_offset<GeneralReg, FloatReg, ASM>(
+    buf: &mut Vec<'_, u8>,
     dst_base_offset: i32,
     stack_size: u32,
     ptr_reg: GeneralReg,
@@ -612,7 +611,6 @@ fn copy_to_base_offset<'a, 'r, GeneralReg, FloatReg, ASM, CC>(
     FloatReg: RegTrait,
     GeneralReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
-    CC: CallConv<GeneralReg, FloatReg, ASM>,
 {
     let mut copied = 0;
     let size = stack_size as i32;
@@ -1082,9 +1080,8 @@ impl X64_64WindowsFastCallLoadArgs {
                         let base_offset = storage_manager.claim_stack_area(&sym, stack_size);
                         let tmp_reg = X86_64WindowsFastcall::GENERAL_RETURN_REGS[0];
 
-                        copy_to_base_offset(
+                        copy_to_base_offset::<_, _, ASM>(
                             buf,
-                            storage_manager,
                             base_offset,
                             stack_size,
                             *ptr_reg,
