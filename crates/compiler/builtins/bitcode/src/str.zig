@@ -1607,7 +1607,7 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
     const src: []const u8 = string.asSlice();
 
     var ret_string = RocStr.allocate(count * bytes_len);
-    const dest: []u8 = ret_string.asSliceWithCapacityMut();
+    const dest: []u8 = ret_string.asSliceWithCapacityMut()[0 .. count * bytes_len];
 
     const builtin = @import("builtin");
 
@@ -1624,6 +1624,12 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
+        if (builtin.target.cpu.arch != .wasm32) {
+            std.debug.print("iteration: {} {s}\n", .{
+                i,
+                ret_string.asSlice(),
+            });
+        }
         std.mem.copy(u8, dest[i * bytes_len .. (i + 1) * bytes_len], src);
     }
 
