@@ -1603,47 +1603,15 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 
 // Str.repeat
 pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
-    const builtin = @import("builtin");
-
-    if (builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("input: {s} {*} {} {} {}\n", .{
-            string.asSlice(),
-            string.str_bytes,
-            string.str_len,
-            string.str_capacity,
-            count,
-        });
-    }
-
     const bytes_len = string.len();
-    const bytes_ptr = string.asU8ptr();
-
-    if (builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("input: {*} {}\n", .{
-            bytes_ptr,
-            bytes_len,
-        });
-    }
+    const src: []const u8 = string.asSlice();
 
     var ret_string = RocStr.allocate(count * bytes_len);
-    var ret_string_ptr = ret_string.asU8ptrMut();
+    const dest: []u8 = ret_string.asSliceWithCapacityMut();
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        if (builtin.target.cpu.arch != .wasm32) {
-            std.debug.print("input: {*} <- {*} {}\n", .{
-                ret_string_ptr + (i * bytes_len),
-                bytes_ptr,
-                bytes_len,
-            });
-        }
-
-        const src: []const u8 = string.asSlice();
-        const dest: []u8 = ret_string.asSliceWithCapacityMut()[i * bytes_len ..];
-
-        std.mem.copy(u8, dest, src);
-
-        // @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
+        std.mem.copy(u8, dest[i * bytes_len ..], src);
     }
 
     return ret_string;
@@ -1779,7 +1747,11 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
         const combined_length = arg1.len() + arg2.len();
 
         var result = arg1.reallocate(combined_length);
-        @memcpy(result.asU8ptrMut() + arg1.len(), arg2.asU8ptr(), arg2.len());
+
+        const src: []const u8 = arg2.asSlice();
+        const dest: []u8 = result.asSliceWithCapacityMut()[arg1.len()..];
+
+        std.mem.copy(u8, dest, src);
 
         return result;
     }
