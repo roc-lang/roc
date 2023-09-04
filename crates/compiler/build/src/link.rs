@@ -1227,6 +1227,12 @@ fn link_windows(
 ) -> io::Result<(Child, PathBuf)> {
     match link_type {
         LinkType::Dylib => {
+            #[cfg(windows)]
+            let target = "-native";
+
+            #[cfg(not(windows))]
+            let target = "x86_64-windows-gnu";
+
             let child = zig()
                 .args(["build-lib"])
                 .args(input_paths)
@@ -1234,7 +1240,7 @@ fn link_windows(
                     "-lc",
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
-                    "native",
+                    target,
                     "--pkg-begin",
                     "glue",
                     find_zig_glue_path().to_str().unwrap(),
