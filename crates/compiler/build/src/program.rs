@@ -1020,7 +1020,8 @@ fn build_loaded_file<'a>(
 
             std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
 
-            let builtins_host_tempfile = roc_bitcode::host_tempfile()
+            let builtins_host_tempfile = roc_bitcode::host_tempfile(target)
+                .as_ref()
                 .expect("failed to write host builtins object to tempfile");
 
             let mut inputs = vec![app_o_file.to_str().unwrap()];

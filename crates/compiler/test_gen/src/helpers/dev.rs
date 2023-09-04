@@ -212,8 +212,9 @@ pub fn helper(
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    let builtins_host_tempfile =
-        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_tempfile(&target)
+        .as_ref()
+        .expect("failed to write host builtins object to tempfile");
 
     // TODO make this an environment variable
     if false {

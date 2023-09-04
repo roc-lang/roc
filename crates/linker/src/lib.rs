@@ -32,33 +32,35 @@ pub enum LinkType {
 }
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
-    if let LinkType::Executable = link_type {
-        match target {
-            Triple {
-                architecture: target_lexicon::Architecture::X86_64,
-                operating_system: target_lexicon::OperatingSystem::Linux,
-                binary_format: target_lexicon::BinaryFormat::Elf,
-                ..
-            } => true,
+    match link_type {
+        LinkType::Executable => {
+            match target {
+                Triple {
+                    architecture: target_lexicon::Architecture::X86_64,
+                    operating_system: target_lexicon::OperatingSystem::Linux,
+                    binary_format: target_lexicon::BinaryFormat::Elf,
+                    ..
+                } => true,
 
-            // macho support is incomplete
-            Triple {
-                operating_system: target_lexicon::OperatingSystem::Darwin,
-                binary_format: target_lexicon::BinaryFormat::Macho,
-                ..
-            } => false,
+                // macho support is incomplete
+                Triple {
+                    operating_system: target_lexicon::OperatingSystem::Darwin,
+                    binary_format: target_lexicon::BinaryFormat::Macho,
+                    ..
+                } => false,
 
-            Triple {
-                architecture: target_lexicon::Architecture::X86_64,
-                operating_system: target_lexicon::OperatingSystem::Windows,
-                binary_format: target_lexicon::BinaryFormat::Coff,
-                ..
-            } => true,
+                Triple {
+                    architecture: target_lexicon::Architecture::X86_64,
+                    operating_system: target_lexicon::OperatingSystem::Windows,
+                    binary_format: target_lexicon::BinaryFormat::Coff,
+                    ..
+                } => true,
 
-            _ => false,
+                _ => false,
+            }
         }
-    } else {
-        false
+        LinkType::Dylib => false,
+        LinkType::None => false,
     }
 }
 

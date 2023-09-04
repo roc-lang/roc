@@ -678,12 +678,12 @@ pub fn build(
     };
 
     let wasm_dev_backend = matches!(code_gen_backend, CodeGenBackend::Wasm);
+    let force_legacy_linker =
+        matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy");
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
-    } else if !roc_linker::supported(link_type, &triple)
-        || matches.get_one::<String>(FLAG_LINKER).map(|s| s.as_str()) == Some("legacy")
-    {
+    } else if !roc_linker::supported(link_type, &triple) || force_legacy_linker {
         LinkingStrategy::Legacy
     } else {
         LinkingStrategy::Surgical
