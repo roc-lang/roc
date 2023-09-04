@@ -464,11 +464,11 @@ pub fn rebuild_host(
         platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
     };
 
-    let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
-    let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
-    let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
+    let env_path = env::var("PATH").unwrap_or_default();
+    let env_home = env::var("HOME").unwrap_or_default();
+    let env_cpath = env::var("CPATH").unwrap_or_default();
 
-    let builtins_host_tempfile = roc_bitcode::host_tempfile(&target)
+    let builtins_host_tempfile = roc_bitcode::host_tempfile(target)
         .as_ref()
         .expect("failed to write host builtins object to tempfile");
 
