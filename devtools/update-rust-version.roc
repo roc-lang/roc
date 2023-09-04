@@ -29,38 +29,39 @@ main =
             NotInRocDir ->
                 "This script should be run from the root of the roc repository folder."
 
-            CloneRustOverlay (IOError str) ->
-                "Failed to clone oxalica/rust-overlay: \(str)."
+            CloneRustOverlayErr (IOError str) ->
+                "Failed to clone oxalica/rust-overlay IOError:\n\t\(str)."
 
-            CloneRustOverlay _ ->
-                "Failed to clone oxalica/rust-overlay"
+            CloneRustOverlayErr _ ->
+                "Failed to clone oxalica/rust-overlay."
 
-            RemoveRustOverlay (IOError str) ->
-                "Failed to remove oxalica/rust-overlay: \(str)."
+            RemoveRustOverlayErr (IOError str) ->
+                "Failed to remove oxalica/rust-overlay:\n\t\(str)."
 
-            RemoveRustOverlay _ ->
+            RemoveRustOverlayErr _ ->
                 "Failed to clone oxalica/rust-overlay."
 
             FailedParsingNightlyFromNix date WrongFormat ->
-                "Failed to parse nightly-\(dateToStr date); reason: WrongFormat."
+                "Failed to parse nightly-\(dateToStr date) with error:\n\tWrongFormat."
 
             FailedParsingNightlyFromNix date _ ->
-                "Failed to parse nightly-\(dateToStr date); reason: Unknown."
+                "Failed to parse nightly-\(dateToStr date) with error:\n\tUnknown."
 
             FileReadErr path _ ->
-                "Failed to read file \(Path.display path)."
+                "Failed to read file:\n\t\(Path.display path)."
 
             FileReadUtf8Err path (BadUtf8 _ _) ->
-                "Failed to read file \(Path.display path): Not a valid Utf8 string."
+                "Failed to read file:\n\t\(Path.display path)\n\tError: Not a valid Utf8 string."
 
             FileWriteErr path _ ->
-                "Failed to write to file \(Path.display path)."
+                "Failed to write to file:\n\t\(Path.display path)"
 
             CwdUnavailable ->
                 "Information about current working directory is not available."
 
-            FailedToGetBaseName path ->
-                "Failed to get basename for path \(Path.display path)."
+            # This error is currently impossible, Str.split never returns the empty list.
+            PathListEmpty path ->
+                "I tried to get the name of the current directory, so I split up  \(Path.display path) and tried to get the last element but the split list was empty."
 
     {} <- Stderr.line "Script failed:\n\t\(msg)" |> await
 
@@ -72,22 +73,29 @@ run =
     currentDir <- Path.display currentDirPath
         |> Str.split "/"
         |> List.last
-        |> Result.mapErr \_ -> FailedToGetBaseName currentDirPath
+        |> Result.mapErr \_ -> PathListEmpty currentDirPath
         |> Task.fromResult
         |> await
 
     if currentDir == "roc" then
+        # TODO request new Rust version from user using Stdin.line
         newRustVersion = "1.71.0"
+        # TODO start with checking if this version is available on Nix, see
+        # `assert pkgs.lib.assertMsg rustVersionsMatch ...` in default.nix
 
-        {} <- Stdout.line "Checking current rust versions..." |> await
+        {} <- log "Extracting current rust version from rust-toolchain.toml..." |> await
         { stable: currentStable, nightly: currentNightly } <- getCurrentVersionsFromToml |> await
-        {} <- Stdout.line "Found:\n\tstable: \(versionToStr currentStable)\n\tnightly: from \(dateToStr currentNightly)" |> await
 
-        {} <- Stdout.line "Searching for nightly matching stable-\(newRustVersion)" |> await
-        newNightly <- findMatchingNigthly (versionFromStr newRustVersion) currentNightly |> await
-        {} <- Stdout.line "New nightly: nightly-\(dateToStr newNightly)" |> await
+        {} <- log "Found versions:\n\t- stable: \(versionToStr currentStable)\n\t- nightly: nightly-\(dateToStr currentNightly)"  |> await
+        {} <- log "Searching for nightly matching stable-\(newRustVersion)..." |> await
+ 
+        newNightly <-
+            findMatchingNigthly (versionFromStr newRustVersion) currentNightly
+            |> await
 
-        # TODO can we avoid boiler plate of `{} <-` and `await` here?
+        {} <- log "Found most recent nightly matching \(newRustVersion): nightly-\(dateToStr newNightly)" |> await
+
+        TODO can we avoid boiler plate of `{} <-` and `await` here?
         {} <-
             Path.fromStr "rust-toolchain.toml"
             |> updateToml newRustVersion
@@ -104,6 +112,7 @@ run =
             |> await
 
         Task.ok {}
+            
     else
         Task.err NotInRocDir
 
@@ -133,23 +142,26 @@ getCurrentVersionsFromToml =
 
 findMatchingNigthly : RustVersion, Date -> Task Date _
 findMatchingNigthly = \desiredVersion, startingDate ->
-    step = \date ->
-        fileContents <- getNightlyFile date |> await
+
+    checkFile = \fileDate ->
+        fileContents <- getNightlyFile fileDate |> await
         version <- parseVersionFromNix fileContents
             |> Task.fromResult
-            |> Task.mapErr \err -> FailedParsingNightlyFromNix date err
+            |> Task.mapErr \err -> FailedParsingNightlyFromNix fileDate err
             |> await
+
         if versionsEqual version desiredVersion then
-            Done date |> Task.ok
+            Done fileDate |> Task.ok
         else
             # TODO: find a better and correct way to get next date
             # maybe list all files under 'manifests/nightly/{year}/'
             # and check them one by one
-            nextDate date |> Step |> Task.ok
+            nextDate fileDate |> Step |> Task.ok
 
     {} <- cloneRustOverlay |> await
-    nightly <- Task.loop startingDate step |> await
+    nightly <- Task.loop startingDate checkFile |> await
     {} <- rmRustOverlay |> await
+
     Task.ok nightly
 
 # TODO try to avoid repition of same code in updateToml and updateEarthFile
@@ -213,7 +225,7 @@ dateToStr = \{ year, month, day } ->
 
 nextDate : Date -> Date
 nextDate = \{ year, month, day } ->
-    # this is totally wrong, to be fixed
+    # TODO this is totally wrong, to be fixed
     { year, month, day: day + 1 }
 
 # stable rust version
@@ -236,50 +248,64 @@ parseVersionFromNix : Str -> Result RustVersion _
 parseVersionFromNix = \nixStr ->
     # nixStr: {v="1.70.0-nightly";d="2023-04-15";r=5;p=5;cargo={_0="6 ...
 
-    { before: _, after } <-
-        Str.splitFirst nixStr "\""
-        |> Result.mapErr \_ -> WrongFormat
-        |> Result.try
-    # after: 1.70.0-nightly";d="2023-04-15";r=5;p=5;cargo={_0="6 ...
-
-    { before, after: _ } <-
-        Str.splitFirst after "-"
-        |> Result.mapErr \_ -> WrongFormat
-        |> Result.try
-    # before: 1.70.0
-
-    Ok (versionFromStr before)
+    Str.splitFirst nixStr "\""
+    |> Result.try
+        # after: 1.70.0-nightly";d="2023-04-15";r=5;p=5;cargo={_0="6 ...
+        \{ before: _, after } -> Str.splitFirst after "-"
+    |> Result.mapErr \_ -> WrongFormat
+    |> Result.map
+        # before: 1.70.0
+        \{ before, after: _ } -> versionFromStr before
 
 getNightlyFile : Date -> Task Str _
 getNightlyFile = \date ->
-    nightlyFilePrefix = "rust-overlay/manifests/nightly/"
+    nightlyFolder = "rust-overlay/manifests/nightly/"
+
     nightlyFilePath =
-        Str.joinWith [nightlyFilePrefix, Num.toStr date.year, "/", dateToStr date, ".nix"] ""
+        Str.joinWith
+            [nightlyFolder, Num.toStr date.year, "/", dateToStr date, ".nix"]
+            ""
         |> Path.fromStr
+
     File.readUtf8 nightlyFilePath
+
+cloneGitRepo : Str -> Task {} _
+cloneGitRepo = \url ->
+    Cmd.new "git"
+        |> Cmd.args ["clone", "--depth=1", url]
+        |> Cmd.status
 
 cloneRustOverlay : Task {} _
 cloneRustOverlay =
     url = "https://github.com/oxalica/rust-overlay.git"
-    {} <- Stdout.line "Cloning \(url) into ./rust-overlay" |> await
-    err <- Cmd.new "git"
-        |> Cmd.args ["clone", "-q", "--depth=1", url]
-        |> Cmd.status
+
+    {} <- log "Cloning \(url) into ./rust-overlay" |> await
+    err <-
+        cloneGitRepo url
         |> Task.onErr
-    {} <- Stdout.line "Trying to remove ./rust-overlay" |> await
-    {} <- rmRustOverlay |> Task.mapErr (\_ -> CloneRustOverlay err) |> await
-    {} <- Stdout.line "Trying to clone again" |> await
-    Cmd.new "git"
-    |> Cmd.args ["clone", "-q", "--depth=1", url]
-    |> Cmd.status
-    |> Task.mapErr CloneRustOverlay
+
+    {} <- log "Trying to remove ./rust-overlay" |> await
+
+    {} <-
+        rmRustOverlay
+        |> Task.mapErr (\_ -> CloneRustOverlayErr err)
+        |> await
+
+    {} <- log "Trying to clone again\n" |> await
+
+    cloneGitRepo url
+    |> Task.mapErr CloneRustOverlayErr
 
 rmRustOverlay : Task {} _
 rmRustOverlay =
     path = "./rust-overlay"
-    {} <- Stdout.line "Removing \(path)" |> await
+    {} <- log "Removing \(path)..." |> await
+
     Cmd.new "rm"
-    |> Cmd.args ["-fr", path]
+    |> Cmd.args ["-rf", path]
     |> Cmd.status
-    |> Task.mapErr RemoveRustOverlay
+    |> Task.mapErr RemoveRustOverlayErr
+
+log = \str ->
+    Stdout.line "> \(str)\n"
 
