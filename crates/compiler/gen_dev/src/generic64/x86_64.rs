@@ -546,7 +546,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 }
 
-fn copy_symbol_to_stack<'a, CC>(
+fn copy_symbol_to_stack_offset<'a, CC>(
     buf: &mut Vec<'a, u8>,
     storage_manager: &mut X86_64StorageManager<'a, '_, CC>,
     sym: Symbol,
@@ -598,6 +598,59 @@ where
     }
 
     size
+}
+
+fn copy_to_base_offset<GeneralReg, FloatReg, ASM>(
+    buf: &mut Vec<'_, u8>,
+    dst_base_offset: i32,
+    stack_size: u32,
+    ptr_reg: GeneralReg,
+    tmp_reg: GeneralReg,
+    read_offset: i32,
+) where
+    FloatReg: RegTrait,
+    GeneralReg: RegTrait,
+    ASM: Assembler<GeneralReg, FloatReg>,
+{
+    let mut copied = 0;
+    let size = stack_size as i32;
+    let base_offset = dst_base_offset;
+
+    if size - copied >= 8 {
+        for _ in (0..(size - copied)).step_by(8) {
+            ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
+            ASM::mov_base32_reg64(buf, base_offset + copied, tmp_reg);
+
+            copied += 8;
+        }
+    }
+
+    if size - copied >= 4 {
+        for _ in (0..(size - copied)).step_by(4) {
+            ASM::mov_reg32_mem32_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
+            ASM::mov_base32_reg32(buf, base_offset + copied, tmp_reg);
+
+            copied += 4;
+        }
+    }
+
+    if size - copied >= 2 {
+        for _ in (0..(size - copied)).step_by(2) {
+            ASM::mov_reg16_mem16_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
+            ASM::mov_base32_reg16(buf, base_offset + copied, tmp_reg);
+
+            copied += 2;
+        }
+    }
+
+    if size - copied >= 1 {
+        for _ in (0..(size - copied)).step_by(1) {
+            ASM::mov_reg8_mem8_offset32(buf, tmp_reg, ptr_reg, read_offset + copied);
+            ASM::mov_base32_reg8(buf, base_offset + copied, tmp_reg);
+
+            copied += 1;
+        }
+    }
 }
 
 struct X64_64SystemVStoreArgs {
@@ -658,7 +711,8 @@ impl X64_64SystemVStoreArgs {
                 // Just copy onto the stack.
                 let stack_offset = self.tmp_stack_offset;
 
-                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
@@ -672,14 +726,16 @@ impl X64_64SystemVStoreArgs {
             LayoutRepr::Struct { .. } => {
                 let stack_offset = self.tmp_stack_offset;
 
-                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let stack_offset = self.tmp_stack_offset;
 
-                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
@@ -762,6 +818,8 @@ impl X64_64WindowsFastCallStoreArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        type ASM = X86_64Assembler;
+
         // we use the return register as a temporary register; it will be overwritten anyway
         let tmp_reg = Self::GENERAL_RETURN_REGS[0];
 
@@ -776,31 +834,50 @@ impl X64_64WindowsFastCallStoreArgs {
                     let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
                     let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg1, offset);
-                    X86_64Assembler::mov_reg64_base32(buf, reg2, offset + 8);
+                    ASM::mov_reg64_base32(buf, reg1, offset);
+                    ASM::mov_reg64_base32(buf, reg2, offset + 8);
 
                     self.general_i += 2;
                 } else {
                     // Copy to stack using return reg as buffer.
                     let reg = Self::GENERAL_RETURN_REGS[0];
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg, offset);
-                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+                    ASM::mov_reg64_base32(buf, reg, offset);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg, offset + 8);
-                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+                    ASM::mov_reg64_base32(buf, reg, offset + 8);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
 
                     self.tmp_stack_offset += 16;
                 }
             }
             _ if layout_interner.stack_size(in_layout) == 0 => {}
             _ if layout_interner.stack_size(in_layout) > 16 => {
-                // for now, just copy onto the stack.
-                let stack_offset = self.tmp_stack_offset;
+                // Reference: https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170#parameter-passing
+                match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+                    Some(reg) => {
+                        // if there is a general purpose register available, use it to store a pointer to the value
+                        let (base_offset, _size) = storage_manager.stack_offset_and_size(&sym);
 
-                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+                        ASM::add_reg64_reg64_imm32(buf, *reg, X86_64GeneralReg::RBP, base_offset);
 
-                self.tmp_stack_offset += size as i32;
+                        self.general_i += 1;
+                    }
+                    None => {
+                        // else, pass the value implicitly by copying to the stack (of the new frame)
+                        let stack_offset = self.tmp_stack_offset;
+
+                        let size = copy_symbol_to_stack_offset(
+                            buf,
+                            storage_manager,
+                            sym,
+                            tmp_reg,
+                            stack_offset,
+                        );
+
+                        self.tmp_stack_offset += size as i32;
+                    }
+                }
             }
             LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
                 buf,
@@ -813,14 +890,16 @@ impl X64_64WindowsFastCallStoreArgs {
                 // for now, just also store this on the stack
                 let stack_offset = self.tmp_stack_offset;
 
-                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let stack_offset = self.tmp_stack_offset;
 
-                let size = copy_symbol_to_stack(buf, storage_manager, sym, tmp_reg, stack_offset);
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
 
                 self.tmp_stack_offset += size as i32;
             }
@@ -977,11 +1056,14 @@ struct X64_64WindowsFastCallLoadArgs {
 impl X64_64WindowsFastCallLoadArgs {
     fn load_arg<'a>(
         &mut self,
+        buf: &mut Vec<'a, u8>,
         storage_manager: &mut X86_64StorageManager<'a, '_, X86_64WindowsFastcall>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        type ASM = X86_64Assembler;
+
         let stack_size = layout_interner.stack_size(in_layout);
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
@@ -991,11 +1073,33 @@ impl X64_64WindowsFastCallLoadArgs {
                 storage_manager.no_data(&sym);
             }
             _ if stack_size > 16 => {
-                // TODO: Double check this.
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
+                // Reference: https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170#parameter-passing
+                match X86_64WindowsFastcall::GENERAL_PARAM_REGS.get(self.general_i) {
+                    Some(ptr_reg) => {
+                        // if there is a general purpose register available, use it to store a pointer to the value
+                        let base_offset = storage_manager.claim_stack_area(&sym, stack_size);
+                        let tmp_reg = X86_64WindowsFastcall::GENERAL_RETURN_REGS[0];
+
+                        copy_to_base_offset::<_, _, ASM>(
+                            buf,
+                            base_offset,
+                            stack_size,
+                            *ptr_reg,
+                            tmp_reg,
+                            0,
+                        );
+
+                        self.general_i += 1;
+                    }
+                    None => {
+                        // else, pass the value implicitly by copying to the stack (of the new frame)
+                        storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                        self.argument_offset += stack_size as i32;
+                    }
+                }
             }
             LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
+                buf,
                 storage_manager,
                 layout_interner,
                 sym,
@@ -1205,7 +1309,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
 
     #[inline(always)]
     fn load_args<'a>(
-        _buf: &mut Vec<'a, u8>,
+        buf: &mut Vec<'a, u8>,
         storage_manager: &mut X86_64StorageManager<'a, '_, X86_64WindowsFastcall>,
         layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(InLayout<'a>, Symbol)],
@@ -1226,7 +1330,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         }
 
         for (in_layout, sym) in args.iter() {
-            state.load_arg(storage_manager, layout_interner, *sym, *in_layout);
+            state.load_arg(buf, storage_manager, layout_interner, *sym, *in_layout);
         }
     }
 
@@ -1474,12 +1578,16 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         type ASM = X86_64Assembler;
 
         // a *const RocStr
-        let roc_str_ptr = R11;
-        ASM::add_reg64_reg64_imm32(buf, roc_str_ptr, RSP, 16 + 24); // 24 is width of a rocstr
+        let roc_str_ptr = RCX;
+        debug_assert_eq!(roc_str_ptr, Self::GENERAL_PARAM_REGS[0]);
 
         // a 32-bit integer
-        let panic_tag = RCX;
-        debug_assert_eq!(panic_tag, Self::GENERAL_PARAM_REGS[0]);
+        let panic_tag = RDX;
+        debug_assert_eq!(panic_tag, Self::GENERAL_PARAM_REGS[1]);
+
+        // move the crash tag into a temporary register. We add 1 to it because the 0 value
+        // is already used for "no crash occurred"
+        ASM::add_reg64_reg64_imm32(buf, R10, panic_tag, 0x01);
 
         // the setlongjmp_buffer
         let env = R8;
@@ -1513,16 +1621,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         ASM::mov_reg64_mem64_offset32(buf, result_pointer, env, 0x58);
 
         // a pointer to the error message
-        ASM::mov_reg64_imm64(buf, R10, 0x60);
-        ASM::add_reg64_reg64_reg64(buf, R10, R10, env);
+        ASM::add_reg64_reg64_imm32(buf, R11, env, 0x60);
 
         // write a pointer to the error message into result_pointer
-        ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R10);
+        ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x00, R11);
 
-        // the panic_tag; 1 is added to differentiate from 0 (which indicates success)
-        ASM::add_reg64_reg64_imm32(buf, R10, panic_tag, 1);
-
-        // write the panic tag into the result_pointer
+        // write the panic tag (now in R10) into the result_pointer
         ASM::mov_mem64_offset32_reg64(buf, result_pointer, 0x08, R10);
 
         jmp_reg64_offset8(buf, env, 0x50)

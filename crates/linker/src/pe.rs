@@ -1107,11 +1107,15 @@ impl<'a> AppSections<'a> {
 
         for (i, section) in file.sections().enumerate() {
             let kind = match section.name() {
-                Ok(".text") => SectionKind::Text,
-                // Ok(".data") => SectionKind::Data,
-                Ok(".rdata") => SectionKind::ReadOnlyData,
-
-                _ => continue,
+                Ok(name) => {
+                    match name {
+                        _ if name.starts_with(".text") => SectionKind::Text,
+                        // _ if name.starts_with(".data") => SectionKind::Data,
+                        _ if name.starts_with(".rdata") => SectionKind::ReadOnlyData,
+                        _ => continue,
+                    }
+                }
+                Err(_) => continue,
             };
 
             let mut relocations: MutMap<String, Vec<AppRelocation>> = MutMap::default();
