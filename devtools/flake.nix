@@ -3,7 +3,7 @@
 
   inputs = {
     # change this path to the path of your roc folder
-    roc.url = "path:/home/username/gitrepos/roc9/roc";
+    roc.url = "path:/home/anton/gitrepos/roc";
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -35,7 +35,7 @@
                         publisher = "benjamin-thomas";
                         version = "0.0.4";
                         # keep this sha for the first run, nix will tell you the correct one to change it to
-                        sha256 = "sha256-mabNegZ+XPQ6EIHFk6jz2mAPLHAU6Pm3w0SiFB7IE+s=";
+                        sha256 = "sha256-USZiXdvYa8hxj62cy6hdiS5c2tIDIQxSyux684lyAEY=";
                       }
                     ]
                   ;
