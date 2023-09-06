@@ -35,7 +35,7 @@ jobs:
               if: steps.checklock.outputs.changed == 'true'
               id: devtools_test_step
               run: |
-                sed -i "s|/home/anton/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
+                sed -i "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
                 cat devtools/flake.nix
                 mkdir -p ../temp
                 cp devtools/flake.nix ../temp
