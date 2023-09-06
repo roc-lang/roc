@@ -21,8 +21,7 @@ jobs:
 
             - name: update roc folder path
               run: |
-                echo "ROC_FOLDER=$(realpath .)" >> $GITHUB_ENV
-                sed -i 's|/home/username/gitrepos/roc|${{ env.ROC_FOLDER }}|g' devtools/flake.nix
+                sed -i 's|/home/username/gitrepos/roc|$(realpath .)|g' devtools/flake.nix
                 cat devtools/flake.nix
 
             - name: test devtools/flake.nix
