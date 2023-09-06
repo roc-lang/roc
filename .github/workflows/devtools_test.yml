@@ -1,0 +1,41 @@
+on:
+    pull_request:
+  
+name: Test the devtools nix files
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    devtools-test:
+        name: devtools-test
+        runs-on: [ubuntu-20.04]
+        timeout-minutes: 120
+        steps:
+            - uses: actions/checkout@v3
+            # TODO only run if flake.lock changed
+
+            - name: test devtools/flake.nix
+              id: devtools_test_step
+              run: |
+                echo "ROC_FOLDER=$(realpath .)" >> $GITHUB_ENV
+                mkdir -p ../temp
+                cp devtools/flake.nix ../temp
+                cp devtools/flake.lock ../temp
+                cd ../temp
+                git init
+                git add flake.nix flake.lock
+                sed -i 's|/home/username/gitrepos/roc|${{ env.ROC_FOLDER }}|g' flake.nix
+                nix develop
+
+            - name: Print tip on fail
+              if: steps.devtools_test_step.outcome == 'failure'
+              run: |
+                echo "The devtools test failed, this can likely be fixed by"
+                echo "locally deleting devtools/flake.lock and following the"
+                echo "instructions in devtools/README.md. This will create a"
+                echo "new flake.lock you should use to replace the old devtools/flake.lock"
+
+
+  
