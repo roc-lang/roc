@@ -19,17 +19,21 @@ jobs:
               with:
                 nix_path: nixpkgs=channel:nixos-unstable
 
+            - name: update roc folder path
+              run: |
+                echo "ROC_FOLDER=$(realpath .)" >> $GITHUB_ENV
+                sed -i 's|/home/username/gitrepos/roc|${{ env.ROC_FOLDER }}|g' flake.nix
+                cat flake.nix
+
             - name: test devtools/flake.nix
               id: devtools_test_step
               run: |
-                echo "ROC_FOLDER=$(realpath .)" >> $GITHUB_ENV
                 mkdir -p ../temp
                 cp devtools/flake.nix ../temp
                 cp devtools/flake.lock ../temp
                 cd ../temp
                 git init
                 git add flake.nix flake.lock
-                sed -i 's|/home/username/gitrepos/roc|${{ env.ROC_FOLDER }}|g' flake.nix
                 nix develop
 
             - name: Print tip on fail
