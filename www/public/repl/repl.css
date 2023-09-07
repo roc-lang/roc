@@ -103,3 +103,9 @@ section.source textarea {
 .underline {
   text-decoration: underline;
 }
+.features-warning {
+  margin-top: 20px;
+  text-align: center;
+  font-size: small;
+  color: #999;
+}
