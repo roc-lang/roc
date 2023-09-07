@@ -228,9 +228,9 @@ unsafe fn fill_last_64_bytes_with_newlines(slice: &mut [MaybeUninit<u8>]) {
         let ptr = last_64_bytes as *mut __m128i;
 
         _mm_storeu_si128(ptr.add(0), newline);
-        _mm_storeu_si128(ptr.add(16), newline);
-        _mm_storeu_si128(ptr.add(32), newline);
-        _mm_storeu_si128(ptr.add(48), newline);
+        _mm_storeu_si128(ptr.add(1), newline);
+        _mm_storeu_si128(ptr.add(2), newline);
+        _mm_storeu_si128(ptr.add(3), newline);
     }
 
     #[cfg(target_feature = "neon")]
