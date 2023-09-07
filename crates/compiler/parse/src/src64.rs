@@ -84,6 +84,11 @@ impl<'a> Src64<'a> {
     /// Returns None if the given string exceeds the maximum size of a Roc source file.
     pub fn from_str(arena: &'a Bump, src: &'a str) -> Option<Src64<'a>> {
         let src_len = src.len();
+
+        if src_len == 0 {
+            return None;
+        }
+
         let capacity = round_up_to_nearest_64(src_len);
 
         if capacity == src_len && src.as_ptr().align_offset(16) == 0 {
@@ -114,6 +119,11 @@ impl<'a> Src64<'a> {
     pub fn from_file(arena: &'a Bump, path: &Path) -> Result<Self, FileErr> {
         let mut file = File::open(path).map_err(Into::<FileErr>::into)?;
         let file_size = file.metadata()?.len() as usize;
+
+        if file_size == 0 {
+            return Err(FileErr::FileWasEmpty);
+        }
+
         let capacity = round_up_to_nearest_64(file_size);
 
         // Safety: we got capacity by rounding up to the nearest 64B
@@ -152,13 +162,7 @@ impl<'a> Src64<'a> {
 
                 Ok(Self { bytes })
             }
-            None => {
-                if file_size == 0 {
-                    Err(FileErr::FileWasEmpty)
-                } else {
-                    Err(FileErr::FileWasTooBig(file_size))
-                }
-            }
+            None => Err(FileErr::FileWasTooBig(file_size)),
         }
     }
 }
@@ -178,7 +182,7 @@ unsafe fn allocate_and_pad_with_newlines(
     // Compare capacity here instead of size because this file limit is based on what we can record row and line
     // numbers for, and those can theoretically oveflow on the trailing newlines we may have added.
     // This distinction will most likely come up in practice zero times ever, but it could come up in fuzzing.
-    if capacity == 0 || capacity > MAX_ROC_SOURCE_FILE_SIZE {
+    if capacity > MAX_ROC_SOURCE_FILE_SIZE {
         return None;
     }
 
