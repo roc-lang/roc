@@ -22,9 +22,13 @@ use std::{
     path::Path,
 };
 
+#[cfg(not(test))]
 /// We store both line and column numbers as u16s, so the largest possible file you could open
 /// would be every line having the longest possible column length, or u16::MAX * u16::MAX.
 const MAX_ROC_SOURCE_FILE_SIZE: usize = u16::MAX as usize * u16::MAX as usize; // 4GB
+
+#[cfg(test)]
+const MAX_ROC_SOURCE_FILE_SIZE: usize = 1024; // small enough that we can create a tempfile to exercise this scenario
 
 pub struct Src64<'a> {
     /// These bytes are guaranteed to have a 16B-aligned address (so the parser can do 128-bit SIMD on it).
@@ -261,9 +265,9 @@ unsafe fn fill_last_64_bytes_with_newlines(slice: &mut [MaybeUninit<u8>]) {
 
 #[cfg(test)]
 mod src64_tests {
-    use super::{FileErr, Src64};
+    use super::{FileErr, Src64, MAX_ROC_SOURCE_FILE_SIZE};
     use bumpalo::Bump;
-    use quickcheck::quickcheck;
+    use quickcheck::{quickcheck, Arbitrary, Gen};
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
@@ -350,16 +354,60 @@ mod src64_tests {
         );
     }
 
+    #[test]
+    fn two_bytes() {
+        expect_from(
+            "xy",
+            Ok({
+                let mut vec: Vec<u8> = [b'\n'; 64].as_mut_slice().into();
+
+                vec[0] = b'x';
+                vec[1] = b'y';
+
+                vec
+            }),
+        );
+    }
+
+    #[test]
+    fn max_file_size() {
+        let bytes = [b'z'; MAX_ROC_SOURCE_FILE_SIZE];
+
+        expect_from(
+            core::str::from_utf8(bytes.as_slice()).unwrap(),
+            Ok(bytes.into()),
+        );
+    }
+
+    #[test]
+    fn too_big() {
+        let bytes = [b'z'; MAX_ROC_SOURCE_FILE_SIZE + 1];
+
+        expect_from(
+            core::str::from_utf8(bytes.as_slice()).unwrap(),
+            Err(FileErr::FileWasTooBig(bytes.len())),
+        );
+    }
+
+    #[derive(Debug, Clone)]
+    struct FileBytes(Vec<u8>);
+
+    impl Arbitrary for FileBytes {
+        fn arbitrary(g: &mut Gen) -> Self {
+            let len = g.size() % (MAX_ROC_SOURCE_FILE_SIZE + 1); // Wrap around to avoid clustering
+                                                                 //
+            FileBytes((0..len).map(|_| u8::arbitrary(g)).collect())
+        }
+    }
+
     quickcheck! {
         /// Creates a tempfile containing arbitrary bytes, then reads it with Str::from_file. Asserts that:
         /// - the returned Result<Str64> is Ok
         /// - its length is a multiple of 64
         /// - it's at least as long as the input bytes were
         /// - it starts_with the input bytes
-        fn from_arb_file(bytes: Vec<u8>) -> bool {
-            if bytes.is_empty() || bytes.len() > 1231 {
-                return true;
-            }
+        fn from_arb_file(bytes: FileBytes) -> bool {
+            let FileBytes(bytes) = bytes;
 
             let dir = tempdir().expect("Failed to create temp dir");
             let file_path = dir.path().join("temp_file");
