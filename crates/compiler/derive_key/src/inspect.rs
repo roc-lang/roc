@@ -4,11 +4,8 @@ use roc_module::{
 };
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
-use crate::{
-    util::{
-        check_derivable_ext_var, debug_name_fn, debug_name_record, debug_name_tag, debug_name_tuple,
-    },
-    DeriveError,
+use crate::util::{
+    check_derivable_ext_var, debug_name_fn, debug_name_record, debug_name_tag, debug_name_tuple,
 };
 
 #[derive(Hash)]
@@ -27,8 +24,9 @@ pub enum FlatInspectableKey {
     Tuple(u32),
     TagUnion(Vec<(TagName, u16)>),
     Function(u32 /* arity; +1 for return type */),
+    /// This means specifically an opaque type where the author hasn't requested that it derive Inspect (or implemented it)
+    Opaque,
     Error,
-    TypeVar(String),
 }
 
 impl FlatInspectableKey {
@@ -42,15 +40,15 @@ impl FlatInspectableKey {
             FlatInspectableKey::TagUnion(tags) => debug_name_tag(tags),
             FlatInspectableKey::Function(arity) => debug_name_fn(*arity),
             FlatInspectableKey::Error => "error".to_string(),
-            FlatInspectableKey::TypeVar(name) => format!("typeVariable({name})"),
+            FlatInspectableKey::Opaque => "opaque".to_string(),
         }
     }
 }
 
 impl FlatInspectable {
     pub(crate) fn from_var(subs: &Subs, var: Variable) -> FlatInspectable {
-        use DeriveError::*;
         use FlatInspectable::*;
+
         match *subs.get_content_without_compacting(var) {
             Content::Structure(flat_type) => match flat_type {
                 FlatType::Apply(sym, _) => match sym {
@@ -58,21 +56,15 @@ impl FlatInspectable {
                     Symbol::SET_SET => Key(FlatInspectableKey::Set()),
                     Symbol::DICT_DICT => Key(FlatInspectableKey::Dict()),
                     Symbol::STR_STR => Immediate(Symbol::INSPECT_STR),
-                    Symbol::NUM_NUM => {
-                        todo!();
-                        // TODO need to match again to see what type of Num it was, then
-                        // use Symbol::INSPECT_WHATEVERNUMBERTYPE
-                    }
                     _ => Immediate(Symbol::INSPECT_OPAQUE),
                 },
                 FlatType::Record(fields, ext) => {
                     let (fields_iter, ext) = fields.unsorted_iterator_and_ext(subs, ext);
 
+                    // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
                     check_derivable_ext_var(subs, ext, |ext| {
-                        todo!(); // TODO open records can still derive Inspect, but we need to decide how/if to render the ext var.
-
-                        // matches!(ext, Content::Structure(FlatType::EmptyRecord))
-                    });
+                        matches!(ext, Content::Structure(FlatType::EmptyRecord))
+                    }).expect("Compiler error: unexpected nonempty ext var when deriving Inspect for record");
 
                     let mut field_names = Vec::with_capacity(fields.len());
                     for (field_name, _) in fields_iter {
@@ -86,11 +78,10 @@ impl FlatInspectable {
                 FlatType::Tuple(elems, ext) => {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
+                    // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
                     check_derivable_ext_var(subs, ext, |ext| {
-                        todo!(); // TODO open tuples can still derive Inspect, but we need to decide how/if to render the ext var.
-
-                        // matches!(ext, Content::Structure(FlatType::EmptyTuple))
-                    });
+                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
+                    }).expect("Compiler error: unexpected nonempty ext var when deriving Inspect for tuple");
 
                     Key(FlatInspectableKey::Tuple(elems_iter.count() as _))
                 }
@@ -106,11 +97,10 @@ impl FlatInspectable {
                     // `t`-prefixed payload types.
                     let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
 
+                    // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
                     check_derivable_ext_var(subs, ext.var(), |ext| {
-                        todo!(); // TODO open tag unions can still derive Inspect, but we need to decide how/if to render the ext var.
-
-                        // matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
-                    });
+                        matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
+                    }).expect("Compiler error: unexpected nonempty ext var when deriving Inspect for tag union");
 
                     let mut tag_names_and_payload_sizes: Vec<_> = tags_iter
                         .tags
@@ -134,14 +124,13 @@ impl FlatInspectable {
                     ))
                 }
                 FlatType::EmptyRecord => Key(FlatInspectableKey::Record(Vec::new())),
-                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Key(FlatInspectableKey::TagUnion(Vec::new())),
-                //
                 FlatType::Func(slice, ..) => {
                     let arity = subs.get_subs_slice(slice).len();
 
                     Key(FlatInspectableKey::Function(arity as u32))
                 }
+                FlatType::EmptyTuple => unreachable!("Somehow Inspect derivation got an expression that's an empty tuple, which shouldn't be possible!"),
             },
             Content::Alias(sym, _, real_var, _) => match Self::from_builtin_alias(sym) {
                 Some(lambda) => lambda,
@@ -157,13 +146,9 @@ impl FlatInspectable {
             Content::FlexVar(_)
             | Content::RigidVar(_)
             | Content::FlexAbleVar(_, _)
-            | Content::RigidAbleVar(_, _) => {
-                let var_name: String = todo!();
-
-                Key(FlatInspectableKey::TypeVar(var_name))
-            }
-            Content::LambdaSet(_) | Content::ErasedLambda => {
-                unreachable!();
+            | Content::RigidAbleVar(_, _)
+            | Content::LambdaSet(_) | Content::ErasedLambda => {
+                unreachable!("There must have been a bug in the solver, because we're trying to derive Inspect on a non-concrete type.");
             }
         }
     }

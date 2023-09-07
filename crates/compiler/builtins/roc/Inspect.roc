@@ -33,6 +33,9 @@ interface Inspect
         custom,
         apply,
         toInspector,
+        # TODO don't expose these - there's some way to do this!
+        inspectFn,
+        inspectOpaque,
     ]
     imports [
         Bool.{ Bool },
@@ -57,12 +60,11 @@ InspectFormatter implements
     set : set, ElemWalker state set elem, (elem -> Inspector f) -> Inspector f where f implements InspectFormatter
     dict : dict, KeyValWalker state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f where f implements InspectFormatter
 
-    # Note opaque is used for both opaque types and functions.
-    # The auto deriver for functions probably could put the function type.
-    # For regular opaque types, I think we can use the type name, though that may lead to some reflection related issues that still need to be discussed.
-    # As a simple baseline, it can just use the exact words `opaque` and `function` for now.
-    # In text, this would render as `<opaque>`, `<function>`, etc
-    opaque : Str -> Inspector f where f implements InspectFormatter
+    # In text, this would render as `<opaque>`
+    opaque : Inspector f where f implements InspectFormatter
+
+    # In text, this would render as `<function>`
+    function : Inspector f where f implements InspectFormatter
 
     u8 : U8 -> Inspector f where f implements InspectFormatter
     i8 : I8 -> Inspector f where f implements InspectFormatter
@@ -94,3 +96,11 @@ inspect : val -> f where val implements Inspect, f implements InspectFormatter
 inspect = \val ->
     (@Inspector valFn) = toInspector val
     valFn (init {})
+
+## Should not be exposed, only used in auto-deriving
+inspectFn : * -> Inspector f where f implements InspectFormatter
+inspectFn = \_ -> function
+
+## Should not be exposed, only used in auto-deriving
+inspectOpaque : * -> Inspector f where f implements InspectFormatter
+inspectOpaque = \_ -> opaque

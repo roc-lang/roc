@@ -1627,6 +1627,8 @@ define_builtins! {
         30 INSPECT_APPLY: "apply"
         31 INSPECT_TO_INSPECTOR: "toInspector"
         32 INSPECT_NAT: "nat"
+        33 INSPECT_INSPECT_FN: "inspectFn"
+        34 INSPECT_INSPECT_OPAQUE: "inspectOpaque"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"
