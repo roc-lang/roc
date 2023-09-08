@@ -1,8 +1,8 @@
 # Commit Signing Guide
 
-If you don't have signing set up on your device and you only want to change a single file, it will be easier to use [github's edit button](https://docs.github.com/en/repositories/working-with-files/managing-files/editing-files). This will sign your commit automatically.
+If you don't have signing set up on your device and you only want to make simple changes, it will be easier to use [github's edit button](https://docs.github.com/en/repositories/working-with-files/managing-files/editing-files) for single file changes or [github's online VSCode editor](https://docs.github.com/en/codespaces/the-githubdev-web-based-editor#opening-the-githubdev-editor) for multi-file changes. These tools will sign your commit automatically.
 
-For multi-file or complex changes you will want to set up signing on your device.
+For complex changes you will want to set up signing on your device.
 Follow along with the subsection below that applies to you.
 
 If your situation is not listed below, consider adding your steps to help out others.
@@ -51,7 +51,7 @@ git config --global gpg.program "c:\Program Files (x86)\GnuPG\bin\gpg.exe"
 git config --global commit.gpgsign true
 gpg --list-secret-keys --keyid-format LONG
 ```
-The last command will show your keyid. On the line that says [SC], copy the id.
+The last command will show your keyid. On the line that says `[SC]`, copy the id.
 In the example below the id is 683AB68D867FEB5C
 ```
 sec>  rsa4096/683AB68D867FEB5C 2020-02-02 [SC] [expires: 2022-02-02]
