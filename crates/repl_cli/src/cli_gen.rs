@@ -7,49 +7,26 @@ use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_load::{EntryPoint, FunctionKind, MonomorphizedModule};
+use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_mono::layout::STLayoutInterner;
 use roc_parse::ast::Expr;
 use roc_repl_eval::eval::jit_to_ast;
-use roc_repl_eval::gen::{compile_to_mono, format_answer, Problems, ReplOutput};
+use roc_repl_eval::gen::{format_answer, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};
-use roc_reporting::report::DEFAULT_PALETTE;
 use roc_std::RocStr;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 use roc_types::subs::Subs;
 use target_lexicon::Triple;
 
-pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
-    defs: I,
-    src: &str,
-    target: Triple,
+pub fn eval_llvm<'a>(
+    mut loaded: MonomorphizedModule<'a>,
+    target: &Triple,
     opt_level: OptLevel,
-) -> (Option<ReplOutput>, Problems) {
+) -> Option<ReplOutput> {
     let arena = Bump::new();
-    let target_info = TargetInfo::from(&target);
-    let function_kind = FunctionKind::LambdaSet;
-
-    let mut loaded;
-    let problems;
-
-    match compile_to_mono(
-        &arena,
-        defs,
-        src,
-        target_info,
-        function_kind,
-        DEFAULT_PALETTE,
-    ) {
-        (Some(mono), probs) => {
-            loaded = mono;
-            problems = probs;
-        }
-        (None, probs) => {
-            return (None, probs);
-        }
-    };
+    let target_info = TargetInfo::from(target);
 
     debug_assert_eq!(loaded.exposed_to_host.top_level_values.len(), 1);
     let (main_fn_symbol, main_fn_var) = loaded
@@ -70,20 +47,15 @@ pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
         DebugPrint::NOTHING,
     );
 
-    let (_, main_fn_layout) = match loaded.procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(layout) => *layout,
-        None => {
-            let empty_vec: Vec<String> = Vec::new(); // rustc can't infer the type of this Vec.
-            debug_assert_ne!(problems.errors, empty_vec, "Got no errors but also no valid layout for the generated main function in the repl!");
-
-            return (None, problems);
-        }
-    };
+    let (_, main_fn_layout) = *loaded
+        .procedures
+        .keys()
+        .find(|(s, _)| *s == main_fn_symbol)?;
 
     let interns = loaded.interns.clone();
 
     let (lib, main_fn_name, subs, layout_interner) =
-        mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
+        mono_module_to_dylib(&arena, &target, loaded, opt_level).expect("we produce a valid Dylib");
 
     let mut app = CliApp { lib };
 
@@ -100,13 +72,10 @@ pub fn gen_and_eval_llvm<'a, I: Iterator<Item = &'a str>>(
     );
     let expr_str = format_answer(&arena, expr).to_string();
 
-    (
-        Some(ReplOutput {
-            expr: expr_str,
-            expr_type: expr_type_str,
-        }),
-        problems,
-    )
+    Some(ReplOutput {
+        expr: expr_str,
+        expr_type: expr_type_str,
+    })
 }
 
 struct CliApp {
@@ -191,11 +160,11 @@ impl ReplAppMemory for CliMemory {
 
 fn mono_module_to_dylib<'a>(
     arena: &'a Bump,
-    target: Triple,
+    target: &Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
 ) -> Result<(libloading::Library, &'a str, Subs, STLayoutInterner<'a>), libloading::Error> {
-    let target_info = TargetInfo::from(&target);
+    let target_info = TargetInfo::from(target);
 
     let MonomorphizedModule {
         procedures,
@@ -210,7 +179,7 @@ fn mono_module_to_dylib<'a>(
     let context = Context::create();
     let builder = context.create_builder();
     let module = arena.alloc(roc_gen_llvm::llvm::build::module_from_builtins(
-        &target, &context, "",
+        target, &context, "",
     ));
 
     let module = arena.alloc(module);
