@@ -43,18 +43,9 @@ Close Kleopatra.
 
 Install the `YubiKey Minidriver for 64-bit systems – Windows Installer` from [here](https://www.yubico.com/support/download/smart-card-drivers-tools/).
 
-Insert your Yubikey and check if it is mentioned in the output of `gpg --card-status` (command line). If not, execute these powershell commands:
-```
-New-Item "$env:APPDATA\gnupg\scdaemon.conf" -Type File
-notepad "$env:APPDATA\gnupg\scdaemon.conf"
-```
-open `Device Manager`, click `View`>`Show Hidden Devices`, expand `Software Devices`, you will see something like `Yubico YubiKey OTP+FIDO+CCID 0`, copy your version of this string.
+Insert your Yubikey and check if it is mentioned in the output of `gpg --card-status` (powershell).
 
-Type `reader-port "Yubico YubiKey OTP+FIDO+CCID 0"` (use your exact string) into notepad and save the file.
-
-Reboot your pc.
-
-Open the `Git Bash` program and execute:
+Open powershell and execute:
 ```
 git config --global gpg.program "c:\Program Files (x86)\GnuPG\bin\gpg.exe"
 git config --global commit.gpgsign true
