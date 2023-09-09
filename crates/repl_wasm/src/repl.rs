@@ -1,12 +1,21 @@
 use bumpalo::{collections::vec::Vec, Bump};
+use roc_reporting::report::{DEFAULT_PALETTE_HTML, HTML_STYLE_CODES};
 use std::{cell::RefCell, mem::size_of};
 
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result;
 use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
-use roc_repl_eval::{eval::jit_to_ast, gen::format_answer, ReplApp, ReplAppMemory};
-use roc_repl_ui::repl_state::{ReplAction, ReplState};
+use roc_repl_eval::{
+    eval::jit_to_ast,
+    gen::{format_answer, ReplOutput},
+    ReplApp, ReplAppMemory,
+};
+use roc_repl_ui::{
+    format_output,
+    repl_state::{ReplAction, ReplState},
+    TIPS,
+};
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
@@ -167,15 +176,50 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
 const PRE_LINKED_BINARY: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.wasm")) as &[_];
 
-pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
+pub async fn entrypoint_from_js(src: String) -> String {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
+    // TODO: make this a global and reset it?
     let arena = &Bump::new();
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
 
+    let res_action = REPL_STATE.with(|repl_state| {
+        let mut repl_state = repl_state.borrow_mut();
+        repl_state.step(arena, &src, target_info, DEFAULT_PALETTE_HTML)
+    });
+
+    match res_action {
+        ReplAction::Help => TIPS.to_string(),
+        ReplAction::Exit | ReplAction::Nothing => String::new(),
+        ReplAction::Eval {
+            opt_mono,
+            problems,
+            opt_var_name,
+        } => {
+            let opt_output = match opt_mono {
+                Some(mono) => eval_wasm(arena, target_info, mono).await,
+                None => None,
+            };
+            let dimensions = None; // TODO: we could get the window dimensions from JS...
+            format_output(
+                HTML_STYLE_CODES,
+                opt_output,
+                problems,
+                opt_var_name,
+                dimensions,
+            )
+        }
+    }
+}
+
+async fn eval_wasm<'a>(
+    arena: &'a Bump,
+    target_info: TargetInfo,
+    mono: MonomorphizedModule<'a>,
+) -> Option<ReplOutput> {
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -192,7 +236,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let main_fn_var = *main_fn_var;
 
     // pretty-print the expr type string for later.
-    let expr_type_str = name_and_print_var(
+    let expr_type = name_and_print_var(
         main_fn_var,
         &mut subs,
         module_id,
@@ -200,10 +244,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         DebugPrint::NOTHING,
     );
 
-    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(layout) => *layout,
-        None => return Ok(format!("<function> : {expr_type_str}")),
-    };
+    let (_, main_fn_layout) = *procedures.keys().find(|(s, _)| *s == main_fn_symbol)?;
 
     let app_module_bytes = {
         let env = roc_gen_wasm::Env {
@@ -247,9 +288,16 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     };
 
     // Send the compiled binary out to JS and create an executable instance from it
-    js_create_app(&app_module_bytes)
-        .await
-        .map_err(|js| format!("{js:?}"))?;
+    let create_result = js_create_app(&app_module_bytes).await;
+    match create_result {
+        Ok(()) => {}
+        Err(js_exception) => {
+            return Some(ReplOutput {
+                expr: format!("{js_exception:?}"),
+                expr_type: String::new(),
+            })
+        }
+    }
 
     let mut app = WasmReplApp { arena };
 
@@ -267,11 +315,8 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         target_info,
     );
 
-    let var_name = String::new(); // TODO turn this into something like " # val1"
-
     // Transform the Expr to a string
-    // `Result::Err` becomes a JS exception that will be caught and displayed
-    let expr = format_answer(arena, res_answer);
+    let expr = format_answer(arena, res_answer).to_string();
 
-    Ok(format!("{expr} : {expr_type_str}{var_name}"))
+    Some(ReplOutput { expr, expr_type })
 }
