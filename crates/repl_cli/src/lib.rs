@@ -1,18 +1,15 @@
 //! Command Line Interface (CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
 mod cli_gen;
-mod colors;
-pub mod repl_state;
 
 use std::borrow::Cow;
 
 use bumpalo::Bump;
-use colors::{BLUE, END_COL, GREEN, PINK};
-use const_format::concatcp;
-use repl_state::ReplAction;
-use repl_state::{parse_src, ParseOutcome, ReplState};
+use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
-use roc_parse::ast::{Expr, ValueDef};
 use roc_repl_eval::gen::{Problems, ReplOutput};
+use roc_repl_ui::colors::{END_COL, GREEN, PINK};
+use roc_repl_ui::repl_state::{ReplAction, ReplState};
+use roc_repl_ui::{is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS, WELCOME_MESSAGE};
 use roc_reporting::report::DEFAULT_PALETTE;
 use roc_target::TargetInfo;
 use rustyline::highlight::{Highlighter, PromptInfo};
@@ -21,62 +18,6 @@ use rustyline_derive::{Completer, Helper, Hinter};
 use target_lexicon::Triple;
 
 use crate::cli_gen::eval_llvm;
-
-pub const WELCOME_MESSAGE: &str = concatcp!(
-    "\n  The rockin’ ",
-    BLUE,
-    "roc repl",
-    END_COL,
-    "\n",
-    PINK,
-    "────────────────────────",
-    END_COL,
-    "\n\n"
-);
-
-// TODO add link to repl tutorial(does not yet exist).
-pub const TIPS: &str = concatcp!(
-    "\nEnter an expression to evaluate, or a definition (like ",
-    BLUE,
-    "x = 1",
-    END_COL,
-    ") to use in future expressions.\n\nUnless there was a compile-time error, expressions get automatically named so you can refer to them later.\nFor example, if you see ",
-    GREEN,
-    "# val1",
-    END_COL,
-    " after an output, you can now refer to that expression as ",
-    BLUE,
-    "val1",
-    END_COL,
-    " in future expressions.\n\n",
-    "Tips:\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    PINK,
-    "ctrl-v",
-    END_COL,
-    " + ",
-    PINK,
-    "ctrl-j",
-    END_COL,
-    " makes a newline\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":q to quit\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":help"
-);
-
-// For when nothing is entered in the repl
-// TODO add link to repl tutorial(does not yet exist).
-pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n\n";
-
-pub const PROMPT: &str = concatcp!(BLUE, "»", END_COL, " ");
-pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
 
 #[derive(Completer, Helper, Hinter, Default)]
 pub struct ReplHelper {
@@ -120,10 +61,8 @@ pub fn main() -> i32 {
                         problems,
                         opt_var_name,
                     } => {
-                        let opt_output =
-                            opt_mono.and_then(|mono| eval_llvm(mono, &target, OptLevel::Normal));
-                        let output = format_output(opt_output, problems, opt_var_name, dimensions);
-
+                        let output =
+                            evaluate(opt_mono, problems, opt_var_name, &target, dimensions);
                         if !output.is_empty() {
                             println!("{output}");
                         }
@@ -157,6 +96,17 @@ pub fn main() -> i32 {
     }
 }
 
+pub fn evaluate<'a>(
+    opt_mono: Option<MonomorphizedModule<'a>>,
+    problems: Problems,
+    opt_var_name: Option<String>,
+    target: &Triple,
+    dimensions: Option<(usize, usize)>,
+) -> String {
+    let opt_output = opt_mono.and_then(|mono| eval_llvm(mono, target, OptLevel::Normal));
+    format_output(opt_output, problems, opt_var_name, dimensions)
+}
+
 #[derive(Default)]
 struct InputValidator {}
 
@@ -167,32 +117,6 @@ impl Validator for InputValidator {
         } else {
             Ok(ValidationResult::Valid(None))
         }
-    }
-}
-
-pub fn is_incomplete(input: &str) -> bool {
-    let arena = Bump::new();
-
-    match parse_src(&arena, input) {
-        ParseOutcome::Incomplete => !input.ends_with('\n'),
-        // Standalone annotations are default incomplete, because we can't know
-        // whether they're about to annotate a body on the next line
-        // (or if not, meaning they stay standalone) until you press Enter again!
-        //
-        // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
-        ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) if !input.ends_with('\n') => true,
-        ParseOutcome::Expr(Expr::When(_, _)) => {
-            // There might be lots of `when` branches, so don't assume the user is done entering
-            // them until they enter a blank line!
-            !input.ends_with('\n')
-        }
-        ParseOutcome::Empty
-        | ParseOutcome::Help
-        | ParseOutcome::Exit
-        | ParseOutcome::ValueDef(_)
-        | ParseOutcome::TypeDef(_)
-        | ParseOutcome::SyntaxErr
-        | ParseOutcome::Expr(_) => false,
     }
 }
 

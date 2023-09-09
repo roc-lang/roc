@@ -34,6 +34,7 @@ impl Default for ReplState {
     }
 }
 
+#[derive(Debug)]
 pub enum ReplAction<'a> {
     Eval {
         opt_mono: Option<MonomorphizedModule<'a>>,

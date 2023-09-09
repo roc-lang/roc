@@ -1,4 +1,4 @@
-//! Command Line Interface (CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
+//! UI functionality, shared between CLI and web, for the Read-Evaluate-Print-Loop (REPL).
 pub mod colors;
 pub mod repl_state;
 

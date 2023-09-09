@@ -3062,9 +3062,14 @@ dependencies = [
  "roc_build",
  "roc_cli",
  "roc_repl_cli",
+ "roc_repl_ui",
+ "roc_reporting",
+ "roc_target",
  "roc_test_utils",
  "roc_wasm_interp",
+ "rustyline",
  "strip-ansi-escapes",
+ "target-lexicon",
 ]
 
 [[package]]
@@ -3858,6 +3863,7 @@ dependencies = [
  "roc_parse",
  "roc_region",
  "roc_repl_eval",
+ "roc_repl_ui",
  "roc_reporting",
  "roc_std",
  "roc_target",

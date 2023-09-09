@@ -1,6 +1,6 @@
 [package]
 name = "roc_repl_ui"
-description = "UI code for the Roc REPL, shared between CLI and WebAssembly versions."
+description = "UI for the Roc REPL, shared between CLI and WebAssembly versions."
 
 authors.workspace = true
 edition.workspace = true
