@@ -151,7 +151,7 @@ fn complete(input: &str, state: &mut ReplState, expected_start: &str, expected_e
             );
         }
         _ => {
-            assert!(false, "Unexpected action: {:?}", action);
+            panic!("Unexpected action: {:?}", action);
         }
     }
 }
@@ -190,7 +190,7 @@ fn error(input: &str, state: &mut ReplState, expected_step_result: String) {
             assert_eq!(expected_step_result, escaped);
         }
         _ => {
-            assert!(false, "Unexpected action: {:?}", action);
+            panic!("Unexpected action: {:?}", action);
         }
     }
 }
