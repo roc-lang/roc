@@ -1,22 +1,22 @@
 use bumpalo::{collections::vec::Vec, Bump};
-use std::mem::size_of;
+use std::{cell::RefCell, mem::size_of};
 
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result;
 use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
-use roc_repl_eval::{
-    eval::jit_to_ast,
-    gen::{compile_to_mono, format_answer},
-    ReplApp, ReplAppMemory,
-};
-use roc_reporting::report::DEFAULT_PALETTE_HTML;
+use roc_repl_eval::{eval::jit_to_ast, gen::format_answer, ReplApp, ReplAppMemory};
+use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
 const WRAPPER_NAME: &str = "wrapper";
+
+std::thread_local! {
+    static REPL_STATE: RefCell<ReplState> = RefCell::new(ReplState::new());
+}
 
 pub struct WasmReplApp<'a> {
     arena: &'a Bump,
@@ -164,13 +164,8 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     }
 }
 
-#[cfg(not(windows))]
 const PRE_LINKED_BINARY: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.o")) as &[_];
-
-#[cfg(windows)]
-const PRE_LINKED_BINARY: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.obj")) as &[_];
+    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.wasm")) as &[_];
 
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     #[cfg(feature = "console_error_panic_hook")]
@@ -180,32 +175,6 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    // TODO use this to filter out problems and warnings in wrapped defs.
-    // See the variable by the same name in the CLI REPL for how to do this!
-    let mono = match compile_to_mono(
-        arena,
-        std::iter::empty(),
-        &src,
-        target_info,
-        DEFAULT_PALETTE_HTML,
-    ) {
-        (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible
-        (_, problems) => {
-            // TODO always report these, but continue if possible with the MonomorphizedModule if we have one.
-            let mut buf = String::new();
-
-            // Join all the errors and warnings together with blank lines.
-            for message in problems.errors.iter().chain(problems.warnings.iter()) {
-                if !buf.is_empty() {
-                    buf.push_str("\n\n");
-                }
-
-                buf.push_str(message);
-            }
-
-            return Err(buf);
-        }
-    };
 
     let MonomorphizedModule {
         module_id,

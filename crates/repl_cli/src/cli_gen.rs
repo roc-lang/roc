@@ -20,8 +20,8 @@ use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 use roc_types::subs::Subs;
 use target_lexicon::Triple;
 
-pub fn eval_llvm<'a>(
-    mut loaded: MonomorphizedModule<'a>,
+pub fn eval_llvm(
+    mut loaded: MonomorphizedModule<'_>,
     target: &Triple,
     opt_level: OptLevel,
 ) -> Option<ReplOutput> {
@@ -55,7 +55,7 @@ pub fn eval_llvm<'a>(
     let interns = loaded.interns.clone();
 
     let (lib, main_fn_name, subs, layout_interner) =
-        mono_module_to_dylib(&arena, &target, loaded, opt_level).expect("we produce a valid Dylib");
+        mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
 
     let mut app = CliApp { lib };
 
@@ -256,6 +256,6 @@ fn mono_module_to_dylib<'a>(
         internal_error!("Errors defining module:\n{}", errors.to_string());
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level)
+    llvm_module_to_dylib(env.module, target, opt_level)
         .map(|lib| (lib, main_fn_name, subs, layout_interner))
 }

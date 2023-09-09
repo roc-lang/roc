@@ -95,8 +95,8 @@ pub fn main() -> i32 {
     }
 }
 
-pub fn evaluate<'a>(
-    opt_mono: Option<MonomorphizedModule<'a>>,
+pub fn evaluate(
+    opt_mono: Option<MonomorphizedModule<'_>>,
     problems: Problems,
     opt_var_name: Option<String>,
     target: &Triple,
