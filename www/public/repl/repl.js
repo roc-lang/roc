@@ -47,6 +47,11 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
   repl.elemSourceInput.placeholder =
     "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line input)";
   repl.compiler = instance;
+
+  // Show the help text by providing fake input, and then removing it!
+  repl.inputQueue.push(":help");
+  processInputQueue();
+  document.querySelector(".input").remove();
 });
 
 // ----------------------------------------------------------------------------
