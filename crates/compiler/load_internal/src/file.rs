@@ -38,10 +38,9 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
-    ProcsBase, UpdateModeIds, UsageTrackingMap,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, HostExposedLambdaSets, PartialProc,
+    Proc, ProcLayout, Procs, ProcsBase, UpdateModeIds, UsageTrackingMap,
 };
-use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
@@ -614,6 +613,7 @@ enum Msg<'a> {
         external_specializations_requested: BumpMap<ModuleId, ExternalSpecializations<'a>>,
         procs_base: ProcsBase<'a>,
         procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
@@ -709,6 +709,7 @@ struct State<'a> {
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    pub host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     pub toplevel_expects: ToplevelExpects,
     pub exposed_to_host: ExposedToHost,
 
@@ -789,6 +790,7 @@ impl<'a> State<'a> {
             module_cache: ModuleCache::default(),
             dependencies,
             procedures: MutMap::default(),
+            host_exposed_lambda_sets: std::vec::Vec::new(),
             toplevel_expects: ToplevelExpects::default(),
             exposed_to_host: ExposedToHost::default(),
             exposed_modules: &[],
@@ -2288,6 +2290,7 @@ fn update<'a>(
                 extend_header_with_builtin(header, ModuleId::ENCODE);
                 extend_header_with_builtin(header, ModuleId::DECODE);
                 extend_header_with_builtin(header, ModuleId::HASH);
+                extend_header_with_builtin(header, ModuleId::INSPECT);
             }
 
             state
@@ -2650,6 +2653,7 @@ fn update<'a>(
             subs,
             procs_base,
             procedures,
+            host_exposed_lambda_sets,
             external_specializations_requested,
             module_timing,
             layout_cache,
@@ -2667,6 +2671,9 @@ fn update<'a>(
             let _ = layout_cache;
 
             state.procedures.extend(procedures);
+            state
+                .host_exposed_lambda_sets
+                .extend(host_exposed_lambda_sets);
             state.module_cache.late_specializations.insert(
                 module_id,
                 LateSpecializationsModule {
@@ -2863,7 +2870,7 @@ fn update<'a>(
                     //   # Default module
                     //   interface Default exposes [default, getDefault]
                     //
-                    //   Default has default : {} -> a | a has Default
+                    //   Default implements default : {} -> a where a implements Default
                     //
                     //   getDefault = \{} -> default {}
                     //
@@ -2982,8 +2989,8 @@ fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
-    mut layout_interner: STLayoutInterner<'a>,
-    mut exposed_to_host: ExposedToHost,
+    layout_interner: STLayoutInterner<'a>,
+    exposed_to_host: ExposedToHost,
     module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
@@ -3082,6 +3089,7 @@ fn finish_specialization<'a>(
     let State {
         toplevel_expects,
         procedures,
+        host_exposed_lambda_sets,
         module_cache,
         output_path,
         platform_data,
@@ -3101,53 +3109,6 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-    let mut glue_getters = Vec::new();
-
-    // the REPL does not have any platform data
-    if let (
-        EntryPoint::Executable {
-            exposed_to_host: exposed_top_levels,
-            ..
-        },
-        Some(platform_data),
-    ) = (&entry_point, platform_data.as_ref())
-    {
-        // Expose glue for the platform, not for the app module!
-        let module_id = platform_data.module_id;
-
-        for (_name, proc_layout) in exposed_top_levels.iter() {
-            let ret = &proc_layout.result;
-            for in_layout in proc_layout.arguments.iter().chain([ret]) {
-                let layout = layout_interner.get(*in_layout);
-                let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-                let all_glue_procs = roc_mono::ir::generate_glue_procs(
-                    module_id,
-                    ident_ids,
-                    arena,
-                    &mut layout_interner,
-                    arena.alloc(layout),
-                );
-
-                let lambda_set_names = all_glue_procs
-                    .legacy_layout_based_extern_names
-                    .iter()
-                    .map(|(lambda_set_id, _)| (*_name, *lambda_set_id));
-                exposed_to_host.lambda_sets.extend(lambda_set_names);
-
-                let getter_names = all_glue_procs
-                    .getters
-                    .iter()
-                    .flat_map(|(_, glue_procs)| glue_procs.iter().map(|glue_proc| glue_proc.name));
-                exposed_to_host.getters.extend(getter_names);
-
-                glue_getters.extend(all_glue_procs.getters.iter().flat_map(|(_, glue_procs)| {
-                    glue_procs
-                        .iter()
-                        .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
-                }));
-            }
-        }
-    }
 
     let output_path = match output_path {
         Some(path_str) => Path::new(path_str).into(),
@@ -3172,13 +3133,12 @@ fn finish_specialization<'a>(
         interns,
         layout_interner,
         procedures,
+        host_exposed_lambda_sets,
         entry_point,
         sources,
         timings: state.timings,
         toplevel_expects,
-        glue_layouts: GlueLayouts {
-            getters: glue_getters,
-        },
+        glue_layouts: GlueLayouts { getters: vec![] },
         uses_prebuilt_platform,
     })
 }
@@ -3535,6 +3495,7 @@ fn load_module<'a>(
         "Encode", ModuleId::ENCODE
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
+        "Inspect", ModuleId::INSPECT
         "TotallyNotJson", ModuleId::JSON
     }
 
@@ -4326,7 +4287,7 @@ fn build_header<'a>(
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
             //
-            // For example, if module A has [B.{ foo }], then
+            // For example, if module A implements [B.{ foo }], then
             // when we get here for B, `foo` will already have
             // an IdentId. We must reuse that!
             let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
@@ -4350,7 +4311,7 @@ fn build_header<'a>(
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
                 //
-                // For example, if module A has [B.{ foo }], then
+                // For example, if module A implements [B.{ foo }], then
                 // when we get here for B, `foo` will already have
                 // an IdentId. We must reuse that!
                 let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
@@ -5298,6 +5259,7 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::DICT
                         | ModuleId::SET
                         | ModuleId::HASH
+                        | ModuleId::INSPECT
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -5563,7 +5525,8 @@ fn make_specializations<'a>(
     );
 
     let external_specializations_requested = procs.externals_we_need.clone();
-    let (procedures, restored_procs_base) = procs.get_specialized_procs_without_rc();
+    let (procedures, host_exposed_lambda_sets, restored_procs_base) =
+        procs.get_specialized_procs_without_rc();
 
     // Turn `Bytes.Decode.IdentId(238)` into `Bytes.Decode.238`, we rely on this in mono tests
     mono_env.home.register_debug_idents(mono_env.ident_ids);
@@ -5579,6 +5542,7 @@ fn make_specializations<'a>(
         layout_cache,
         procs_base: restored_procs_base,
         procedures,
+        host_exposed_lambda_sets,
         update_mode_ids,
         subs,
         expectations,

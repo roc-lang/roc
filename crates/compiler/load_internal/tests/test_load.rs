@@ -514,12 +514,12 @@ fn load_astar() {
     expect_types(
         loaded_module,
         hashmap! {
-            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] | position has Hash & Eq",
-            "initialModel" => "position -> Model position | position has Hash & Eq",
-            "reconstructPath" => "Dict position position, position -> List position | position has Hash & Eq",
-            "updateCost" => "position, position, Model position -> Model position | position has Hash & Eq",
-            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] | position has Hash & Eq",
-            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Hash & Eq",
+            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] where position implements Hash & Eq",
+            "initialModel" => "position -> Model position where position implements Hash & Eq",
+            "reconstructPath" => "Dict position position, position -> List position where position implements Hash & Eq",
+            "updateCost" => "position, position, Model position -> Model position where position implements Hash & Eq",
+            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
+            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] where position implements Hash & Eq",
         },
     );
 }
@@ -940,8 +940,8 @@ fn issue_2863_module_type_does_not_exist() {
                         Did you mean one of these?
 
                             Decoding
-                            Result
                             Dict
+                            Result
                             DecodeError
                         "
                       )

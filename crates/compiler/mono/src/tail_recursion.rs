@@ -802,7 +802,6 @@ impl<'a> TrmcEnv<'a> {
             closure_data_layout: proc.closure_data_layout,
             ret_layout: proc.ret_layout,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: proc.host_exposed_layouts.clone(),
             is_erased: proc.is_erased,
         }
     }

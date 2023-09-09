@@ -309,7 +309,7 @@ mod cli_run {
 
             if !actual.ends_with(expected_ending) {
                 panic!(
-                    "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
+                    "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
                     expected_ending, actual, out.stderr
                 );
             }
@@ -387,7 +387,7 @@ mod cli_run {
         let mut custom_flags: Vec<&str> = Vec::new();
 
         match executable_filename {
-            "form" | "hello-gui" | "breakout" | "libhello" => {
+            "form" | "hello-gui" | "breakout" | "libhello" | "inspect-gui" => {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                 // we do `roc build` on them but don't run them.
@@ -936,6 +936,30 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_http() {
         test_roc_expect("examples/parser/package", "ParserHttp.roc")
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn inspect_logging() {
+        test_roc_app_slim(
+            "examples",
+            "inspect-logging.roc",
+            "inspect-logging",
+            r#"{people: [{firstName: "John", lastName: "Smith", age: 27, hasBeard: true, favoriteColor: Blue}, {firstName: "Debby", lastName: "Johnson", age: 47, hasBeard: false, favoriteColor: Green}, {firstName: "Jane", lastName: "Doe", age: 33, hasBeard: false, favoriteColor: (RGB (255, 255, 0))}], friends: [{2}, {2}, {0, 1}]}
+"#,
+            UseValgrind::Yes,
+        )
+    }
+
+    #[test]
+    fn inspect_gui() {
+        test_roc_app_slim(
+            "examples",
+            "inspect-gui.roc",
+            "inspect-gui",
+            "",
+            UseValgrind::No,
+        )
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

@@ -4,8 +4,8 @@ use crate::{
     Buf,
 };
 use roc_parse::ast::{
-    AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, HasAbility, HasClause, HasImpls,
-    RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, Collection, Expr, ExtractSpaces, ImplementsAbilities,
+    ImplementsAbility, ImplementsClause, RecordBuilderField, Tag, TypeAnnotation, TypeHeader,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
@@ -350,16 +350,23 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
             }
 
-            Where(annot, has_clauses) => {
+            Where(annot, implements_clauses) => {
                 annot.format_with_options(buf, parens, newlines, indent);
-                if has_clauses.iter().any(|has| has.is_multiline()) {
+                if implements_clauses
+                    .iter()
+                    .any(|implements| implements.is_multiline())
+                {
                     buf.newline();
                     buf.indent(indent);
                 } else {
                     buf.spaces(1);
                 }
-                for (i, has) in has_clauses.iter().enumerate() {
-                    buf.push(if i == 0 { '|' } else { ',' });
+                for (i, has) in implements_clauses.iter().enumerate() {
+                    buf.push_str(if i == 0 {
+                        roc_parse::keyword::WHERE
+                    } else {
+                        ","
+                    });
                     buf.spaces(1);
                     has.format_with_options(buf, parens, newlines, indent);
                 }
@@ -645,16 +652,16 @@ impl<'a> Formattable for Tag<'a> {
     }
 }
 
-impl<'a> Formattable for HasClause<'a> {
+impl<'a> Formattable for ImplementsClause<'a> {
     fn is_multiline(&self) -> bool {
-        // No, always put abilities in a "has" clause on one line
+        // No, always put abilities in an "implements" clause on one line
         false
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         buf.push_str(self.var.value.extract_spaces().item);
         buf.spaces(1);
-        buf.push_str("has");
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
         buf.spaces(1);
 
         for (i, ab) in self.abilities.iter().enumerate() {
@@ -668,30 +675,30 @@ impl<'a> Formattable for HasClause<'a> {
     }
 }
 
-impl<'a> Formattable for HasImpls<'a> {
+impl<'a> Formattable for AbilityImpls<'a> {
     fn is_multiline(&self) -> bool {
         match self {
-            HasImpls::SpaceBefore(_, _) | HasImpls::SpaceAfter(_, _) => true,
-            HasImpls::HasImpls(impls) => is_collection_multiline(impls),
+            AbilityImpls::SpaceBefore(_, _) | AbilityImpls::SpaceAfter(_, _) => true,
+            AbilityImpls::AbilityImpls(impls) => is_collection_multiline(impls),
         }
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
-            HasImpls::HasImpls(impls) => {
+            AbilityImpls::AbilityImpls(impls) => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);
                 }
                 fmt_collection(buf, indent, Braces::Curly, *impls, Newlines::No);
             }
-            HasImpls::SpaceBefore(impls, spaces) => {
+            AbilityImpls::SpaceBefore(impls, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 impls.format_with_options(buf, parens, Newlines::No, indent);
             }
-            HasImpls::SpaceAfter(impls, spaces) => {
+            AbilityImpls::SpaceAfter(impls, spaces) => {
                 impls.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
@@ -699,11 +706,11 @@ impl<'a> Formattable for HasImpls<'a> {
     }
 }
 
-impl<'a> Formattable for HasAbility<'a> {
+impl<'a> Formattable for ImplementsAbility<'a> {
     fn is_multiline(&self) -> bool {
         match self {
-            HasAbility::SpaceAfter(..) | HasAbility::SpaceBefore(..) => true,
-            HasAbility::HasAbility { ability, impls } => {
+            ImplementsAbility::SpaceAfter(..) | ImplementsAbility::SpaceBefore(..) => true,
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
                 ability.is_multiline() || impls.map(|i| i.is_multiline()).unwrap_or(false)
             }
         }
@@ -711,7 +718,7 @@ impl<'a> Formattable for HasAbility<'a> {
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
-            HasAbility::HasAbility { ability, impls } => {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);
@@ -722,13 +729,13 @@ impl<'a> Formattable for HasAbility<'a> {
                     impls.format_with_options(buf, parens, newlines, indent);
                 }
             }
-            HasAbility::SpaceBefore(ab, spaces) => {
+            ImplementsAbility::SpaceBefore(ab, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ab.format_with_options(buf, parens, Newlines::No, indent)
             }
-            HasAbility::SpaceAfter(ab, spaces) => {
+            ImplementsAbility::SpaceAfter(ab, spaces) => {
                 ab.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
@@ -736,32 +743,34 @@ impl<'a> Formattable for HasAbility<'a> {
     }
 }
 
-impl<'a> Formattable for HasAbilities<'a> {
+impl<'a> Formattable for ImplementsAbilities<'a> {
     fn is_multiline(&self) -> bool {
         match self {
-            HasAbilities::SpaceAfter(..) | HasAbilities::SpaceBefore(..) => true,
-            HasAbilities::Has(has_abilities) => is_collection_multiline(has_abilities),
+            ImplementsAbilities::SpaceAfter(..) | ImplementsAbilities::SpaceBefore(..) => true,
+            ImplementsAbilities::Implements(has_abilities) => {
+                is_collection_multiline(has_abilities)
+            }
         }
     }
 
     fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         match self {
-            HasAbilities::Has(has_abilities) => {
+            ImplementsAbilities::Implements(has_abilities) => {
                 if newlines == Newlines::Yes {
                     buf.newline();
                     buf.indent(indent);
                 }
-                buf.push_str("has");
+                buf.push_str(roc_parse::keyword::IMPLEMENTS);
                 buf.spaces(1);
                 fmt_collection(buf, indent, Braces::Square, *has_abilities, Newlines::No);
             }
-            HasAbilities::SpaceBefore(has_abilities, spaces) => {
+            ImplementsAbilities::SpaceBefore(has_abilities, spaces) => {
                 buf.newline();
                 buf.indent(indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 has_abilities.format_with_options(buf, parens, Newlines::No, indent)
             }
-            HasAbilities::SpaceAfter(has_abilities, spaces) => {
+            ImplementsAbilities::SpaceAfter(has_abilities, spaces) => {
                 has_abilities.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }

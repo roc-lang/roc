@@ -31,9 +31,10 @@ You can include packages using an URL:
 app "hello"
     packages { 
         # basic-cli platform
-        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.4.0/DI4lqn7LIZs8ZrCDUgLK-tHHpQmxGF1ZrlevRKq5LXk.tar.br",
+        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br",
         # json package
-        json: "https://github.com/lukewilliamboswell/roc-json/releases/download/0.1.0/xbO9bXdHi7E9ja6upN5EJXpDoYm7lwmJ8VzL7a5zhYE.tar.br",
+        # TODO update to json 0.3.0
+        json: "https://github.com/lukewilliamboswell/roc-json/releases/download/0.2.0/gh4zvR8xyEsef0R961Fcv5vxFEZJ-GJF-7bQwgL2Xz8.tar.br",
     }
     imports [
         pf.Stdout,

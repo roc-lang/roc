@@ -307,7 +307,6 @@ pub struct Proc<'a> {
     pub closure_data_layout: Option<InLayout<'a>>,
     pub ret_layout: InLayout<'a>,
     pub is_self_recursive: SelfRecursive,
-    pub host_exposed_layouts: HostExposedLayouts<'a>,
     pub is_erased: bool,
 }
 
@@ -318,15 +317,6 @@ pub struct HostExposedLambdaSet<'a> {
     pub symbol: Symbol,
     pub proc_layout: ProcLayout<'a>,
     pub raw_function_layout: RawFunctionLayout<'a>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostExposedLayouts<'a> {
-    NotHostExposed,
-    HostExposed {
-        rigids: BumpMap<Lowercase, InLayout<'a>>,
-        aliases: BumpMap<Symbol, HostExposedLambdaSet<'a>>,
-    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -905,12 +895,16 @@ impl<'a> SpecializationStack<'a> {
     }
 }
 
+pub type HostExposedLambdaSets<'a> =
+    std::vec::Vec<(LambdaName<'a>, Symbol, HostExposedLambdaSet<'a>)>;
+
 #[derive(Clone, Debug)]
 pub struct Procs<'a> {
     pub partial_procs: PartialProcs<'a>,
     ability_member_aliases: AbilityAliases,
     pending_specializations: PendingSpecializations<'a>,
     specialized: Specialized<'a>,
+    host_exposed_lambda_sets: HostExposedLambdaSets<'a>,
     pub runtime_errors: BumpMap<Symbol, &'a str>,
     pub externals_we_need: BumpMap<ModuleId, ExternalSpecializations<'a>>,
     symbol_specializations: SymbolSpecializations<'a>,
@@ -930,6 +924,7 @@ impl<'a> Procs<'a> {
             specialized: Specialized::default(),
             runtime_errors: BumpMap::new_in(arena),
             externals_we_need: BumpMap::new_in(arena),
+            host_exposed_lambda_sets: std::vec::Vec::new(),
             symbol_specializations: Default::default(),
             specialization_stack: SpecializationStack(Vec::with_capacity_in(16, arena)),
 
@@ -995,7 +990,11 @@ impl<'a> Procs<'a> {
 
     pub fn get_specialized_procs_without_rc(
         self,
-    ) -> (MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>, ProcsBase<'a>) {
+    ) -> (
+        MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        HostExposedLambdaSets<'a>,
+        ProcsBase<'a>,
+    ) {
         let mut specialized_procs =
             MutMap::with_capacity_and_hasher(self.specialized.len(), default_hasher());
 
@@ -1013,7 +1012,11 @@ impl<'a> Procs<'a> {
             imported_module_thunks: self.imported_module_thunks,
         };
 
-        (specialized_procs, restored_procs_base)
+        (
+            specialized_procs,
+            self.host_exposed_lambda_sets,
+            restored_procs_base,
+        )
     }
 
     // TODO trim these down
@@ -3062,16 +3065,14 @@ fn specialize_host_specializations<'a>(
 
     let offset_variable = StorageSubs::merge_into(store, env.subs);
 
-    for (symbol, from_app, opt_from_platform) in it {
+    for (lambda_name, from_app, opt_from_platform) in it {
         let from_app = offset_variable(from_app);
-        let index = specialize_external_help(env, procs, layout_cache, symbol, from_app);
+        let index = specialize_external_help(env, procs, layout_cache, lambda_name, from_app);
 
         let Some(from_platform) = opt_from_platform else { continue };
 
         // now run the lambda set numbering scheme
-        let mut layout_env =
-            layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
-        let hels = find_lambda_sets(&mut layout_env, from_platform);
+        let hels = find_lambda_sets(env.arena, env.subs, from_platform);
 
         // now unify
         let mut unify_env = roc_unify::Env::new(
@@ -3097,11 +3098,17 @@ fn specialize_host_specializations<'a>(
             }
         }
 
-        let mut aliases = BumpMap::default();
-
-        for (id, _, raw_function_layout) in hels {
+        for (var, id) in hels {
             let symbol = env.unique_symbol();
             let lambda_name = LambdaName::no_niche(symbol);
+
+            let mut layout_env =
+                layout::Env::from_components(layout_cache, env.subs, env.arena, env.target_info);
+            let lambda_set = env.subs.get_lambda_set(var);
+            let raw_function_layout =
+                RawFunctionLayout::from_var(&mut layout_env, lambda_set.ambient_function)
+                    .value()
+                    .unwrap();
 
             let (key, (top_level, proc)) = generate_host_exposed_function(
                 env,
@@ -3122,20 +3129,10 @@ fn specialize_host_specializations<'a>(
                 raw_function_layout,
             };
 
-            aliases.insert(key, hels);
-        }
+            let in_progress = &mut procs.specialized.procedures[index.0];
+            let InProgressProc::Done(proc) = in_progress else { unreachable!() };
 
-        let in_progress = &mut procs.specialized.procedures[index.0];
-        let InProgressProc::Done(proc) = in_progress else { unreachable!() };
-
-        match &mut proc.host_exposed_layouts {
-            HostExposedLayouts::HostExposed { aliases: old, .. } => old.extend(aliases),
-            hep @ HostExposedLayouts::NotHostExposed => {
-                *hep = HostExposedLayouts::HostExposed {
-                    aliases,
-                    rigids: Default::default(),
-                };
-            }
+            procs.host_exposed_lambda_sets.push((proc.name, key, hels));
         }
     }
 }
@@ -3302,7 +3299,6 @@ fn generate_runtime_error_function<'a>(
         closure_data_layout: None,
         ret_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         is_erased,
     }
 }
@@ -3398,7 +3394,6 @@ fn generate_host_exposed_function<'a>(
                 closure_data_layout: None,
                 ret_layout: result,
                 is_self_recursive: SelfRecursive::NotSelfRecursive,
-                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                 is_erased: false,
             };
 
@@ -3463,7 +3458,6 @@ fn generate_host_exposed_lambda_set<'a>(
         closure_data_layout: None,
         ret_layout: return_layout,
         is_self_recursive: SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         is_erased: false,
     };
 
@@ -3527,9 +3521,6 @@ fn specialize_proc_help<'a>(
     let body = partial_proc.body.clone();
     let body_var = partial_proc.body_var;
 
-    // host-exposed functions are tagged on later
-    let host_exposed_layouts = HostExposedLayouts::NotHostExposed;
-
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
     let specialized_proc = match specialized {
@@ -3561,7 +3552,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout: Some(closure_data_layout),
                 ret_layout,
                 is_self_recursive: recursivity,
-                host_exposed_layouts,
                 is_erased,
             }
         }
@@ -3764,7 +3754,6 @@ fn specialize_proc_help<'a>(
                 closure_data_layout,
                 ret_layout,
                 is_self_recursive: recursivity,
-                host_exposed_layouts,
                 is_erased,
             }
         }
@@ -3976,7 +3965,7 @@ fn build_specialized_proc<'a>(
                     }
                 }
                 Ordering::Less => panic!(
-                    "more argument symbols than arguments (according to the layout) for {proc_name:?}"
+                    "more argument symbols than arguments (according to the layout) for {proc_name:?}. Pattern symbols: {:?}\n\nPattern layouts: {:?}", pattern_symbols, pattern_layouts_len,
                 ),
             }
         }
@@ -10001,16 +9990,17 @@ impl LambdaSetId {
     }
 }
 
-fn find_lambda_sets<'a>(
-    env: &mut crate::layout::Env<'a, '_>,
+pub fn find_lambda_sets(
+    arena: &Bump,
+    subs: &Subs,
     initial: Variable,
-) -> Vec<'a, (LambdaSetId, Variable, RawFunctionLayout<'a>)> {
-    let mut stack = bumpalo::collections::Vec::new_in(env.arena);
+) -> MutMap<Variable, LambdaSetId> {
+    let mut stack = bumpalo::collections::Vec::new_in(arena);
 
     // ignore the lambda set of top-level functions
-    match env.subs.get_without_compacting(initial).content {
+    match subs.get_without_compacting(initial).content {
         Content::Structure(FlatType::Func(arguments, _, result)) => {
-            let arguments = &env.subs.variables[arguments.indices()];
+            let arguments = &subs.variables[arguments.indices()];
 
             stack.extend(arguments.iter().copied());
             stack.push(result);
@@ -10020,24 +10010,10 @@ fn find_lambda_sets<'a>(
         }
     }
 
-    let lambda_set_variables = find_lambda_sets_help(env.subs, stack);
-    let mut answer =
-        bumpalo::collections::Vec::with_capacity_in(lambda_set_variables.len(), env.arena);
-
-    for (variable, lambda_set_id) in lambda_set_variables {
-        let lambda_set = env.subs.get_lambda_set(variable);
-        let raw_function_layout = RawFunctionLayout::from_var(env, lambda_set.ambient_function)
-            .value()
-            .unwrap();
-
-        let key = (lambda_set_id, variable, raw_function_layout);
-        answer.push(key);
-    }
-
-    answer
+    find_lambda_sets_help(subs, stack)
 }
 
-pub fn find_lambda_sets_help(
+fn find_lambda_sets_help(
     subs: &Subs,
     mut stack: Vec<'_, Variable>,
 ) -> MutMap<Variable, LambdaSetId> {
@@ -10337,7 +10313,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             is_erased: false,
         };
 
@@ -10433,7 +10408,6 @@ where
             closure_data_layout: None,
             ret_layout: *field,
             is_self_recursive: SelfRecursive::NotSelfRecursive,
-            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
             is_erased: false,
         };
 

@@ -200,18 +200,27 @@ pub fn load_and_typecheck_str<'a>(
     }
 }
 
+macro_rules! include_bytes_align_as {
+    ($align_ty:ty, $path:expr) => {{
+        // const block expression to encapsulate the static
+
+        #[repr(C)]
+        pub struct AlignedAs<Align, Bytes: ?Sized> {
+            pub _align: [Align; 0],
+            pub bytes: Bytes,
+        }
+
+        // this assignment is made possible by CoerceUnsized
+        static ALIGNED: &AlignedAs<$align_ty, [u8]> = &AlignedAs {
+            _align: [],
+            bytes: *include_bytes!($path),
+        };
+
+        &ALIGNED.bytes
+    }};
+}
+
 // IFTTT: crates/compiler/load/build.rs
-const BOOL: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Bool.dat")) as &[_];
-const DICT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Dict.dat")) as &[_];
-const SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Set.dat")) as &[_];
-const RESULT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Result.dat")) as &[_];
-const NUM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Num.dat")) as &[_];
-const LIST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/List.dat")) as &[_];
-const STR: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Str.dat")) as &[_];
-const BOX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Box.dat")) as &[_];
-const ENCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Encode.dat")) as &[_];
-const DECODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Decode.dat")) as &[_];
-const HASH: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/Hash.dat")) as &[_];
 
 fn deserialize_help(bytes: &[u8]) -> TypeState {
     let (state, _offset) = TypeState::deserialize(bytes);
@@ -221,27 +230,41 @@ fn deserialize_help(bytes: &[u8]) -> TypeState {
 }
 
 fn read_cached_types() -> MutMap<ModuleId, TypeState> {
+    let mod_bool = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Bool.dat"));
+    let mod_dict = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Dict.dat"));
+    let mod_set = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Set.dat"));
+    let mod_result = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Result.dat"));
+    let mod_num = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Num.dat"));
+    let mod_list = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/List.dat"));
+    let mod_str = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Str.dat"));
+    let mod_box = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Box.dat"));
+    let mod_encode = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Encode.dat"));
+    let mod_decode = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Decode.dat"));
+    let mod_hash = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Hash.dat"));
+    let mod_inspect = include_bytes_align_as!(u128, concat!(env!("OUT_DIR"), "/Inspect.dat"));
+
     let mut output = MutMap::default();
 
     // Wasm seems to re-order definitions between build time and runtime, but only in release mode.
     // That is very strange, but we can solve it separately
     if !cfg!(target_family = "wasm") && !cfg!(windows) && !SKIP_SUBS_CACHE {
-        output.insert(ModuleId::BOOL, deserialize_help(BOOL));
+        output.insert(ModuleId::BOOL, deserialize_help(mod_bool));
 
-        output.insert(ModuleId::RESULT, deserialize_help(RESULT));
-        output.insert(ModuleId::NUM, deserialize_help(NUM));
+        output.insert(ModuleId::RESULT, deserialize_help(mod_result));
+        output.insert(ModuleId::NUM, deserialize_help(mod_num));
 
-        output.insert(ModuleId::LIST, deserialize_help(LIST));
-        output.insert(ModuleId::STR, deserialize_help(STR));
-        output.insert(ModuleId::BOX, deserialize_help(BOX));
+        output.insert(ModuleId::LIST, deserialize_help(mod_list));
+        output.insert(ModuleId::STR, deserialize_help(mod_str));
+        output.insert(ModuleId::BOX, deserialize_help(mod_box));
 
-        output.insert(ModuleId::DICT, deserialize_help(DICT));
-        output.insert(ModuleId::SET, deserialize_help(SET));
+        output.insert(ModuleId::DICT, deserialize_help(mod_dict));
+        output.insert(ModuleId::SET, deserialize_help(mod_set));
 
-        output.insert(ModuleId::ENCODE, deserialize_help(ENCODE));
-        output.insert(ModuleId::DECODE, deserialize_help(DECODE));
+        output.insert(ModuleId::ENCODE, deserialize_help(mod_encode));
+        output.insert(ModuleId::DECODE, deserialize_help(mod_decode));
 
-        output.insert(ModuleId::HASH, deserialize_help(HASH));
+        output.insert(ModuleId::HASH, deserialize_help(mod_hash));
+        output.insert(ModuleId::INSPECT, deserialize_help(mod_inspect));
     }
 
     output

@@ -65,4 +65,4 @@ jobs:
       #TODO verify-no-git-changes
 
       - name: test website build script
-        run: REPL_DEBUG=1 bash www/build.sh
+        run: bash www/build.sh

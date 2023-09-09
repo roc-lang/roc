@@ -12,7 +12,7 @@ interface Bool
 ## be a `NaN` ([Not a Number](https://en.wikipedia.org/wiki/NaN)), and the
 ## [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) floating point standard
 ## specifies that two `NaN`s are not equal.
-Eq has
+Eq implements
     ## Returns `Bool.true` if the input values are equal. This is
     ## equivalent to the logic
     ## [XNOR](https://en.wikipedia.org/wiki/Logical_equality) gate. The infix
@@ -30,11 +30,11 @@ Eq has
     ## for more detail.
     ## 5. Functions cannot be compared for structural equality, therefore Roc
     ## cannot derive `isEq` for types that contain functions.
-    isEq : a, a -> Bool | a has Eq
+    isEq : a, a -> Bool where a implements Eq
 
 ## Represents the boolean true and false using an opaque type.
 ## `Bool` implements the `Eq` ability.
-Bool := [True, False] has [Eq { isEq: boolIsEq }]
+Bool := [True, False] implements [Eq { isEq: boolIsEq }]
 
 boolIsEq = \@Bool b1, @Bool b2 -> structuralEq b1 b2
 
@@ -116,7 +116,7 @@ not : Bool -> Bool
 ## expect (Bool.false != Bool.false) == Bool.false
 ## expect "Apples" != "Oranges"
 ## ```
-isNotEq : a, a -> Bool | a has Eq
+isNotEq : a, a -> Bool where a implements Eq
 isNotEq = \a, b -> structuralNotEq a b
 
 # INTERNAL COMPILER USE ONLY: used to lower calls to `isEq` to structural

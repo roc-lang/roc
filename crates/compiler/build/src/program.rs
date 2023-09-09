@@ -235,6 +235,7 @@ fn gen_from_mono_module_llvm<'a>(
         &loaded.layout_interner,
         opt_level,
         loaded.procedures,
+        loaded.host_exposed_lambda_sets,
         entry_point,
         Some(&app_ll_file),
         &loaded.glue_layouts,

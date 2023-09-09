@@ -1,5 +1,5 @@
 use crate::generic64::{aarch64, new_backend_64bit, x86_64};
-use crate::{Backend, Env, Relocation};
+use crate::{AssemblyBackendMode, Backend, Env, Relocation};
 use bumpalo::collections::Vec;
 use object::write::{self, SectionId, SymbolId};
 use object::write::{Object, StandardSection, StandardSegment, Symbol, SymbolSection};
@@ -312,11 +312,13 @@ fn build_object<'a, B: Backend<'a>>(
     );
     */
 
-    define_setlongjmp_buffer(&mut output);
+    if backend.env().mode.generate_roc_panic() {
+        define_setlongjmp_buffer(&mut output);
 
-    generate_roc_panic(&mut backend, &mut output);
-    generate_setjmp(&mut backend, &mut output);
-    generate_longjmp(&mut backend, &mut output);
+        generate_roc_panic(&mut backend, &mut output);
+        generate_setjmp(&mut backend, &mut output);
+        generate_longjmp(&mut backend, &mut output);
+    }
 
     if backend.env().mode.generate_allocators() {
         generate_wrapper(
@@ -402,15 +404,17 @@ fn build_object<'a, B: Backend<'a>>(
 
             // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
 
-            build_proc_symbol(
-                &mut output,
-                &mut layout_ids,
-                &mut procs,
-                &mut backend,
-                layout,
-                test_helper,
-                Exposed::TestMain,
-            );
+            if let AssemblyBackendMode::Test = backend.env().mode {
+                build_proc_symbol(
+                    &mut output,
+                    &mut layout_ids,
+                    &mut procs,
+                    &mut backend,
+                    layout,
+                    test_helper,
+                    Exposed::TestMain,
+                );
+            }
 
             build_proc_symbol(
                 &mut output,
@@ -599,7 +603,6 @@ fn build_exposed_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'a>) -> P
         closure_data_layout: None,
         ret_layout: proc.ret_layout,
         is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
         is_erased: proc.is_erased,
     }
 }
@@ -681,7 +684,6 @@ fn build_exposed_generic_proc<'a, B: Backend<'a>>(backend: &mut B, proc: &Proc<'
         closure_data_layout: None,
         ret_layout: roc_mono::layout::Layout::UNIT,
         is_self_recursive: roc_mono::ir::SelfRecursive::NotSelfRecursive,
-        host_exposed_layouts: roc_mono::ir::HostExposedLayouts::NotHostExposed,
         is_erased: proc.is_erased,
     }
 }

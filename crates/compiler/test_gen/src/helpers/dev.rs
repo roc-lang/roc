@@ -215,9 +215,10 @@ pub fn helper(
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
-    // TODO make this an envrionment variable
+    // TODO make this an environment variable
     if false {
         let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
         std::fs::copy(&app_o_file, file_path).unwrap();
     }
 

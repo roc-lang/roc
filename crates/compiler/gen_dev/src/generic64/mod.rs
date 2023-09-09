@@ -985,7 +985,8 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            LayoutRepr::I128 | LayoutRepr::U128 => {
+            // Note that on windows there is only 1 general return register so we can't use this optimisation
+            LayoutRepr::I128 | LayoutRepr::U128 if CC::GENERAL_RETURN_REGS.len() > 1 => {
                 let offset = self.storage_manager.claim_stack_area(dst, 16);
 
                 ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);

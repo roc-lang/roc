@@ -122,7 +122,7 @@ pub struct NamedVariable {
     pub first_seen: Region,
 }
 
-/// A type variable bound to an ability, like "a has Hash".
+/// A type variable bound to an ability, like "a implements Hash".
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AbleVariable {
     pub variable: Variable,
@@ -296,7 +296,7 @@ pub(crate) fn canonicalize_annotation(
 
     let (annotation, region) = match annotation {
         TypeAnnotation::Where(annotation, clauses) => {
-            // Add each "has" clause. The association of a variable to an ability will be saved on
+            // Add each "implements" clause. The association of a variable to an ability will be saved on
             // `introduced_variables`, which we'll process later.
             for clause in clauses.iter() {
                 let opt_err = canonicalize_has_clause(
@@ -847,29 +847,17 @@ fn can_annotation_help(
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
 
-            if vars.is_empty() && env.home == symbol.module_id() {
-                let actual_var = var_store.fresh();
-                introduced_variables.insert_host_exposed_alias(symbol, actual_var);
-                Type::HostExposedAlias {
-                    name: symbol,
-                    type_arguments: vars,
-                    lambda_set_variables: alias.lambda_set_variables.clone(),
-                    actual: Box::new(alias.typ.clone()),
-                    actual_var,
-                }
-            } else {
-                Type::Alias {
-                    symbol,
-                    type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
-                    lambda_set_variables: alias.lambda_set_variables.clone(),
-                    infer_ext_in_output_types: alias
-                        .infer_ext_in_output_variables
-                        .iter()
-                        .map(|v| Type::Variable(*v))
-                        .collect(),
-                    actual: Box::new(alias.typ.clone()),
-                    kind: alias.kind,
-                }
+            Type::Alias {
+                symbol,
+                type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
+                lambda_set_variables: alias.lambda_set_variables.clone(),
+                infer_ext_in_output_types: alias
+                    .infer_ext_in_output_variables
+                    .iter()
+                    .map(|v| Type::Variable(*v))
+                    .collect(),
+                actual: Box::new(alias.typ.clone()),
+                kind: alias.kind,
             }
         }
 
@@ -1041,8 +1029,8 @@ fn can_annotation_help(
         Where(_annotation, clauses) => {
             debug_assert!(!clauses.is_empty());
 
-            // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
-            env.problem(roc_problem::can::Problem::IllegalHasClause {
+            // Implements clauses are allowed only on the top level of a signature, which we handle elsewhere.
+            env.problem(roc_problem::can::Problem::IllegalImplementsClause {
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });
 
@@ -1065,13 +1053,13 @@ fn canonicalize_has_clause(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    clause: &Loc<roc_parse::ast::HasClause<'_>>,
+    clause: &Loc<roc_parse::ast::ImplementsClause<'_>>,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
         region,
-        value: roc_parse::ast::HasClause { var, abilities },
+        value: roc_parse::ast::ImplementsClause { var, abilities },
     } = clause;
     let region = *region;
 
@@ -1097,13 +1085,13 @@ fn canonicalize_has_clause(
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
                 {
-                    env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                    env.problem(roc_problem::can::Problem::ImplementsClauseIsNotAbility { region });
                     return Err(Type::Error);
                 }
                 symbol
             }
             _ => {
-                env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                env.problem(roc_problem::can::Problem::ImplementsClauseIsNotAbility { region });
                 return Err(Type::Error);
             }
         };
@@ -1112,7 +1100,7 @@ fn canonicalize_has_clause(
         let already_seen = can_abilities.insert(ability);
 
         if already_seen {
-            env.problem(roc_problem::can::Problem::DuplicateHasAbility { ability, region });
+            env.problem(roc_problem::can::Problem::DuplicateImplementsAbility { ability, region });
         }
     }
 

@@ -599,7 +599,7 @@ pub enum EType<'a> {
     TEnd(Position),
     TFunctionArgument(Position),
     TWhereBar(Position),
-    THasClause(Position),
+    TImplementsClause(Position),
     TAbilityImpl(ETypeAbilityImpl<'a>, Position),
     ///
     TIndentStart(Position),
@@ -1520,6 +1520,23 @@ where
         match parser.parse(a, state, min_indent) {
             Ok(t) => Ok(t),
             Err((p, error)) => Err((p, map_error(a.alloc(error), original_state.pos()))),
+        }
+    }
+}
+
+pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Position) -> E,
+    E: 'a,
+{
+    debug_assert!(!word.contains('\n'));
+
+    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
+        if state.bytes().starts_with(word.as_bytes()) {
+            let state = state.advance(word.len());
+            Ok((MadeProgress, (), state))
+        } else {
+            Err((NoProgress, to_error(state.pos())))
         }
     }
 }
