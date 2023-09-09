@@ -35,6 +35,7 @@ impl Default for ReplState {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ReplAction<'a> {
     Eval {
         opt_mono: Option<MonomorphizedModule<'a>>,
@@ -62,7 +63,7 @@ impl ReplState {
         target_info: TargetInfo,
         palette: Palette,
     ) -> ReplAction<'a> {
-        match parse_src(&arena, line) {
+        match parse_src(arena, line) {
             ParseOutcome::Empty | ParseOutcome::Help => ReplAction::Help,
             ParseOutcome::Expr(_)
             | ParseOutcome::ValueDef(_)
@@ -82,7 +83,7 @@ impl ReplState {
     ) -> ReplAction<'a> {
         let pending_past_def;
         let mut opt_var_name;
-        let src = match parse_src(&arena, src) {
+        let src = match parse_src(arena, src) {
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
                 pending_past_def = None;
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
@@ -105,7 +106,7 @@ impl ReplState {
                         self.add_past_def(ident.trim_end().to_string(), src.to_string());
 
                         // Return early without running eval, since standalone annotations
-                        // cannnot be evaluated as expressions.
+                        // cannot be evaluated as expressions.
                         return ReplAction::Nothing;
                     }
                     ValueDef::Body(
@@ -132,7 +133,7 @@ impl ReplState {
                         // reported because we filter out errors whose regions are in past defs.
                         let mut buf = bumpalo::collections::string::String::with_capacity_in(
                             ident.len() + src.len() + 1,
-                            &arena,
+                            arena,
                         );
 
                         buf.push_str(src);
@@ -200,7 +201,7 @@ impl ReplState {
                     opt_var_name = Some(existing_ident);
 
                     compile_to_mono(
-                        &arena,
+                        arena,
                         self.past_defs.iter().map(|def| def.src.as_str()),
                         src,
                         target_info,
@@ -209,7 +210,7 @@ impl ReplState {
                 }
                 None => {
                     let (output, problems) = compile_to_mono(
-                        &arena,
+                        arena,
                         self.past_defs.iter().map(|def| def.src.as_str()),
                         src,
                         target_info,
