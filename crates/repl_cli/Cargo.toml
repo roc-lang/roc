@@ -11,7 +11,6 @@ version.workspace = true
 # pipe target to roc_build
 target-aarch64 = ["roc_build/target-aarch64"]
 target-arm = ["roc_build/target-arm"]
-target-wasm32 = ["roc_build/target-wasm32"]
 target-x86 = ["roc_build/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64"]
 
@@ -21,7 +20,6 @@ roc_builtins = { path = "../compiler/builtins" }
 roc_collections = { path = "../compiler/collections" }
 roc_gen_llvm = { path = "../compiler/gen_llvm" }
 roc_load = { path = "../compiler/load" }
-roc_module = { path = "../compiler/module" }
 roc_mono = { path = "../compiler/mono" }
 roc_parse = { path = "../compiler/parse" }
 roc_region = { path = "../compiler/region" }

@@ -3854,7 +3854,6 @@ dependencies = [
  "roc_error_macros",
  "roc_gen_llvm",
  "roc_load",
- "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_region",
@@ -3923,6 +3922,22 @@ dependencies = [
  "strip-ansi-escapes",
  "target-lexicon",
  "tempfile",
+]
+
+[[package]]
+name = "roc_repl_ui"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "const_format",
+ "roc_collections",
+ "roc_load",
+ "roc_parse",
+ "roc_region",
+ "roc_repl_eval",
+ "roc_reporting",
+ "roc_target",
+ "unicode-segmentation",
 ]
 
 [[package]]
