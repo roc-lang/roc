@@ -122,7 +122,7 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
     }
 }
 
-fn run(src: &'static str) -> Result<String, String> {
+fn run(src: &'static str) -> String {
     let arena = Bump::new();
 
     let mut instance = {
@@ -140,27 +140,19 @@ fn run(src: &'static str) -> Result<String, String> {
     };
 
     let len = Value::I32(src.len() as i32);
-    let wasm_ok: i32 = instance
+    assert!(instance
         .call_export("entrypoint_from_test", [len])
         .unwrap()
-        .unwrap()
-        .expect_i32()
-        .unwrap();
-    let answer_str = instance.import_dispatcher.answer.to_owned();
-
-    if wasm_ok == 0 {
-        Err(answer_str)
-    } else {
-        Ok(answer_str)
-    }
+        .is_none());
+    instance.import_dispatcher.answer.to_owned()
 }
 
 #[allow(dead_code)]
 pub fn expect_success(input: &'static str, expected: &str) {
-    assert_eq!(run(input), Ok(expected.into()));
+    assert_eq!(run(input), expected.to_string());
 }
 
 #[allow(dead_code)]
 pub fn expect_failure(input: &'static str, expected: &str) {
-    assert_eq!(run(input), Err(expected.into()));
+    assert_eq!(run(input), expected.to_string());
 }
