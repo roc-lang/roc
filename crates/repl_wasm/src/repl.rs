@@ -186,14 +186,17 @@ pub async fn entrypoint_from_js(src: String) -> String {
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
 
-    let res_action = REPL_STATE.with(|repl_state| {
-        let mut repl_state = repl_state.borrow_mut();
+    // On the web, we keep the REPL state in a global variable, because `main` is not in our Rust code!
+    // We return back to JS after every line of input. `main` is in the browser engine, running the JS event loop.
+    let res_action = REPL_STATE.with(|repl_state_cell| {
+        let mut repl_state = repl_state_cell.borrow_mut();
         repl_state.step(arena, &src, target_info, DEFAULT_PALETTE_HTML)
     });
 
     match res_action {
         ReplAction::Help => TIPS.to_string(),
-        ReplAction::Exit | ReplAction::Nothing => String::new(),
+        ReplAction::Exit => ":quit does not work on the web! You can close the browser tab though! Thanks for trying Roc!".to_string(),
+        ReplAction::Nothing => String::new(),
         ReplAction::Eval {
             opt_mono,
             problems,
