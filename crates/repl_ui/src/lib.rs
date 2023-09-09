@@ -1,4 +1,5 @@
 //! UI functionality, shared between CLI and web, for the Read-Evaluate-Print-Loop (REPL).
+// We don't do anything here related to the terminal (doesn't exist on the web) or LLVM (too big for the web).
 pub mod colors;
 pub mod repl_state;
 
@@ -22,50 +23,6 @@ pub const WELCOME_MESSAGE: &str = concatcp!(
     "\n\n"
 );
 
-// Tips for the CLI REPL only (not the web REPL)
-#[cfg(not(target_family = "wasm"))]
-const TARGET_SPECIFIC_TIPS: &str = concatcp!(
-    "Tips:\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    PINK,
-    "ctrl-v",
-    END_COL,
-    " + ",
-    PINK,
-    "ctrl-j",
-    END_COL,
-    " makes a newline\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":q to quit\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":help"
-);
-
-// Tips for the web REPL only
-// In the browser, you quit by closing the browser tab!
-// And we are not stuck with weirdness like ctrl-v ctrl-j.
-#[cfg(target_family = "wasm")]
-const TARGET_SPECIFIC_TIPS: &str = concatcp!(
-    "Tips:\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    PINK,
-    "ctrl-Enter",
-    END_COL,
-    " makes a newline\n\n",
-    BLUE,
-    "  - ",
-    END_COL,
-    ":help"
-);
-
 // TODO add link to repl tutorial(does not yet exist).
 pub const TIPS: &str = concatcp!(
     "\nEnter an expression to evaluate, or a definition (like ",
@@ -81,7 +38,47 @@ pub const TIPS: &str = concatcp!(
     "val1",
     END_COL,
     " in future expressions.\n\n",
-    TARGET_SPECIFIC_TIPS
+    "Tips:\n\n",
+    if cfg!(target_family = "wasm") {
+        // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
+        // We use ctrl-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
+        concatcp!(
+            BLUE,
+            "  - ",
+            END_COL,
+            PINK,
+            "ctrl-Enter",
+            END_COL,
+            " makes a newline\n\n",
+            BLUE,
+            "  - ",
+            END_COL,
+            ":help"
+        )
+    } else {
+        // We use ctrl-v + ctrl-j for newlines because on Unix, terminals cannot distinguish between ctrl-Enter and Enter
+        concatcp!(
+            BLUE,
+            "  - ",
+            END_COL,
+            PINK,
+            "ctrl-v",
+            END_COL,
+            " + ",
+            PINK,
+            "ctrl-j",
+            END_COL,
+            " makes a newline\n\n",
+            BLUE,
+            "  - ",
+            END_COL,
+            ":q to quit\n\n",
+            BLUE,
+            "  - ",
+            END_COL,
+            ":help"
+        )
+    }
 );
 
 // For when nothing is entered in the repl
