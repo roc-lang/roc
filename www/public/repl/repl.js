@@ -45,7 +45,7 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder =
-    "Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)";
+    "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line input)";
   repl.compiler = instance;
 });
 
@@ -95,7 +95,7 @@ function onInputKeyup(event) {
       break;
 
     case ENTER:
-      if (!event.shiftKey) {
+      if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
         onInputChange({ target: repl.elemSourceInput });
       }
       break;

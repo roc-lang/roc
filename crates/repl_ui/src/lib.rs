@@ -41,13 +41,17 @@ pub const TIPS: &str = concatcp!(
     "Tips:\n\n",
     if cfg!(target_family = "wasm") {
         // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
-        // We use ctrl-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
+        // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
         concatcp!(
             BLUE,
             "  - ",
             END_COL,
             PINK,
-            "ctrl-Enter",
+            "Shift-Enter",
+            END_COL,
+            " or ",
+            PINK,
+            "Ctrl-Enter",
             END_COL,
             " makes a newline\n\n",
             BLUE,
@@ -56,7 +60,7 @@ pub const TIPS: &str = concatcp!(
             ":help"
         )
     } else {
-        // We use ctrl-v + ctrl-j for newlines because on Unix, terminals cannot distinguish between ctrl-Enter and Enter
+        // We use ctrl-v + ctrl-j for newlines because on Unix, terminals cannot distinguish between Shift-Enter and Enter
         concatcp!(
             BLUE,
             "  - ",
