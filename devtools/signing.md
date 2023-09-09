@@ -41,7 +41,7 @@ Open the program Kleopatra (installed with gpg4win) and go to Smartcards.
 You should see your Yubikey there, it should also say something like `failed to find public key locally`. Click the import button, change the available file types at the bottom right to `Any files` and open the `public.key` file you created earlier.
 Close Kleopatra.
 
-Install the `YubiKey Minidriver for 64-bit systems – Windows Installer` from [here](https://www.yubico.com/support/download/smart-card-drivers-tools/).
+Install the [YubiKey Minidriver for 64-bit systems – Windows Installer](https://www.yubico.com/support/download/smart-card-drivers-tools/).
 
 Insert your Yubikey and check if it is mentioned in the output of `gpg --card-status` (powershell).
 

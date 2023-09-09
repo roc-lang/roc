@@ -53,7 +53,7 @@ This command will generate the documentation in the [`generated-docs`](generated
 
 ### Commit signing
 
-All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g). Check out our guide for commit signing [here](devtools/signing.md).
+All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g). Check out [our guide for commit signing](devtools/signing.md).
 
 #### Commit signing on NixOS
 
