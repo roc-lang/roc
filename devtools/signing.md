@@ -30,15 +30,15 @@ This explanation was based on the steps outlined [here](https://scatteredcode.ne
 On linux, run:
 ```
 gpg --list-keys --keyid-format SHORT | grep ^pub
-gpg --export --armor [Your_Key_ID] > public.key
+gpg --export --armor [Your_Key_ID] > public.asc
 ```
 
-Copy the public.key file to windows.
+Copy the public.asc file to windows.
 
 Download and install [Gpg4win](https://www.gpg4win.org/get-gpg4win.html).
 
 Open the program Kleopatra (installed with gpg4win) and go to Smartcards.
-You should see your Yubikey there, it should also say something like `failed to find public key locally`. Click the import button, change the available file types at the bottom right to `Any files` and open the `public.key` file you created earlier.
+You should see your Yubikey there, it should also say something like `failed to find public key locally`. Click the import button and open the `public.asc` file you created earlier.
 Close Kleopatra.
 
 Install the [YubiKey Minidriver for 64-bit systems – Windows Installer](https://www.yubico.com/support/download/smart-card-drivers-tools/).
