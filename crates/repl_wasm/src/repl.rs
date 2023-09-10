@@ -23,6 +23,8 @@ use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
 const WRAPPER_NAME: &str = "wrapper";
 
+// On the web, we keep the REPL state in a global variable, because `main` is not in our Rust code!
+// We return back to JS after every line of input. `main` is in the browser engine, running the JS event loop.
 std::thread_local! {
     static REPL_STATE: RefCell<ReplState> = RefCell::new(ReplState::new());
 }
@@ -177,6 +179,8 @@ const PRE_LINKED_BINARY: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.wasm")) as &[_];
 
 pub async fn entrypoint_from_js(src: String) -> String {
+    // If our Rust code panics, redirect the error message to JS console.error
+    // Also, our JS code overrides console.error to display the error message text (including stack trace) in the REPL output.
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
@@ -186,16 +190,18 @@ pub async fn entrypoint_from_js(src: String) -> String {
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
 
-    // On the web, we keep the REPL state in a global variable, because `main` is not in our Rust code!
-    // We return back to JS after every line of input. `main` is in the browser engine, running the JS event loop.
-    let res_action = REPL_STATE.with(|repl_state_cell| {
+    // Advance the REPL state machine
+    let action = REPL_STATE.with(|repl_state_cell| {
         let mut repl_state = repl_state_cell.borrow_mut();
         repl_state.step(arena, &src, target_info, DEFAULT_PALETTE_HTML)
     });
 
-    match res_action {
+    // Perform the action the state machine asked for, and return the appropriate output string
+    match action {
         ReplAction::Help => TIPS.to_string(),
-        ReplAction::Exit => ":quit does not work on the web! You can close the browser tab though! Thanks for trying Roc!".to_string(),
+        ReplAction::Exit => {
+            "To exit the web version of the REPL, just close the browser tab!".to_string()
+        }
         ReplAction::Nothing => String::new(),
         ReplAction::Eval {
             opt_mono,
@@ -290,13 +296,12 @@ async fn eval_wasm<'a>(
         buffer
     };
 
-    // Send the compiled binary out to JS and create an executable instance from it
-    let create_result = js_create_app(&app_module_bytes).await;
-    match create_result {
+    // Send the compiled binary out to JS, which will asynchronously create an executable WebAssembly instance
+    match js_create_app(&app_module_bytes).await {
         Ok(()) => {}
         Err(js_exception) => {
             return Some(ReplOutput {
-                expr: format!("{js_exception:?}"),
+                expr: format!("<span class='color-red'>{js_exception:?}</span>"),
                 expr_type: String::new(),
             })
         }

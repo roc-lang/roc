@@ -55,8 +55,6 @@ pub fn main() -> i32 {
 
                 arena.reset();
                 match repl_state.step(&arena, &line, target_info, DEFAULT_PALETTE) {
-                    // If there was no output, don't print a blank line!
-                    // (This happens for something like a type annotation.)
                     ReplAction::Eval {
                         opt_mono,
                         problems,
@@ -64,6 +62,8 @@ pub fn main() -> i32 {
                     } => {
                         let output =
                             evaluate(opt_mono, problems, opt_var_name, &target, dimensions);
+                        // If there was no output, don't print a blank line!
+                        // (This happens for something like a type annotation.)
                         if !output.is_empty() {
                             println!("{output}");
                         }
