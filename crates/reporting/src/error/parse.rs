@@ -3888,6 +3888,23 @@ fn to_space_report<'a>(
             }
         }
 
+        BadInputError::HasMisplacedCarriageReturn => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I encountered a carriage return (\r)"),
+                alloc.region(region),
+                alloc.reflow(r"A carriage return (\r) has to be followed by a newline (\n)."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISPLACED CARRIAGE RETURN".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         _ => todo!("unhandled type parse error: {:?}", &parse_problem),
     }
 }

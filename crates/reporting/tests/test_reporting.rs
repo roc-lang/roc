@@ -4559,26 +4559,35 @@ mod test_reporting {
     "###
     );
 
-    
     test_report!(
         comment_with_control_character,
         "# comment with a \x07\n",
-        |golden| pretty_assertions::assert_eq!(
-            golden,
-            &format!(
-                r###"── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
+        @r###"
+    ── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
 
-I encountered an ASCII control character
+    I encountered an ASCII control character
 
-4│      # comment with a {}
-                         ^
+    4│      # comment with a 
+                             ^
 
-ASCII control characters are not allowed."###,
-                "\x07"
-            )
-        )
+    ASCII control characters are not allowed.
+    "###
     );
 
+    test_report!(
+        record_type_carriage_return,
+        "f : { \r foo }",
+        @r###"
+    ── MISPLACED CARRIAGE RETURN ──────── tmp/record_type_carriage_return/Test.roc ─
+
+    I encountered a carriage return (\r)
+
+    4│      f : {  foo }
+                  ^
+
+    A carriage return (\r) has to be followed by a newline (\n).
+    "###
+    );
 
     // TODO bad error message
     test_report!(
