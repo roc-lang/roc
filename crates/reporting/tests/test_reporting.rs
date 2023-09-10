@@ -4547,21 +4547,38 @@ mod test_reporting {
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
+        @r###"
+    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+
+    I encountered a tab character
+
+    4│      # comment with a 	
+                             ^
+
+    Tab characters are not allowed.
+    "###
+    );
+
+    
+    test_report!(
+        comment_with_control_character,
+        "# comment with a \x07\n",
         |golden| pretty_assertions::assert_eq!(
             golden,
             &format!(
-                r###"── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+                r###"── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
 
-I encountered a tab character
+I encountered an ASCII control character
 
 4│      # comment with a {}
                          ^
 
-Tab characters are not allowed."###,
-                "\t"
+ASCII control characters are not allowed."###,
+                "\x07"
             )
         )
     );
+
 
     // TODO bad error message
     test_report!(

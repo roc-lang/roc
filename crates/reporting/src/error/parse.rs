@@ -3858,15 +3858,32 @@ fn to_space_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I encountered a tab character"),
+                alloc.reflow("I encountered a tab character"),
                 alloc.region(region),
-                alloc.concat([alloc.reflow("Tab characters are not allowed.")]),
+                alloc.reflow("Tab characters are not allowed."),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "TAB CHARACTER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        BadInputError::HasAsciiControl => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow("I encountered an ASCII control character"),
+                alloc.region(region),
+                alloc.reflow("ASCII control characters are not allowed."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ASII CONTROL CHARACTER".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
