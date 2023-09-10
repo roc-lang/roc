@@ -63,27 +63,11 @@ impl ReplState {
         target_info: TargetInfo,
         palette: Palette,
     ) -> ReplAction<'a> {
-        match parse_src(arena, line) {
-            ParseOutcome::Empty | ParseOutcome::Help => ReplAction::Help,
-            ParseOutcome::Expr(_)
-            | ParseOutcome::ValueDef(_)
-            | ParseOutcome::TypeDef(_)
-            | ParseOutcome::SyntaxErr
-            | ParseOutcome::Incomplete => self.next_action(arena, line, target_info, palette),
-            ParseOutcome::Exit => ReplAction::Exit,
-        }
-    }
-
-    fn next_action<'a>(
-        &mut self,
-        arena: &'a Bump,
-        src: &str,
-        target_info: TargetInfo,
-        palette: Palette,
-    ) -> ReplAction<'a> {
         let pending_past_def;
         let mut opt_var_name;
-        let src = match parse_src(arena, src) {
+        let src: &str = match parse_src(arena, line) {
+            ParseOutcome::Empty | ParseOutcome::Help => return ReplAction::Help,
+            ParseOutcome::Exit => return ReplAction::Exit,
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
                 pending_past_def = None;
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
@@ -91,7 +75,7 @@ impl ReplState {
                 // proceed as normal and let the error reporting happen during eval.
                 opt_var_name = None;
 
-                src
+                line
             }
             ParseOutcome::ValueDef(value_def) => {
                 match value_def {
@@ -103,7 +87,7 @@ impl ReplState {
                         _,
                     ) => {
                         // Record the standalone type annotation for future use.
-                        self.add_past_def(ident.trim_end().to_string(), src.to_string());
+                        self.add_past_def(ident.trim_end().to_string(), line.to_string());
 
                         // Return early without running eval, since standalone annotations
                         // cannot be evaluated as expressions.
@@ -124,7 +108,7 @@ impl ReplState {
                             },
                         ..
                     } => {
-                        pending_past_def = Some((ident.to_string(), src.to_string()));
+                        pending_past_def = Some((ident.to_string(), line.to_string()));
                         opt_var_name = Some(ident.to_string());
 
                         // Recreate the body of the def and then evaluate it as a lookup.
@@ -132,11 +116,11 @@ impl ReplState {
                         // if we just did a lookup on the past def, then errors wouldn't get
                         // reported because we filter out errors whose regions are in past defs.
                         let mut buf = bumpalo::collections::string::String::with_capacity_in(
-                            ident.len() + src.len() + 1,
+                            ident.len() + line.len() + 1,
                             arena,
                         );
 
-                        buf.push_str(src);
+                        buf.push_str(line);
                         buf.push('\n');
                         buf.push_str(ident);
 
@@ -183,13 +167,12 @@ impl ReplState {
                 ..
             }) => {
                 // Record the type for future use.
-                self.add_past_def(ident.trim_end().to_string(), src.to_string());
+                self.add_past_def(ident.trim_end().to_string(), line.to_string());
 
                 // Return early without running eval, since none of these
                 // can be evaluated as expressions.
                 return ReplAction::Nothing;
             }
-            ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit => unreachable!(),
         };
 
         // Record e.g. "val1" as a past def, unless our input was exactly the name of
