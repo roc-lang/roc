@@ -3020,7 +3020,7 @@ impl<'a> Layout<'a> {
     }
 
     pub fn default_float() -> InLayout<'a> {
-        Layout::F64
+        Layout::DEC
     }
 
     pub fn int_literal_width_to_int(
