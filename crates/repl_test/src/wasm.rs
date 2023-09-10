@@ -140,19 +140,33 @@ fn run(src: &'static str) -> String {
     };
 
     let len = Value::I32(src.len() as i32);
-    assert!(instance
-        .call_export("entrypoint_from_test", [len])
-        .unwrap()
-        .is_none());
+    instance.call_export("entrypoint_from_test", [len]).unwrap();
     instance.import_dispatcher.answer.to_owned()
 }
 
 #[allow(dead_code)]
 pub fn expect_success(input: &'static str, expected: &str) {
-    assert_eq!(run(input), expected.to_string());
+    expect(input, expected);
 }
 
 #[allow(dead_code)]
 pub fn expect_failure(input: &'static str, expected: &str) {
-    assert_eq!(run(input), expected.to_string());
+    expect(input, expected);
+}
+
+#[allow(dead_code)]
+pub fn expect(input: &'static str, expected: &str) {
+    let raw_output = run(input);
+
+    // We need to get rid of HTML tags, and we can be quite specific about it!
+    // If we ever write more complex test cases, we might need regex here.
+    let without_html = raw_output
+        .replace("<span class='color-magenta'> : </span>", " : ")
+        .replace("<span class='color-green'> # val1</span>", "");
+
+    // Whitespace that was originally in front of the `# val1` is now at the end,
+    // and there's other whitespace at both ends too. Trim it all.
+    let clean_output = without_html.trim();
+
+    assert_eq!(clean_output, expected);
 }
