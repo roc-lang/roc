@@ -24,20 +24,29 @@ You should run it from the project root directory.
 
 ```bash
 crates/repl_wasm/build-www.sh
-cp crates/repl_wasm/build/* www/build/repl/
 ```
 
-### 2. Run a local HTTP server
+### 3. Make symlinks to the generated Wasm and JS
+```bash
+cd www/public
+ln -s ../../../crates/repl_wasm/build/roc_repl_wasm_bg.wasm
+ln -s ../../../crates/repl_wasm/build/roc_repl_wasm.js
+```
+These symlinks are ignored by Git.
+This is slightly different from how we do the production build but it makes development easy.
+You can directly edit files like repl.js and just reload your browser to see changes.
+
+### 4. Run a local HTTP server
 
 Browsers won't load .wasm files over the `file://` protocol, so you need to serve the files in `./www/build/` from a local web server.
 Any server will do, but this example should work on any system that has Python 3 installed:
 
 ```bash
-cd www/build
+cd www/public
 python3 -m http.server
 ```
 
-### 3. Open your browser
+### 5. Open your browser
 
 You should be able to find the Roc REPL at <http://127.0.0.1:8000/repl> (or whatever port your web server mentioned when it started up.)
 

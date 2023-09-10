@@ -241,6 +241,7 @@ pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE
 pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
 
 /// A machine-readable format for text styles (colors and other styles)
+#[derive(Debug, PartialEq)]
 pub struct StyleCodes {
     pub red: &'static str,
     pub green: &'static str,
