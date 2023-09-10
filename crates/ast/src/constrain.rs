@@ -2140,7 +2140,7 @@ pub mod test_constrain {
                 3.14
                 "#
             ),
-            "Float *",
+            "Frac *",
         )
     }
 
@@ -2315,7 +2315,7 @@ pub mod test_constrain {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float *",
+            "Frac *",
         );
     }
 

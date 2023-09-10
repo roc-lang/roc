@@ -32,12 +32,12 @@ fn literal_0x42() {
 
 #[test]
 fn literal_0point0() {
-    expect_success("0.0", "0 : Float *");
+    expect_success("0.0", "0 : Frac *");
 }
 
 #[test]
 fn literal_4point2() {
-    expect_success("4.2", "4.2 : Float *");
+    expect_success("4.2", "4.2 : Frac *");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn int_addition() {
 
 #[test]
 fn float_addition() {
-    expect_success("1.1 + 2", "3.1 : Float *");
+    expect_success("1.1 + 2", "3.1 : Frac *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -185,7 +185,7 @@ fn tag_in_record() {
 #[test]
 fn single_element_tag_union() {
     expect_success("True 1", "True 1 : [True (Num *)]");
-    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]");
+    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Frac *)]");
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn tag_with_arguments() {
 
     expect_success(
         "if 1 == 1 then True 3 else False 3.14",
-        "True 3 : [False (Float *), True (Num *)]",
+        "True 3 : [False (Frac *), True (Num *)]",
     )
 }
 
@@ -296,7 +296,7 @@ fn literal_int_list() {
 
 #[test]
 fn literal_float_list() {
-    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Float *)");
+    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Frac *)");
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn nested_int_list() {
 fn nested_float_list() {
     expect_success(
         r#"[[[4, 3, 2], [1, 0.0]], [[]], []]"#,
-        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Float *)))"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Frac *)))"#,
     );
 }
 
@@ -411,7 +411,7 @@ fn num_mul_checked() {
 fn list_concat() {
     expect_success(
         "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
-        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Float *)",
+        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Frac *)",
     );
 }
 
@@ -428,7 +428,7 @@ fn list_contains() {
 fn list_sum() {
     expect_success("List.sum []", "0 : Num a");
     expect_success("List.sum [1, 2, 3]", "6 : Num *");
-    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Float *");
+    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Frac *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -471,7 +471,7 @@ fn basic_1_field_i64_record() {
 fn basic_1_field_f64_record() {
     // Even though this gets unwrapped at runtime, the repl should still
     // report it as a record
-    expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Float * }");
+    expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Frac * }");
 }
 
 #[test]
@@ -490,7 +490,7 @@ fn nested_1_field_f64_record() {
     // report it as a record
     expect_success(
         "{ foo: { bar: { baz: 4.2 } } }",
-        "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Float * } } }",
+        "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Frac * } } }",
     );
 }
 
@@ -506,7 +506,7 @@ fn basic_2_field_i64_record() {
 fn basic_2_field_f64_record() {
     expect_success(
         "{ foo: 4.1, bar: 2.3 }",
-        "{ bar: 2.3, foo: 4.1 } : { bar : Float *, foo : Float * }",
+        "{ bar: 2.3, foo: 4.1 } : { bar : Frac *, foo : Frac * }",
     );
 }
 
@@ -514,7 +514,7 @@ fn basic_2_field_f64_record() {
 fn basic_2_field_mixed_record() {
     expect_success(
         "{ foo: 4.1, bar: 2 }",
-        "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float * }",
+        "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Frac * }",
     );
 }
 
@@ -522,7 +522,7 @@ fn basic_2_field_mixed_record() {
 fn basic_3_field_record() {
     expect_success(
         "{ foo: 4.1, bar: 2, baz: 0x5 }",
-        "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int *, foo : Float * }",
+        "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int *, foo : Frac * }",
     );
 }
 
@@ -537,7 +537,7 @@ fn list_of_1_field_records() {
 fn list_of_2_field_records() {
     expect_success(
         "[{ foo: 4.1, bar: 2 }]",
-        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Float * }",
+        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Frac * }",
     );
 }
 
@@ -608,7 +608,7 @@ fn multiline_string_wasm() {
 fn list_of_3_field_records() {
     expect_success(
         "[{ foo: 4.1, bar: 2, baz: 0x3 }]",
-        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Float * }",
+        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Frac * }",
     );
 }
 
