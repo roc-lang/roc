@@ -48,9 +48,13 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
     "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line input)";
   repl.compiler = instance;
 
-  // Show the help text by providing fake input, and then removing it!
+  // Show the help text by providing fake input
   repl.inputQueue.push(":help");
   processInputQueue();
+
+  // Remove the fake input
+  repl.inputHistory.shift();
+  repl.inputHistoryIndex = 0;
   document.querySelector(".input").remove();
 });
 
@@ -80,6 +84,9 @@ function onInputKeyup(event) {
 
   switch (keyCode) {
     case UP:
+      if (repl.inputHistory.length === 0) {
+        return;
+      }
       if (repl.inputHistoryIndex == repl.inputHistory.length - 1) {
         repl.inputStash = el.value;
       }
@@ -91,6 +98,9 @@ function onInputKeyup(event) {
       break;
 
     case DOWN:
+      if (repl.inputHistory.length === 0) {
+        return;
+      }
       if (repl.inputHistoryIndex === repl.inputHistory.length - 1) {
         setInput(repl.inputStash);
       } else {
