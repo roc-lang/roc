@@ -23,8 +23,8 @@ use target_lexicon::Triple;
 #[macro_use]
 extern crate const_format;
 
-#[global_allocator]
-static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+// #[global_allocator]
+// static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::ffi::{OsStr, OsString};
 
