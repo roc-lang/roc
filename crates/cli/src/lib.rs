@@ -141,7 +141,7 @@ pub fn build_app() -> Command {
 
     let build_target_values_parser =
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
-    
+
     Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
