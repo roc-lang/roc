@@ -1079,8 +1079,15 @@ fn str_repeat_small_stays_small() {
 fn str_repeat_small_becomes_big() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "less than 23 characters" 2"#),
-        RocStr::from("less than 23 charactersless than 23 characters"),
-        RocStr
+        String::from("less than 23 charactersless than 23 characters"),
+        RocStr,
+        |value: RocStr| {
+            let x = value.as_str().to_string();
+
+            std::mem::forget(value);
+
+            x
+        }
     );
 }
 
