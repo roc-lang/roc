@@ -1560,7 +1560,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
-            LayoutRepr::U128 | LayoutRepr::I128 => {
+            LayoutRepr::U128 | LayoutRepr::I128 | LayoutRepr::DEC => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
                 // put the arguments on the stack
@@ -1611,7 +1611,6 @@ impl<
 
                 ASM::eq_freg_freg_reg64(&mut self.buf, dst_reg, src_reg1, src_reg2, float_width)
             }
-            LayoutRepr::DEC => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::DEC)),
             LayoutRepr::STR => {
                 // use a zig call
                 self.build_fn_call(
@@ -1753,54 +1752,12 @@ impl<
         arg_layout: &InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
-        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
-        match (
-            self.layout_interner.get_repr(*arg_layout),
-            self.layout_interner.get_repr(*ret_layout),
-        ) {
-            (
-                LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
-                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
-                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (a, r) => todo!("NumToFrac: layout, arg {:?}, ret {:?}", a, r),
+        match *ret_layout {
+            Layout::F32 => self.num_to_f32(dst, src, arg_layout),
+            Layout::F64 => self.num_to_f64(dst, src, arg_layout),
+            Layout::DEC => self.num_to_dec(dst, src, arg_layout),
+
+            other => todo!("NumToFrac: layout {other:?} is not Frac"),
         }
     }
 
@@ -4048,6 +4005,84 @@ impl<
         (unmasked_symbol, unmasked_reg)
     }
 
+    fn num_to_f32(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+        match self.layout_interner.get_repr(*arg_layout) {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)) => {
+                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
+                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::F32),
+        }
+    }
+
+    fn num_to_f64(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+        match self.layout_interner.get_repr(*arg_layout) {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)) => {
+                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
+                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::F64),
+        }
+    }
+
+    fn num_to_dec(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        match self.layout_interner.get_repr(*arg_layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_FROM_INT[int_width].to_string(),
+                    &[*src],
+                    &[*arg_layout],
+                    &Layout::DEC,
+                );
+            }
+
+            arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::DEC),
+        }
+    }
+
+    fn compare_128bit(
+        &mut self,
+        op: CompareOperation,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        width: IntWidth,
+    ) {
+        let intrinsic = match op {
+            CompareOperation::LessThan => &bitcode::NUM_LESS_THAN[width],
+            CompareOperation::LessThanOrEqual => &bitcode::NUM_LESS_THAN_OR_EQUAL[width],
+            CompareOperation::GreaterThan => &bitcode::NUM_GREATER_THAN[width],
+            CompareOperation::GreaterThanOrEqual => &bitcode::NUM_GREATER_THAN_OR_EQUAL[width],
+        };
+
+        self.build_fn_call(
+            &dst,
+            intrinsic.to_string(),
+            &[*src1, *src2],
+            &[Layout::U128, Layout::U128],
+            &Layout::U8,
+        );
+    }
+
     fn compare(
         &mut self,
         op: CompareOperation,
@@ -4098,6 +4133,12 @@ impl<
                     float_width,
                     op,
                 );
+            }
+            LayoutRepr::Builtin(Builtin::Int(width @ (IntWidth::I128 | IntWidth::U128))) => {
+                self.compare_128bit(op, dst, src1, src2, width);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.compare_128bit(op, dst, src1, src2, IntWidth::I128);
             }
             x => todo!("NumLt: layout, {:?}", x),
         }

@@ -2237,7 +2237,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     )
                 }
                 LayoutRepr::Builtin(Builtin::Decimal) => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::DEC_FROM_U64)
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::DEC_FROM_INT[arg_width])
                 }
                 _ => internal_error!("There can only be floats here!"),
             }

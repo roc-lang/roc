@@ -39,6 +39,10 @@ comptime {
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
+
+    inline for (INTEGERS) |T| {
+        dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
+    }
 }
 
 // List Module
