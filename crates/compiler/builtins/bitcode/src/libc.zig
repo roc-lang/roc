@@ -9,7 +9,7 @@ comptime {
     // TODO: remove this workaround.
     // Our wasm llvm pipeline always links in memcpy.
     // As such, our impl will conflict.
-    if (arch != .wasm32) {
+    if (arch != .wasm32 and arch != .windows) {
         @export(memcpy, .{ .name = "memcpy", .linkage = .Strong });
     }
 }
