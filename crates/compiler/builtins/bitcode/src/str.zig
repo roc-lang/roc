@@ -1624,13 +1624,22 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
+        const subslice = dest[i * bytes_len .. (i + 1) * bytes_len];
         if (builtin.target.cpu.arch != .wasm32) {
-            std.debug.print("iteration: {} {s}\n", .{
+            std.debug.print("iteration: {} `{s}` `{s}`\n", .{
                 i,
                 ret_string.asSlice(),
+                subslice,
+            });
+
+            std.debug.print("iteration: {} {} {}\n", .{
+                i,
+                subslice.len,
+                src.len,
             });
         }
-        std.mem.copy(u8, dest[i * bytes_len .. (i + 1) * bytes_len], src);
+
+        std.mem.copy(u8, subslice, src);
     }
 
     return ret_string;
