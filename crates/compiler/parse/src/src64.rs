@@ -263,7 +263,7 @@ unsafe fn allocate_and_pad_with_newlines(arena: &Bump, capacity: usize) -> Optio
         // Prefetch the third 64-byte chunk, using min() to branchlessly avoid prefetching an address we might not own.
         prefetch_read(buf_ptr, 128.min(last_chunk_offset));
 
-        // Further prefetching will happen in the tokenization loop. Now that we've prefetched the first 3 pages,
+        // Further prefetching can happen in the tokenization loop. Now that we've prefetched the first 3 pages,
         // we should be able to prefetch the others in the loop with enough time before the tokenizer arrives there.
     }
 
@@ -353,6 +353,8 @@ fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
             in(reg) non_null_ptr.as_ptr().add(offset)
         );
     }
+
+    // If we're not on x64 or aarch64, just do nothing!
 }
 
 #[inline(always)]
@@ -375,6 +377,8 @@ fn prefetch_readwrite<T>(non_null_ptr: NonNull<T>, offset: usize) {
             in(reg) non_null_ptr.as_ptr().add(offset)
         );
     }
+
+    // If we're not on x64 or aarch64, just do nothing!
 }
 
 #[cfg(test)]
