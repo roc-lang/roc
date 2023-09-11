@@ -1,5 +1,5 @@
 //! Provides Rust representations of Roc data structures.
-#![cfg_attr(not(feature = "std"), no_std)]
+// #![cfg_attr(not(feature = "std"), no_std)]
 #![crate_type = "lib"]
 
 use arrayvec::ArrayString;

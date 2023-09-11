@@ -537,18 +537,26 @@ impl<T> Drop for RocList<T> {
             // Decrease the list's reference count.
             let mut new_storage = storage.get();
 
+            std::dbg!(!new_storage.is_readonly());
+
             if !new_storage.is_readonly() {
                 let needs_dealloc = new_storage.decrease();
 
                 if needs_dealloc {
                     unsafe {
                         // Drop the stored elements.
+                        println!("dropping elements");
                         for index in 0..self.len() {
                             ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
                         }
+                        println!("dropped elements");
+
+                        println!("the pointer is {:?}", self.ptr_to_allocation());
 
                         // Release the memory.
                         roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+
+                        println!("dropped the allocation");
                     }
                 } else {
                     // Write the storage back.

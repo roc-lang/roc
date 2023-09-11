@@ -396,6 +396,10 @@ pub fn allocateWithRefcount(
 
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
+    if (builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("made allocation at {*}\n", .{new_bytes});
+    }
+
     const data_ptr = new_bytes + alignment;
     const refcount_ptr = @ptrCast([*]usize, @alignCast(ptr_width, data_ptr) - ptr_width);
     refcount_ptr[0] = if (RC_TYPE == Refcount.none) REFCOUNT_MAX_ISIZE else REFCOUNT_ONE;
