@@ -15,6 +15,7 @@ members = [
   "crates/repl_cli",
   "crates/repl_eval",
   "crates/repl_test",
+  "crates/repl_ui",
   "crates/repl_wasm",
   "crates/repl_expect",
   "crates/roc_std",
