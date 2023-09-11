@@ -1084,7 +1084,7 @@ fn str_repeat_small_becomes_big() {
         |value: RocStr| {
             let x = value.as_str().to_string();
 
-            std::mem::forget(value);
+            std::mem::drop(value);
 
             x
         }
