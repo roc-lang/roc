@@ -53,7 +53,7 @@ fn f64_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                   rec = { y: 17.2, x: 15.1, z: 19.3 }
+                   rec = { y: 17.2f64, x: 15.1f64, z: 19.3f64 }
 
                    rec.x
                 "#
@@ -65,7 +65,7 @@ fn f64_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                   rec = { y: 17.2, x: 15.1, z: 19.3 }
+                   rec = { y: 17.2f64, x: 15.1f64, z: 19.3f64 }
 
                    rec.y
                 "#
@@ -77,7 +77,7 @@ fn f64_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                    rec = { y: 17.2, x: 15.1, z: 19.3 }
+                    rec = { y: 17.2f64, x: 15.1f64, z: 19.3f64 }
 
                     rec.z
                 "#
@@ -280,7 +280,7 @@ fn f64_record2_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-                   { x: 3.1, y: 5.1 }
+                   { x: 3.1f64, y: 5.1f64 }
                 "#
         ),
         (3.1, 5.1),
@@ -717,7 +717,7 @@ fn return_record_float_int() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 1.23, b: 0x1 }
+                { a: 1.23f64, b: 0x1 }
                 "#
         ),
         (1.23, 0x1),
@@ -731,7 +731,7 @@ fn return_record_int_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 0x1, b: 1.23 }
+                { a: 0x1, b: 1.23f64 }
                 "#
         ),
         (0x1, 1.23),
@@ -745,7 +745,7 @@ fn return_record_float_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 2.46, b: 1.23 }
+                { a: 2.46f64, b: 1.23f64 }
                 "#
         ),
         (2.46, 1.23),
@@ -759,7 +759,7 @@ fn return_record_float_float_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                { a: 2.46, b: 1.23, c: 0.1 }
+                { a: 2.46f64, b: 1.23f64, c: 0.1f64 }
                 "#
         ),
         (2.46, 1.23, 0.1),
@@ -773,7 +773,7 @@ fn return_nested_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                { flag: 0x0, payload: { a: 2.46, b: 1.23, c: 0.1 } }
+                { flag: 0x0, payload: { a: 2.46f64, b: 1.23f64, c: 0.1f64 } }
                 "#
         ),
         (0x0, (2.46, 1.23, 0.1)),
@@ -802,7 +802,7 @@ fn nested_record_load() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn accessor_twice() {
-    assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 2.46, foo: 3 } ", 7, i64);
+    assert_evals_to!(".foo { foo: 4 }  + .foo { bar: 2.46f64, foo: 3 } ", 7, i64);
 }
 
 #[test]
@@ -839,7 +839,7 @@ fn update_record() {
     assert_evals_to!(
         indoc!(
             r#"
-                rec = { foo: 42, bar: 2.46 }
+                rec = { foo: 42, bar: 2.46f64 }
 
                 { rec & foo: rec.foo + 1 }
                 "#

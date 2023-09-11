@@ -406,6 +406,12 @@ impl RocDec {
     }
 }
 
+impl From<i32> for RocDec {
+    fn from(value: i32) -> Self {
+        RocDec::from_ne_bytes((RocDec::ONE_POINT_ZERO * value as i128).to_ne_bytes())
+    }
+}
+
 impl fmt::Display for RocDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.to_str_helper(&mut ArrayString::new()))

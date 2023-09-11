@@ -198,7 +198,7 @@ fn gen_if_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                if Bool.true then -1.0 else 1.0
+                if Bool.true then -1.0 else 1.0f64
                 "#
         ),
         -1.0,
@@ -766,7 +766,7 @@ fn join_point_when() {
                     when x is
                         Red -> 1
                         White -> 2
-                        Blue -> 3.1
+                        Blue -> 3.1f64
 
                 y
 

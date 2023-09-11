@@ -21,6 +21,7 @@ comptime {
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.toStr, "to_str");
     exportDecFn(dec.fromF64C, "from_f64");
+    exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.toI128, "to_i128");
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
@@ -81,6 +82,19 @@ comptime {
 
     exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
     exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
+
+    exportNumFn(num.compareI128, "compare.i128");
+    exportNumFn(num.compareU128, "compare.u128");
+
+    exportNumFn(num.lessThanI128, "less_than.i128");
+    exportNumFn(num.lessThanOrEqualI128, "less_than_or_equal.i128");
+    exportNumFn(num.greaterThanI128, "greater_than.i128");
+    exportNumFn(num.greaterThanOrEqualI128, "greater_than_or_equal.i128");
+
+    exportNumFn(num.lessThanU128, "less_than.u128");
+    exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
+    exportNumFn(num.greaterThanU128, "greater_than.u128");
+    exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
 
     inline for (INTEGERS) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");

@@ -20,7 +20,7 @@ fn basic_int() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_float() {
-    assert_evals_to!("1234.0", 1234.0, f64);
+    assert_evals_to!("1234.0f64", 1234.0, f64);
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn branch_first_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                when 1.23 is
+                when 1.23f64 is
                     1.23 -> 12
                     _ -> 34
             "#
@@ -239,12 +239,12 @@ fn gen_large_when_float() {
             r#"
                 foo = \num ->
                     when num is
-                        0.5 -> 200.1
+                        0.5f64 -> 200.1
                         -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
                         3.6 -> 789.5
                         1.7 -> 123.3
                         2.8 -> 456.4
-                        _ -> 1000.6
+                        _ -> 1000.6f64
 
                 foo -3.6
             "#
@@ -314,7 +314,7 @@ fn return_unnamed_fn() {
                 alwaysFloatIdentity = \_ ->
                     (\a -> a)
 
-                (alwaysFloatIdentity 2) 1.23
+                (alwaysFloatIdentity 2) 1.23f64
 
             wrapper {}
             "#
@@ -362,7 +362,7 @@ fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
             r#"
-                float = 1.23
+                float = 1.23f64
 
                 float
             "#
@@ -380,7 +380,7 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                float = 1.23
+                float = 1.23f64
 
                 if float > 3 then answer else answer
             "#
@@ -394,7 +394,7 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                float = 1.23
+                float = 1.23f64
 
                 if answer > 3 then float else float
             "#
@@ -564,7 +564,7 @@ fn top_level_constant() {
             r#"
             app "test" provides [main] to "./platform"
 
-            float = 1.2315
+            float = 1.2315f64
 
             main =
                 float + float
@@ -1826,10 +1826,10 @@ fn unified_empty_closure_bool() {
 
             foo = \{} ->
                 when A is
-                    A -> (\_ -> 1.23)
-                    B -> (\_ -> 1.23)
+                    A -> (\_ -> 1.23f64)
+                    B -> (\_ -> 1.23f64)
 
-            main : Frac *
+            main : F64
             main =
                 (foo {}) 0
             "#
@@ -1851,11 +1851,11 @@ fn unified_empty_closure_byte() {
 
             foo = \{} ->
                 when A is
-                    A -> (\_ -> 1.23)
-                    B -> (\_ -> 1.23)
+                    A -> (\_ -> 1.23f64)
+                    B -> (\_ -> 1.23f64)
                     C -> (\_ -> 1.23)
 
-            main : Frac *
+            main : F64
             main =
                 (foo {}) 0
             "#

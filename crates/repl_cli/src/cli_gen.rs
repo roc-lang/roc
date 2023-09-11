@@ -70,6 +70,7 @@ pub fn eval_llvm(
         layout_interner.into_global().fork(),
         target_info,
     );
+
     let expr_str = format_answer(&arena, expr).to_string();
 
     Some(ReplOutput {

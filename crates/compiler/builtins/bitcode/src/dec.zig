@@ -1125,6 +1125,10 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
 }
 
+pub fn fromU64C(arg: u64) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.fromU64, .{arg}).toI128();
+}
+
 pub fn toI128(arg: RocDec) callconv(.C) i128 {
     return @call(.{ .modifier = always_inline }, RocDec.toI128, .{arg});
 }

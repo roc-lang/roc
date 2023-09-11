@@ -310,6 +310,14 @@ pub const NUM_IS_MULTIPLE_OF: IntrinsicName = int_intrinsic!("roc_builtins.num.i
 pub const NUM_SHIFT_RIGHT_ZERO_FILL: IntrinsicName =
     int_intrinsic!("roc_builtins.num.shift_right_zero_fill");
 
+pub const NUM_COMPARE: IntrinsicName = int_intrinsic!("roc_builtins.num.compare");
+pub const NUM_LESS_THAN: IntrinsicName = int_intrinsic!("roc_builtins.num.less_than");
+pub const NUM_LESS_THAN_OR_EQUAL: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.less_than_or_equal");
+pub const NUM_GREATER_THAN: IntrinsicName = int_intrinsic!("roc_builtins.num.greater_than");
+pub const NUM_GREATER_THAN_OR_EQUAL: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.greater_than_or_equal");
+
 pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_leading_zero_bits");
 pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
@@ -381,6 +389,7 @@ pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_EQ: &str = "roc_builtins.dec.eq";
 pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
