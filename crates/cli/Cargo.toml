@@ -26,7 +26,7 @@ run-wasm32 = ["roc_wasm_interp"]
 # Compiling for a different target than the current machine can cause linker errors.
 target-aarch64 = ["roc_build/target-aarch64", "roc_repl_cli/target-aarch64"]
 target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
-target-wasm32 = ["roc_build/target-wasm32", "roc_repl_cli/target-wasm32"]
+target-wasm32 = ["roc_build/target-wasm32"]
 target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 

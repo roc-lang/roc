@@ -92,6 +92,12 @@ Command Line Interface(CLI) functionality for the Read-Evaluate-Print-Loop (REPL
 
 Provides the functionality for the REPL to evaluate Roc expressions.
 
+## `repl_state/` - `roc_repl_state`
+
+Implements the state machine the to handle user input for the REPL (CLI and web)
+If the user enters an expression, like `x * 2`, check it evaluate it.
+If the user enters a declaration, like `x = 123`, check it and remember it, but don't evaluate.
+
 ## `repl_expect/` - `roc_repl_expect`
 
 Supports evaluating `expect` and printing contextual information when they fail.

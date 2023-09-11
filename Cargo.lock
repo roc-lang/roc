@@ -2117,9 +2117,14 @@ dependencies = [
  "roc_build",
  "roc_cli",
  "roc_repl_cli",
+ "roc_repl_ui",
+ "roc_reporting",
+ "roc_target",
  "roc_test_utils",
  "roc_wasm_interp",
+ "rustyline",
  "strip-ansi-escapes",
+ "target-lexicon",
 ]
 
 [[package]]
@@ -2814,11 +2819,11 @@ dependencies = [
  "roc_error_macros",
  "roc_gen_llvm",
  "roc_load",
- "roc_module",
  "roc_mono",
  "roc_parse",
  "roc_region",
  "roc_repl_eval",
+ "roc_repl_ui",
  "roc_reporting",
  "roc_std",
  "roc_target",
@@ -2886,6 +2891,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_repl_ui"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "const_format",
+ "roc_collections",
+ "roc_load",
+ "roc_parse",
+ "roc_region",
+ "roc_repl_eval",
+ "roc_reporting",
+ "roc_target",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "roc_repl_wasm"
 version = "0.0.1"
 dependencies = [
@@ -2901,6 +2922,7 @@ dependencies = [
  "roc_load",
  "roc_parse",
  "roc_repl_eval",
+ "roc_repl_ui",
  "roc_reporting",
  "roc_solve",
  "roc_target",
@@ -4318,9 +4340,9 @@ dependencies = [
 
 [[package]]
 name = "webpki"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f095d78192e208183081cc07bc5515ef55216397af48b873e5edcd72637fa1bd"
+checksum = "f0e74f82d49d545ad128049b7e88f6576df2da6b02e9ce565c6f533be576957e"
 dependencies = [
  "ring",
  "untrusted",
