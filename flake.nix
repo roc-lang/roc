@@ -11,7 +11,7 @@
     };
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
-    # to be able to use vulkan system libs for editor graphics
+    # to be able to use vulkan system libs for graphics in examples/gui
     nixgl = {
       url = "github:guibou/nixGL";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -32,10 +32,11 @@
         rust =
           pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
 
-        linuxInputs = with pkgs;
+        # DevInputs are not necessary to build roc as a user 
+        linuxDevInputs = with pkgs;
           lib.optionals stdenv.isLinux [
             valgrind # used in cli tests, see cli/tests/cli_run.rs
-            vulkan-headers
+            vulkan-headers # here and below is all graphics stuff for examples/gui
             vulkan-loader
             vulkan-tools
             vulkan-validation-layers
@@ -52,10 +53,16 @@
             AppKit
             CoreFoundation
             CoreServices
-            CoreVideo
             Foundation
-            Metal
             Security
+          ]);
+
+        # DevInputs are not necessary to build roc as a user 
+        darwinDevInputs = with pkgs;
+          lib.optionals stdenv.isDarwin
+          (with pkgs.darwin.apple_sdk.frameworks; [
+            CoreVideo # for examples/gui
+            Metal # for examples/gui
             curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
           ]);
 
@@ -85,29 +92,30 @@
         sharedInputs = (with pkgs; [
           # build libraries
           cmake
-          git
-          python3
           llvmPkgs.llvm.dev
           llvmPkgs.clang
-          libxkbcommon
           pkg-config
           zig_0_9 # roc builtins are implemented in zig, see compiler/builtins/bitcode/
-
           # lib deps
           libffi
           libxml2
           ncurses
           zlib
-          libiconv
-
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
-          debugir
           rust
+        ]);
+
+        sharedDevInputs = (with pkgs; [
+          git
+          python3
+          libiconv # for examples/gui
+          libxkbcommon # for examples/gui
+          debugir # used in crates/compiler/build/src/program.rs
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
-          jq
+          jq # used in several bash scripts
         ]);
 
         aliases = ''
@@ -119,7 +127,7 @@
       in {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ darwinInputs ++ linuxInputs
+          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs++ linuxDevInputs
             ++ (if system == "x86_64-linux" then
               [ pkgs.nixgl.nixVulkanIntel ]
             else
@@ -138,7 +146,7 @@
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
             ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-              ++ linuxInputs);
+              ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the editor with NVIDIA's closed source drivers
           

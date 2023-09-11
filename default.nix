@@ -75,31 +75,16 @@ in
     buildInputs = (with pkgs;
       [
         libffi
-        libiconv
-        libxkbcommon
         libxml2
         ncurses
         zlib
         cargo
         makeWrapper # necessary for postBuild wrapProgram
-      ] ++ lib.optionals pkgs.stdenv.isLinux [
-        valgrind
-        vulkan-headers
-        vulkan-loader
-        vulkan-tools
-        vulkan-validation-layers
-        xorg.libX11
-        xorg.libXcursor
-        xorg.libXi
-        xorg.libXrandr
-        xorg.libxcb
       ] ++ lib.optionals pkgs.stdenv.isDarwin [
         pkgs.darwin.apple_sdk.frameworks.AppKit
         pkgs.darwin.apple_sdk.frameworks.CoreFoundation
         pkgs.darwin.apple_sdk.frameworks.CoreServices
-        pkgs.darwin.apple_sdk.frameworks.CoreVideo
         pkgs.darwin.apple_sdk.frameworks.Foundation
-        pkgs.darwin.apple_sdk.frameworks.Metal
         pkgs.darwin.apple_sdk.frameworks.Security
       ]);
 
