@@ -324,7 +324,7 @@ unsafe fn write_newlines(dest: *mut u8, len: usize) {
         _mm_storeu_si128(ptr.add(2), newline);
         _mm_storeu_si128(ptr.add(3), newline);
 
-        core::ptr::copy_nonoverlapping(ptr as *const u8, dest.as_ptr(), len);
+        core::ptr::copy_nonoverlapping(ptr as *const u8, dest, len);
     }
 
     #[cfg(target_feature = "neon")]
@@ -363,7 +363,7 @@ unsafe fn write_newlines(dest: *mut u8, len: usize) {
         *ptr.add(6) = newline_repeated;
         *ptr.add(7) = newline_repeated;
 
-        core::ptr::copy_nonoverlapping(ptr as *const u8, dest.as_ptr(), len);
+        core::ptr::copy_nonoverlapping(ptr as *const u8, dest, len);
     }
 }
 
