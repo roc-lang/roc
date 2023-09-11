@@ -1008,7 +1008,7 @@ fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
         unreachable!()
     };
 
-    const DEFAULT: &'static Loc<Expr> = &Loc::at_zero(Expr::Crash);
+    const DEFAULT: &Loc<Expr> = &Loc::at_zero(Expr::Crash);
     let mut vec: Vec<_> = std::iter::repeat(DEFAULT)
         .take(output.len())
         .collect_in(env.arena);

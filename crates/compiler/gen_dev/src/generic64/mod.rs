@@ -4075,7 +4075,7 @@ impl<
         };
 
         self.build_fn_call(
-            &dst,
+            dst,
             intrinsic.to_string(),
             &[*src1, *src2],
             &[Layout::U128, Layout::U128],
