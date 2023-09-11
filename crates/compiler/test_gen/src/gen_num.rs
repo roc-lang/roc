@@ -2018,7 +2018,7 @@ fn int_mul_wrap_i128() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
@@ -3369,7 +3369,7 @@ fn sub_saturated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mul_saturated() {
     assert_evals_to!(
         indoc!(
@@ -3965,7 +3965,7 @@ fn sub_checked_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mul_checked_dec() {
     assert_evals_to!(
         indoc!(

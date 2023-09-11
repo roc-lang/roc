@@ -1400,6 +1400,90 @@ impl<
         }
     }
 
+    fn build_num_mul_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
+                let intrinsic = bitcode::NUM_MUL_SATURATED_INT[width].to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                let intrinsic = bitcode::DEC_MUL_SATURATED.to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            x => todo!("NumMulSaturated: layout, {:?}", x),
+        }
+    }
+
+    fn build_num_mul_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
+    ) {
+        use Builtin::Int;
+
+        let buf = &mut self.buf;
+
+        let struct_size = self.layout_interner.stack_size(*return_layout);
+
+        let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
+
+        match self.layout_interner.get_repr(*num_layout) {
+            LayoutRepr::Builtin(Int(
+                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
+            )) => {
+                let dst_reg = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP);
+
+                let overflow_reg = self
+                    .storage_manager
+                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
+
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+
+                ASM::imul_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+                ASM::set_if_overflow(buf, overflow_reg);
+
+                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
+                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
+            LayoutRepr::Builtin(Int(
+                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
+            )) => {
+                todo!("mulChecked for unsigned integers")
+            }
+            LayoutRepr::Builtin(Builtin::Float(_width)) => {
+                todo!("mulChecked for floats")
+            }
+            x => todo!("mulChecked: layout, {:?}", x),
+        }
+    }
+
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(

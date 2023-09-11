@@ -1012,6 +1012,12 @@ trait Backend<'a> {
             ),
             LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumMulWrap => self.build_num_mul_wrap(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulSaturated => {
+                self.build_num_mul_saturated(*sym, args[0], args[1], *ret_layout);
+            }
+            LowLevel::NumMulChecked => {
+                self.build_num_mul_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,
@@ -2052,6 +2058,23 @@ trait Backend<'a> {
         src1: &Symbol,
         src2: &Symbol,
         layout: &InLayout<'a>,
+    );
+
+    fn build_num_mul_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    );
+
+    fn build_num_mul_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
     );
 
     /// build_num_mul stores `src1 / src2` into dst.
