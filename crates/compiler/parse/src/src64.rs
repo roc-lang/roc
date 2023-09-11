@@ -124,7 +124,7 @@ impl<'a> Src64<'a> {
             return Err(FileErr::FileWasEmpty);
         }
 
-        let capacity = round_up_to_nearest_64(file_size as usize);
+        let capacity = round_up_to_nearest_64(file_size);
 
         // Safety: round_up_to_nearest_u64 will give us a capacity that is
         // at least 64, and also a multiple of 64.
