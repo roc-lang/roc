@@ -1642,6 +1642,8 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
         std.mem.copy(u8, subslice, src);
     }
 
+    std.debug.print("made it out of the loop\n", .{});
+
     return ret_string;
 }
 
