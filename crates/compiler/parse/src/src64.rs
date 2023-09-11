@@ -238,8 +238,8 @@ impl<'a> Src64<'a> {
                     // Prefetch the fourth 64-byte chunk, using min() to branchlessly avoid prefetching an address we might not own.
                     prefetch_read(buf, 192.min(last_chunk_offset));
 
-                    // Further prefetching can happen in the tokenization loop. Now that we've prefetched the first 3 pages,
-                    // we should be able to prefetch the others in the loop with enough time before the tokenizer arrives there.
+                    // Further prefetching can happen in the tokenization loop. Now that we've prefetched the first pages,
+                    // we should be able to prefetch the others in the tokenization loop before it needs to read them.
                 }
 
                 if capacity > file_size {
