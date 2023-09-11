@@ -16,8 +16,6 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use std::fs::File;
-
 #[cfg(not(test))]
 /// We store both line and column numbers as u16s, so the largest possible file you could open
 /// would be every line having the longest possible column length, or u16::MAX * u16::MAX.
@@ -40,6 +38,7 @@ pub enum FileErr {
     ReadErr,
     FileWasTooBig(usize),
     ErrReadingFileSize,
+    FileOpenFailed,
 }
 
 impl<'a> Src64<'a> {
@@ -105,8 +104,15 @@ impl<'a> Src64<'a> {
     }
 
     #[cfg(any(unix, windows))] // This is not available on wasm32. We could make it work with WASI if desired.
-    pub fn from_file(arena: &'a Bump, file: File) -> Result<Self, FileErr> {
+    pub fn from_file(arena: &'a Bump, path: &std::path::Path) -> Result<Self, FileErr> {
         use core::ffi::c_void;
+
+        let file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(_) => {
+                return Err(FileErr::FileOpenFailed);
+            }
+        };
 
         let file_size = match file.metadata() {
             Ok(metadata) => {
@@ -425,9 +431,7 @@ mod src64_tests {
                 .expect("Failed to write to temp file");
         }
 
-        let file = File::open(&file_path).expect("Failed to read temp file");
-
-        match Src64::from_file(arena, file) {
+        match Src64::from_file(arena, &file_path) {
             Ok(actual) => {
                 assert_eq!(actual.len() % 64, 0);
                 assert_eq!(
@@ -542,10 +546,9 @@ mod src64_tests {
                 file.write_all(&bytes).expect("Failed to write to temp file");
             }
 
-            let file = File::open(&file_path).expect("Failed to read temp file");
             let arena = Bump::new();
 
-            match Src64::from_file(&arena, file) {
+            match Src64::from_file(&arena, &file_path) {
                 Ok(src64) => {
                     let len = src64.len();
 
