@@ -12,15 +12,10 @@
 use bumpalo::{self, Bump};
 use core::{
     alloc::Layout,
-    mem::{self, MaybeUninit},
     ptr::{self, NonNull},
-    slice,
 };
-use std::{
-    fs::File,
-    io::{self, Read},
-    path::Path,
-};
+
+use std::fs::File;
 
 #[cfg(not(test))]
 /// We store both line and column numbers as u16s, so the largest possible file you could open
@@ -38,31 +33,17 @@ pub struct Src64<'a> {
     bytes: &'a [u8],
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum FileErr {
-    IoErr(io::Error),
     FileWasEmpty,
+    ReadErr,
     FileWasTooBig(usize),
-}
-
-// We can't derive PartialEq because io::Error doesn't have it.
-impl PartialEq for FileErr {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::IoErr(left), Self::IoErr(right)) => left.kind() == right.kind(),
-            (Self::FileWasTooBig(left), Self::FileWasTooBig(right)) => left == right,
-            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-        }
-    }
-}
-
-impl From<io::Error> for FileErr {
-    fn from(err: io::Error) -> Self {
-        FileErr::IoErr(err)
-    }
+    ErrReadingFileSize,
 }
 
 impl<'a> Src64<'a> {
+    const BYTES_ALIGNMENT: usize = 64;
+
     /// The underlying source bytes that originally came from a file or from a string.
     ///
     /// These bytes are guaranteed to have a 16B-aligned address (so the parser can do 128-bit SIMD on it).
@@ -91,7 +72,9 @@ impl<'a> Src64<'a> {
 
         let capacity = round_up_to_nearest_64(src_len);
 
-        if capacity == src_len && src.as_ptr().align_offset(16) == 0 {
+        debug_assert_eq!(capacity % 64, 0);
+
+        if capacity == src_len && src.as_ptr().align_offset(Self::BYTES_ALIGNMENT) == 0 {
             // If the string already happens to meet our capacity and alignment requirements, just return it.
             return Some(Self {
                 bytes: src.as_bytes(),
@@ -99,66 +82,133 @@ impl<'a> Src64<'a> {
         }
 
         // Safety: we got capacity by rounding up to the nearest 64B
-        let dest = unsafe { allocate_and_pad_with_newlines(arena, capacity)? };
+        let dest = unsafe { allocate_and_pad_with_newlines(arena, capacity)? }.as_ptr() as *mut u8;
 
-        // Safety: we just allocated `dest` to have len >= src.len(), and they're both u8 slices.
+        // Safety: we just allocated `dest` to have len >= src.len(), and they're both u8 arrays.
         unsafe {
-            ptr::copy_nonoverlapping(
-                src.as_bytes().as_ptr(),
-                dest.as_mut_ptr() as *mut u8,
-                src_len,
-            );
+            ptr::copy_nonoverlapping(src.as_bytes().as_ptr(), dest, src_len);
         }
 
         Some(Self {
-            // Safety: all the bytes should now be initialized, so we can transmute away their MaybeUninit marker.
-            bytes: unsafe { mem::transmute::<&'a [MaybeUninit<u8>], &'a [u8]>(dest) },
+            // Safety: all the bytes should now be initialized
+            bytes: unsafe { core::slice::from_raw_parts_mut(dest, capacity) },
         })
     }
 
-    pub fn from_file(arena: &'a Bump, path: &Path) -> Result<Self, FileErr> {
-        let mut file = File::open(path).map_err(Into::<FileErr>::into)?;
-        let file_size = file.metadata()?.len() as usize;
+    #[cfg(any(unix, windows))] // This is not available on wasm32. We could make it work with WASI if desired.
+    pub fn from_file(arena: &'a Bump, file: File) -> Result<Self, FileErr> {
+        use core::ffi::c_void;
+
+        let file_size = match file.metadata() {
+            Ok(metadata) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::prelude::MetadataExt;
+
+                    metadata.size() as usize
+                }
+
+                #[cfg(windows)]
+                {
+                    use std::os::windows::prelude::MetadataExt;
+
+                    metadata.file_size() as usize
+                }
+            }
+            Err(_io_err) => {
+                return Err(FileErr::ErrReadingFileSize);
+            }
+        };
 
         if file_size == 0 {
             return Err(FileErr::FileWasEmpty);
         }
 
-        let capacity = round_up_to_nearest_64(file_size);
+        let capacity = round_up_to_nearest_64(file_size as usize);
 
-        // Safety: we got capacity by rounding up to the nearest 64B
+        // Safety: round_up_to_nearest_u64 will give us a capacity that is
+        // at least 64, and also a multiple of 64.
         match unsafe { allocate_and_pad_with_newlines(arena, capacity) } {
-            Some(bytes) => {
-                {
-                    // Read the contents of the file directly into `bytes`. If the file size isn't a multiple of 64,
-                    // it's no problem; we already made its capacity a multiple of 64, and the last 64B now end in newlines.
-                    //
-                    // Safety: By design, read_exact returns an error if it doesn't completely fill the buffer
-                    // it was given. However, in this case, we explicitly want it to do that, in order to preserve
-                    // our newline padding at the end. This is safe because we know that the buffer's length will
-                    // actually be strictly longer than what we're setting it to, because capacity > file_size.
-                    //
-                    // The `read` function is not an appropriate substitute for `read_exact` here, because:
-                    // - It's allowed to read fewer than the specified number of bytes, which is not what we want
-                    // - The docs - https://doc.rust-lang.org/std/io/trait.Read.html#tymethod.read - explicitly say
-                    //   that "It is your responsibility to make sure that buf is initialized before calling read.
-                    //   Calling read with an uninitialized buf (of the kind one obtains via MaybeUninit<T>) is
-                    //   not safe, and can lead to undefined behavior." That UB is exactly what we would be doing here
-                    //   if we used read on this. Using `read_exact` in this unusual way is safer than using `read`
-                    //   in a way that is explicitly documented to be UB.
-                    file.read_exact(unsafe {
-                        slice::from_raw_parts_mut(bytes.as_ptr() as _, file_size)
-                    })
-                    .map_err(Into::<FileErr>::into)?;
+            Some(buf) => {
+                // Read bytes equal to file_size into the arena allocation.
+                //
+                // We use the native OS read() operation here to avoid UB; file.read_exact()
+                // only reads into a slice, and constructing a slice with uninitialized
+                // data is UB (per the slice::from_raw_parts docs). The allocation is uninitialized here,
+                // and initializing it would be a waste of CPU cycles because we're about to overwrite
+                // those bytes with bytes from the file anyway.
+                let bytes_read = {
+                    #[cfg(unix)]
+                    unsafe {
+                        use std::os::fd::AsRawFd;
+
+                        // This extern lets us avoid an entire libc crate dependency.
+                        extern "C" {
+                            // https://linux.die.net/man/2/read
+                            pub fn read(
+                                fd: core::ffi::c_int,
+                                buf: *mut c_void,
+                                count: usize,
+                            ) -> isize;
+                        }
+
+                        read(file.as_raw_fd(), buf.as_ptr() as *mut c_void, file_size) as usize
+                    }
+
+                    #[cfg(windows)]
+                    unsafe {
+                        use std::os::windows::io::AsRawHandle;
+
+                        // This extern lets us avoid an entire winapi crate dependency.
+                        extern "system" {
+                            // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
+                            pub fn ReadFile(
+                                hFile: *mut c_void,
+                                lpBuffer: *mut c_void,
+                                nNumberOfBytesToRead: u32,
+                                lpNumberOfBytesRead: *mut u32,
+                                lpOverlapped: *mut c_void, // this should be a pointer to a struct, but we always pass null.
+                            ) -> i32;
+                        }
+
+                        let mut bytes_read = core::mem::MaybeUninit::uninit();
+
+                        // We should have already errored out if file_size exceeded u32::MAX,
+                        // due to our maximum source file size. This debug_assert! is here to
+                        // make sure casting file_size to u32 is safe in the ReadFile call.
+                        debug_assert!(MAX_ROC_SOURCE_FILE_SIZE <= u32::MAX as usize);
+
+                        ReadFile(
+                            file.as_raw_handle() as *mut c_void,
+                            buf.as_ptr() as *mut c_void,
+                            file_size as u32,
+                            bytes_read.as_mut_ptr(),
+                            core::ptr::null_mut(),
+                        );
+
+                        bytes_read.assume_init() as usize
+                    }
+                };
+
+                // We can close the file now; we're done with it.
+                drop(file);
+
+                // It's crucial that we successfully read the entire file; otherwise, it would be unsafe
+                // to make a slice out of it because we might not have overwritten the uninitialized
+                // memory leading up to the newlines at the end!
+                //
+                // Note that on UNIX, bytes_read might be -1 if this was a file read error. This
+                // condition will catch that too, since we know file_size won't be (-1isize as usize)
+                // beacuse if it was, then this match would have taken the None branch due to
+                // (-1isize as usize) exceeding our maximum file size.
+                if bytes_read != file_size {
+                    return Err(FileErr::ReadErr);
                 }
 
-                // Safety: we have to do this transmute because read_exact requires &[u8].
-                // Fortunately, after the next call, it will be fully initialized anyway.
-                //
-                // Once https://doc.rust-lang.org/std/io/trait.Read.html#method.read_buf_exact is stabilized,
-                // we can use that instead of &mut MaybeUninit<u8> and transmuting like this.
+                // Safety: bytes_ptr came from an allocation of `capacity` bytes, it's had
+                // newlines filled at the end, and `file_size` bytes written over the rest.
                 let bytes =
-                    unsafe { mem::transmute::<&'a mut [MaybeUninit<u8>], &'a mut [u8]>(bytes) };
+                    unsafe { core::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, capacity) };
 
                 Ok(Self { bytes })
             }
@@ -175,10 +225,7 @@ fn round_up_to_nearest_64(num: usize) -> usize {
 }
 
 /// Safety: capacity must be a multiple of 64, and must be at least 64.
-unsafe fn allocate_and_pad_with_newlines(
-    arena: &Bump,
-    capacity: usize,
-) -> Option<&mut [MaybeUninit<u8>]> {
+unsafe fn allocate_and_pad_with_newlines(arena: &Bump, capacity: usize) -> Option<NonNull<u8>> {
     // Compare capacity here instead of size because this file limit is based on what we can record row and line
     // numbers for, and those can theoretically oveflow on the trailing newlines we may have added.
     // This distinction will most likely come up in practice zero times ever, but it could come up in fuzzing.
@@ -191,18 +238,39 @@ unsafe fn allocate_and_pad_with_newlines(
 
     // Safety: the rules we follow are https://doc.rust-lang.org/core/alloc/struct.Layout.html#method.from_size_align_unchecked
     // `align` is valid because it's hardcoded, and we already rounded `capacity` up to something even bigger.
-    let layout = unsafe { Layout::from_size_align_unchecked(capacity, 16) };
+    // We align it to 64B so that it's on cache line boundaries on many CPUs, which makes prefetching simpler.
+    let layout = unsafe { Layout::from_size_align_unchecked(capacity, Src64::BYTES_ALIGNMENT) };
 
     // We have to use alloc_layout here because we have stricter alignment requirements than normal slices.
     let buf_ptr: NonNull<u8> = arena.alloc_layout(layout);
 
-    // Safety: we just allocated this pointer to have a capacity of `size` bytes.
-    let contents = unsafe { slice::from_raw_parts_mut(buf_ptr.as_ptr() as _, capacity) };
+    // Branchlessly prefetch the first three 64-byte chunks, and the last chunk. This prevents a double cache miss:
+    // first a cache miss when we write the newlines to the end, and then a second cache miss when we start
+    // working on the beginning of the allocation. We can do further prefetches in the actual tokenization loop.
+    {
+        // We know capacity >= 64, so this will never wrap.
+        let last_chunk_offset = capacity - 64;
+
+        // Prefetch the last 64-byte chunk. (We do this one first because we'll be writing newlines to it first.)
+        prefetch_readwrite(buf_ptr, last_chunk_offset);
+
+        // Prefetch the first 64-byte chunk. The rest of these only need reading, since we never write to them.
+        prefetch_read(buf_ptr, 0);
+
+        // Prefetch the second 64-byte chunk, using min() to branchlessly avoid prefetching an address we might not own.
+        prefetch_read(buf_ptr, 64.min(last_chunk_offset));
+
+        // Prefetch the third 64-byte chunk, using min() to branchlessly avoid prefetching an address we might not own.
+        prefetch_read(buf_ptr, 128.min(last_chunk_offset));
+
+        // Further prefetching will happen in the tokenization loop. Now that we've prefetched the first 3 pages,
+        // we should be able to prefetch the others in the loop with enough time before the tokenizer arrives there.
+    }
 
     // Safety: `contents` has a length of `capacity`, which has been rounded up to a multiple of 64.
-    unsafe { fill_last_64_bytes_with_newlines(contents) };
+    unsafe { fill_last_64_bytes_with_newlines(buf_ptr, capacity) };
 
-    Some(contents)
+    Some(buf_ptr)
 }
 
 /// This is branchless so there can't be mispredictions. We know the slice's length is a multiple of 64,
@@ -210,19 +278,17 @@ unsafe fn allocate_and_pad_with_newlines(
 ///
 /// Safety: this slice must have an alignment of at least 64,
 /// and its length must be both at least 64 and also a multiple of 64.
-unsafe fn fill_last_64_bytes_with_newlines(slice: &mut [MaybeUninit<u8>]) {
-    let len = slice.len();
-
+unsafe fn fill_last_64_bytes_with_newlines(ptr: NonNull<u8>, len: usize) {
     debug_assert_eq!(
-        slice.as_ptr() as usize % 16,
+        ptr.as_ptr() as usize % 16,
         0,
-        "The slice's alignment must be at least 16."
+        "The pointer's alignment must be at least 16."
     );
-    debug_assert_eq!(len % 64, 0, "The slice's length must be a multiple of 64.");
-    debug_assert!(len >= 64, "The slice's length must be at least 64.");
+    debug_assert_eq!(len % 64, 0, "The buffer's length must be a multiple of 64.");
+    debug_assert!(len >= 64, "The buffer's length must be at least 64.");
 
     // Safety: this function's docs note that it must be given a slice with at least 64 bytes in it.
-    let last_64_bytes = slice.as_mut_ptr().add(len - 64);
+    let last_64_bytes = ptr.as_ptr().add(len - 64);
 
     #[cfg(target_feature = "sse2")]
     {
@@ -267,6 +333,44 @@ unsafe fn fill_last_64_bytes_with_newlines(slice: &mut [MaybeUninit<u8>]) {
     }
 }
 
+#[inline(always)]
+fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!(
+            "prefetcht0 [{}]",
+            in(reg) non_null_ptr.as_ptr().add(offset)
+        );
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!(
+            "prfm PLDL1KEEP, [{}]",
+            in(reg) non_null_ptr.as_ptr().add(offset)
+        );
+    }
+}
+
+#[inline(always)]
+fn prefetch_readwrite<T>(non_null_ptr: NonNull<T>, offset: usize) {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        core::arch::asm!(
+            "prefetchw [{}]",
+            in(reg) non_null_ptr.as_ptr().add(offset)
+        );
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        core::arch::asm!(
+            "prfm PSTL1KEEP, [{}]",
+            in(reg) non_null_ptr.as_ptr().add(offset)
+        );
+    }
+}
+
 #[cfg(test)]
 mod src64_tests {
     use super::{FileErr, Src64, MAX_ROC_SOURCE_FILE_SIZE};
@@ -307,7 +411,9 @@ mod src64_tests {
                 .expect("Failed to write to temp file");
         }
 
-        match Src64::from_file(arena, &file_path) {
+        let file = File::open(&file_path).expect("Failed to read temp file");
+
+        match Src64::from_file(arena, file) {
             Ok(actual) => {
                 assert_eq!(actual.len() % 64, 0);
                 assert_eq!(
@@ -422,9 +528,10 @@ mod src64_tests {
                 file.write_all(&bytes).expect("Failed to write to temp file");
             }
 
+            let file = File::open(&file_path).expect("Failed to read temp file");
             let arena = Bump::new();
 
-            match Src64::from_file(&arena, &file_path) {
+            match Src64::from_file(&arena, file) {
                 Ok(src64) => {
                     let len = src64.len();
 
