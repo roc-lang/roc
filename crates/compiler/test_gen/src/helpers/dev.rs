@@ -222,18 +222,21 @@ pub fn helper(
         std::fs::copy(&app_o_file, file_path).unwrap();
     }
 
-    let (mut child, dylib_path) = link(
-        &target,
-        app_o_file.clone(),
-        // Long term we probably want a smarter way to link in zig builtins.
-        // With the current method all methods are kept and it adds about 100k to all outputs.
-        &[
+    let dylib_path = app_o_file.to_owned();
+
+    let mut child = roc_command_utils::zig()
+        .args([
+            "build-lib",
             app_o_file.to_str().unwrap(),
             builtins_host_tempfile.path().to_str().unwrap(),
-        ],
-        LinkType::Dylib,
-    )
-    .expect("failed to link dynamic library");
+            "-lc",
+            &format!("-femit-bin={}", app_o_file.to_str().unwrap()),
+            "-target",
+            "native",
+            "-dynamic",
+        ])
+        .spawn()
+        .unwrap();
 
     child.wait().unwrap();
 
