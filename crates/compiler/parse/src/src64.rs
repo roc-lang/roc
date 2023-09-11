@@ -267,17 +267,17 @@ unsafe fn allocate_and_pad_with_newlines(arena: &Bump, capacity: usize) -> Optio
         // we should be able to prefetch the others in the loop with enough time before the tokenizer arrives there.
     }
 
-    // Safety: `contents` has a length of `capacity`, which has been rounded up to a multiple of 64.
+    // Safety: `buf_ptr` has a length of `capacity`, which has been rounded up to a multiple of 64.
     unsafe { fill_last_64_bytes_with_newlines(buf_ptr, capacity) };
 
     Some(buf_ptr)
 }
 
-/// This is branchless so there can't be mispredictions. We know the slice's length is a multiple of 64,
+/// This is branchless so there can't be mispredictions. We know the buffer's length is a multiple of 64,
 /// so we can just always do four SIMD writes and call it a day. (Eight if we don't have SIMD.)
 ///
-/// Safety: this slice must have an alignment of at least 64,
-/// and its length must be both at least 64 and also a multiple of 64.
+/// Safety: this pointer must have an alignment of at least 64,
+/// and the length must be both at least 64 and also a multiple of 64.
 unsafe fn fill_last_64_bytes_with_newlines(ptr: NonNull<u8>, len: usize) {
     debug_assert_eq!(
         ptr.as_ptr() as usize % 16,
