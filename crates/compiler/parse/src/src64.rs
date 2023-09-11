@@ -335,6 +335,9 @@ unsafe fn fill_last_64_bytes_with_newlines(ptr: NonNull<u8>, len: usize) {
 
 #[inline(always)]
 fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
+    // Use inline asm until this is stabilized:
+    // https://doc.rust-lang.org/std/intrinsics/fn.prefetch_read_data.html
+
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!(
@@ -354,6 +357,9 @@ fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
 
 #[inline(always)]
 fn prefetch_readwrite<T>(non_null_ptr: NonNull<T>, offset: usize) {
+    // Use inline asm until this is stabilized:
+    // https://doc.rust-lang.org/std/intrinsics/fn.prefetch_write_data.html
+
     #[cfg(target_arch = "x86_64")]
     unsafe {
         core::arch::asm!(
