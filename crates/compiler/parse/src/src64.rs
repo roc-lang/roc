@@ -242,9 +242,11 @@ impl<'a> Src64<'a> {
                     // we should be able to prefetch the others in the tokenization loop before it needs to read them.
                 }
 
+                // We may have coincidentally had a file size that was a multiple of 64, but if not,
+                // we'll need to fill the allocation with trailing newlines so we aren't tokenizing
+                // uninitialized memory.
                 if capacity > file_size {
                     debug_assert!(capacity - file_size < 64);
-                    debug_assert!(capacity - file_size > 0);
                     let trailing_newlines_needed = capacity - file_size;
 
                     // Safety: `buf_ptr` has a length of `capacity`, which has been rounded up to a multiple of 64.
