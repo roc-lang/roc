@@ -38,6 +38,9 @@ in
 
     src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
 
+    # faster linking with lld
+    RUSTFLAGS = "-C link-arg=-fuse-ld=lld";
+
     cargoLock = {
       lockFile = ./Cargo.lock;
       outputHashes = {
