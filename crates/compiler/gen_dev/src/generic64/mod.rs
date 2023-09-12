@@ -1207,6 +1207,15 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_ADD_OR_PANIC.to_string(),
+                    &[*src1, *src2],
+                    &[Layout::DEC, Layout::DEC],
+                    &Layout::DEC,
+                );
+            }
             x => todo!("NumAdd: layout, {:?}", x),
         }
     }
