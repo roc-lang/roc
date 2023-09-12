@@ -61,6 +61,13 @@ impl FloatWidth {
             _ => None,
         }
     }
+
+    pub const fn type_name(&self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
 }
 
 #[repr(u8)]

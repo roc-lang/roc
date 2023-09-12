@@ -1,7 +1,7 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, IntType},
+    types::{BasicType, BasicTypeEnum, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
         PointerValue, StructValue,
@@ -287,19 +287,37 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     }
                 }
                 PtrWidth::Bytes8 => {
-                    let cc_return_by_pointer = match layout_interner.get_repr(number_layout) {
-                        LayoutRepr::Builtin(Builtin::Int(int_width)) => {
-                            (int_width.stack_size() as usize > env.target_info.ptr_size())
-                                .then_some(int_width.type_name())
+                    let (type_name, width) = {
+                        match layout_interner.get_repr(number_layout) {
+                            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                                (int_width.type_name(), int_width.stack_size())
+                            }
+                            LayoutRepr::Builtin(Builtin::Decimal) => {
+                                // zig picks 128 for dec.RocDec
+                                ("i128", 16)
+                            }
+                            LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                                (float_width.type_name(), float_width.stack_size())
+                            }
+                            _ => {
+                                unreachable!("other layout types are non-numeric")
+                            }
                         }
-                        LayoutRepr::Builtin(Builtin::Decimal) => {
-                            // zig picks 128 for dec.RocDec
-                            Some("i128")
-                        }
-                        _ => None,
                     };
 
-                    if let Some(type_name) = cc_return_by_pointer {
+                    use roc_target::OperatingSystem::*;
+                    let cc_return_by_pointer = match env.target_info.operating_system {
+                        Windows => {
+                            // there is just one return register on Windows
+                            (width + 1) as usize > env.target_info.ptr_size()
+                        }
+                        _ => {
+                            // on other systems we have two return registers
+                            (width + 1) as usize > 2 * env.target_info.ptr_size()
+                        }
+                    };
+
+                    if cc_return_by_pointer {
                         let bitcode_return_type = zig_num_parse_result_type(env, type_name);
 
                         call_bitcode_fn_fixing_for_convention(
@@ -495,12 +513,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    let return_type = env.context.struct_type(
-                        &[env.ptr_int().into(), env.context.i32_type().into()],
-                        false,
-                    );
+                    let zig_return_type = env
+                        .module
+                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                        .unwrap()
+                        .get_type()
+                        .get_param_types()[0]
+                        .into_pointer_type()
+                        .get_element_type();
 
-                    let result = env.builder.build_alloca(return_type, "result");
+                    let result = env
+                        .builder
+                        .build_alloca(BasicTypeEnum::try_from(zig_return_type).unwrap(), "result");
 
                     call_void_bitcode_fn(
                         env,
@@ -508,19 +532,19 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    let return_type = basic_type_from_layout(
+                    let roc_return_type = basic_type_from_layout(
                         env,
                         layout_interner,
                         layout_interner.get_repr(layout),
                     );
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::default()),
+                        roc_return_type.ptr_type(AddressSpace::default()),
                         "cast",
                     );
 
                     env.builder
-                        .new_build_load(return_type, cast_result, "load_result")
+                        .new_build_load(roc_return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
