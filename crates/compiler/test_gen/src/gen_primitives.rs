@@ -2258,7 +2258,6 @@ fn nested_switch() {
 
                     _ -> e
 
-
             expr : Expr
             expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
 

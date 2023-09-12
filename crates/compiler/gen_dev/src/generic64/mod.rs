@@ -3412,6 +3412,22 @@ impl<
                 let stores_tag_id_as_data =
                     union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
 
+                let largest_variant = tags
+                    .iter()
+                    .map(|fields| {
+                        let struct_layout = self
+                            .layout_interner
+                            .insert_direct_no_semantic(LayoutRepr::Struct(fields));
+
+                        (
+                            struct_layout,
+                            self.layout_interner.stack_size(struct_layout),
+                        )
+                    })
+                    .max_by(|(_, a), (_, b)| a.cmp(b))
+                    .unwrap()
+                    .0;
+
                 // construct the payload as a struct on the stack
                 let data_struct_layout = self
                     .layout_interner
@@ -3462,12 +3478,28 @@ impl<
                         fields,
                     );
 
+                    let (data_size, _) = union_layout.data_size_and_alignment(self.layout_interner);
+                    let scratch_space = self.debug_symbol("scratch_space");
+                    let to_offset = self
+                        .storage_manager
+                        .claim_stack_area(&scratch_space, data_size);
+
+                    // this is a cheaty copy, because the destination may be wider than the source
+                    let (from_offset, _) =
+                        self.storage_manager.stack_offset_and_size(&scratch_space);
+                    self.storage_manager.copy_to_stack_offset(
+                        &mut self.buf,
+                        data_size,
+                        from_offset,
+                        to_offset,
+                    );
+
                     // now effectively box this struct
                     let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
                     self.expr_box(
                         untagged_pointer_symbol,
                         whole_struct_symbol,
-                        data_struct_layout,
+                        largest_variant,
                         reuse,
                     );
 
