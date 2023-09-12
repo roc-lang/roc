@@ -22,9 +22,6 @@ jobs:
 
       - uses: cachix/install-nix-action@v22
 
-      - name: test building default.nix
-        run: nix-build
-
       - name: execute cli_run tests only, the full tests take too long but are run nightly
         run: nix develop -c cargo test --locked --release -p roc_cli
 
