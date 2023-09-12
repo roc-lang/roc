@@ -20,7 +20,7 @@ use roc_mono::{
     },
     list_element_layout,
 };
-use roc_target::{OperatingSystem, PtrWidth};
+use roc_target::PtrWidth;
 
 use crate::llvm::{
     bitcode::{
