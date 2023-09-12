@@ -52,6 +52,10 @@ comptime {
             @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
             @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
         }
+
+        if (builtin.os.tag == .windows) {
+            @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
+        }
     }
 }
 
