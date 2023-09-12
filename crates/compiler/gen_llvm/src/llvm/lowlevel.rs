@@ -20,7 +20,7 @@ use roc_mono::{
     },
     list_element_layout,
 };
-use roc_target::PtrWidth;
+use roc_target::{OperatingSystem, PtrWidth};
 
 use crate::llvm::{
     bitcode::{
@@ -287,19 +287,37 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     }
                 }
                 PtrWidth::Bytes8 => {
-                    let cc_return_by_pointer = match layout_interner.get_repr(number_layout) {
-                        LayoutRepr::Builtin(Builtin::Int(int_width)) => {
-                            (int_width.stack_size() as usize > env.target_info.ptr_size())
-                                .then_some(int_width.type_name())
+                    let (type_name, width) = {
+                        match layout_interner.get_repr(number_layout) {
+                            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                                (int_width.type_name(), int_width.stack_size())
+                            }
+                            LayoutRepr::Builtin(Builtin::Decimal) => {
+                                // zig picks 128 for dec.RocDec
+                                ("i128", 16)
+                            }
+                            LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                                (float_width.type_name(), float_width.stack_size())
+                            }
+                            _ => {
+                                unreachable!("other layout types are non-numeric")
+                            }
                         }
-                        LayoutRepr::Builtin(Builtin::Decimal) => {
-                            // zig picks 128 for dec.RocDec
-                            Some("i128")
-                        }
-                        _ => None,
                     };
 
-                    if let Some(type_name) = cc_return_by_pointer {
+                    use roc_target::OperatingSystem::*;
+                    let cc_return_by_pointer = match env.target_info.operating_system {
+                        Windows => {
+                            // there is just one return register on Windows
+                            (width + 1) as usize > env.target_info.ptr_size()
+                        }
+                        _ => {
+                            // on other systems we have two return registers
+                            (width + 1) as usize > 2 * env.target_info.ptr_size()
+                        }
+                    };
+
+                    if cc_return_by_pointer {
                         let bitcode_return_type = zig_num_parse_result_type(env, type_name);
 
                         call_bitcode_fn_fixing_for_convention(
