@@ -72,6 +72,7 @@ in
       python3
       llvmPkgs.clang
       llvmPkgs.llvm.dev
+      llvmPkgs.bintools-unwrapped # contains lld      
       zig_0_9
     ]);
 
