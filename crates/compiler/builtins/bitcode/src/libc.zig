@@ -28,15 +28,7 @@ pub fn memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callcon
     switch (arch) {
         // x86_64 has a special optimized memcpy that can use avx2.
         .x86_64 => {
-            // On windows the folly memcpy segfaults for unclear reasons
-            // TODO investigate why it segfaults
-            if (builtin.os.tag == .windows) {
-                std.mem.copy(u8, dest[0..len], src[0..len]);
-
-                return dest;
-            } else {
-                return memcpy_target(dest, src, len);
-            }
+            return memcpy_target(dest, src, len);
         },
         else => {
             return musl.memcpy(dest, src, len);
