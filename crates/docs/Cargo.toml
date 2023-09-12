@@ -8,10 +8,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_ast = { path = "../ast" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
-roc_code_markup = { path = "../code_markup" }
 roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight" }
 roc_load = { path = "../compiler/load" }

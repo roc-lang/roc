@@ -8,10 +8,6 @@ You can use `cargo doc` to generate docs for a specific package; e.g.
 cargo doc --package roc_ast --open
 ```
 
-## `ast/` - `roc_ast`
-
-Code to represent the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) as used by the editor. In contrast to the compiler, the types in this AST do not keep track of the location of the matching code in the source file.
-
 ## `cli/` - `roc_cli`
 
 The `roc` binary that brings together all functionality in the Roc toolset.
@@ -19,10 +15,6 @@ The `roc` binary that brings together all functionality in the Roc toolset.
 ## `cli_utils/` - `cli_utils`
 
 Provides shared code for cli tests and benchmarks.
-
-## `code_markup/` - `roc_code_markup`
-
-A [markup language](https://en.wikipedia.org/wiki/Markup_language) to display Roc code in the editor.
 
 ## `compiler/`
 
@@ -76,10 +68,6 @@ Used for [roc-lang.org/builtins/Num](https://www.roc-lang.org/builtins/Num).
 
 Provides a binary that is only used for static build servers.
 
-## `editor/` - `roc_editor`
-
-Roc's editor. See [README.md](./editor/README.md) for more information.
-
 ## `error_macros/` - `roc_error_macros`
 
 Provides macros for consistent reporting of errors in Roc's rust code.
@@ -90,7 +78,7 @@ The `roc_glue` crate generates code needed for platform hosts to communicate wit
 
 ## `highlight/` - `roc_highlight`
 
-Provides syntax highlighting for the editor by transforming a string to markup nodes.
+Provides syntax highlighting for the static site gen platform which is used by the tutorial.
 
 ## `linker/` - `roc_linker`
 
