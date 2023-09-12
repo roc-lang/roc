@@ -1,7 +1,7 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, IntType},
+    types::{BasicType, BasicTypeEnum, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
         PointerValue, StructValue,
@@ -513,12 +513,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    let return_type = env.context.struct_type(
-                        &[env.ptr_int().into(), env.context.i32_type().into()],
-                        false,
-                    );
+                    let zig_return_type = env
+                        .module
+                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                        .unwrap()
+                        .get_type()
+                        .get_param_types()[0]
+                        .into_pointer_type()
+                        .get_element_type();
 
-                    let result = env.builder.build_alloca(return_type, "result");
+                    let result = env
+                        .builder
+                        .build_alloca(BasicTypeEnum::try_from(zig_return_type).unwrap(), "result");
 
                     call_void_bitcode_fn(
                         env,
@@ -526,19 +532,19 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    let return_type = basic_type_from_layout(
+                    let roc_return_type = basic_type_from_layout(
                         env,
                         layout_interner,
                         layout_interner.get_repr(layout),
                     );
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::default()),
+                        roc_return_type.ptr_type(AddressSpace::default()),
                         "cast",
                     );
 
                     env.builder
-                        .new_build_load(return_type, cast_result, "load_result")
+                        .new_build_load(roc_return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
