@@ -634,8 +634,17 @@ fn make_specialization_decision<P: Phase>(
                     };
                     match abilities_store.get_implementation(impl_key) {
                         None => {
-                            // Doesn't specialize; an error will already be reported for this.
-                            SpecializeDecision::Drop
+                            match ability_member {
+                                // Inspect is special - if there is no implementation for the
+                                // opaque type, we always emit a default implementation.
+                                Symbol::INSPECT_TO_INSPECTOR => SpecializeDecision::Specialize(
+                                    Immediate(Symbol::INSPECT_OPAQUE),
+                                ),
+                                _ => {
+                                    // Doesn't specialize; an error will already be reported for this.
+                                    SpecializeDecision::Drop
+                                }
+                            }
                         }
                         Some(MemberImpl::Error) => {
                             // TODO: probably not right, we may want to choose a derive decision!

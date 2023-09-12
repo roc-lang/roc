@@ -2,7 +2,10 @@ use roc_module::{
     ident::{Lowercase, TagName},
     symbol::Symbol,
 };
-use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
+use roc_types::{
+    subs::{Content, FlatType, GetSubsSlice, Subs, Variable},
+    types::AliasKind,
+};
 
 use crate::util::{
     check_derivable_ext_var, debug_name_fn, debug_name_record, debug_name_tag, debug_name_tuple,
@@ -125,18 +128,41 @@ impl FlatInspectable {
                 }
                 FlatType::EmptyRecord => Key(FlatInspectableKey::Record(Vec::new())),
                 FlatType::EmptyTagUnion => Key(FlatInspectableKey::TagUnion(Vec::new())),
-                FlatType::Func(slice, ..) => {
-                    let arity = subs.get_subs_slice(slice).len();
-
-                    Key(FlatInspectableKey::Function(arity as u32))
+                FlatType::Func(..) => {
+                    Immediate(Symbol::INSPECT_FUNCTION)
                 }
                 FlatType::EmptyTuple => unreachable!("Somehow Inspect derivation got an expression that's an empty tuple, which shouldn't be possible!"),
             },
-            Content::Alias(sym, _, real_var, _) => match Self::from_builtin_alias(sym) {
+            Content::Alias(sym, _, real_var, kind) => match Self::from_builtin_alias(sym) {
                 Some(lambda) => lambda,
-                // TODO: I believe it is okay to unwrap opaques here because derivers are only used
-                // by the backend, and the backend treats opaques like structural aliases.
-                _ => Self::from_var(subs, real_var),
+
+                _ => {
+                    match kind {
+                        AliasKind::Structural => {
+                            Self::from_var(subs, real_var)
+                        }
+                        AliasKind::Opaque => {
+                            // There are two cases in which `Inspect` can be derived for an opaque
+                            // type.
+                            //   1. An opaque type claims to implement `Inspect` and asks us to
+                            //      auto-derive it. E.g.
+                            //
+                            //      ```text
+                            //      Op := {} implements [Inspect]
+                            //      ```
+                            //
+                            //      In this case, we generate a synthetic implementation during
+                            //      canonicalization that defers to `inspect`ing the inner type. As
+                            //      such, this case is never reached in this branch.
+                            //
+                            //   2. An opaque type does not explicitly claim to implement
+                            //      `Inspect`. In this case, we print a default opaque string for
+                            //      the opaque type.
+                            Immediate(Symbol::INSPECT_OPAQUE)
+                        }
+                    }
+                }
+
             },
             Content::RangedNumber(range) => {
                 Self::from_var(subs, range.default_compilation_variable())

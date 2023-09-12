@@ -15,6 +15,7 @@ interface Inspect
         record,
         bool,
         str,
+        function,
         opaque,
         u8,
         i8,
@@ -33,13 +34,10 @@ interface Inspect
         custom,
         apply,
         toInspector,
-        # TODO don't expose these - there's some way to do this!
-        inspectFn,
-        inspectOpaque,
     ]
     imports [
         Bool.{ Bool },
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
+        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec, Nat },
         List,
         Str,
     ]
@@ -61,10 +59,10 @@ InspectFormatter implements
     dict : dict, KeyValWalker state dict key value, (key -> Inspector f), (value -> Inspector f) -> Inspector f where f implements InspectFormatter
 
     # In text, this would render as `<opaque>`
-    opaque : Inspector f where f implements InspectFormatter
+    opaque : * -> Inspector f where f implements InspectFormatter
 
     # In text, this would render as `<function>`
-    function : Inspector f where f implements InspectFormatter
+    function : * -> Inspector f where f implements InspectFormatter
 
     u8 : U8 -> Inspector f where f implements InspectFormatter
     i8 : I8 -> Inspector f where f implements InspectFormatter
@@ -96,11 +94,3 @@ inspect : val -> f where val implements Inspect, f implements InspectFormatter
 inspect = \val ->
     (@Inspector valFn) = toInspector val
     valFn (init {})
-
-## Should not be exposed, only used in auto-deriving
-inspectFn : * -> Inspector f where f implements InspectFormatter
-inspectFn = \_ -> function
-
-## Should not be exposed, only used in auto-deriving
-inspectOpaque : * -> Inspector f where f implements InspectFormatter
-inspectOpaque = \_ -> opaque
