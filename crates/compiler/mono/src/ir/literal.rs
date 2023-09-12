@@ -88,7 +88,7 @@ pub fn make_num_literal<'a>(
             IntOrFloatValue::Int(IntValue::I128(n)) => NumLiteral::Int(n, width),
             IntOrFloatValue::Int(IntValue::U128(n)) => NumLiteral::U128(n),
             IntOrFloatValue::Float(..) => {
-                internal_error!("Float value where int was expected, should have been a type error")
+                internal_error!("Frac value where int was expected, should have been a type error")
             }
         },
         LayoutRepr::Builtin(Builtin::Float(width)) => match num_value {

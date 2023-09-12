@@ -99,7 +99,7 @@ fn atan() {
             Num.atan
             "#
         ),
-        "Float -> Float",
+        "Frac a -> Frac a",
     );
 }
 ```

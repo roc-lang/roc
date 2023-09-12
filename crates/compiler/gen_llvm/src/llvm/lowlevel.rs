@@ -349,7 +349,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrFromFloat => {
-            // Str.fromFloat : Float * -> Str
+            // Str.fromFloat : Frac * -> Str
             debug_assert_eq!(args.len(), 1);
 
             let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);

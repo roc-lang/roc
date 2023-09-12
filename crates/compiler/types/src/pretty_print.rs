@@ -906,7 +906,7 @@ fn write_float<'a>(
         Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
         Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
         _ => write_parens!(write_parens, buf, {
-            buf.push_str("Float ");
+            buf.push_str("Frac ");
             write_content(env, ctx, var, subs, buf, parens, pol);
         }),
     }

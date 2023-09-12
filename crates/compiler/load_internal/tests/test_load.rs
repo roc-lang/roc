@@ -445,14 +445,14 @@ fn test_load_and_typecheck() {
         loaded_module,
         hashmap! {
             "floatTest" => "F64",
-            "divisionFn" => "Float a, Float a -> Float a",
-            "x" => "Float *",
+            "divisionFn" => "Frac a, Frac a -> Frac a",
+            "x" => "Frac *",
             "divisionTest" => "F64",
             "intTest" => "I64",
             "constantNum" => "Num *",
             "divisionTest" => "F64",
-            "divDep1ByDep2" => "Float a",
-            "fromDep2" => "Float a",
+            "divDep1ByDep2" => "Frac a",
+            "fromDep2" => "Frac a",
         },
     );
 }
@@ -546,12 +546,12 @@ fn iface_dep_types() {
     expect_types(
         loaded_module,
         hashmap! {
-            "blah2" => "Float *",
+            "blah2" => "Frac *",
             "blah3" => "Str",
             "str" => "Str",
-            "alwaysThree" => "* -> Float *",
+            "alwaysThree" => "* -> Frac *",
             "identity" => "a -> a",
-            "z" => "Float *",
+            "z" => "Frac *",
             "w" => "Dep1.Identity {}",
             "succeed" => "a -> Dep1.Identity a",
             "yay" => "Res.Res {} err",
@@ -568,12 +568,12 @@ fn app_dep_types() {
     expect_types(
         loaded_module,
         hashmap! {
-            "blah2" => "Float *",
+            "blah2" => "Frac *",
             "blah3" => "Str",
             "str" => "Str",
-            "alwaysThree" => "* -> Float *",
+            "alwaysThree" => "* -> Frac *",
             "identity" => "a -> a",
-            "z" => "Float *",
+            "z" => "Frac *",
             "w" => "Dep1.Identity {}",
             "succeed" => "a -> Dep1.Identity a",
             "yay" => "Res.Res {} err",
