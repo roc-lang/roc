@@ -241,6 +241,12 @@ fn to_inspector<'a>(env: &mut Env<'a>, at_opaque: &'a str) -> ast::Expr<'a> {
         roc_module::called_via::CalledVia::Space,
     ));
 
+    // TODO: change the derived implementation to be something that includes the opaque symbol in
+    // the derivation, e.g. something like
+    //
+    //   \@Opaq payload ->
+    //     Inspect.opaqueWrapper "toString symbol" payload
+
     // \@Opaq payload -> Inspect.toInspector payload
     ast::Expr::Closure(
         env.arena
