@@ -26,8 +26,6 @@ li {
 }
 section.history {
   flex: 1;
-}
-.scroll-wrap {
   position: relative;
   height: 100%;
 }
