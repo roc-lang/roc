@@ -253,10 +253,11 @@ li {
 }
 
 #first-code-sample {
-    width: 100%;
+    display: inline-block;
     border: 1px solid #ddd;
     margin-top: 42px;
     margin-bottom: 24px;
+    padding-bottom: 0;
 }
 
 #first-code-sample samp {
@@ -595,7 +596,7 @@ samp .punctuation.terminator,
 code .punctuation.terminator,
 samp .kw,
 code .kw {
-    color: var(--magenta);
+    color: var(--primary-2);
 }
 
 /* Operators */

@@ -27,20 +27,41 @@
 <!-- This exact sample was chosen for several reasons:
 
 1. It's plausible to figure out what it's doing even if you don't know the language yet.
-2. It implements a familiar operation across a variety of domains: filtering a list of files based on extension.
-3. It uses a higher-order function, giving a functional first impression.
-4. It shows some things not found in most mainstream languages, e.g. `|>`, function calls without parens, lambda syntax.
+2. It uses a higher-order function, giving a functional first impression.
+3. It shows some things not found in most mainstream languages, e.g. function calls without parens, lambda syntax.
+4. It shows some things not found in most FP languages, e.g. string interpolation, passing a lambda without `<|` or `$`
 5. It's horizontally small enough that it can be read on mobile without a scroll bar or shrinking the font size.
-6. It's stylistically idiomatic (`|> Str.endsWith` is always fine; `endsWith` reads well in that style!)
-7. It can be syntax-highlighted with 1 color without looking weird (e.g. string interpolation looks weird in 1 color).
-   This simplifies the color palette of the homepage and doesn't excessively draw attention to the code snippet.
 -->
-<pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>keepIf paths <span class="kw">\</span>path <span class="kw">-></span>
-    path <span class="kw">|></span> Str<span class="punctuation section">.</span>endsWith <span class="kw">".roc"</span></samp></pre>
+<pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
+    <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
 
 <p><b>Fast</b> - Roc code is designed to compile fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
-<p><img src="roc-rocket.png" width=36>Friendly</p>
-<p><img src="roc-rocket.png" width=36>Functional</p>
+<p><b>Friendly</b></p>
+<p><b>Functional</b></p>
+
+## REPL
+
+> TODO only show this if you have JavaScript enabled!
+
+You can get a quick taste of Roc in this WebAssembly Read-Eval-Print Loop (REPL):
+
+<input placeholder="Try writing 0.1 + 0.2 and pressing Enter" style="width:600px">
+
+Roc code can compile to WebAssembly, so this REPL runs completely in your browser. It will keep working even if
+your network connection drops!
+
+## Use cases
+
+Roc is a new language, and its ecosystem is very small. It currently has the most mature support for these use cases:
+
+- Web servers ([tutorial on making a webserver in Roc](...))
+- Command-Line Interfaces ([tutorial on making a CLI in Roc](...))
+- Embedding Roc into other languages ([tutorial on calling Roc code from other languages](...))
+
+There are many other use cases the ecosystem can potentially expand into in the future, but these are the best-supported
+ones today.
+
+## Example
 
 ```elixir
 # Hover over anything here to see an explanation
@@ -66,39 +87,8 @@ handleErr = \err ->
 > there are no types mentioned anywhere. That also includes the JSON decoding, which is done via
 > type inference, and which is not specific to JSON (or any particular encoding).
 
-## Try Roc
-
-> TODO only show this if you have JavaScript enabled!
-The fastest way to try Roc is in this REPL. It runs in your browser via WebAssembly, and will keep working if you lose your connection.
-
-```
-TODO Web REPL goes here!
-```
-
-Roc is still a work in progress. It doesn't have a numbered release yet, but you can download a [nightly release](https://github.com/roc-lang/roc/releases/tag/nightly) to try out building things with it. In the (likely) event that you encounter a bug, we’d really appreciate if you’d [open an issue](https://github.com/roc-lang/roc/issues) to let us know about it.
-
-The code below shows a Roc application which prints `Hello World!` to the terminal. It does this using the [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) platform.
-
-```roc
-app "hello-world"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
-
-main =
-    Stdout.line "Hello, World!"
-```
-
-We have developed a number of smaller code [examples](https://github.com/roc-lang/examples) which demonstrate how to use Roc. These cover a range of topics from basic syntax to more advanced features such as random number generation and using the popular `Task` feature.
-
-## Use cases
-
--   Tools & Scripts
--   Web (coming soon)
--   Networking & Servers (coming soon)
--   Graphical (coming soon)
--   Scientific (coming soon)
--   Embedded (coming soon)
+There are [more examples](https://github.com/roc-lang/examples) of full Roc programs,
+and also a [tutorial](/tutorial) which takes you through building your first Roc application.
 
 ## Platforms & Applications
 
