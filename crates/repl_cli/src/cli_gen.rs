@@ -249,6 +249,9 @@ fn mono_module_to_dylib_llvm<'a>(
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
+    dbg!(&main_fn_name);
+    env.module.print_to_file("/tmp/output.ll");
+
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
@@ -299,7 +302,7 @@ fn mono_module_to_dylib_asm<'a>(
         module_id,
         exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
-        mode: roc_gen_dev::AssemblyBackendMode::Test,
+        mode: roc_gen_dev::AssemblyBackendMode::Repl,
     };
 
     let target = target_lexicon::Triple::host();
@@ -315,6 +318,13 @@ fn mono_module_to_dylib_asm<'a>(
         .write()
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
+
+    // TODO make this an environment variable
+    if false {
+        let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
+        std::fs::copy(&app_o_file, file_path).unwrap();
+    }
 
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");

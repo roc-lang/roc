@@ -4149,11 +4149,16 @@ impl<
                 LayoutRepr::LambdaSet(lambda_set) => {
                     self.return_symbol(sym, &lambda_set.runtime_representation())
                 }
+                LayoutRepr::Struct([]) => {
+                    // there is nothing to do here
+                }
                 LayoutRepr::Union(UnionLayout::NonRecursive(_))
                 | LayoutRepr::Builtin(_)
                 | LayoutRepr::Struct(_)
                 | LayoutRepr::Erased(_) => {
-                    internal_error!("All primitive values should fit in a single register");
+                    internal_error!(
+                        "All primitive values should fit in a single register {repr:?}"
+                    );
                 }
             }
         } else {

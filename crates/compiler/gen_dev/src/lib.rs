@@ -36,6 +36,8 @@ pub enum AssemblyBackendMode {
     Binary,
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     Test,
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    Repl,
 }
 
 impl AssemblyBackendMode {
@@ -43,6 +45,7 @@ impl AssemblyBackendMode {
         match self {
             AssemblyBackendMode::Binary => false,
             AssemblyBackendMode::Test => true,
+            AssemblyBackendMode::Repl => true,
         }
     }
 
@@ -50,6 +53,7 @@ impl AssemblyBackendMode {
         match self {
             AssemblyBackendMode::Binary => false,
             AssemblyBackendMode::Test => true,
+            AssemblyBackendMode::Repl => true,
         }
     }
 }
@@ -1630,12 +1634,18 @@ trait Backend<'a> {
                 self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::PtrStore => {
+                let args0 = args[0];
+                let args1 = args[1];
+
                 let element_layout = match self.interner().get_repr(arg_layouts[0]) {
                     LayoutRepr::Ptr(inner) => inner,
-                    _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
+                    _ => unreachable!(
+                        "cannot write to {:?} in *{args0:?} = {args1:?}",
+                        self.interner().dbg(arg_layouts[0])
+                    ),
                 };
 
-                self.build_ptr_store(*sym, args[0], args[1], element_layout);
+                self.build_ptr_store(*sym, args0, args1, element_layout);
             }
             LowLevel::PtrLoad => {
                 self.build_ptr_load(*sym, args[0], *ret_layout);

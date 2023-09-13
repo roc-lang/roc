@@ -486,6 +486,8 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
             };
 
+            dbg!("got here");
+
             app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
