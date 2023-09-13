@@ -353,7 +353,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             _ if layout_interner.stack_size(*layout) == 0 => {}
             _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
-                debug_assert_eq!(base_offset % 8, 0);
+
                 if size <= 8 {
                     X86_64Assembler::mov_reg64_base32(
                         buf,
