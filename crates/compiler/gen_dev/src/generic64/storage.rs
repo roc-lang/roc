@@ -1293,7 +1293,16 @@ impl<
     /// It returns the base offset of the stack area.
     /// It should only be used for complex data and not primitives.
     pub fn claim_stack_area(&mut self, sym: &Symbol, size: u32) -> i32 {
-        let base_offset = self.claim_stack_size(size);
+        self.claim_stack_area_with_alignment(sym, size, 8)
+    }
+
+    pub fn claim_stack_area_with_alignment(
+        &mut self,
+        sym: &Symbol,
+        size: u32,
+        alignment: u32,
+    ) -> i32 {
+        let base_offset = self.claim_stack_size_with_alignment(size, alignment);
         self.symbol_storage_map
             .insert(*sym, Stack(Complex { base_offset, size }));
         self.allocation_map
@@ -1321,37 +1330,62 @@ impl<
     /// This may be free space in the stack or result in increasing the stack size.
     /// It returns base pointer relative offset of the new data.
     fn claim_stack_size(&mut self, amount: u32) -> i32 {
-        debug_assert!(amount > 0);
-        // round value to 8 byte alignment.
-        let amount = if amount % 8 != 0 {
-            amount + 8 - (amount % 8)
-        } else {
-            amount
-        };
+        self.claim_stack_size_with_alignment(amount, 8)
+    }
+
+    fn claim_stack_size_with_alignment(&mut self, amount: u32, alignment: u32) -> i32 {
+        debug_assert_ne!(amount, 0);
+
+        pub const fn next_multiple_of(lhs: u32, rhs: u32) -> u32 {
+            match lhs % rhs {
+                0 => lhs,
+                r => lhs + (rhs - r),
+            }
+        }
+
+        pub const fn is_multiple_of(lhs: u32, rhs: u32) -> bool {
+            match rhs {
+                0 => false,
+                _ => lhs % rhs == 0,
+            }
+        }
+
+        // round value to alignment.
+        let amount = next_multiple_of(amount, alignment);
+
+        let alignment_correction = next_multiple_of(self.stack_size, alignment) - self.stack_size;
+
         if let Some(fitting_chunk) = self
             .free_stack_chunks
             .iter()
             .enumerate()
-            .filter(|(_, (_, size))| *size >= amount)
+            .filter(|(_, (offset, size))| {
+                *size >= amount && is_multiple_of((*offset).abs() as u32, alignment)
+            })
             .min_by_key(|(_, (_, size))| size)
         {
             let (pos, (offset, size)) = fitting_chunk;
             let (offset, size) = (*offset, *size);
+
             if size == amount {
                 self.free_stack_chunks.remove(pos);
+                debug_assert_eq!(offset % alignment as i32, 0);
                 offset
             } else {
                 let (prev_offset, prev_size) = self.free_stack_chunks[pos];
                 self.free_stack_chunks[pos] = (prev_offset + amount as i32, prev_size - amount);
+                debug_assert_eq!(prev_offset % alignment as i32, 0);
                 prev_offset
             }
-        } else if let Some(new_size) = self.stack_size.checked_add(amount) {
+        } else if let Some(new_size) = self.stack_size.checked_add(alignment_correction + amount) {
             // Since stack size is u32, but the max offset is i32, if we pass i32 max, we have overflowed.
             if new_size > i32::MAX as u32 {
                 internal_error!("Ran out of stack space");
             } else {
                 self.stack_size = new_size;
-                -(self.stack_size as i32)
+                let offset = -(self.stack_size as i32);
+                debug_assert_eq!(offset % alignment as i32, 0);
+                offset
             }
         } else {
             internal_error!("Ran out of stack space");

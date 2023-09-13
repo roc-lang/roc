@@ -3724,7 +3724,11 @@ impl<
         match union_layout {
             UnionLayout::NonRecursive(field_layouts) => {
                 let id_offset = data_size - data_alignment;
-                let base_offset = self.storage_manager.claim_stack_area(sym, data_size);
+                let base_offset = self.storage_manager.claim_stack_area_with_alignment(
+                    sym,
+                    data_size,
+                    data_alignment,
+                );
                 let mut current_offset = base_offset;
 
                 let it = fields.iter().zip(field_layouts[tag_id as usize].iter());
@@ -3746,7 +3750,7 @@ impl<
                         ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
 
                         let total_id_offset = base_offset as u32 + id_offset;
-                        debug_assert!(total_id_offset % data_alignment == 0);
+                        debug_assert_eq!(total_id_offset % data_alignment, 0);
 
                         // pick the right instruction based on the alignment of the tag id
                         if field_layouts.len() <= u8::MAX as _ {
