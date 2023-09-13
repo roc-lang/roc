@@ -369,9 +369,16 @@ concat : List a, List a -> List a
 ## ```
 last : List a -> Result a [ListWasEmpty]
 last = \list ->
-    when List.get list (Num.subSaturated (List.len list) 1) is
+    # Note: it's fine to use wrapping subtraction here, because if the list is empty,
+    # the length will be 0, so this will do a List.get on a huge number that is obviously
+    # out of bounds for an empty list, at which point List.get will return Err OutOfBounds.
+    when List.get list (Num.subWrap (List.len list) 1) is
         Ok v -> Ok v
-        Err _ -> Err ListWasEmpty
+        Err OutOfBounds -> Err ListWasEmpty
+
+expect last [] == Err ListWasEmpty
+expect last [Foo] == Ok Foo
+expect last [Foo, Bar] = Ok Bar
 
 ## A list with a single element in it.
 ##
