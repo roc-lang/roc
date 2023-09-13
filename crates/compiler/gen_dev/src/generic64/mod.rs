@@ -3877,31 +3877,33 @@ impl<
                     };
 
                     // finally, we need to tag the pointer
-                    debug_assert!(tag_id < 8);
-                    self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
+                    if tag_id < 8 {
+                        self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
 
-                    self.build_int_bitwise_or(
-                        sym,
-                        &untagged_pointer_symbol,
-                        &tag_id_symbol,
-                        IntWidth::U64,
-                    );
+                        self.build_int_bitwise_or(
+                            sym,
+                            &untagged_pointer_symbol,
+                            &tag_id_symbol,
+                            IntWidth::U64,
+                        );
 
-                    self.free_symbol(&untagged_pointer_symbol);
-                    self.free_symbol(&tag_id_symbol);
+                        self.free_symbol(&untagged_pointer_symbol);
+                        self.free_symbol(&tag_id_symbol);
+                    } else {
+                        todo!()
+                    }
                 }
             }
             UnionLayout::Recursive(tags) => {
                 self.load_literal_symbols(fields);
 
-                let whole_struct_symbol = self.debug_symbol("whole_struct_symbol");
                 let tag_id_symbol = self.debug_symbol("tag_id_symbol");
                 let other_fields = tags[tag_id as usize];
 
                 let stores_tag_id_as_data =
                     union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
 
-                let largest_variant = tags
+                let (largest_variant, _largest_variant_size) = tags
                     .iter()
                     .map(|fields| {
                         let struct_layout = self
@@ -3914,19 +3916,18 @@ impl<
                         )
                     })
                     .max_by(|(_, a), (_, b)| a.cmp(b))
-                    .unwrap()
-                    .0;
+                    .unwrap();
 
                 // construct the payload as a struct on the stack
                 let data_struct_layout = self
                     .layout_interner
                     .insert_direct_no_semantic(LayoutRepr::Struct(other_fields));
 
-                let tag_id_layout = union_layout.tag_id_layout();
-
                 if stores_tag_id_as_data {
-                    let inner_struct_symbol = self.debug_symbol("inner_struct_symbol");
+                    self.load_literal_symbols(fields);
 
+                    // create the data as a record
+                    let inner_struct_symbol = self.debug_symbol("inner_struct_symbol");
                     self.storage_manager.create_struct(
                         self.layout_interner,
                         &mut self.buf,
@@ -3935,30 +3936,55 @@ impl<
                         fields,
                     );
 
-                    self.load_literal_i64(&tag_id_symbol, tag_id as _);
-
-                    let arena = self.env.arena;
-                    let whole_struct_layout =
-                        self.layout_interner
-                            .insert_direct_no_semantic(LayoutRepr::Struct(
-                                arena.alloc([data_struct_layout, tag_id_layout]),
-                            ));
-
-                    self.storage_manager.create_struct(
-                        self.layout_interner,
-                        &mut self.buf,
-                        &whole_struct_symbol,
-                        &whole_struct_layout,
-                        arena.alloc([inner_struct_symbol, tag_id_symbol]),
+                    // allocate space on the stack for the whole tag payload
+                    let scratch_space = self.debug_symbol("scratch_space");
+                    let (data_size, data_alignment) =
+                        union_layout.data_size_and_alignment(self.layout_interner);
+                    let to_offset = self.storage_manager.claim_stack_area_with_alignment(
+                        &scratch_space,
+                        data_size,
+                        data_alignment,
                     );
 
-                    self.expr_box(*sym, whole_struct_symbol, whole_struct_layout, reuse);
+                    // copy the inner struct into the reserved space
+                    let (from_offset, variant_size) = self
+                        .storage_manager
+                        .stack_offset_and_size(&inner_struct_symbol);
+                    self.storage_manager.copy_to_stack_offset(
+                        &mut self.buf,
+                        variant_size,
+                        from_offset,
+                        to_offset,
+                    );
+
+                    // create the tag id
+                    {
+                        self.load_literal_i64(&tag_id_symbol, tag_id as _);
+                        let tag_id_offset = union_layout.tag_id_offset(self.interner());
+
+                        self.storage_manager
+                            .ensure_symbol_on_stack(&mut self.buf, &tag_id_symbol);
+                        let (from_offset, tag_id_size) =
+                            self.storage_manager.stack_offset_and_size(&tag_id_symbol);
+                        let to_offset = to_offset + tag_id_offset.unwrap() as i32;
+
+                        // move the tag id into position
+                        self.storage_manager.copy_to_stack_offset(
+                            &mut self.buf,
+                            tag_id_size,
+                            from_offset,
+                            to_offset,
+                        );
+                    }
+
+                    // now effectively box whole data + id struct
+                    self.expr_box(*sym, scratch_space, largest_variant, reuse);
 
                     self.free_symbol(&tag_id_symbol);
-                    self.free_symbol(&whole_struct_symbol);
                     self.free_symbol(&inner_struct_symbol);
                 } else {
                     self.load_literal_symbols(fields);
+                    let whole_struct_symbol = self.debug_symbol("whole_struct_symbol");
                     self.storage_manager.create_struct(
                         self.layout_interner,
                         &mut self.buf,

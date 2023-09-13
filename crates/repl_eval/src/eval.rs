@@ -486,8 +486,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
             };
 
-            dbg!("got here");
-
             app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
@@ -754,6 +752,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             };
 
             let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, mem, union_layout, addr);
+
 
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
