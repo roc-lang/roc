@@ -1122,7 +1122,20 @@ pub fn toStr(arg: RocDec) callconv(.C) RocStr {
 }
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
-    return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
+    if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| {
+        return dec.num;
+    } else {
+        @panic("TODO runtime exception failing convert f64 to RocDec");
+    }
+}
+
+pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
+    const arg_f64 = arg_f32;
+    if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg_f64})) |dec| {
+        return dec.num;
+    } else {
+        @panic("TODO runtime exception failing convert f64 to RocDec");
+    }
 }
 
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
