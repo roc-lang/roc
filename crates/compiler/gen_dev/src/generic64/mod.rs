@@ -3867,6 +3867,21 @@ impl<
                     // it's just a null pointer
                     self.load_literal_i64(sym, 0);
                 } else {
+                    let (largest_variant, _largest_variant_size) = other_tags
+                        .iter()
+                        .map(|fields| {
+                            let struct_layout = self
+                                .layout_interner
+                                .insert_direct_no_semantic(LayoutRepr::Struct(fields));
+
+                            (
+                                struct_layout,
+                                self.layout_interner.stack_size(struct_layout),
+                            )
+                        })
+                        .max_by(|(_, a), (_, b)| a.cmp(b))
+                        .unwrap();
+
                     let other_fields = if tag_id < nullable_id {
                         other_tags[tag_id as usize]
                     } else {
@@ -3888,12 +3903,6 @@ impl<
                         fields,
                     );
 
-                    // now effectively box this struct
-                    let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
-                    self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
-
-                    self.free_symbol(&temp_sym);
-
                     let tag_id_symbol = self.debug_symbol("tag_id");
 
                     // index zero is taken up by the nullable tag, so any tags before it in the
@@ -3905,7 +3914,60 @@ impl<
                     };
 
                     // finally, we need to tag the pointer
-                    if tag_id < 8 {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                        // allocate space on the stack for the whole tag payload
+                        let scratch_space = self.debug_symbol("scratch_space");
+                        let (data_size, data_alignment) =
+                            union_layout.data_size_and_alignment(self.layout_interner);
+                        let to_offset = self.storage_manager.claim_stack_area_with_alignment(
+                            scratch_space,
+                            data_size,
+                            data_alignment,
+                        );
+
+                        // copy the inner struct into the reserved space
+                        let (from_offset, variant_size) =
+                            self.storage_manager.stack_offset_and_size(&temp_sym);
+                        self.storage_manager.copy_to_stack_offset(
+                            &mut self.buf,
+                            variant_size,
+                            from_offset,
+                            to_offset,
+                        );
+
+                        // create the tag id
+                        {
+                            self.load_literal_i64(&tag_id_symbol, tag_id as _);
+                            let tag_id_offset = union_layout.tag_id_offset(self.interner());
+
+                            self.storage_manager
+                                .ensure_symbol_on_stack(&mut self.buf, &tag_id_symbol);
+                            let (from_offset, tag_id_size) =
+                                self.storage_manager.stack_offset_and_size(&tag_id_symbol);
+                            let to_offset = to_offset + tag_id_offset.unwrap() as i32;
+
+                            // move the tag id into position
+                            self.storage_manager.copy_to_stack_offset(
+                                &mut self.buf,
+                                tag_id_size,
+                                from_offset,
+                                to_offset,
+                            );
+                        }
+
+                        // now effectively box whole data + id struct
+                        self.expr_box(*sym, scratch_space, largest_variant, reuse);
+
+                        self.free_symbol(&tag_id_symbol);
+                        self.free_symbol(&scratch_space);
+                        self.free_symbol(&temp_sym);
+                    } else {
+                        // now effectively box this struct
+                        let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
+                        self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
+
+                        self.free_symbol(&temp_sym);
+
                         self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
 
                         self.build_int_bitwise_or(
@@ -3917,8 +3979,7 @@ impl<
 
                         self.free_symbol(&untagged_pointer_symbol);
                         self.free_symbol(&tag_id_symbol);
-                    } else {
-                        todo!()
+                        self.free_symbol(&temp_sym);
                     }
                 }
             }
