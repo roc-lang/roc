@@ -293,10 +293,6 @@ inline fn free_ptr_to_refcount(
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
     const allocation_ptr = @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize));
 
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("💀 free {*}\n", .{allocation_ptr});
-    }
-
     // NOTE: we don't even check whether the refcount is "infinity" here!
     dealloc(allocation_ptr, alignment);
 
@@ -428,10 +424,6 @@ pub fn allocateWithRefcount(
     const ptr_width = @sizeOf(usize);
     const alignment = std.math.max(ptr_width, element_alignment);
     const length = alignment + data_bytes;
-
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ before allocate {} {} {} \n", .{ data_bytes, element_alignment, length });
-    }
 
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
