@@ -9,7 +9,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocBox, RocList, RocStr};
+use roc_std::{RocBox, RocDec, RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -1905,7 +1905,7 @@ fn task_always_twice() {
             "#
         ),
         (),
-        (f64, u8),
+        (RocDec, u8),
         |_| ()
     );
 }
@@ -1963,7 +1963,7 @@ fn alias_of_alias_with_type_arguments() {
             "#
         ),
         (),
-        (f64, u8),
+        (RocDec, u8),
         |_| ()
     );
 }
