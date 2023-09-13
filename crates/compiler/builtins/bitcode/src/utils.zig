@@ -221,13 +221,14 @@ pub fn decrefDataPtrC(
 ) callconv(.C) void {
     var bytes = bytes_or_null orelse return;
 
-    const ptr = @ptrToInt(bytes);
+    const data_ptr = @ptrToInt(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const unmasked_ptr = data_ptr & ~tag_mask;
 
-    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+    const isizes: [*]isize = @intToPtr([*]isize, unmasked_ptr);
+    const rc_ptr = isizes - 1;
 
-    return decrefRcPtrC(isizes - 1, alignment);
+    return decrefRcPtrC(rc_ptr, alignment);
 }
 
 pub fn increfDataPtrC(
@@ -435,7 +436,7 @@ pub fn allocateWithRefcount(
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ allocated {*}\n", .{new_bytes});
+        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, element_alignment });
     }
 
     const data_ptr = new_bytes + alignment;

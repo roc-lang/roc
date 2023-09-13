@@ -12,7 +12,7 @@ use crate::helpers::with_larger_debug_stack;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -82,6 +82,16 @@ fn bool_list_literal() {
         ),
         RocList::from_slice(&[false; 1]),
         RocList<bool>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn dec_list_literal() {
+    assert_evals_to!(
+        "[1.0, 2.0]",
+        RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]),
+        RocList<RocDec>
     );
 }
 
@@ -2797,6 +2807,12 @@ fn list_sum() {
     assert_evals_to!("List.sum []", 0, i64);
     assert_evals_to!("List.sum [1, 2, 3]", 6, i64);
     assert_evals_to!("List.sum [1.1f64, 2.2, 3.3]", 6.6, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_sum_dec() {
+    assert_evals_to!("List.sum [1.0dec, 2.0]", RocDec::from(3), RocDec);
 }
 
 #[test]

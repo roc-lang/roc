@@ -3104,7 +3104,7 @@ impl<
 
         // Load allocation alignment (u32)
         let element_alignment_symbol = Symbol::DEV_TMP2;
-        self.load_layout_alignment(Layout::U32, element_alignment_symbol);
+        self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
         let allocation_symbol = self.debug_symbol("list_allocation");
         self.allocate_with_refcount(
