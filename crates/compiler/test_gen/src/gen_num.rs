@@ -3970,11 +3970,28 @@ fn mul_checked_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-            Num.mulChecked 5.0dec 2.0dec == Ok 10.0dec
+            Num.mulChecked 5.0dec 2.0dec
             "#
         ),
-        true,
-        bool
+        RocResult::ok(RocDec::from_str("10.0").unwrap()),
+        RocResult<RocDec, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn mul_checked_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result U128 [ Overflow ]
+            x = Num.mulChecked 5u128 2u128
+
+            x
+            "#
+        ),
+        RocResult::ok(5u128 * 2u128),
+        RocResult<u128, ()>
     );
 }
 

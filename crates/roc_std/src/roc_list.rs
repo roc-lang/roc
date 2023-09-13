@@ -547,6 +547,8 @@ impl<T> Drop for RocList<T> {
                             ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
                         }
 
+                        dbg!(self.ptr_to_allocation());
+
                         // Release the memory.
                         roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
                     }

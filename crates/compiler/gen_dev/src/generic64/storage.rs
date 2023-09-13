@@ -679,7 +679,7 @@ impl<
             self.symbol_storage_map.insert(*sym, NoData);
             return;
         }
-        let base_offset = self.claim_stack_area(sym, struct_size);
+        let base_offset = self.claim_stack_area_layout(layout_interner, *sym, *layout);
 
         let mut in_layout = *layout;
         let layout = loop {
@@ -955,7 +955,7 @@ impl<
     pub fn ensure_symbol_on_stack(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) {
         match self.remove_storage_for_sym(sym) {
             Reg(reg_storage) => {
-                let base_offset = self.claim_stack_size(8);
+                let base_offset = self.claim_stack_size_with_alignment(8, 8);
                 match reg_storage {
                     General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
                     Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
@@ -1015,7 +1015,7 @@ impl<
         match self.remove_storage_for_sym(sym) {
             Reg(reg_storage) => {
                 debug_assert_eq!(reg_storage, wanted_reg);
-                let base_offset = self.claim_stack_size(8);
+                let base_offset = self.claim_stack_size_with_alignment(8, 8);
                 match reg_storage {
                     General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
                     Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
@@ -1135,7 +1135,7 @@ impl<
     ) {
         match layout_interner.get_repr(layout) {
             single_register_layouts!() | pointer_layouts!() => {
-                let base_offset = self.claim_stack_size(8);
+                let base_offset = self.claim_stack_size_with_alignment(8, 8);
                 self.symbol_storage_map.insert(
                     symbol,
                     Stack(Primitive {
@@ -1156,7 +1156,7 @@ impl<
                 if stack_size == 0 {
                     self.no_data(&symbol);
                 } else {
-                    self.claim_stack_area(&symbol, stack_size);
+                    self.claim_stack_area_layout(layout_interner, symbol, layout);
                 }
             }
         }
@@ -1288,32 +1288,47 @@ impl<
         self.join_param_map.insert(*id, param_storage);
     }
 
-    /// claim_stack_area is the public wrapper around claim_stack_size.
-    /// It also deals with updating symbol storage.
-    /// It returns the base offset of the stack area.
-    /// It should only be used for complex data and not primitives.
-    pub fn claim_stack_area(&mut self, sym: &Symbol, size: u32) -> i32 {
-        self.claim_stack_area_with_alignment(sym, size, 8)
+    /// Claim space on the stack for a certain layout. Size and alignment are handled
+    ///
+    /// This function:
+    ///
+    /// - deals with updating symbol storage.
+    /// - should only be used for complex data and not primitives.
+    /// - returns the base offset of the stack area.
+    pub(crate) fn claim_stack_area_layout(
+        &mut self,
+        layout_interner: &STLayoutInterner<'_>,
+        sym: Symbol,
+        layout: InLayout<'_>,
+    ) -> i32 {
+        let (size, alignment) = layout_interner.stack_size_and_alignment(layout);
+        self.claim_stack_area_with_alignment(sym, size, Ord::min(alignment, 8))
     }
 
+    /// Claim space on the stack of a certain size and alignment.
+    ///
+    /// This function:
+    ///
+    /// - deals with updating symbol storage.
+    /// - should only be used for complex data and not primitives.
+    /// - returns the base offset of the stack area.
     pub fn claim_stack_area_with_alignment(
         &mut self,
-        sym: &Symbol,
+        sym: Symbol,
         size: u32,
         alignment: u32,
     ) -> i32 {
-        let base_offset = self.claim_stack_size_with_alignment(size, alignment);
+        let base_offset = self.claim_stack_size_with_alignment(size, Ord::min(alignment, 8));
         self.symbol_storage_map
-            .insert(*sym, Stack(Complex { base_offset, size }));
+            .insert(sym, Stack(Complex { base_offset, size }));
         self.allocation_map
-            .insert(*sym, Rc::new((base_offset, size)));
+            .insert(sym, Rc::new((base_offset, size)));
         base_offset
     }
 
     pub fn claim_pointer_stack_area(&mut self, sym: Symbol) -> i32 {
-        let size = 8;
-
-        let base_offset = self.claim_stack_size(size);
+        // pointers are 8 bytes wide with an alignment of 8
+        let base_offset = self.claim_stack_size_with_alignment(8, 8);
 
         self.symbol_storage_map.insert(
             sym,
@@ -1326,13 +1341,9 @@ impl<
         base_offset
     }
 
-    /// claim_stack_size claims `amount` bytes from the stack alignind to 8.
+    /// claim_stack_size claims `amount` bytes from the stack
     /// This may be free space in the stack or result in increasing the stack size.
     /// It returns base pointer relative offset of the new data.
-    fn claim_stack_size(&mut self, amount: u32) -> i32 {
-        self.claim_stack_size_with_alignment(amount, 8)
-    }
-
     fn claim_stack_size_with_alignment(&mut self, amount: u32, alignment: u32) -> i32 {
         debug_assert_ne!(amount, 0);
 

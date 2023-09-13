@@ -3,9 +3,9 @@ const builtin = @import("builtin");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
-const DEBUG_INCDEC = false;
+const DEBUG_INCDEC = true;
 const DEBUG_TESTING_ALLOC = false;
-const DEBUG_ALLOC = false;
+const DEBUG_ALLOC = true;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -360,7 +360,7 @@ pub fn isUnique(
     const refcount = (isizes - 1)[0];
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("| is unique {*}\n", .{isizes});
+        std.debug.print("| is unique {*}\n", .{isizes - 1});
     }
 
     return refcount == REFCOUNT_ONE_ISIZE;
@@ -436,7 +436,7 @@ pub fn allocateWithRefcount(
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, element_alignment });
+        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
     }
 
     const data_ptr = new_bytes + alignment;

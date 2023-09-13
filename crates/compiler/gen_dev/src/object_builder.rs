@@ -455,7 +455,6 @@ fn build_object<'a, B: Backend<'a>>(
                     );
                 }
                 AssemblyBackendMode::Binary => { /* do nothing */ }
->>>>>>> 12686f23b (repl helper codegen)
             }
 
             build_proc_symbol(
