@@ -118,6 +118,7 @@
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
+          cargo-nextest # used to give more info for segfaults for gen tests
         ]);
 
         aliases = ''
