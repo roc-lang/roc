@@ -3,9 +3,9 @@ const builtin = @import("builtin");
 const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
-const DEBUG_INCDEC = true;
+const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
-const DEBUG_ALLOC = true;
+const DEBUG_ALLOC = false;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
