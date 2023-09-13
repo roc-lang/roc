@@ -38,21 +38,22 @@ const repl = {
 // Initialise
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
+roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder =
     "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line input)";
   repl.compiler = instance;
 
-  // Show the help text by providing fake input
-  repl.inputQueue.push(":help");
-  processInputQueue();
-
-  // Remove the fake input
-  repl.inputHistory.shift();
-  repl.inputHistoryIndex = 0;
-  document.querySelector(".input").remove();
+  // Get help text from the compiler, and display it at top of the history panel
+  try {
+    const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
+    const helpElem = document.getElementById("help-text");
+    helpElem.innerHTML = helpText;
+  } catch (e) {
+    // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
+    console.warn(e);
+  }
 });
 
 // ----------------------------------------------------------------------------
