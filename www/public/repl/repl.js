@@ -49,7 +49,7 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   try {
     const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
     const helpElem = document.getElementById("help-text");
-    helpElem.innerHTML = helpText;
+    helpElem.innerHTML = helpText.replace(/\n/g, '<br>');
   } catch (e) {
     // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
     console.warn(e);
@@ -199,14 +199,14 @@ function createHistoryEntry(inputText) {
   repl.inputHistory.push(inputText);
 
   const firstLinePrefix = '<span class="input-line-prefix">» </span>';
-  const otherLinePrefix = '\n<span class="input-line-prefix">… </span>';
+  const otherLinePrefix = '<br><span class="input-line-prefix">… </span>';
   const inputLines = inputText.split("\n");
   if (inputLines[inputLines.length - 1] === "") {
     inputLines.pop();
   }
   const inputWithPrefixes = firstLinePrefix + inputLines.join(otherLinePrefix);
 
-  const inputElem = document.createElement("pre");
+  const inputElem = document.createElement("div");
   inputElem.innerHTML = inputWithPrefixes;
   inputElem.classList.add("input");
 
@@ -221,10 +221,9 @@ function createHistoryEntry(inputText) {
 }
 
 function updateHistoryEntry(index, ok, outputText) {
-  const outputElem = document.createElement("pre");
-  outputElem.innerHTML = outputText;
-  outputElem.classList.add("output");
-  outputElem.classList.add(ok ? "output-ok" : "output-error");
+  const outputElem = document.createElement("div");
+  outputElem.innerHTML = outputText.replace(/\n/g, "<br>");
+  outputElem.classList.add("output", ok ? "output-ok" : "output-error");
 
   const historyItem = repl.elemHistory.children[index];
   historyItem.appendChild(outputElem);
