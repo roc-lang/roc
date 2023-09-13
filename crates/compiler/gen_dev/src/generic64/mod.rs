@@ -1549,6 +1549,25 @@ impl<
         }
     }
 
+    fn build_num_div_ceil(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    ) {
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_DIV_CEIL[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+            x => todo!("NumDivCeilUnchecked: layout, {:?}", x),
+        }
+    }
+
     fn build_num_rem(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(

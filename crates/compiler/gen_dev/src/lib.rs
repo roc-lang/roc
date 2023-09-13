@@ -1039,6 +1039,9 @@ trait Backend<'a> {
                 self.build_num_div(sym, &args[0], &args[1], ret_layout)
             }
 
+            LowLevel::NumDivCeilUnchecked => {
+                self.build_num_div_ceil(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumRemUnchecked => self.build_num_rem(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumNeg => {
                 debug_assert_eq!(
@@ -2089,6 +2092,14 @@ trait Backend<'a> {
 
     /// build_num_mul stores `src1 / src2` into dst.
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    fn build_num_div_ceil(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    );
 
     /// build_num_mul stores `src1 % src2` into dst.
     fn build_num_rem(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
