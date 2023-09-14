@@ -431,7 +431,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 }
             }
             _ => {
-                // This should have been recieved via an arg pointer.
+                // This should have been received via an arg pointer.
                 // That means the value is already loaded onto the stack area we allocated before the call.
                 // Nothing to do.
             }
@@ -1546,7 +1546,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                 }
             }
             _ => {
-                // This should have been recieved via an arg pointer.
+                // This should have been received via an arg pointer.
                 // That means the value is already loaded onto the stack area we allocated before the call.
                 // Nothing to do.
             }
