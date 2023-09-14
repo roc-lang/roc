@@ -189,7 +189,14 @@ impl<T> RocList<T> {
     #[inline(always)]
     fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
-        let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>() };
+
+        let offset = match mem::align_of::<T>() {
+            16 => 1,
+            8 | 4 | 2 | 1 => 0,
+            other => unreachable!("invalid alignment {other}"),
+        };
+
+        let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>().add(offset) };
         Some((elements, storage))
     }
 
@@ -793,6 +800,15 @@ mod tests {
         // RocDec is special because it's alignment is 16
         let a = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
         let b = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn clone_list_dec() {
+        // RocDec is special because it's alignment is 16
+        let a = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
+        let b = a.clone();
 
         assert_eq!(a, b);
     }
