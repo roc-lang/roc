@@ -89,7 +89,7 @@ fn bool_list_literal() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn dec_list_literal() {
     assert_evals_to!(
-        "[1.0, 2.0]",
+        "[1.0dec, 2.0dec]",
         RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]),
         RocList<RocDec>
     );
