@@ -774,6 +774,7 @@ const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RocDec;
 
     #[no_mangle]
     pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
