@@ -269,6 +269,7 @@ fn mono_module_to_dylib_llvm<'a>(
         .map(|lib| (lib, main_fn_name, subs, layout_interner))
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(unused))]
 fn mono_module_to_dylib_asm<'a>(
     arena: &'a Bump,
     target: &Triple,
