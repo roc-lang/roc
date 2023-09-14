@@ -249,9 +249,6 @@ fn mono_module_to_dylib_llvm<'a>(
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    dbg!(&main_fn_name);
-    env.module.print_to_file("/tmp/output.ll");
-
     if main_fn.verify(true) {
         function_pass.run_on(&main_fn);
     } else {
