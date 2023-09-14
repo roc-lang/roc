@@ -1388,7 +1388,7 @@ fn list_map_closure_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map4_group() {
     assert_evals_to!(
         indoc!(
@@ -1402,7 +1402,7 @@ fn list_map4_group() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map4_different_length() {
     assert_evals_to!(
         indoc!(
@@ -1421,7 +1421,7 @@ fn list_map4_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map3_group() {
     assert_evals_to!(
         indoc!(
@@ -1435,7 +1435,7 @@ fn list_map3_group() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map3_different_length() {
     assert_evals_to!(
         indoc!(
@@ -1453,7 +1453,7 @@ fn list_map3_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
@@ -1468,7 +1468,7 @@ fn list_map2_pair() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map2_different_lengths() {
     assert_evals_to!(
         indoc!(
@@ -2909,7 +2909,7 @@ fn cleanup_because_exception() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_with() {
     assert_evals_to!(
         "List.sortWith [] Num.compare",
@@ -2929,7 +2929,7 @@ fn list_sort_with() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_asc() {
     assert_evals_to!(
         "List.sortAsc []",
@@ -2944,7 +2944,7 @@ fn list_sort_asc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_desc() {
     assert_evals_to!(
         "List.sortDesc []",
