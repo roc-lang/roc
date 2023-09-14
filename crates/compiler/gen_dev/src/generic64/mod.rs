@@ -731,6 +731,9 @@ impl<
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
         &mut self.relocs
     }
+    fn target_info(&self) -> TargetInfo {
+        self.storage_manager.target_info
+    }
     fn module_interns_helpers_mut(
         &mut self,
     ) -> (

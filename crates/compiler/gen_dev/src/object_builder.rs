@@ -797,6 +797,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
+    let target_info = backend.target_info();
     let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc, layout_ids);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
     for reloc in relocs.iter() {
@@ -882,11 +883,19 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
+                    let encoding = match target_info.architecture {
+                        roc_target::Architecture::Aarch32 => todo!(),
+                        roc_target::Architecture::Aarch64 => RelocationEncoding::AArch64Call,
+                        roc_target::Architecture::Wasm32 => todo!(),
+                        roc_target::Architecture::X86_32 => todo!(),
+                        roc_target::Architecture::X86_64 => RelocationEncoding::X86Branch,
+                    };
+
                     write::Relocation {
                         offset: offset + proc_offset,
                         size: 32,
                         kind: RelocationKind::PltRelative,
-                        encoding: RelocationEncoding::X86Branch,
+                        encoding,
                         symbol: sym_id,
                         addend: -4,
                     }

@@ -858,8 +858,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn call(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>, _fn_name: String) {
-        todo!("calling functions literal for AArch64");
+    fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String) {
+        let inst = 0b1001_0100_0000_0000_0000_0000_0000u32;
+        buf.extend(inst.to_le_bytes());
+        relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
     }
 
     #[inline(always)]
