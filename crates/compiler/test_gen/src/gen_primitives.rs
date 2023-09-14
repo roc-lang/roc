@@ -1899,13 +1899,13 @@ fn task_always_twice() {
                         Ok x -> transform x
                         Err e -> fail e
 
-            main : Task {} (Frac *)
+            main : Task {} F64
             main = after (always "foo") (\_ -> always {})
 
             "#
         ),
         (),
-        (RocDec, u8),
+        (f64, u8),
         |_| ()
     );
 }
@@ -1958,12 +1958,12 @@ fn alias_of_alias_with_type_arguments() {
                 @Effect inner
 
 
-            main : Task {} (Frac *)
+            main : Task {} F64
             main = always {}
             "#
         ),
         (),
-        (RocDec, u8),
+        (f64, u8),
         |_| ()
     );
 }
