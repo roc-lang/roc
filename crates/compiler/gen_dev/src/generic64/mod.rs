@@ -2975,7 +2975,7 @@ impl<
         let list_b_layout = arg_layouts[1];
 
         // Load list alignment argument (u32).
-        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
+        self.load_layout_alignment(elem_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);

@@ -97,6 +97,22 @@ fn dec_list_literal() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn dec_list_join() {
+    assert_evals_to!(
+        "List.concat [1.0dec, 2.0] [3.0, 4.0, 5.0]",
+        RocList::from_slice(&[
+            RocDec::from(1),
+            RocDec::from(2),
+            RocDec::from(3),
+            RocDec::from(4),
+            RocDec::from(5),
+        ]),
+        RocList<RocDec>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bool_list_concat() {
     assert_evals_to!(
         indoc!(

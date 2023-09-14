@@ -455,7 +455,7 @@ where
     T: PartialEq<U>,
 {
     fn eq(&self, other: &RocList<U>) -> bool {
-        self.deref() == other.deref()
+        self.as_slice() == other.as_slice()
     }
 }
 
@@ -812,5 +812,8 @@ mod tests {
         let b = a.clone();
 
         assert_eq!(a, b);
+
+        drop(a);
+        drop(b);
     }
 }
