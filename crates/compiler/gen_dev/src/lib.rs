@@ -1255,7 +1255,7 @@ trait Backend<'a> {
                 );
 
                 debug_assert!(
-                    matches!(*ret_layout, Layout::F32 | Layout::F64),
+                    matches!(*ret_layout, Layout::F32 | Layout::F64 | Layout::DEC),
                     "NumToFrac: expected to have return layout of type Float"
                 );
                 self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout)

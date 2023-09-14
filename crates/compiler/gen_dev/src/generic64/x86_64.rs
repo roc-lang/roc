@@ -681,7 +681,7 @@ impl X64_64SystemVStoreArgs {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
-            LayoutRepr::I128 | LayoutRepr::U128 => {
+            LayoutRepr::I128 | LayoutRepr::U128 | LayoutRepr::DEC => {
                 let (offset, _) = storage_manager.stack_offset_and_size(&sym);
 
                 if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
@@ -1001,6 +1001,10 @@ impl X64_64SystemVLoadArgs {
                 self.argument_offset += stack_size as i32;
             }
             LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
                 storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
                 self.argument_offset += stack_size as i32;
             }

@@ -1108,6 +1108,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 "lt_or_gt",
                             )
                         }
+                        Decimal => {
+                            //
+                            call_bitcode_fn(
+                                env,
+                                &[lhs_arg, rhs_arg],
+                                &bitcode::NUM_COMPARE[IntWidth::I128],
+                            )
+                        }
 
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
@@ -2150,6 +2158,9 @@ fn build_dec_binop<'a, 'ctx>(
             "decimal multiplication overflowed",
         ),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
+
+        NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),
+        NumGt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_GREATER_THAN[IntWidth::I128]),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
@@ -2214,19 +2225,22 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
         NumToFrac => {
             // This is an Int, so we need to convert it.
 
-            let target_float_type = match layout_interner.get_repr(return_layout) {
+            match layout_interner.get_repr(return_layout) {
                 LayoutRepr::Builtin(Builtin::Float(float_width)) => {
-                    convert::float_type_from_float_width(env, float_width)
+                    let target_float_type = convert::float_type_from_float_width(env, float_width);
+
+                    bd.build_cast(
+                        InstructionOpcode::SIToFP,
+                        arg,
+                        target_float_type,
+                        "i64_to_f64",
+                    )
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::DEC_FROM_INT[arg_width])
                 }
                 _ => internal_error!("There can only be floats here!"),
-            };
-
-            bd.build_cast(
-                InstructionOpcode::SIToFP,
-                arg,
-                target_float_type,
-                "i64_to_f64",
-            )
+            }
         }
         NumToIntChecked => {
             // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }

@@ -1518,7 +1518,7 @@ fn list_join_two_non_empty_lists() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_two_non_empty_lists_of_float() {
     assert_evals_to!(
-        "List.join [[1.2, 1.1], [2.1, 2.2]]",
+        "List.join [[1.2f64, 1.1], [2.1, 2.2]]",
         RocList::from_slice(&[1.2, 1.1, 2.1, 2.2]),
         RocList<f64>
     );
@@ -1532,7 +1532,7 @@ fn list_join_to_big_list() {
             r#"
                 List.join
                     [
-                        [1.2, 1.1],
+                        [1.2f64, 1.1],
                         [2.1, 2.2],
                         [3.0, 4.0, 5.0, 6.1, 9.0],
                         [3.0, 4.0, 5.0, 6.1, 9.0],
@@ -1582,7 +1582,7 @@ fn list_join_all_empty_lists() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_one_empty_list() {
     assert_evals_to!(
-        "List.join [[1.2, 1.1], []]",
+        "List.join [[1.2f64, 1.1], []]",
         RocList::from_slice(&[1.2, 1.1]),
         RocList<f64>
     );
@@ -1761,8 +1761,8 @@ fn list_concat_two_non_empty_lists() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_bigger_non_empty_lists() {
     assert_evals_to!(
-        "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
-        RocList::from_slice(&[1.1, 2.2, 3.3, 4.4, 5.5]),
+        "List.concat [1.1f64, 2.2] [3.3, 4.4, 5.5]",
+        RocList::from_slice(&[1.1f64, 2.2, 3.3, 4.4, 5.5]),
         RocList<f64>
     );
 }
@@ -2164,7 +2164,7 @@ fn replace_shared_int_list() {
 
                 { x, y }
 
-            wrapper [2.1, 4.3]
+            wrapper [2.1f64, 4.3]
             "#
         ),
         (7.7, 4.3),
@@ -2214,7 +2214,7 @@ fn set_unique_int_list() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn set_unique_list_oob() {
     assert_evals_to!(
-        "List.set [3, 17, 4.1] 1337 9.25",
+        "List.set [3f64, 17, 4.1] 1337 9.25",
         RocList::from_slice(&[3.0, 17.0, 4.1]),
         RocList<f64>
     );
@@ -2240,7 +2240,7 @@ fn set_shared_int_list() {
 
                 { x, y }
 
-            wrapper [2.1, 4.3]
+            wrapper [2.1f64, 4.3]
             "#
         ),
         (7.7, 4.3),
@@ -2796,7 +2796,7 @@ fn list_max() {
 fn list_sum() {
     assert_evals_to!("List.sum []", 0, i64);
     assert_evals_to!("List.sum [1, 2, 3]", 6, i64);
-    assert_evals_to!("List.sum [1.1, 2.2, 3.3]", 6.6, f64);
+    assert_evals_to!("List.sum [1.1f64, 2.2, 3.3]", 6.6, f64);
 }
 
 #[test]
@@ -2804,7 +2804,7 @@ fn list_sum() {
 fn list_product() {
     assert_evals_to!("List.product []", 1, i64);
     assert_evals_to!("List.product [1, 2, 3]", 6, i64);
-    assert_evals_to!("List.product [1.1, 2.2, 3.3]", 1.1 * 2.2 * 3.3, f64);
+    assert_evals_to!("List.product [1.1f64, 2.2, 3.3]", 1.1 * 2.2 * 3.3, f64);
 }
 
 #[test]

@@ -3644,11 +3644,24 @@ fn specialize_proc_help<'a>(
 
                                 let symbol = get_specialized_name(**symbol);
 
+                                let fresh_symbol =
+                                    env.named_unique_symbol(&format!("{:?}_closure", symbol));
+
                                 specialized_body = Stmt::Let(
-                                    symbol,
+                                    fresh_symbol,
                                     expr,
                                     layout,
                                     env.arena.alloc(specialized_body),
+                                );
+
+                                // the same symbol may be used where
+                                // - the closure is created
+                                // - the closure is consumed
+                                substitute_in_exprs(
+                                    env.arena,
+                                    &mut specialized_body,
+                                    symbol,
+                                    fresh_symbol,
                                 );
                             }
                         }

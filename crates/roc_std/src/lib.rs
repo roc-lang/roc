@@ -384,20 +384,31 @@ impl RocDec {
         // push a dummy character so we have space for the decimal dot
         string.push('$');
 
-        // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
-        let bytes = unsafe { string.as_bytes_mut() };
+        if decimal_location == last_nonzero_byte {
+            // never have a '.' as the last character
+            string.truncate(last_nonzero_byte)
+        } else {
+            // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
+            let bytes = unsafe { string.as_bytes_mut() };
 
-        // shift the fractional part by one
-        bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
+            // shift the fractional part by one
+            bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
 
-        // and put in the decimal dot in the right place
-        bytes[decimal_location] = b'.';
+            // and put in the decimal dot in the right place
+            bytes[decimal_location] = b'.';
+        }
 
         string.as_str()
     }
 
     pub fn to_str(&self) -> RocStr {
         RocStr::from(self.to_str_helper(&mut ArrayString::new()))
+    }
+}
+
+impl From<i32> for RocDec {
+    fn from(value: i32) -> Self {
+        RocDec::from_ne_bytes((RocDec::ONE_POINT_ZERO * value as i128).to_ne_bytes())
     }
 }
 
