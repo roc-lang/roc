@@ -1157,7 +1157,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
-            todo!("negative base offsets for AArch64");
+            ldur_reg64_reg64_imm9(buf, dst, AArch64GeneralReg::FP, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
@@ -1198,7 +1198,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
-            todo!("negative base offsets for AArch64");
+            str_reg64_reg64_imm9(buf, src, AArch64GeneralReg::FP, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
@@ -2907,6 +2907,33 @@ fn ldr_reg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+#[inline(always)]
+fn ldur_reg64_reg64_imm9(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64GeneralReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b00;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: false,
+        fixed3: 0b00.into(),
+        opc: 0b01.into(), // load
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 /// `LSL Xd, Xn, Xm` -> Logical shift Xn left by Xm and place the result into Xd.
 #[inline(always)]
 fn lsl_reg64_reg64_reg64(
@@ -3050,6 +3077,34 @@ fn sdiv_reg64_reg64_reg64(
         rn: src1,
         rd: dst,
     });
+
+    buf.extend(inst.bytes());
+}
+
+/// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
+#[inline(always)]
+fn str_reg64_reg64_imm9(
+    buf: &mut Vec<'_, u8>,
+    src: AArch64GeneralReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: false,
+        fixed3: 0b00.into(),
+        opc: 0b00.into(), // store
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: src.id().into(),
+    };
 
     buf.extend(inst.bytes());
 }
@@ -3528,6 +3583,16 @@ mod tests {
         }
     }
 
+    fn signed_hex_i16(value: i16) -> String {
+        let sign = if value < 0 { "-" } else { "" };
+
+        if value.unsigned_abs() < 16 {
+            format!("#{sign}{}", value.unsigned_abs())
+        } else {
+            format!("#{sign}0x{:x}", value.unsigned_abs())
+        }
+    }
+
     const TEST_U16: u16 = 0x1234;
     //const TEST_I32: i32 = 0x12345678;
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
@@ -3905,6 +3970,22 @@ mod tests {
     }
 
     #[test]
+    fn test_ldr_reg64_reg64_imm9() {
+        disassembler_test!(
+            ldur_reg64_reg64_imm9,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldur {}, [{}, {}]",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm),
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x010, -0x010, 4, -4]
+        );
+    }
+
+    #[test]
     fn test_lsl_reg64_reg64_reg64() {
         disassembler_test!(
             lsl_reg64_reg64_reg64,
@@ -4103,6 +4184,22 @@ mod tests {
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_str_reg64_reg64_imm9() {
+        disassembler_test!(
+            str_reg64_reg64_imm9,
+            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, {}]!", // ! indicates writeback
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm),
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [4, -4]
         );
     }
 
