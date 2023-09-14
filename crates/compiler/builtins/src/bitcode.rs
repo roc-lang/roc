@@ -131,7 +131,7 @@ impl IntWidth {
                 //
                 // however, rust does not always think that this is true
                 match target_info.architecture {
-                    Architecture::X86_64 => 8,
+                    Architecture::X86_64 => 16,
                     Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
                     Architecture::X86_32 => 8,
                 }
