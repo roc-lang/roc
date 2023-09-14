@@ -35,7 +35,7 @@
 <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
     <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
 
-<p><b>Fast</b> - Roc code is designed to compile fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
+<p><b>Fast</b> - Roc code is designed to build fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
 <p><b>Friendly</b></p>
 <p><b>Functional</b></p>
 
@@ -43,12 +43,11 @@
 
 > TODO only show this if you have JavaScript enabled!
 
-You can get a quick taste of Roc in this WebAssembly Read-Eval-Print Loop (REPL):
+You can get a quick taste of Roc in this WebAssembly Read-Eval-Print Loop (REPL). Try entering 0.1 + 0.2 here:
 
 <input placeholder="Try writing 0.1 + 0.2 and pressing Enter" style="width:600px">
 
-Roc code can compile to WebAssembly, so this REPL runs completely in your browser. It will keep working even if
-your network connection drops!
+Roc code can compile to WebAssembly, so this REPL runs completely in your browser. No network connection required!
 
 ## Use cases
 
