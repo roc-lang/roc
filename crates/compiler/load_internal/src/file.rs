@@ -2198,16 +2198,11 @@ fn update<'a>(
                         let undefined_shorthands: Vec<_> = header
                             .package_qualified_imported_modules
                             .iter()
-                            .filter_map(|pqim| match pqim {
-                                PackageQualified::Unqualified(_) => None,
+                            .filter(|pqim| match pqim {
+                                PackageQualified::Unqualified(_) => false,
                                 PackageQualified::Qualified(shorthand, _) => {
-                                    if header.packages.contains_key(shorthand)
-                                        || shorthand == &config_shorthand
-                                    {
-                                        None
-                                    } else {
-                                        Some(pqim)
-                                    }
+                                    !(header.packages.contains_key(shorthand)
+                                        || shorthand == &config_shorthand)
                                 }
                             })
                             .collect();
