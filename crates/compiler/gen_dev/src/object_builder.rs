@@ -408,7 +408,7 @@ fn build_object<'a, B: Backend<'a>>(
             }
 
             if let AssemblyBackendMode::Test = mode {
-                if true {
+                if false {
                     println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
                 }
 

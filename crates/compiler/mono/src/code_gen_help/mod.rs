@@ -813,7 +813,7 @@ impl<'a> CallerProc<'a> {
             is_erased: false,
         };
 
-        if true {
+        if false {
             home.register_debug_idents(ident_ids);
             println!("{}", proc.to_pretty(layout_interner, 200, true));
         }
@@ -955,7 +955,7 @@ impl<'a> CallerProc<'a> {
             is_erased: false,
         };
 
-        if true {
+        if false {
             home.register_debug_idents(ident_ids);
             println!("{}", proc.to_pretty(layout_interner, 200, true));
         }
