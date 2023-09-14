@@ -51,7 +51,7 @@ pub fn build_module<'a, 'r>(
                 b".note.GNU-stack".to_vec(),
                 SectionKind::Elf(object::elf::SHT_PROGBITS),
             );
-            build_object(env.mode, procedures, backend, object)
+            build_object(procedures, backend, object)
         }
         Triple {
             architecture: TargetArch::X86_64,
@@ -65,7 +65,6 @@ pub fn build_module<'a, 'r>(
                 x86_64::X86_64SystemV,
             >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(
@@ -87,7 +86,6 @@ pub fn build_module<'a, 'r>(
                 x86_64::X86_64WindowsFastcall,
             >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
@@ -106,7 +104,6 @@ pub fn build_module<'a, 'r>(
                     aarch64::AArch64Call,
                 >(env, TargetInfo::default_aarch64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
@@ -125,7 +122,6 @@ pub fn build_module<'a, 'r>(
                     aarch64::AArch64Call,
                 >(env, TargetInfo::default_aarch64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(
@@ -298,7 +294,6 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn build_object<'a, B: Backend<'a>>(
-    mode: AssemblyBackendMode,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object<'a>,
