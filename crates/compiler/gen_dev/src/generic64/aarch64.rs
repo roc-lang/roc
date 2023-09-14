@@ -263,7 +263,19 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         AArch64GeneralReg::IP0,
         AArch64GeneralReg::IP1,
     ];
-    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = &[];
+
+    // The first eight registers, v0-v7, are used to pass argument values
+    // into a subroutine and to return result values from a function.
+    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = &[
+        AArch64FloatReg::V0,
+        AArch64FloatReg::V1,
+        AArch64FloatReg::V2,
+        AArch64FloatReg::V3,
+        AArch64FloatReg::V4,
+        AArch64FloatReg::V5,
+        AArch64FloatReg::V6,
+        AArch64FloatReg::V7,
+    ];
     const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = Self::FLOAT_PARAM_REGS;
     const FLOAT_DEFAULT_FREE_REGS: &'static [AArch64FloatReg] = &[];
 
