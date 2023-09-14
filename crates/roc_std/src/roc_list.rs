@@ -13,7 +13,7 @@ use core::{
     ptr::{self, NonNull},
 };
 
-use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocDec};
+use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
 
 #[cfg(feature = "serde")]
 use core::marker::PhantomData;
