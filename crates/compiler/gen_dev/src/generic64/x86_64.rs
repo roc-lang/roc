@@ -675,6 +675,8 @@ impl X64_64SystemVStoreArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        type ASM = X86_64Assembler;
+
         // we use the return register as a temporary register; it will be overwritten anyway
         let tmp_reg = Self::GENERAL_RETURN_REGS[0];
 
@@ -689,19 +691,19 @@ impl X64_64SystemVStoreArgs {
                     let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
                     let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg1, offset);
-                    X86_64Assembler::mov_reg64_base32(buf, reg2, offset + 8);
+                    ASM::mov_reg64_base32(buf, reg1, offset);
+                    ASM::mov_reg64_base32(buf, reg2, offset + 8);
 
                     self.general_i += 2;
                 } else {
                     // Copy to stack using return reg as buffer.
                     let reg = Self::GENERAL_RETURN_REGS[0];
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg, offset);
-                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+                    ASM::mov_reg64_base32(buf, reg, offset);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
 
-                    X86_64Assembler::mov_reg64_base32(buf, reg, offset + 8);
-                    X86_64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+                    ASM::mov_reg64_base32(buf, reg, offset + 8);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
 
                     self.tmp_stack_offset += 16;
                 }

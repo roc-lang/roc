@@ -1,11 +1,16 @@
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
-use crate::Relocation;
+use crate::{
+    pointer_layouts, single_register_floats, single_register_int_builtins,
+    single_register_integers, Relocation,
+};
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
-use roc_builtins::bitcode::FloatWidth;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{InLayout, STLayoutInterner};
+use roc_mono::layout::{
+    Builtin, InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+};
 
 use super::{CompareOperation, RegisterWidth};
 
@@ -281,8 +286,19 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         )
     }
     #[inline(always)]
-    fn float_callee_saved(_reg: &AArch64FloatReg) -> bool {
-        todo!("AArch64 FloatRegs");
+    fn float_callee_saved(reg: &AArch64FloatReg) -> bool {
+        // Registers v8-v15 must be preserved by a callee across subroutine calls;
+        matches!(
+            reg,
+            AArch64FloatReg::V8
+                | AArch64FloatReg::V9
+                | AArch64FloatReg::V10
+                | AArch64FloatReg::V11
+                | AArch64FloatReg::V12
+                | AArch64FloatReg::V13
+                | AArch64FloatReg::V14
+                | AArch64FloatReg::V15
+        )
     }
 
     #[inline(always)]
@@ -386,40 +402,68 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
     #[inline(always)]
     fn load_args<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _args: &'a [(InLayout<'a>, Symbol)],
-        _ret_layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        args: &'a [(InLayout<'a>, Symbol)],
+        ret_layout: &InLayout<'a>,
     ) {
-        todo!("Loading args for AArch64");
+        let returns_via_pointer = AArch64Call::returns_via_arg_pointer(layout_interner, ret_layout);
+
+        let mut state = AArch64CallLoadArgs {
+            general_i: usize::from(returns_via_pointer),
+            float_i: 0,
+            // 16 is the size of the pushed return address and base pointer.
+            argument_offset: AArch64Call::SHADOW_SPACE_SIZE as i32 + 16,
+        };
+
+        if returns_via_pointer {
+            storage_manager.ret_pointer_arg(AArch64Call::GENERAL_PARAM_REGS[0]);
+        }
+
+        for (in_layout, sym) in args.iter() {
+            state.load_arg(buf, storage_manager, layout_interner, *sym, *in_layout);
+        }
     }
 
     #[inline(always)]
     fn store_args<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _dst: &Symbol,
-        _args: &[Symbol],
-        _arg_layouts: &[InLayout<'a>],
-        _ret_layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        dst: &Symbol,
+        args: &[Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     ) {
-        todo!("Storing args for AArch64");
+        let mut general_i = 0;
+
+        if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
+            // Save space on the stack for the result we will be return.
+            let base_offset =
+                storage_manager.claim_stack_area_layout(layout_interner, *dst, *ret_layout);
+            // Set the first reg to the address base + offset.
+            let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
+            general_i += 1;
+            AArch64Assembler::add_reg64_reg64_imm32(
+                buf,
+                ret_reg,
+                AArch64Call::BASE_PTR_REG,
+                base_offset,
+            );
+        }
+
+        let mut state = AArch64CallStoreArgs {
+            general_i,
+            float_i: 0,
+            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
+        };
+
+        for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
+            state.store_arg(buf, storage_manager, layout_interner, *sym, *in_layout);
+        }
+
+        storage_manager.update_fn_call_stack_size(state.tmp_stack_offset as u32);
     }
 
     fn return_complex_symbol<'a>(
@@ -457,15 +501,287 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     fn setjmp(_buf: &mut Vec<'_, u8>) {
-        todo!()
+        eprintln!("setjmp is not implemented on this target!");
     }
 
     fn longjmp(_buf: &mut Vec<'_, u8>) {
-        todo!()
+        eprintln!("longjmp is not implemented on this target!");
     }
 
     fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
-        todo!()
+        eprintln!("roc_panic is not implemented on this target!");
+    }
+}
+
+impl AArch64Call {
+    fn returns_via_arg_pointer<'a>(
+        interner: &STLayoutInterner<'a>,
+        ret_layout: &InLayout<'a>,
+    ) -> bool {
+        // TODO: This will need to be more complex/extended to fully support the calling convention.
+        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
+        interner.stack_size(*ret_layout) > 16
+    }
+}
+
+type AArch64StorageManager<'a, 'r> =
+    StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, AArch64Assembler, AArch64Call>;
+
+struct AArch64CallLoadArgs {
+    general_i: usize,
+    float_i: usize,
+    argument_offset: i32,
+}
+
+impl AArch64CallLoadArgs {
+    fn load_arg<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: Symbol,
+        in_layout: InLayout<'a>,
+    ) {
+        let stack_size = layout_interner.stack_size(in_layout);
+        match layout_interner.get_repr(in_layout) {
+            single_register_integers!() => self.load_arg_general(storage_manager, sym),
+            pointer_layouts!() => self.load_arg_general(storage_manager, sym),
+            single_register_floats!() => self.load_arg_float(storage_manager, sym),
+            _ if stack_size == 0 => {
+                storage_manager.no_data(&sym);
+            }
+            _ if stack_size > 16 => {
+                // TODO: Double check this.
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
+                buf,
+                storage_manager,
+                layout_interner,
+                sym,
+                lambda_set.runtime_representation(),
+            ),
+            LayoutRepr::Struct { .. } => {
+                // for now, just also store this on the stack
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                self.load_arg_general_128bit(buf, storage_manager, sym);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.load_arg_general_128bit(buf, storage_manager, sym);
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                // for now, just also store this on the stack
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            _ => {
+                todo!(
+                    "Loading args with layout {:?}",
+                    layout_interner.dbg(in_layout)
+                );
+            }
+        }
+    }
+
+    fn load_arg_general(
+        &mut self,
+        storage_manager: &mut AArch64StorageManager<'_, '_>,
+        sym: Symbol,
+    ) {
+        if let Some(reg) = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i) {
+            storage_manager.general_reg_arg(&sym, *reg);
+            self.general_i += 1;
+        } else {
+            storage_manager.primitive_stack_arg(&sym, self.argument_offset);
+            self.argument_offset += 8;
+        }
+    }
+
+    fn load_arg_general_128bit(
+        &mut self,
+        buf: &mut Vec<u8>,
+        storage_manager: &mut AArch64StorageManager<'_, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let reg1 = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i);
+        let reg2 = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i + 1);
+
+        match (reg1, reg2) {
+            (Some(reg1), Some(reg2)) => {
+                let offset = storage_manager.claim_stack_area_with_alignment(sym, 16, 16);
+
+                ASM::mov_base32_reg64(buf, offset, *reg1);
+                ASM::mov_base32_reg64(buf, offset + 8, *reg2);
+
+                self.general_i += 2;
+            }
+            _ => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, 16);
+                self.argument_offset += 16;
+            }
+        }
+    }
+
+    fn load_arg_float(&mut self, storage_manager: &mut AArch64StorageManager<'_, '_>, sym: Symbol) {
+        if let Some(reg) = AArch64Call::FLOAT_PARAM_REGS.get(self.float_i) {
+            storage_manager.float_reg_arg(&sym, *reg);
+            self.float_i += 1;
+        } else {
+            storage_manager.primitive_stack_arg(&sym, self.argument_offset);
+            self.argument_offset += 8;
+        }
+    }
+}
+
+struct AArch64CallStoreArgs {
+    general_i: usize,
+    float_i: usize,
+    tmp_stack_offset: i32,
+}
+
+impl AArch64CallStoreArgs {
+    const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_PARAM_REGS;
+    const GENERAL_RETURN_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_RETURN_REGS;
+
+    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_PARAM_REGS;
+    const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_RETURN_REGS;
+
+    fn store_arg<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: Symbol,
+        in_layout: InLayout<'a>,
+    ) {
+        type ASM = AArch64Assembler;
+
+        // we use the return register as a temporary register; it will be overwritten anyway
+        let _tmp_reg = Self::GENERAL_RETURN_REGS[0];
+
+        match layout_interner.get_repr(in_layout) {
+            single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
+            pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
+            single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
+            LayoutRepr::I128 | LayoutRepr::U128 => {
+                let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+                if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+                    let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+                    ASM::mov_reg64_base32(buf, reg1, offset);
+                    ASM::mov_reg64_base32(buf, reg2, offset + 8);
+
+                    self.general_i += 2;
+                } else {
+                    // Copy to stack using return reg as buffer.
+                    let reg = Self::GENERAL_RETURN_REGS[0];
+
+                    ASM::mov_reg64_base32(buf, reg, offset);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+                    ASM::mov_reg64_base32(buf, reg, offset + 8);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+                    self.tmp_stack_offset += 16;
+                }
+            }
+            _ if layout_interner.stack_size(in_layout) == 0 => {}
+            /*
+            _ if layout_interner.stack_size(in_layout) > 16 => {
+                // TODO: Double check this.
+                // Just copy onto the stack.
+                let stack_offset = self.tmp_stack_offset;
+
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
+
+                self.tmp_stack_offset += size as i32;
+            }
+            LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
+                buf,
+                storage_manager,
+                layout_interner,
+                sym,
+                lambda_set.runtime_representation(),
+            ),
+            LayoutRepr::Struct { .. } => {
+                let stack_offset = self.tmp_stack_offset;
+
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
+
+                self.tmp_stack_offset += size as i32;
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                let stack_offset = self.tmp_stack_offset;
+
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
+
+                self.tmp_stack_offset += size as i32;
+            }
+            */
+            _ => {
+                todo!(
+                    "calling with arg type, {:?}",
+                    layout_interner.dbg(in_layout)
+                );
+            }
+        }
+    }
+
+    fn store_arg_general<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                storage_manager.load_to_specified_general_reg(buf, &sym, *reg);
+                self.general_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let tmp = Self::GENERAL_RETURN_REGS[0];
+
+                storage_manager.load_to_specified_general_reg(buf, &sym, tmp);
+                AArch64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
+    }
+
+    fn store_arg_float<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        match Self::FLOAT_PARAM_REGS.get(self.float_i) {
+            Some(reg) => {
+                storage_manager.load_to_specified_float_reg(buf, &sym, *reg);
+                self.float_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let tmp = Self::FLOAT_RETURN_REGS[0];
+
+                storage_manager.load_to_specified_float_reg(buf, &sym, tmp);
+                AArch64Assembler::mov_stack32_freg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
     }
 }
 
