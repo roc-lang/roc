@@ -30,6 +30,9 @@ use storage::{RegStorage, StorageManager};
 
 // TODO: on all number functions double check and deal with over/underflow.
 
+// NOTE: must fit in 27 bits and aligned to 4 for aarch64
+const JUMP_PLACEHOLDER: i32 = 0x0011_1100;
+
 #[derive(Debug, Clone, Copy)]
 pub enum RegisterWidth {
     W8,
@@ -1070,7 +1073,7 @@ impl<
             // Build unconditional jump to the end of this switch.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
             let jmp_location = self.buf.len();
-            let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+            let jmp_offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER);
             ret_jumps.push((jmp_location, jmp_offset));
 
             // Overwrite the original jne with the correct offset.
@@ -1162,7 +1165,7 @@ impl<
             .setup_jump(self.layout_interner, &mut self.buf, id, args, arg_layouts);
 
         let jmp_location = self.buf.len();
-        let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+        let start_offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER);
 
         if let Some(vec) = self.join_map.get_mut(id) {
             vec.push((jmp_location as u64, start_offset as u64))
@@ -4342,7 +4345,7 @@ impl<
             )
         }
         let inst_loc = self.buf.len() as u64;
-        let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
+        let offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER) as u64;
         self.relocs.push(Relocation::JmpToReturn {
             inst_loc,
             inst_size: self.buf.len() as u64 - inst_loc,
