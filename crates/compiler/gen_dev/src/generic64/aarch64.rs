@@ -879,7 +879,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _fn_name: String,
         _dst: AArch64GeneralReg,
     ) {
-        todo!("data pointer for AArch64");
+        eprintln!("data_pointer not implemented for this target");
     }
 
     #[inline(always)]
