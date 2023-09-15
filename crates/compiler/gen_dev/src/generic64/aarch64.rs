@@ -1226,28 +1226,33 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
+    fn mov_reg_mem_offset32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+        offset: i32,
+    ) {
         if offset < 0 {
-            ldur_reg64_reg64_imm9(buf, dst, AArch64GeneralReg::FP, offset as i16);
+            ldur_reg_reg_imm9(buf, register_width, dst, src, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
     }
+
     #[inline(always)]
-    fn mov_reg32_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
-        todo!()
+    fn mov_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        Self::mov_reg_mem_offset32(buf, register_width, dst, AArch64GeneralReg::FP, offset)
     }
-    #[inline(always)]
-    fn mov_reg16_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_reg8_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
-        todo!()
-    }
+
     #[inline(always)]
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
         Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::FP, offset, src)
@@ -1268,14 +1273,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
-        if offset < 0 {
-            str_reg64_reg64_imm9(buf, src, AArch64GeneralReg::FP, offset as i16);
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
-        } else {
-            todo!("base offsets over 32k for AArch64");
-        }
+        Self::mov_mem64_offset32_reg64(buf, AArch64GeneralReg::FP, offset, src)
     }
 
     #[inline(always)]
@@ -1291,71 +1289,20 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!()
     }
 
-    #[inline(always)]
-    fn mov_reg64_mem64_offset32(
+    fn mov_mem_offset32_reg(
         buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src: AArch64GeneralReg,
-        offset: i32,
-    ) {
-        if offset < 0 {
-            todo!("negative mem offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
-        } else {
-            todo!("mem offsets over 32k for AArch64");
-        }
-    }
-    #[inline(always)]
-    fn mov_reg32_mem32_offset32(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src: AArch64GeneralReg,
-        offset: i32,
-    ) {
-        if offset < 0 {
-            todo!("negative mem offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
-        } else {
-            todo!("mem offsets over 32k for AArch64");
-        }
-    }
-    #[inline(always)]
-    fn mov_reg16_mem16_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
-    ) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_reg8_mem8_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
-    ) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_mem64_offset32_reg64(
-        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: AArch64GeneralReg,
         offset: i32,
         src: AArch64GeneralReg,
     ) {
         if offset < 0 {
-            todo!("negative mem offsets for AArch64");
+            str_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+            str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
         } else {
-            todo!("mem offsets over 32k for AArch64");
+            todo!("base offsets over 32k for AArch64");
         }
     }
 
@@ -1374,36 +1321,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
-    }
-
-    #[inline(always)]
-    fn mov_mem32_offset32_reg32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_mem16_offset32_reg16(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_mem8_offset32_reg8(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!()
     }
 
     #[inline(always)]
@@ -1442,14 +1359,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
-        if offset < 0 {
-            todo!("negative stack offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-        } else {
-            todo!("stack offsets over 32k for AArch64");
-        }
+        Self::mov_reg_mem_offset32(
+            buf,
+            RegisterWidth::W64,
+            dst,
+            AArch64GeneralReg::ZRSP,
+            offset,
+        )
     }
     #[inline(always)]
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
@@ -1459,25 +1375,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn mov_stack32_reg(
         buf: &mut Vec<'_, u8>,
-        register_width: RegisterWidth,
+        _register_width: RegisterWidth,
         offset: i32,
         src: AArch64GeneralReg,
     ) {
-        match register_width {
-            RegisterWidth::W8 => todo!(),
-            RegisterWidth::W16 => todo!(),
-            RegisterWidth::W32 => todo!(),
-            RegisterWidth::W64 => {
-                if offset < 0 {
-                    todo!("negative stack offsets for AArch64");
-                } else if offset < (0xFFF << 8) {
-                    debug_assert!(offset % 8 == 0);
-                    str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-                } else {
-                    todo!("stack offsets over 32k for AArch64");
-                }
-            }
-        }
+        Self::mov_mem64_offset32_reg64(buf, AArch64GeneralReg::ZRSP, offset, src)
     }
     #[inline(always)]
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
@@ -2987,14 +2889,15 @@ fn eor_reg64_reg64_reg64(
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn ldr_reg64_reg64_imm12(
+fn ldr_reg_reg_imm12(
     buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
     dst: AArch64GeneralReg,
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
     let inst = LoadStoreRegisterImmediate::new_load(LoadStoreRegisterImmediateParams {
-        size: 0b11,
+        size: register_width as u8,
         imm12,
         rn: base,
         rt: dst,
@@ -3004,8 +2907,9 @@ fn ldr_reg64_reg64_imm12(
 }
 
 #[inline(always)]
-fn ldur_reg64_reg64_imm9(
+fn ldur_reg_reg_imm9(
     buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
     dst: AArch64GeneralReg,
     base: AArch64GeneralReg,
     imm9: i16,
@@ -3014,10 +2918,11 @@ fn ldur_reg64_reg64_imm9(
     assert!((-256..256).contains(&imm9));
 
     let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
-    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b00;
+    #[allow(clippy::identity_op)]
+    let imm12 = (imm9 & 0b0001_1111_1111) << 2 | 0b00;
 
     let inst = LoadStoreRegisterImmediate {
-        size: 0b11.into(), // 64-bit
+        size: (register_width as u8).into(), // 64-bit
         fixed: 0b111.into(),
         fixed2: false,
         fixed3: 0b00.into(),
@@ -3227,10 +3132,9 @@ fn sdiv_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
-/// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
-#[inline(always)]
-fn str_reg64_reg64_imm9(
+fn str_reg_reg_imm9(
     buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
     src: AArch64GeneralReg,
     base: AArch64GeneralReg,
     imm9: i16,
@@ -3242,7 +3146,7 @@ fn str_reg64_reg64_imm9(
     let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
 
     let inst = LoadStoreRegisterImmediate {
-        size: 0b11.into(), // 64-bit
+        size: (register_width as u8).into(), // 64-bit
         fixed: 0b111.into(),
         fixed2: false,
         fixed3: 0b00.into(),
@@ -3258,14 +3162,15 @@ fn str_reg64_reg64_imm9(
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn str_reg64_reg64_imm12(
+fn str_reg_reg_imm12(
     buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
     src: AArch64GeneralReg,
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
     let inst = LoadStoreRegisterImmediate::new_store(LoadStoreRegisterImmediateParams {
-        size: 0b11,
+        size: register_width as u8,
         imm12,
         rn: base,
         rt: src,
@@ -4150,13 +4055,14 @@ mod tests {
     #[test]
     fn test_ldr_reg64_reg64_imm12() {
         disassembler_test!(
-            ldr_reg64_reg64_imm12,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+            ldr_reg_reg_imm12,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
                 "ldr {}, [{}, #0x{:x}]",
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 imm << 3
             ),
+            [RegisterWidth::W64],
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
@@ -4198,13 +4104,14 @@ mod tests {
     #[test]
     fn test_ldr_reg64_reg64_imm9() {
         disassembler_test!(
-            ldur_reg64_reg64_imm9,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+            ldur_reg_reg_imm9,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
                 "ldur {}, [{}, {}]",
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 signed_hex_i16(imm),
             ),
+            [RegisterWidth::W64],
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x010, -0x010, 4, -4]
@@ -4400,13 +4307,14 @@ mod tests {
     #[test]
     fn test_str_reg64_reg64_imm12() {
         disassembler_test!(
-            str_reg64_reg64_imm12,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+            str_reg_reg_imm12,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
                 "str {}, [{}, #0x{:x}]",
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 imm << 3
             ),
+            [RegisterWidth::W64],
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
@@ -4448,13 +4356,14 @@ mod tests {
     #[test]
     fn test_str_reg64_reg64_imm9() {
         disassembler_test!(
-            str_reg64_reg64_imm9,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+            str_reg_reg_imm9,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
                 "str {}, [{}, {}]!", // ! indicates writeback
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 signed_hex_i16(imm),
             ),
+            [RegisterWidth::W64],
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [4, -4]

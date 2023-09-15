@@ -35,10 +35,10 @@ const JUMP_PLACEHOLDER: i32 = 0x0011_1100;
 
 #[derive(Debug, Clone, Copy)]
 pub enum RegisterWidth {
-    W8,
-    W16,
-    W32,
-    W64,
+    W8 = 0b00,
+    W16 = 0b01,
+    W32 = 0b10,
+    W64 = 0b11,
 }
 
 impl RegisterWidth {
@@ -329,10 +329,25 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
-    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
+    fn mov_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
+
+    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W64, dst, offset)
+    }
+    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W32, dst, offset)
+    }
+    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W16, dst, offset)
+    }
+    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W8, dst, offset)
+    }
 
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
@@ -343,25 +358,46 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
 
     // move from memory (a pointer) to register
+    fn mov_reg_mem_offset32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+
     fn mov_reg64_mem64_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W64, dst, src, offset)
+    }
     fn mov_reg32_mem32_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W32, dst, src, offset)
+    }
     fn mov_reg16_mem16_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
-    fn mov_reg8_mem8_offset32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg, offset: i32);
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W16, dst, src, offset)
+    }
+    fn mov_reg8_mem8_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W8, dst, src, offset)
+    }
 
     fn mov_freg64_mem64_offset32(
         buf: &mut Vec<'_, u8>,
@@ -377,25 +413,46 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
 
     // move from register to memory
+    fn mov_mem_offset32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    );
+
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W64, dst, offset, src)
+    }
     fn mov_mem32_offset32_reg32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W32, dst, offset, src)
+    }
     fn mov_mem16_offset32_reg16(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
-    fn mov_mem8_offset32_reg8(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, src: GeneralReg);
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W16, dst, offset, src)
+    }
+    fn mov_mem8_offset32_reg8(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W8, dst, offset, src)
+    }
 
     fn movesd_mem64_offset32_freg64(
         buf: &mut Vec<'_, u8>,

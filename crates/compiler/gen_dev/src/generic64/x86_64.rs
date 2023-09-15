@@ -2257,20 +2257,20 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-        mov_reg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
-    }
-    #[inline(always)]
-    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-        mov_reg32_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
-    }
-    #[inline(always)]
-    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-        mov_reg16_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
-    }
-    #[inline(always)]
-    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
-        mov_reg8_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    fn mov_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        use RegisterWidth::*;
+
+        match register_width {
+            W8 => mov_reg8_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            W16 => mov_reg16_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            W32 => mov_reg32_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            W64 => mov_reg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+        }
     }
 
     #[inline(always)]
@@ -2311,78 +2311,35 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
-    fn mov_reg64_mem64_offset32(
+    fn mov_reg_mem_offset32(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: X86_64GeneralReg,
         src: X86_64GeneralReg,
         offset: i32,
     ) {
-        mov_reg64_base64_offset32(buf, dst, src, offset)
-    }
-    #[inline(always)]
-    fn mov_reg32_mem32_offset32(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src: X86_64GeneralReg,
-        offset: i32,
-    ) {
-        mov_reg32_base32_offset32(buf, dst, src, offset)
-    }
-    fn mov_reg16_mem16_offset32(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src: X86_64GeneralReg,
-        offset: i32,
-    ) {
-        mov_reg16_base16_offset32(buf, dst, src, offset)
-    }
-    fn mov_reg8_mem8_offset32(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        src: X86_64GeneralReg,
-        offset: i32,
-    ) {
-        mov_reg8_base8_offset32(buf, dst, src, offset)
+        match register_width {
+            RegisterWidth::W8 => mov_reg8_base8_offset32(buf, dst, src, offset),
+            RegisterWidth::W16 => mov_reg16_base16_offset32(buf, dst, src, offset),
+            RegisterWidth::W32 => mov_reg32_base32_offset32(buf, dst, src, offset),
+            RegisterWidth::W64 => mov_reg64_base64_offset32(buf, dst, src, offset),
+        }
     }
 
     #[inline(always)]
-    fn mov_mem64_offset32_reg64(
+    fn mov_mem_offset32_reg(
         buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
         dst: X86_64GeneralReg,
         offset: i32,
         src: X86_64GeneralReg,
     ) {
-        mov_base64_offset32_reg64(buf, dst, offset, src)
-    }
-
-    #[inline(always)]
-    fn mov_mem32_offset32_reg32(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        offset: i32,
-        src: X86_64GeneralReg,
-    ) {
-        mov_base32_offset32_reg32(buf, dst, offset, src)
-    }
-
-    #[inline(always)]
-    fn mov_mem16_offset32_reg16(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        offset: i32,
-        src: X86_64GeneralReg,
-    ) {
-        mov_base16_offset32_reg16(buf, dst, offset, src)
-    }
-
-    #[inline(always)]
-    fn mov_mem8_offset32_reg8(
-        buf: &mut Vec<'_, u8>,
-        dst: X86_64GeneralReg,
-        offset: i32,
-        src: X86_64GeneralReg,
-    ) {
-        mov_base8_offset32_reg8(buf, dst, offset, src)
+        match register_width {
+            RegisterWidth::W8 => mov_base8_offset32_reg8(buf, dst, offset, src),
+            RegisterWidth::W16 => mov_base16_offset32_reg16(buf, dst, offset, src),
+            RegisterWidth::W32 => mov_base32_offset32_reg32(buf, dst, offset, src),
+            RegisterWidth::W64 => mov_base64_offset32_reg64(buf, dst, offset, src),
+        }
     }
 
     #[inline(always)]
