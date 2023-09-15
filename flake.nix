@@ -27,7 +27,12 @@
         overlays = [ (import rust-overlay) ]
           ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
+
+        # When updating the zig or llvm version, make sure they stay in sync.
+        zigPkg = pkgs.zig_0_9;
         llvmPkgs = pkgs.llvmPackages_13;
+        llvmVersion = builtins.splitVersion llvmPkgs.release_version;
+        llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
 
         # get current working directory
         cwd = builtins.toString ./.;
@@ -77,11 +82,11 @@
             rev = "b981e0b74872d9896ba447dd6391dfeb63332b80";
             sha256 = "Gzey0SF0NZkpiObk5e29nbc41dn4Olv1dx+6YixaZH0=";
           };
-          buildInputs = with pkgs; [ cmake libxml2 llvmPackages_13.llvm.dev ];
+          buildInputs = with pkgs; [ cmake libxml2 llvmPkgs.llvm.dev ];
           buildPhase = ''
             mkdir build
             cd build
-            cmake -DLLVM_DIR=${pkgs.llvmPackages_13.llvm.dev} -DCMAKE_BUILD_TYPE=Release ../
+            cmake -DLLVM_DIR=${llvmPkgs.llvm.dev} -DCMAKE_BUILD_TYPE=Release ../
             cmake --build ../
             cp ../debugir .
           '';
@@ -97,7 +102,7 @@
           llvmPkgs.llvm.dev
           llvmPkgs.clang
           pkg-config
-          zig_0_9 # roc builtins are implemented in zig, see compiler/builtins/bitcode/
+          zigPkg # roc builtins are implemented in zig, see compiler/builtins/bitcode/
           # lib deps
           libffi
           libxml2
@@ -136,8 +141,6 @@
             else
               [ ]);
 
-          LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
-
           # nix does not store libs in /usr/lib or /lib
           # for libgcc_s.so.1
           NIX_LIBGCC_S_PATH =
@@ -154,6 +157,7 @@
             1; # to run the editor with NVIDIA's closed source drivers
           
           shellHook = ''
+            export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
             ${aliases}
           '';
         };
