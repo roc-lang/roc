@@ -1218,14 +1218,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, offset: i32) {
-        if offset < 0 {
-            todo!("load float with negative offset")
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_freg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
-        } else {
-            todo!("base offsets over 32k for AArch64");
-        }
+        Self::mov_freg64_mem64_offset32(buf, dst, AArch64GeneralReg::FP, offset)
     }
 
     #[inline(always)]
@@ -1370,7 +1363,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src: AArch64FloatReg,
     ) {
         if offset < 0 {
-            todo!("negative mem offsets for AArch64");
+            str_freg64_reg64_imm9(buf, src, dst, offset as i16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_freg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
@@ -1440,8 +1433,8 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        todo!("loading floating point reg from stack for AArch64");
+    fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, offset: i32) {
+        Self::mov_freg64_mem64_offset32(buf, dst, AArch64GeneralReg::ZRSP, offset)
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
@@ -1729,12 +1722,19 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn mov_freg64_mem64_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src: AArch64GeneralReg,
+        offset: i32,
     ) {
-        todo!()
+        if offset < 0 {
+            ldr_freg64_reg64_imm9(buf, dst, src, offset as i16)
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("base offsets over 32k for AArch64");
+        }
     }
 
     fn mov_freg32_mem32_offset32(
@@ -3049,6 +3049,33 @@ fn ldr_freg64_reg64_imm12(
     buf.extend(inst.bytes());
 }
 
+#[inline(always)]
+fn ldr_freg64_reg64_imm9(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b00.into(),
+        opc: 0b01.into(), // load
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 /// `LSL Xd, Xn, Xm` -> Logical shift Xn left by Xm and place the result into Xd.
 #[inline(always)]
 fn lsl_reg64_reg64_reg64(
@@ -3239,6 +3266,33 @@ fn str_reg64_reg64_imm12(
         rn: base,
         rt: src,
     });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn str_freg64_reg64_imm9(
+    buf: &mut Vec<'_, u8>,
+    src: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b00.into(),
+        opc: 0b00.into(), // store
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: src.id().into(),
+    };
 
     buf.extend(inst.bytes());
 }
@@ -4122,6 +4176,22 @@ mod tests {
     }
 
     #[test]
+    fn test_ldr_freg64_reg64_imm9() {
+        disassembler_test!(
+            ldr_freg64_reg64_imm9,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldr {}, [{}, {}]!",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm)
+            ),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [4, -4]
+        );
+    }
+
+    #[test]
     fn test_ldr_reg64_reg64_imm9() {
         disassembler_test!(
             ldur_reg64_reg64_imm9,
@@ -4352,6 +4422,22 @@ mod tests {
             ALL_FLOAT_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_str_freg64_reg64_imm9() {
+        disassembler_test!(
+            str_freg64_reg64_imm9,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, {}]!",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm),
+            ),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [4, -4]
         );
     }
 
