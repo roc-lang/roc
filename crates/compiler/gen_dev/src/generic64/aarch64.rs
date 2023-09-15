@@ -919,7 +919,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String) {
-        let inst = 0b1001_0100_0000_0000_0000_0000_0000u32;
+        let inst = 0b1001_0100_0000_0000_0000_0000_0000_0000u32;
         buf.extend(inst.to_le_bytes());
         relocs.push(Relocation::LinkedFunction {
             offset: buf.len() as u64 - 4,
