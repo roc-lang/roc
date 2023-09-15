@@ -1187,11 +1187,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         dst: AArch64GeneralReg,
         src: AArch64GeneralReg,
     ) {
-        match register_width {
-            RegisterWidth::W8 => todo!(),
-            RegisterWidth::W16 => todo!(),
-            RegisterWidth::W32 => todo!(),
-            RegisterWidth::W64 => mov_reg64_reg64(buf, dst, src),
+        if dst != src {
+            // TODO can we be more fine-grained here? there is a 32-bit version of this instruction
+            // but that does not really help for W8 and W16
+            match register_width {
+                RegisterWidth::W8 => mov_reg64_reg64(buf, dst, src),
+                RegisterWidth::W16 => mov_reg64_reg64(buf, dst, src),
+                RegisterWidth::W32 => mov_reg64_reg64(buf, dst, src),
+                RegisterWidth::W64 => mov_reg64_reg64(buf, dst, src),
+            }
         }
     }
 
