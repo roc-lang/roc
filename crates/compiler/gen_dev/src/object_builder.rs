@@ -295,14 +295,14 @@ fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> 
         roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
     };
 
-    write::Relocation {
+    dbg!(write::Relocation {
         offset,
         size,
         kind: RelocationKind::PltRelative,
         encoding,
         symbol,
         addend: -4,
-    }
+    })
 }
 
 fn build_object<'a, B: Backend<'a>>(
