@@ -4535,12 +4535,12 @@ mod test_reporting {
         @r###"
     ── TAB CHARACTER ──────────────────────────────── tmp/record_type_tab/Test.roc ─
 
-    I encountered a tab character
+    I encountered a tab character:
 
     4│      f : { foo 	 }
                       ^
 
-    Tab characters are not allowed.
+    Tab characters are not allowed, use spaces instead.
     "###
     );
 
@@ -4550,12 +4550,12 @@ mod test_reporting {
         @r###"
     ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
 
-    I encountered a tab character
+    I encountered a tab character:
 
     4│      # comment with a 	
                              ^
 
-    Tab characters are not allowed.
+    Tab characters are not allowed, use spaces instead.
     "###
     );
 
@@ -4565,7 +4565,7 @@ mod test_reporting {
         @r###"
     ── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
 
-    I encountered an ASCII control character
+    I encountered an ASCII control character:
 
     4│      # comment with a 
                              ^
@@ -4580,7 +4580,7 @@ mod test_reporting {
         @r###"
     ── MISPLACED CARRIAGE RETURN ──────── tmp/record_type_carriage_return/Test.roc ─
 
-    I encountered a carriage return (\r)
+    I encountered a stray carriage return (\r):
 
     4│      f : {  foo }
                   ^

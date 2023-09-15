@@ -3858,9 +3858,9 @@ fn to_space_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow("I encountered a tab character"),
+                alloc.reflow("I encountered a tab character:"),
                 alloc.region(region),
-                alloc.reflow("Tab characters are not allowed."),
+                alloc.reflow("Tab characters are not allowed, use spaces instead."),
             ]);
 
             Report {
@@ -3875,7 +3875,7 @@ fn to_space_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow("I encountered an ASCII control character"),
+                alloc.reflow("I encountered an ASCII control character:"),
                 alloc.region(region),
                 alloc.reflow("ASCII control characters are not allowed."),
             ]);
@@ -3892,7 +3892,7 @@ fn to_space_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I encountered a carriage return (\r)"),
+                alloc.reflow(r"I encountered a stray carriage return (\r):"),
                 alloc.region(region),
                 alloc.reflow(r"A carriage return (\r) has to be followed by a newline (\n)."),
             ]);
