@@ -2423,6 +2423,16 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_mem64_offset32_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64FloatReg,
+    ) {
+        movsd_base64_offset32_freg64(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RSP, offset)
     }

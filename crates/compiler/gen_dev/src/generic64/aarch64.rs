@@ -1252,12 +1252,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!()
     }
     #[inline(always)]
-    fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        todo!("saving floating point reg to base offset for AArch64");
+    fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
+        Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::FP, offset, src)
     }
     #[inline(always)]
-    fn mov_base32_freg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        todo!("saving floating point reg to base offset for AArch64");
+    fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
+        Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::FP, offset, src)
     }
     #[inline(always)]
     fn movesd_mem64_offset32_freg64(
@@ -1363,6 +1363,23 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_mem64_offset32_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64GeneralReg,
+        offset: i32,
+        src: AArch64FloatReg,
+    ) {
+        if offset < 0 {
+            todo!("negative mem offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_freg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+        } else {
+            todo!("mem offsets over 32k for AArch64");
+        }
+    }
+
+    #[inline(always)]
     fn mov_mem32_offset32_reg32(
         _buf: &mut Vec<'_, u8>,
         _dst: AArch64GeneralReg,
@@ -1439,15 +1456,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
-        if offset < 0 {
-            todo!("negative stack offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            str_freg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-        } else {
-            todo!("stack offsets over 32k for AArch64");
-        }
+        Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::ZRSP, offset, src)
     }
+
     #[inline(always)]
     fn mov_stack32_reg(
         buf: &mut Vec<'_, u8>,
