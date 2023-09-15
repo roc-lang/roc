@@ -216,7 +216,7 @@ pub fn helper(
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     // TODO make this an environment variable
-    if true {
+    if false {
         let file_path = std::env::temp_dir().join("app.o");
         println!("gen-test object file written to {}", file_path.display());
         std::fs::copy(&app_o_file, file_path).unwrap();
@@ -364,6 +364,8 @@ macro_rules! assert_evals_to {
         let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
+        // NOTE: on aarch64 our infrastructure for roc_panic does not work yet. Therefore we call
+        // just the main roc function which does not do anything to catch/report panics.
         let result = if cfg!(target_arch = "aarch64") {
             let typ = std::any::type_name::<$ty>();
             println!("calling the `{_main_fn_name}: {typ}` function");
