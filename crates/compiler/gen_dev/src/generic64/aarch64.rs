@@ -1,7 +1,7 @@
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::{
     pointer_layouts, single_register_floats, single_register_int_builtins,
-    single_register_integers, Relocation,
+    single_register_integers, single_register_layouts, Relocation,
 };
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
@@ -496,20 +496,44 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     fn load_returned_complex_symbol<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _sym: &Symbol,
-        _layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: &Symbol,
+        layout: &InLayout<'a>,
     ) {
-        todo!("Loading returned complex symbols for AArch64");
+        match layout_interner.get_repr(*layout) {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            _ if layout_interner.stack_size(*layout) == 0 => {
+                storage_manager.no_data(sym);
+            }
+            _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
+                let size = layout_interner.stack_size(*layout);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, *sym, *layout);
+                if size <= 8 {
+                    AArch64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                } else if size <= 16 {
+                    AArch64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                    AArch64Assembler::mov_base32_reg64(
+                        buf,
+                        offset + 8,
+                        Self::GENERAL_RETURN_REGS[1],
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
+            _ => {
+                // This should have been recieved via an arg pointer.
+                // That means the value is already loaded onto the stack area we allocated before the call.
+                // Nothing to do.
+            }
+        }
     }
 
     fn setjmp(_buf: &mut Vec<'_, u8>) {
