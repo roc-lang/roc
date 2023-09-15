@@ -1154,6 +1154,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             build_int_binop(
                 env,
+                layout_interner,
                 parent,
                 int_width,
                 lhs_arg.into_int_value(),
@@ -1183,6 +1184,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             build_int_binop(
                 env,
+                layout_interner,
                 parent,
                 int_width,
                 lhs_arg.into_int_value(),
@@ -1429,6 +1431,7 @@ fn intwidth_from_layout(layout: InLayout) -> IntWidth {
 
 fn build_int_binop<'ctx>(
     env: &Env<'_, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'_>,
     parent: FunctionValue<'ctx>,
     int_width: IntWidth,
     lhs: IntValue<'ctx>,
@@ -1452,10 +1455,23 @@ fn build_int_binop<'ctx>(
             throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
-        NumAddChecked => env.call_intrinsic(
-            &LLVM_ADD_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumAddChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_ADD_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_add_with_overflow",
+            )
+        }
         NumAddSaturated => {
             env.call_intrinsic(&LLVM_ADD_SATURATED[int_width], &[lhs.into(), rhs.into()])
         }
@@ -1470,10 +1486,23 @@ fn build_int_binop<'ctx>(
             throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
-        NumSubChecked => env.call_intrinsic(
-            &LLVM_SUB_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumSubChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_SUB_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_sub_with_overflow",
+            )
+        }
         NumSubSaturated => {
             env.call_intrinsic(&LLVM_SUB_SATURATED[int_width], &[lhs.into(), rhs.into()])
         }
@@ -1493,10 +1522,23 @@ fn build_int_binop<'ctx>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_MUL_SATURATED_INT[int_width],
         ),
-        NumMulChecked => env.call_intrinsic(
-            &LLVM_MUL_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumMulChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_MUL_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_mul_with_overflow",
+            )
+        }
         NumGt => {
             if int_width.is_signed() {
                 bd.build_int_compare(SGT, lhs, rhs, "gt_int").into()
@@ -1671,6 +1713,7 @@ pub fn build_num_binop<'a, 'ctx>(
             match lhs_builtin {
                 Int(int_width) => build_int_binop(
                     env,
+                    layout_interner,
                     parent,
                     int_width,
                     lhs_arg.into_int_value(),
@@ -2088,10 +2131,10 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
 /// Zig returns a nominal `WithOverflow(Dec)` struct (see [zig_with_overflow_roc_dec]),
 /// but the Roc side may flatten the overflow struct. LLVM does not admit comparisons
 /// between the two representations, so always cast to the Roc representation.
-fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
+fn change_with_overflow_to_roc_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    val: StructValue<'ctx>,
+    val: impl BasicValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let return_type = convert::basic_type_from_layout(
@@ -2099,7 +2142,8 @@ fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
         layout_interner,
         layout_interner.get_repr(return_layout),
     );
-    let casted = cast_basic_basic(env.builder, val.into(), return_type);
+    let casted = cast_basic_basic(env.builder, val.as_basic_value_enum(), return_type);
+
     use_roc_value(
         env,
         layout_interner,
@@ -2123,15 +2167,15 @@ fn build_dec_binop<'a, 'ctx>(
     match op {
         NumAddChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumSubChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumMulChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_MUL_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumAdd => build_dec_binop_throw_on_overflow(
             env,

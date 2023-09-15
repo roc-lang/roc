@@ -73,10 +73,7 @@ impl TargetInfo {
         // This is a reasonable default for most architectures. We want to pass large values by
         // reference because it's more efficient than copying them around on the stack, and puts
         // less pressure on CPU registers.
-
-        // TODO: change this back to `self.ptr_size() * 4`. We make some assumptions about how
-        // return valus are passed somewhere that make that not quite work for the llvm wasm backend.
-        8 * 4
+        self.ptr_size() * 4
     }
 
     pub const fn ptr_alignment_bytes(&self) -> usize {

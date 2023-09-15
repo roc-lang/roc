@@ -3996,6 +3996,23 @@ fn mul_checked_u128() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn add_checked_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result U128 [ Overflow ]
+            x = Num.addChecked 5u128 2u128
+
+            x
+            "#
+        ),
+        RocResult::ok(5u128 + 2u128),
+        RocResult<u128, ()>
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn num_min() {
     assert_evals_to!(r#"Num.min 0 0"#, 0, i64);
