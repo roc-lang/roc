@@ -479,20 +479,54 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     fn return_complex_symbol<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _sym: &Symbol,
-        _layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: &Symbol,
+        layout: &InLayout<'a>,
     ) {
-        todo!("Returning complex symbols for AArch64");
+        match layout_interner.get_repr(*layout) {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            _ if layout_interner.stack_size(*layout) == 0 => {}
+            _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
+                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                if size <= 8 {
+                    AArch64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                } else if size <= 16 {
+                    AArch64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                    AArch64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[1],
+                        base_offset + 8,
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
+            _ => {
+                // This is a large type returned via the arg pointer.
+                storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
+                // Also set the return reg to the arg pointer.
+                storage_manager.load_to_specified_general_reg(
+                    buf,
+                    &Symbol::RET_POINTER,
+                    Self::GENERAL_RETURN_REGS[0],
+                );
+            }
+        }
     }
 
     fn load_returned_complex_symbol<'a>(
