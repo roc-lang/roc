@@ -1,5 +1,5 @@
 //! Provides Rust representations of Roc data structures.
-#![cfg_attr(not(feature = "std"), no_std)]
+// #![cfg_attr(not(feature = "std"), no_std)]
 #![crate_type = "lib"]
 
 use arrayvec::ArrayString;
@@ -227,9 +227,18 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
+
+impl Debug for RocDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RocDec")
+            .field(&self.0)
+            .field(&self.to_str())
+            .finish()
+    }
+}
 
 impl RocDec {
     pub const MIN: Self = Self(i128::MIN.to_ne_bytes());

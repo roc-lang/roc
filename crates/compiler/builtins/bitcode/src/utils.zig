@@ -221,13 +221,14 @@ pub fn decrefDataPtrC(
 ) callconv(.C) void {
     var bytes = bytes_or_null orelse return;
 
-    const ptr = @ptrToInt(bytes);
+    const data_ptr = @ptrToInt(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const unmasked_ptr = data_ptr & ~tag_mask;
 
-    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+    const isizes: [*]isize = @intToPtr([*]isize, unmasked_ptr);
+    const rc_ptr = isizes - 1;
 
-    return decrefRcPtrC(isizes - 1, alignment);
+    return decrefRcPtrC(rc_ptr, alignment);
 }
 
 pub fn increfDataPtrC(
@@ -292,10 +293,6 @@ inline fn free_ptr_to_refcount(
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
     const allocation_ptr = @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize));
 
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("💀 free {*}\n", .{allocation_ptr});
-    }
-
     // NOTE: we don't even check whether the refcount is "infinity" here!
     dealloc(allocation_ptr, alignment);
 
@@ -359,7 +356,7 @@ pub fn isUnique(
     const refcount = (isizes - 1)[0];
 
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("| is unique {*}\n", .{isizes});
+        std.debug.print("| is unique {*}\n", .{isizes - 1});
     }
 
     return refcount == REFCOUNT_ONE_ISIZE;
@@ -428,14 +425,10 @@ pub fn allocateWithRefcount(
     const alignment = std.math.max(ptr_width, element_alignment);
     const length = alignment + data_bytes;
 
-    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ before allocate {} {} {} \n", .{ data_bytes, element_alignment, length });
-    }
-
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
 
     if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("+ allocated {*}\n", .{new_bytes});
+        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
     }
 
     const data_ptr = new_bytes + alignment;

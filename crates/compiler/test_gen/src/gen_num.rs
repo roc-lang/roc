@@ -1823,7 +1823,7 @@ fn int_add_checked_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_add_wrap() {
     assert_evals_to!(
         "Num.addWrap 9_223_372_036_854_775_807 1",
@@ -1846,7 +1846,7 @@ fn float_add_checked_pass() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_fail() {
     assert_evals_to!(
-        "Num.addChecked 1.7976931348623157e308 1.7976931348623157e308",
+        "Num.addChecked 1.7976931348623157e308f64 1.7976931348623157e308",
         RocResult::err(()),
         RocResult<f64, ()>
     );
@@ -2018,7 +2018,7 @@ fn int_mul_wrap_i128() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
@@ -3369,7 +3369,7 @@ fn sub_saturated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mul_saturated() {
     assert_evals_to!(
         indoc!(
@@ -3937,7 +3937,7 @@ fn bool_in_switch() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn add_checked_dec() {
     assert_evals_to!(
         indoc!(
@@ -3951,7 +3951,7 @@ fn add_checked_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn sub_checked_dec() {
     assert_evals_to!(
         indoc!(
@@ -3965,16 +3965,67 @@ fn sub_checked_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn mul_checked_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-            Num.mulChecked 5.0dec 2.0dec == Ok 10.0dec
+            Num.mulChecked 5.0dec 2.0dec
             "#
         ),
-        true,
-        bool
+        RocResult::ok(RocDec::from_str("10.0").unwrap()),
+        RocResult<RocDec, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn mul_checked_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result U128 [ Overflow ]
+            x = Num.mulChecked 5u128 2u128
+
+            x
+            "#
+        ),
+        RocResult::ok(5u128 * 2u128),
+        RocResult<u128, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn sub_checked_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result U128 [ Overflow ]
+            x = Num.subChecked 5u128 2u128
+
+            x
+            "#
+        ),
+        RocResult::ok(5u128 - 2u128),
+        RocResult<u128, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn add_checked_u128() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result U128 [ Overflow ]
+            x = Num.addChecked 5u128 2u128
+
+            x
+            "#
+        ),
+        RocResult::ok(5u128 + 2u128),
+        RocResult<u128, ()>
     );
 }
 

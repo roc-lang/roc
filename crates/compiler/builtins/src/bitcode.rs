@@ -128,7 +128,13 @@ impl IntWidth {
             U128 | I128 => {
                 // the C ABI defines 128-bit integers to always be 16B aligned,
                 // according to https://reviews.llvm.org/D28990#655487
-                16
+                //
+                // however, rust does not always think that this is true
+                match target_info.architecture {
+                    Architecture::X86_64 => 16,
+                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
+                    Architecture::X86_32 => 8,
+                }
             }
         }
     }

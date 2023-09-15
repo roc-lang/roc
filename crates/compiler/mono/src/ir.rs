@@ -2190,6 +2190,16 @@ impl<'a> Expr<'a> {
             arguments: std::slice::from_ref(symbol),
         })
     }
+
+    pub(crate) fn ptr_store(arguments: &'a [Symbol]) -> Expr<'a> {
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrStore,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments,
+        })
+    }
 }
 
 impl<'a> Stmt<'a> {

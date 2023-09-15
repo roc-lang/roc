@@ -2061,7 +2061,7 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
                     _ -> (\a -> a)
 
 
-            main = ((fn "*") 3) * ((fn "+") 5)
+            main = ((fn "*") 3i64) * ((fn "+") 5)
             "#
         ),
         90,

@@ -2534,6 +2534,21 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub const fn from_int_width(int_width: IntWidth) -> InLayout<'static> {
+        match int_width {
+            IntWidth::U8 => Layout::U8,
+            IntWidth::U16 => Layout::U16,
+            IntWidth::U32 => Layout::U32,
+            IntWidth::U64 => Layout::U64,
+            IntWidth::U128 => Layout::U128,
+            IntWidth::I8 => Layout::I8,
+            IntWidth::I16 => Layout::I16,
+            IntWidth::I32 => Layout::I32,
+            IntWidth::I64 => Layout::I64,
+            IntWidth::I128 => Layout::I128,
+        }
+    }
+
     fn layout_from_ranged_number(
         env: &mut Env<'a, '_>,
         range: NumericRange,

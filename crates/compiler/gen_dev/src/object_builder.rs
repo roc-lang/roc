@@ -51,7 +51,7 @@ pub fn build_module<'a, 'r>(
                 b".note.GNU-stack".to_vec(),
                 SectionKind::Elf(object::elf::SHT_PROGBITS),
             );
-            build_object(env.mode, procedures, backend, object)
+            build_object(procedures, backend, object)
         }
         Triple {
             architecture: TargetArch::X86_64,
@@ -65,7 +65,6 @@ pub fn build_module<'a, 'r>(
                 x86_64::X86_64SystemV,
             >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(
@@ -87,7 +86,6 @@ pub fn build_module<'a, 'r>(
                 x86_64::X86_64WindowsFastcall,
             >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
@@ -106,7 +104,6 @@ pub fn build_module<'a, 'r>(
                     aarch64::AArch64Call,
                 >(env, TargetInfo::default_aarch64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
@@ -125,7 +122,6 @@ pub fn build_module<'a, 'r>(
                     aarch64::AArch64Call,
                 >(env, TargetInfo::default_aarch64(), interns, layout_interner);
             build_object(
-                env.mode,
                 procedures,
                 backend,
                 Object::new(
@@ -298,7 +294,6 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn build_object<'a, B: Backend<'a>>(
-    mode: AssemblyBackendMode,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
     mut backend: B,
     mut output: Object<'a>,
@@ -384,43 +379,77 @@ fn build_object<'a, B: Backend<'a>>(
             let exposed_proc = build_exposed_proc(&mut backend, &proc);
             let exposed_generic_proc = build_exposed_generic_proc(&mut backend, &proc);
 
+            let mode = backend.env().mode;
+
             let (module_id, layout_interner, interns, code_gen_help, _) =
                 backend.module_interns_helpers_mut();
 
             let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-            let test_helper = roc_mono::code_gen_help::test_helper(
-                code_gen_help,
-                ident_ids,
-                layout_interner,
-                &proc,
-            );
+            match mode {
+                AssemblyBackendMode::Test => {
+                    let test_helper = roc_mono::code_gen_help::test_helper(
+                        code_gen_help,
+                        ident_ids,
+                        layout_interner,
+                        &proc,
+                    );
 
-            #[cfg(debug_assertions)]
-            {
-                let module_id = exposed_generic_proc.name.name().module_id();
-                let ident_ids = backend
-                    .interns_mut()
-                    .all_ident_ids
-                    .get_mut(&module_id)
-                    .unwrap();
-                module_id.register_debug_idents(ident_ids);
-            }
+                    #[cfg(debug_assertions)]
+                    {
+                        let module_id = exposed_generic_proc.name.name().module_id();
+                        let ident_ids = backend
+                            .interns_mut()
+                            .all_ident_ids
+                            .get_mut(&module_id)
+                            .unwrap();
+                        module_id.register_debug_idents(ident_ids);
+                    }
 
-            if let AssemblyBackendMode::Test = mode {
-                if false {
-                    println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+                    // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+
+                    build_proc_symbol(
+                        &mut output,
+                        &mut layout_ids,
+                        &mut procs,
+                        &mut backend,
+                        layout,
+                        test_helper,
+                        Exposed::TestMain,
+                    );
                 }
+                AssemblyBackendMode::Repl => {
+                    let repl_helper = roc_mono::code_gen_help::repl_helper(
+                        code_gen_help,
+                        ident_ids,
+                        layout_interner,
+                        &proc,
+                    );
 
-                build_proc_symbol(
-                    &mut output,
-                    &mut layout_ids,
-                    &mut procs,
-                    &mut backend,
-                    layout,
-                    test_helper,
-                    Exposed::TestMain,
-                );
+                    #[cfg(debug_assertions)]
+                    {
+                        let module_id = exposed_generic_proc.name.name().module_id();
+                        let ident_ids = backend
+                            .interns_mut()
+                            .all_ident_ids
+                            .get_mut(&module_id)
+                            .unwrap();
+                        module_id.register_debug_idents(ident_ids);
+                    }
+
+                    // println!("{}", repl_helper.to_pretty(backend.interner(), 200, true));
+
+                    build_proc_symbol(
+                        &mut output,
+                        &mut layout_ids,
+                        &mut procs,
+                        &mut backend,
+                        layout,
+                        repl_helper,
+                        Exposed::TestMain,
+                    );
+                }
+                AssemblyBackendMode::Binary => { /* do nothing */ }
             }
 
             build_proc_symbol(

@@ -753,6 +753,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, mem, union_layout, addr);
 
+
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
                 env,

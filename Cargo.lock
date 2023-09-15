@@ -2813,10 +2813,12 @@ dependencies = [
  "const_format",
  "inkwell",
  "libloading",
+ "roc_bitcode",
  "roc_build",
  "roc_builtins",
  "roc_collections",
  "roc_error_macros",
+ "roc_gen_dev",
  "roc_gen_llvm",
  "roc_load",
  "roc_mono",
@@ -2831,6 +2833,7 @@ dependencies = [
  "rustyline",
  "rustyline-derive",
  "target-lexicon",
+ "tempfile",
  "unicode-segmentation",
 ]
 

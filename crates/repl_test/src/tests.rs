@@ -425,9 +425,19 @@ fn list_contains() {
 
 #[cfg(not(feature = "wasm"))]
 #[test]
-fn list_sum() {
+fn list_sum_empty() {
     expect_success("List.sum []", "0 : Num a");
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn list_sum_num() {
     expect_success("List.sum [1, 2, 3]", "6 : Num *");
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn list_sum_frac() {
     expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Frac *");
 }
 
@@ -677,16 +687,28 @@ fn type_problem() {
 }
 
 #[test]
-fn issue_2149() {
+fn issue_2149_i8_ok() {
     expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
+}
+
+#[test]
+fn issue_2149_i8_err() {
     expect_success(
         r#"Str.toI8 "128""#,
         "Err InvalidNumStr : Result I8 [InvalidNumStr]",
     );
+}
+
+#[test]
+fn issue_2149_i16_ok() {
     expect_success(
         r#"Str.toI16 "32767""#,
         "Ok 32767 : Result I16 [InvalidNumStr]",
     );
+}
+
+#[test]
+fn issue_2149_i16_err() {
     expect_success(
         r#"Str.toI16 "32768""#,
         "Err InvalidNumStr : Result I16 [InvalidNumStr]",
