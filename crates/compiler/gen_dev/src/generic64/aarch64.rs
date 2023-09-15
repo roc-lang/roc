@@ -1222,7 +1222,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             todo!("load float with negative offset")
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_freg64_freg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            ldr_freg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
@@ -1438,8 +1438,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
-    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        todo!("saving floating point reg to stack for AArch64");
+    fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
+        if offset < 0 {
+            todo!("negative stack offsets for AArch64");
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            str_freg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
+        } else {
+            todo!("stack offsets over 32k for AArch64");
+        }
     }
     #[inline(always)]
     fn mov_stack32_reg(
@@ -3011,7 +3018,7 @@ fn ldur_reg64_reg64_imm9(
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn ldr_freg64_freg64_imm12(
+fn ldr_freg64_reg64_imm12(
     buf: &mut Vec<'_, u8>,
     dst: AArch64FloatReg,
     base: AArch64GeneralReg,
@@ -3221,6 +3228,27 @@ fn str_reg64_reg64_imm12(
         rn: base,
         rt: src,
     });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn str_freg64_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    src: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm12: u16,
+) {
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b01.into(),
+        opc: 0b00.into(), // store
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: src.id().into(),
+    };
 
     buf.extend(inst.bytes());
 }
@@ -4067,9 +4095,9 @@ mod tests {
     }
 
     #[test]
-    fn test_ldr_freg64_freg64_imm12() {
+    fn test_ldr_freg64_reg64_imm12() {
         disassembler_test!(
-            ldr_freg64_freg64_imm12,
+            ldr_freg64_reg64_imm12,
             |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
                 "ldr {}, [{}, #0x{:x}]",
                 reg1.capstone_string(FloatWidth::F64),
@@ -4295,6 +4323,22 @@ mod tests {
                 imm << 3
             ),
             ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_str_freg64_reg64_imm12() {
+        disassembler_test!(
+            str_freg64_reg64_imm12,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, #0x{:x}]",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_FLOAT_REGS,
             ALL_GENERAL_REGS,
             [0x123]
         );
