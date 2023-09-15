@@ -275,17 +275,17 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
-        let encoding = match backend.target_info().architecture {
+        let (encoding, size) = match backend.target_info().architecture {
             roc_target::Architecture::Aarch32 => todo!(),
-            roc_target::Architecture::Aarch64 => RelocationEncoding::AArch64Call,
+            roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
             roc_target::Architecture::Wasm32 => todo!(),
             roc_target::Architecture::X86_32 => todo!(),
-            roc_target::Architecture::X86_64 => RelocationEncoding::X86Branch,
+            roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
         };
 
         let reloc = write::Relocation {
             offset: offset + proc_offset,
-            size: 32,
+            size,
             kind: RelocationKind::PltRelative,
             encoding,
             symbol: sym_id,
@@ -891,17 +891,17 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    let encoding = match target_info.architecture {
+                    let (encoding, size) = match target_info.architecture {
                         roc_target::Architecture::Aarch32 => todo!(),
-                        roc_target::Architecture::Aarch64 => RelocationEncoding::AArch64Call,
+                        roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
                         roc_target::Architecture::Wasm32 => todo!(),
                         roc_target::Architecture::X86_32 => todo!(),
-                        roc_target::Architecture::X86_64 => RelocationEncoding::X86Branch,
+                        roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
                     };
 
                     write::Relocation {
                         offset: offset + proc_offset,
-                        size: 32,
+                        size,
                         kind: RelocationKind::PltRelative,
                         encoding,
                         symbol: sym_id,

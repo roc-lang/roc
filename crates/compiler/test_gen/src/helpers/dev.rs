@@ -299,17 +299,28 @@ impl<T> RocCallResult<T> {
     }
 }
 
+fn get_raw_fn<'a, T>(
+    fn_name: &str,
+    lib: &'a libloading::Library,
+) -> libloading::Symbol<'a, unsafe extern "C" fn() -> T> {
+    unsafe {
+        lib.get(fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{fn_name}`"))
+            .expect("errored")
+    }
+}
+
 fn get_test_main_fn<T>(
     lib: &libloading::Library,
 ) -> libloading::Symbol<unsafe extern "C" fn() -> RocCallResult<T>> {
-    let main_fn_name = "test_main";
+    get_raw_fn("test_main", lib)
+}
 
-    unsafe {
-        lib.get(main_fn_name.as_bytes())
-            .ok()
-            .ok_or(format!("Unable to JIT compile `{main_fn_name}`"))
-            .expect("errored")
-    }
+pub(crate) fn run_function<T>(fn_name: &str, lib: &libloading::Library) -> T {
+    let main = get_raw_fn::<T>(fn_name, lib);
+
+    unsafe { main() }
 }
 
 pub(crate) fn run_test_main<T>(lib: &libloading::Library) -> Result<T, (String, CrashTag)> {
@@ -353,7 +364,13 @@ macro_rules! assert_evals_to {
         let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
-        let result = $crate::helpers::dev::run_test_main::<$ty>(&lib);
+        // cfg!(target_arch = "aarch64") {
+        let result = if false {
+            let result = $crate::helpers::dev::run_function::<$ty>(&_main_fn_name, &lib);
+            Ok(result)
+        } else {
+            $crate::helpers::dev::run_test_main::<$ty>(&lib)
+        };
 
         if !errors.is_empty() {
             dbg!(&errors);
