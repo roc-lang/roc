@@ -1272,21 +1272,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
-        Self::mov_mem64_offset32_reg64(buf, AArch64GeneralReg::FP, offset, src)
-    }
-
-    #[inline(always)]
-    fn mov_base32_reg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_base32_reg16(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_base32_reg8(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
-        todo!()
+    fn mov_base32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        Self::mov_mem_offset32_reg(buf, register_width, AArch64GeneralReg::FP, offset, src)
     }
 
     fn mov_mem_offset32_reg(
