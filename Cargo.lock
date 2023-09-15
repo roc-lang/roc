@@ -2785,6 +2785,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_region",
+ "tempfile",
 ]
 
 [[package]]
