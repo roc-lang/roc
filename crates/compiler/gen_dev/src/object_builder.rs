@@ -275,11 +275,19 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
+        let encoding = match backend.target_info().architecture {
+            roc_target::Architecture::Aarch32 => todo!(),
+            roc_target::Architecture::Aarch64 => RelocationEncoding::AArch64Call,
+            roc_target::Architecture::Wasm32 => todo!(),
+            roc_target::Architecture::X86_32 => todo!(),
+            roc_target::Architecture::X86_64 => RelocationEncoding::X86Branch,
+        };
+
         let reloc = write::Relocation {
             offset: offset + proc_offset,
             size: 32,
             kind: RelocationKind::PltRelative,
-            encoding: RelocationEncoding::X86Branch,
+            encoding,
             symbol: sym_id,
             addend: -4,
         };
