@@ -1171,12 +1171,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn movzx_reg_reg(
-        _buf: &mut Vec<'_, u8>,
-        _input_width: RegisterWidth,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
     ) {
-        todo!("move with zero extension");
+        // moving with zero extension is the default in arm
+        Self::mov_reg_reg(buf, input_width, dst, src)
     }
 
     #[inline(always)]
