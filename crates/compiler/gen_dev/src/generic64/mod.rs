@@ -1264,7 +1264,7 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        use Builtin::Int;
+        use Builtin::{Float, Int};
 
         let buf = &mut self.buf;
 
@@ -1303,11 +1303,32 @@ impl<
             )) => {
                 todo!("addChecked for unsigned integers")
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                todo!("addChecked for f64")
+            LayoutRepr::Builtin(Int(int_width @ (IntWidth::U128 | IntWidth::I128))) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::NUM_ADD_CHECKED_INT[int_width].to_string(),
+                    &[*src1, *src2],
+                    &[*num_layout, *num_layout],
+                    return_layout,
+                );
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                todo!("addChecked for f32")
+            LayoutRepr::Builtin(Float(float_width @ (FloatWidth::F64 | FloatWidth::F32))) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::NUM_ADD_CHECKED_FLOAT[float_width].to_string(),
+                    &[*src1, *src2],
+                    &[*num_layout, *num_layout],
+                    return_layout,
+                );
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_ADD_WITH_OVERFLOW.to_string(),
+                    &[*src1, *src2],
+                    &[*num_layout, *num_layout],
+                    return_layout,
+                );
             }
             x => todo!("NumAdd: layout, {:?}", x),
         }
