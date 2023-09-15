@@ -1217,9 +1217,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        todo!("loading floating point reg from base offset for AArch64");
+    fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, offset: i32) {
+        if offset < 0 {
+            todo!("load float with negative offset")
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_freg64_freg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+        } else {
+            todo!("base offsets over 32k for AArch64");
+        }
     }
+
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
         if offset < 0 {
@@ -3000,6 +3008,29 @@ fn ldur_reg64_reg64_imm9(
     buf.extend(inst.bytes());
 }
 
+/// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
+/// Note: imm12 is the offest divided by 8.
+#[inline(always)]
+fn ldr_freg64_freg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm12: u16,
+) {
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b01.into(),
+        opc: 0b01.into(), // load
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 /// `LSL Xd, Xn, Xm` -> Logical shift Xn left by Xm and place the result into Xd.
 #[inline(always)]
 fn lsl_reg64_reg64_reg64(
@@ -4030,6 +4061,22 @@ mod tests {
                 imm << 3
             ),
             ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_ldr_freg64_freg64_imm12() {
+        disassembler_test!(
+            ldr_freg64_freg64_imm12,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldr {}, [{}, #0x{:x}]",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_FLOAT_REGS,
             ALL_GENERAL_REGS,
             [0x123]
         );
