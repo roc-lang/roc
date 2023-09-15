@@ -880,7 +880,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            todo!("immediate addition with values less than 0");
+            // add immediates must be signed, so we have to use a register here
+            Self::mov_reg64_imm64(buf, dst, imm32 as i64);
+            add_reg64_reg64_reg64(buf, dst, src, dst);
         } else if imm32 < 0xFFF {
             add_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
@@ -2733,10 +2735,10 @@ fn add_reg64_reg64_imm12(
     let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
         op: false,
         s: false,
+        sh: false,
+        imm12,
         rd: dst,
         rn: src,
-        imm12,
-        sh: false,
     });
 
     buf.extend(inst.bytes());
