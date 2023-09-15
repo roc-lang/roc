@@ -675,7 +675,15 @@ impl<'a> RocDocAllocator<'a> {
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
 
-            let line: &str = self.src_lines.get(i as usize).unwrap_or(&"");
+            // filter out any escape characters for the current line that could mess up the output.
+            let line: String = self
+                .src_lines
+                .get(i as usize)
+                .unwrap_or(&"")
+                .chars()
+                .filter(|&c| !c.is_ascii_control() || c == '\t')
+                .collect::<String>();
+
             let is_line_empty = line.trim().is_empty();
             let rest_of_line = if !is_line_empty {
                 self.text(line)

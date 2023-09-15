@@ -4535,32 +4535,58 @@ mod test_reporting {
         @r###"
     ── TAB CHARACTER ──────────────────────────────── tmp/record_type_tab/Test.roc ─
 
-    I encountered a tab character
+    I encountered a tab character:
 
     4│      f : { foo 	 }
                       ^
 
-    Tab characters are not allowed.
+    Tab characters are not allowed, use spaces instead.
     "###
     );
 
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        |golden| pretty_assertions::assert_eq!(
-            golden,
-            &format!(
-                r###"── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+        @r###"
+    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
 
-I encountered a tab character
+    I encountered a tab character:
 
-4│      # comment with a {}
-                         ^
+    4│      # comment with a 	
+                             ^
 
-Tab characters are not allowed."###,
-                "\t"
-            )
-        )
+    Tab characters are not allowed, use spaces instead.
+    "###
+    );
+
+    test_report!(
+        comment_with_control_character,
+        "# comment with a \x07\n",
+        @r###"
+    ── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
+
+    I encountered an ASCII control character:
+
+    4│      # comment with a 
+                             ^
+
+    ASCII control characters are not allowed.
+    "###
+    );
+
+    test_report!(
+        record_type_carriage_return,
+        "f : { \r foo }",
+        @r###"
+    ── MISPLACED CARRIAGE RETURN ──────── tmp/record_type_carriage_return/Test.roc ─
+
+    I encountered a stray carriage return (\r):
+
+    4│      f : {  foo }
+                  ^
+
+    A carriage return (\r) has to be followed by a newline (\n).
+    "###
     );
 
     // TODO bad error message
