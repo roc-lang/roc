@@ -52,51 +52,92 @@ pub enum AArch64GeneralReg {
     ZRSP = 31,
 }
 
+impl AArch64GeneralReg {
+    #[cfg(test)]
+    const fn as_str_32bit(&self) -> &str {
+        match self {
+            AArch64GeneralReg::X0 => "w0",
+            AArch64GeneralReg::X1 => "w1",
+            AArch64GeneralReg::X2 => "w2",
+            AArch64GeneralReg::X3 => "w3",
+            AArch64GeneralReg::X4 => "w4",
+            AArch64GeneralReg::X5 => "w5",
+            AArch64GeneralReg::X6 => "w6",
+            AArch64GeneralReg::X7 => "w7",
+            AArch64GeneralReg::XR => "wr",
+            AArch64GeneralReg::X9 => "w9",
+            AArch64GeneralReg::X10 => "w10",
+            AArch64GeneralReg::X11 => "w11",
+            AArch64GeneralReg::X12 => "w12",
+            AArch64GeneralReg::X13 => "w13",
+            AArch64GeneralReg::X14 => "w14",
+            AArch64GeneralReg::X15 => "w15",
+            AArch64GeneralReg::IP0 => "ip0",
+            AArch64GeneralReg::IP1 => "ip1",
+            AArch64GeneralReg::PR => "pr",
+            AArch64GeneralReg::X19 => "w19",
+            AArch64GeneralReg::X20 => "w20",
+            AArch64GeneralReg::X21 => "w21",
+            AArch64GeneralReg::X22 => "w22",
+            AArch64GeneralReg::X23 => "w23",
+            AArch64GeneralReg::X24 => "w24",
+            AArch64GeneralReg::X25 => "w25",
+            AArch64GeneralReg::X26 => "w26",
+            AArch64GeneralReg::X27 => "w27",
+            AArch64GeneralReg::X28 => "w28",
+            AArch64GeneralReg::FP => "fp",
+            AArch64GeneralReg::LR => "lr",
+            AArch64GeneralReg::ZRSP => "zrsp",
+        }
+    }
+
+    const fn as_str_64bit(&self) -> &str {
+        match self {
+            AArch64GeneralReg::X0 => "x0",
+            AArch64GeneralReg::X1 => "x1",
+            AArch64GeneralReg::X2 => "x2",
+            AArch64GeneralReg::X3 => "x3",
+            AArch64GeneralReg::X4 => "x4",
+            AArch64GeneralReg::X5 => "x5",
+            AArch64GeneralReg::X6 => "x6",
+            AArch64GeneralReg::X7 => "x7",
+            AArch64GeneralReg::XR => "xr",
+            AArch64GeneralReg::X9 => "x9",
+            AArch64GeneralReg::X10 => "x10",
+            AArch64GeneralReg::X11 => "x11",
+            AArch64GeneralReg::X12 => "x12",
+            AArch64GeneralReg::X13 => "x13",
+            AArch64GeneralReg::X14 => "x14",
+            AArch64GeneralReg::X15 => "x15",
+            AArch64GeneralReg::IP0 => "ip0",
+            AArch64GeneralReg::IP1 => "ip1",
+            AArch64GeneralReg::PR => "pr",
+            AArch64GeneralReg::X19 => "x19",
+            AArch64GeneralReg::X20 => "x20",
+            AArch64GeneralReg::X21 => "x21",
+            AArch64GeneralReg::X22 => "x22",
+            AArch64GeneralReg::X23 => "x23",
+            AArch64GeneralReg::X24 => "x24",
+            AArch64GeneralReg::X25 => "x25",
+            AArch64GeneralReg::X26 => "x26",
+            AArch64GeneralReg::X27 => "x27",
+            AArch64GeneralReg::X28 => "x28",
+            AArch64GeneralReg::FP => "fp",
+            AArch64GeneralReg::LR => "lr",
+            AArch64GeneralReg::ZRSP => "zrsp",
+        }
+    }
+}
+
 impl RegTrait for AArch64GeneralReg {
     fn value(&self) -> u8 {
         *self as u8
     }
 }
+
 impl std::fmt::Display for AArch64GeneralReg {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                AArch64GeneralReg::X0 => "x0",
-                AArch64GeneralReg::X1 => "x1",
-                AArch64GeneralReg::X2 => "x2",
-                AArch64GeneralReg::X3 => "x3",
-                AArch64GeneralReg::X4 => "x4",
-                AArch64GeneralReg::X5 => "x5",
-                AArch64GeneralReg::X6 => "x6",
-                AArch64GeneralReg::X7 => "x7",
-                AArch64GeneralReg::XR => "xr",
-                AArch64GeneralReg::X9 => "x9",
-                AArch64GeneralReg::X10 => "x10",
-                AArch64GeneralReg::X11 => "x11",
-                AArch64GeneralReg::X12 => "x12",
-                AArch64GeneralReg::X13 => "x13",
-                AArch64GeneralReg::X14 => "x14",
-                AArch64GeneralReg::X15 => "x15",
-                AArch64GeneralReg::IP0 => "ip0",
-                AArch64GeneralReg::IP1 => "ip1",
-                AArch64GeneralReg::PR => "pr",
-                AArch64GeneralReg::X19 => "x19",
-                AArch64GeneralReg::X20 => "x20",
-                AArch64GeneralReg::X21 => "x21",
-                AArch64GeneralReg::X22 => "x22",
-                AArch64GeneralReg::X23 => "x23",
-                AArch64GeneralReg::X24 => "x24",
-                AArch64GeneralReg::X25 => "x25",
-                AArch64GeneralReg::X26 => "x26",
-                AArch64GeneralReg::X27 => "x27",
-                AArch64GeneralReg::X28 => "x28",
-                AArch64GeneralReg::FP => "fp",
-                AArch64GeneralReg::LR => "lr",
-                AArch64GeneralReg::ZRSP => "zrsp",
-            }
-        )
+        write!(f, "{}", self.as_str_64bit())
     }
 }
 
@@ -1201,12 +1242,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn movsx_reg_reg(
-        _buf: &mut Vec<'_, u8>,
-        _input_width: RegisterWidth,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
     ) {
-        todo!("move with sign extension");
+        sign_extend(buf, input_width, dst, src)
     }
 
     #[inline(always)]
@@ -1322,11 +1363,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         dst: AArch64GeneralReg,
         offset: i32,
     ) {
+        use RegisterWidth::*;
+
+        // move to destination (zero extends)
+        Self::mov_reg_base32(buf, register_width, dst, offset);
+
+        // then sign-extend if needed
         match register_width {
-            RegisterWidth::W8 => todo!("sign extend 1 byte values"),
-            RegisterWidth::W16 => todo!("sign extend 2 byte values"),
-            RegisterWidth::W32 => todo!("sign extend 4 byte values"),
-            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
+            W8 | W16 | W32 => sign_extend(buf, register_width, dst, dst),
+            W64 => { /* do nothing */ }
         }
     }
 
@@ -1337,11 +1382,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         dst: AArch64GeneralReg,
         offset: i32,
     ) {
+        use RegisterWidth::*;
+
+        // move to destination (zero extends)
+        Self::mov_reg_base32(buf, register_width, dst, offset);
+
+        // then sign-extend if needed
         match register_width {
-            RegisterWidth::W8 => todo!("zero extend 1 byte values"),
-            RegisterWidth::W16 => todo!("zero extend 2 byte values"),
-            RegisterWidth::W32 => todo!("zero extend 4 byte values"),
-            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
+            W8 | W16 => zero_extend(buf, register_width, dst, dst),
+            W32 | W64 => { /* do nothing */ }
         }
     }
 
@@ -2265,6 +2314,75 @@ impl UnconditionalBranchImmediate {
             imm26: imm26.into(),
         }
     }
+}
+
+#[derive(PackedStruct, Debug)]
+#[packed_struct(endian = "msb")]
+pub struct SignExtend {
+    sf: Integer<u8, packed_bits::Bits<1>>,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<6>>,
+    n: Integer<u8, packed_bits::Bits<1>>,
+    immr: Integer<u8, packed_bits::Bits<6>>,
+    imms: Integer<u8, packed_bits::Bits<6>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for SignExtend {}
+
+fn sign_extend(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+) {
+    let imms = match register_width {
+        RegisterWidth::W8 => 0b00_0111,  // sxtb
+        RegisterWidth::W16 => 0b00_1111, // sxth
+        RegisterWidth::W32 => 0b01_1111, // sxtw
+        RegisterWidth::W64 => return mov_reg64_reg64(buf, dst, src),
+    };
+
+    let inst = SignExtend {
+        sf: 0b1.into(),
+        opc: 0b00.into(),
+        fixed: 0b100110.into(),
+        n: 0b1.into(),
+        immr: 0b00_0000.into(),
+        imms: imms.into(),
+        rn: src.id().into(),
+        rd: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
+fn zero_extend(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+) {
+    let imms = match register_width {
+        RegisterWidth::W8 => 0b00_0111,  // uxtb
+        RegisterWidth::W16 => 0b00_1111, // uxth
+        RegisterWidth::W32 => return mov_reg64_reg64(buf, dst, src),
+        RegisterWidth::W64 => return mov_reg64_reg64(buf, dst, src),
+    };
+
+    let inst = SignExtend {
+        sf: 0b0.into(),
+        opc: 0b10.into(),
+        fixed: 0b100110.into(),
+        n: 0b0.into(),
+        immr: 0b00_0000.into(),
+        imms: imms.into(),
+        rn: src.id().into(),
+        rd: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
 }
 
 // Uses unsigned Offset
@@ -3663,6 +3781,22 @@ mod tests {
                 _ => format!("{self}"),
             }
         }
+
+        fn capstone_string_32bit(&self, zrsp_kind: ZRSPKind) -> String {
+            match self {
+                AArch64GeneralReg::XR => "w8".to_owned(),
+                AArch64GeneralReg::IP0 => "w16".to_owned(),
+                AArch64GeneralReg::IP1 => "w17".to_owned(),
+                AArch64GeneralReg::PR => "w18".to_owned(),
+                AArch64GeneralReg::FP => "w29".to_owned(),
+                AArch64GeneralReg::LR => "w30".to_owned(),
+                AArch64GeneralReg::ZRSP => match zrsp_kind {
+                    UsesZR => "wzr".to_owned(),
+                    UsesSP => "sp".to_owned(),
+                },
+                _ => self.as_str_32bit().to_string(),
+            }
+        }
     }
 
     impl AArch64FloatReg {
@@ -3687,6 +3821,13 @@ mod tests {
     const TEST_U16: u16 = 0x1234;
     //const TEST_I32: i32 = 0x12345678;
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
+
+    const ALL_REGISTER_WIDTHS: &[RegisterWidth] = &[
+        RegisterWidth::W8,
+        RegisterWidth::W16,
+        RegisterWidth::W32,
+        RegisterWidth::W64,
+    ];
 
     const ALL_GENERAL_REGS: &[AArch64GeneralReg] = &[
         AArch64GeneralReg::X0,
@@ -4819,6 +4960,63 @@ mod tests {
             ),
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_sign_extend() {
+        disassembler_test!(
+            sign_extend,
+            |w, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "{} {}, {}",
+                match w {
+                    RegisterWidth::W8 => "sxtb",
+                    RegisterWidth::W16 => "sxth",
+                    RegisterWidth::W32 => "sxtw",
+                    RegisterWidth::W64 => "mov",
+                },
+                reg1.capstone_string(UsesZR),
+                match w {
+                    RegisterWidth::W8 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W16 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W32 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W64 => reg2.capstone_string(UsesZR),
+                }
+            ),
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_zero_extend() {
+        disassembler_test!(
+            zero_extend,
+            |w, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "{} {}, {}",
+                match w {
+                    RegisterWidth::W8 => "uxtb",
+                    RegisterWidth::W16 => "uxth",
+                    RegisterWidth::W32 => "mov",
+                    RegisterWidth::W64 => "mov",
+                },
+                match w {
+                    RegisterWidth::W8 => reg1.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W16 => reg1.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W32 => reg1.capstone_string(UsesZR),
+                    RegisterWidth::W64 => reg1.capstone_string(UsesZR),
+                },
+                match w {
+                    RegisterWidth::W8 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W16 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W32 => reg2.capstone_string(UsesZR),
+                    RegisterWidth::W64 => reg2.capstone_string(UsesZR),
+                }
+            ),
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
     }
