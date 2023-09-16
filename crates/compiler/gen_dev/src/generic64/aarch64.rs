@@ -1558,8 +1558,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         fcvt_freg64_freg32(buf, dst, src);
     }
 
-    fn set_if_overflow(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg) {
-        todo!("set if overflow for AArch64");
+    #[inline(always)]
+    fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg) {
+        cset_reg64_cond(buf, dst, ConditionCode::VS)
     }
 
     #[inline(always)]
