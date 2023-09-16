@@ -1019,9 +1019,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            // add immediates must be signed, so we have to use a register here
-            Self::mov_reg64_imm64(buf, dst, imm32 as i64);
-            add_reg64_reg64_reg64(buf, dst, src, dst);
+            Self::sub_reg64_reg64_imm32(buf, dst, src, -imm32);
         } else if imm32 < 0xFFF {
             add_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
@@ -1552,7 +1550,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            todo!("immediate subtractions with values less than 0");
+            Self::add_reg64_reg64_imm32(buf, dst, src, -imm32)
         } else if imm32 < 0xFFF {
             sub_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
