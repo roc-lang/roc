@@ -1685,7 +1685,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         offset: i32,
     ) {
         if offset < 0 {
-            ldr_freg64_reg64_imm9(buf, dst, src, offset as i16)
+            ldur_freg64_reg64_imm9(buf, dst, src, offset as i16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
@@ -3079,7 +3079,7 @@ fn ldr_freg64_reg64_imm12(
 }
 
 #[inline(always)]
-fn ldr_freg64_reg64_imm9(
+fn ldur_freg64_reg64_imm9(
     buf: &mut Vec<'_, u8>,
     dst: AArch64FloatReg,
     base: AArch64GeneralReg,
@@ -3089,7 +3089,7 @@ fn ldr_freg64_reg64_imm9(
     assert!((-256..256).contains(&imm9));
 
     let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
-    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+    let imm12 = (imm9 & 0b0001_1111_1111) << 2;
 
     let inst = LoadStoreRegisterImmediate {
         size: 0b11.into(), // 64-bit
@@ -4229,11 +4229,11 @@ mod tests {
     }
 
     #[test]
-    fn test_ldr_freg64_reg64_imm9() {
+    fn test_ludr_freg64_reg64_imm9() {
         disassembler_test!(
-            ldr_freg64_reg64_imm9,
+            ldur_freg64_reg64_imm9,
             |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
-                "ldr {}, [{}, {}]!",
+                "ldur {}, [{}, {}]",
                 reg1.capstone_string(FloatWidth::F64),
                 reg2.capstone_string(UsesSP),
                 signed_hex_i16(imm)
@@ -4245,7 +4245,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ldr_reg64_reg64_imm9() {
+    fn test_ldur_reg64_reg64_imm9() {
         disassembler_test!(
             ldur_reg_reg_imm9,
             |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
