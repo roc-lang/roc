@@ -318,7 +318,44 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         AArch64FloatReg::V7,
     ];
     const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = Self::FLOAT_PARAM_REGS;
-    const FLOAT_DEFAULT_FREE_REGS: &'static [AArch64FloatReg] = &[];
+    const FLOAT_DEFAULT_FREE_REGS: &'static [AArch64FloatReg] = &[
+        //
+        AArch64FloatReg::V31,
+        AArch64FloatReg::V30,
+        AArch64FloatReg::V29,
+        AArch64FloatReg::V28,
+        AArch64FloatReg::V27,
+        AArch64FloatReg::V26,
+        AArch64FloatReg::V25,
+        AArch64FloatReg::V24,
+        //
+        AArch64FloatReg::V23,
+        AArch64FloatReg::V22,
+        AArch64FloatReg::V21,
+        AArch64FloatReg::V20,
+        AArch64FloatReg::V19,
+        AArch64FloatReg::V18,
+        AArch64FloatReg::V17,
+        AArch64FloatReg::V16,
+        //
+        AArch64FloatReg::V15,
+        AArch64FloatReg::V14,
+        AArch64FloatReg::V13,
+        AArch64FloatReg::V12,
+        AArch64FloatReg::V11,
+        AArch64FloatReg::V10,
+        AArch64FloatReg::V9,
+        AArch64FloatReg::V8,
+        //
+        AArch64FloatReg::V7,
+        AArch64FloatReg::V6,
+        AArch64FloatReg::V5,
+        AArch64FloatReg::V4,
+        AArch64FloatReg::V3,
+        AArch64FloatReg::V2,
+        AArch64FloatReg::V1,
+        AArch64FloatReg::V0,
+    ];
 
     const SHADOW_SPACE_SIZE: u8 = 0;
 
