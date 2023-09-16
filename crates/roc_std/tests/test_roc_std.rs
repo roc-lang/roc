@@ -293,6 +293,10 @@ mod test_roc_std {
 
         let example = RocDec::from_str("1_000.5678").unwrap();
         assert_eq!(format!("{example}"), "1000.5678");
+
+        let sample_negative = "-1.234";
+        let example = RocDec::from_str(sample_negative).unwrap().to_str();
+        assert_eq!(format!("{example}"), sample_negative);
     }
 
     #[test]

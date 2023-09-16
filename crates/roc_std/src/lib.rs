@@ -373,7 +373,8 @@ impl RocDec {
         write!(string, "{:019}", self.as_i128()).unwrap();
 
         let is_negative = self.as_i128() < 0;
-        let decimal_location = string.len() - Self::DECIMAL_PLACES + (is_negative as usize);
+        let decimal_location = string.len() - Self::DECIMAL_PLACES;
+        dbg!(decimal_location, is_negative, string.len());
 
         // skip trailing zeros
         let last_nonzero_byte = string.trim_end_matches('0').len();
