@@ -279,7 +279,7 @@ mod test_roc_std {
     fn roc_dec_fmt() {
         assert_eq!(
             format!("{}", RocDec::MIN),
-            "-1701411834604692317316.87303715884105728"
+            "-170141183460469231731.687303715884105728"
         );
 
         let half = RocDec::from_str("0.5").unwrap();
