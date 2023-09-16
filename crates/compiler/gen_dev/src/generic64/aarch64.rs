@@ -400,10 +400,12 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
                 offset -= 8;
                 AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
 
-                AArch64Assembler::mov_reg64_reg64(
+                // update the frame pointer
+                AArch64Assembler::add_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::FP,
                     AArch64GeneralReg::ZRSP,
+                    offset,
                 );
 
                 offset = aligned_stack_size - fn_call_stack_size;
@@ -1335,7 +1337,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src: AArch64GeneralReg,
     ) {
         if offset < 0 {
-            str_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
+            stur_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
@@ -3247,7 +3249,7 @@ fn sdiv_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
-fn str_reg_reg_imm9(
+fn stur_reg_reg_imm9(
     buf: &mut Vec<'_, u8>,
     register_width: RegisterWidth,
     src: AArch64GeneralReg,
@@ -3258,7 +3260,7 @@ fn str_reg_reg_imm9(
     assert!((-256..256).contains(&imm9));
 
     let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
-    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+    let imm12 = (imm9 & 0b0001_1111_1111) << 2;
 
     let inst = LoadStoreRegisterImmediate {
         size: (register_width as u8).into(), // 64-bit
@@ -4494,9 +4496,9 @@ mod tests {
     #[test]
     fn test_str_reg64_reg64_imm9() {
         disassembler_test!(
-            str_reg_reg_imm9,
+            stur_reg_reg_imm9,
             |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
-                "str {}, [{}, {}]!", // ! indicates writeback
+                "stur {}, [{}, {}]", // ! indicates writeback
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 signed_hex_i16(imm),
