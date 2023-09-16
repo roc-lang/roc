@@ -275,22 +275,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
-        let (encoding, size) = match backend.target_info().architecture {
-            roc_target::Architecture::Aarch32 => todo!(),
-            roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
-            roc_target::Architecture::Wasm32 => todo!(),
-            roc_target::Architecture::X86_32 => todo!(),
-            roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
-        };
-
-        let reloc = write::Relocation {
-            offset: offset + proc_offset,
-            size,
-            kind: RelocationKind::PltRelative,
-            encoding,
-            symbol: sym_id,
-            addend: -4,
-        };
+        let reloc = create_relocation(backend.target_info(), sym_id, offset + proc_offset);
 
         match output.add_relocation(text_section, reloc) {
             Ok(obj) => obj,
@@ -298,6 +283,49 @@ fn generate_wrapper<'a, B: Backend<'a>>(
         }
     } else {
         internal_error!("failed to find fn symbol for {:?}", wraps);
+    }
+}
+
+fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> write::Relocation {
+    let (encoding, size, addend, kind) = match target_info.architecture {
+        roc_target::Architecture::Aarch32 => todo!(),
+        roc_target::Architecture::Aarch64 => {
+            if cfg!(target_os = "macos") {
+                (
+                    RelocationEncoding::Generic,
+                    26,
+                    0,
+                    RelocationKind::MachO {
+                        value: 2,
+                        relative: true,
+                    },
+                )
+            } else {
+                (
+                    RelocationEncoding::AArch64Call,
+                    26,
+                    0,
+                    RelocationKind::PltRelative,
+                )
+            }
+        }
+        roc_target::Architecture::Wasm32 => todo!(),
+        roc_target::Architecture::X86_32 => todo!(),
+        roc_target::Architecture::X86_64 => (
+            RelocationEncoding::X86Branch,
+            32,
+            -4,
+            RelocationKind::PltRelative,
+        ),
+    };
+
+    write::Relocation {
+        offset,
+        size,
+        kind,
+        encoding,
+        symbol,
+        addend,
     }
 }
 
@@ -891,22 +919,7 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    let (encoding, size) = match target_info.architecture {
-                        roc_target::Architecture::Aarch32 => todo!(),
-                        roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
-                        roc_target::Architecture::Wasm32 => todo!(),
-                        roc_target::Architecture::X86_32 => todo!(),
-                        roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
-                    };
-
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size,
-                        kind: RelocationKind::PltRelative,
-                        encoding,
-                        symbol: sym_id,
-                        addend: -4,
-                    }
+                    create_relocation(target_info, sym_id, offset + proc_offset)
                 } else {
                     internal_error!("failed to find fn symbol for {:?}", name);
                 }
