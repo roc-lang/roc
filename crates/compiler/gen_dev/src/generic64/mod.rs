@@ -30,12 +30,15 @@ use storage::{RegStorage, StorageManager};
 
 // TODO: on all number functions double check and deal with over/underflow.
 
+// NOTE: must fit in 27 bits and aligned to 4 for aarch64
+const JUMP_PLACEHOLDER: i32 = 0x0011_1100;
+
 #[derive(Debug, Clone, Copy)]
 pub enum RegisterWidth {
-    W8,
-    W16,
-    W32,
-    W64,
+    W8 = 0b00,
+    W16 = 0b01,
+    W32 = 0b10,
+    W64 = 0b11,
 }
 
 impl RegisterWidth {
@@ -326,39 +329,90 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
-    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
+    fn mov_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
+
+    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W64, dst, offset)
+    }
+    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W32, dst, offset)
+    }
+    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W16, dst, offset)
+    }
+    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W8, dst, offset)
+    }
 
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
     fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
 
-    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
-    fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
-    fn mov_base32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
-    fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+    fn mov_base32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: GeneralReg,
+    );
+
+    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W64, offset, src)
+    }
+    fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W32, offset, src)
+    }
+    fn mov_base32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W16, offset, src)
+    }
+    fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W8, offset, src)
+    }
 
     // move from memory (a pointer) to register
+    fn mov_reg_mem_offset32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+
     fn mov_reg64_mem64_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W64, dst, src, offset)
+    }
     fn mov_reg32_mem32_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W32, dst, src, offset)
+    }
     fn mov_reg16_mem16_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
-    fn mov_reg8_mem8_offset32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg, offset: i32);
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W16, dst, src, offset)
+    }
+    fn mov_reg8_mem8_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W8, dst, src, offset)
+    }
 
     fn mov_freg64_mem64_offset32(
         buf: &mut Vec<'_, u8>,
@@ -374,25 +428,46 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
 
     // move from register to memory
+    fn mov_mem_offset32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    );
+
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W64, dst, offset, src)
+    }
     fn mov_mem32_offset32_reg32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W32, dst, offset, src)
+    }
     fn mov_mem16_offset32_reg16(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
-    fn mov_mem8_offset32_reg8(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, src: GeneralReg);
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W16, dst, offset, src)
+    }
+    fn mov_mem8_offset32_reg8(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W8, dst, offset, src)
+    }
 
     fn movesd_mem64_offset32_freg64(
         buf: &mut Vec<'_, u8>,
@@ -417,6 +492,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         offset: i32,
     );
 
+    fn mov_mem64_offset32_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: FloatReg,
+    );
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
@@ -727,6 +808,9 @@ impl<
     }
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
         &mut self.relocs
+    }
+    fn target_info(&self) -> TargetInfo {
+        self.storage_manager.target_info
     }
     fn module_interns_helpers_mut(
         &mut self,
@@ -1070,7 +1154,7 @@ impl<
             // Build unconditional jump to the end of this switch.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
             let jmp_location = self.buf.len();
-            let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+            let jmp_offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER);
             ret_jumps.push((jmp_location, jmp_offset));
 
             // Overwrite the original jne with the correct offset.
@@ -1162,7 +1246,7 @@ impl<
             .setup_jump(self.layout_interner, &mut self.buf, id, args, arg_layouts);
 
         let jmp_location = self.buf.len();
-        let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+        let start_offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER);
 
         if let Some(vec) = self.join_map.get_mut(id) {
             vec.push((jmp_location as u64, start_offset as u64))
@@ -4342,7 +4426,7 @@ impl<
             )
         }
         let inst_loc = self.buf.len() as u64;
-        let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
+        let offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER) as u64;
         self.relocs.push(Relocation::JmpToReturn {
             inst_loc,
             inst_size: self.buf.len() as u64 - inst_loc,

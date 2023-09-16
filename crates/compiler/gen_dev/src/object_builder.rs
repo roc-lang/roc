@@ -275,11 +275,19 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
+        let (encoding, size) = match backend.target_info().architecture {
+            roc_target::Architecture::Aarch32 => todo!(),
+            roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
+            roc_target::Architecture::Wasm32 => todo!(),
+            roc_target::Architecture::X86_32 => todo!(),
+            roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
+        };
+
         let reloc = write::Relocation {
             offset: offset + proc_offset,
-            size: 32,
+            size,
             kind: RelocationKind::PltRelative,
-            encoding: RelocationEncoding::X86Branch,
+            encoding,
             symbol: sym_id,
             addend: -4,
         };
@@ -797,6 +805,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
+    let target_info = backend.target_info();
     let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc, layout_ids);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
     for reloc in relocs.iter() {
@@ -882,11 +891,19 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
+                    let (encoding, size) = match target_info.architecture {
+                        roc_target::Architecture::Aarch32 => todo!(),
+                        roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
+                        roc_target::Architecture::Wasm32 => todo!(),
+                        roc_target::Architecture::X86_32 => todo!(),
+                        roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
+                    };
+
                     write::Relocation {
                         offset: offset + proc_offset,
-                        size: 32,
+                        size,
                         kind: RelocationKind::PltRelative,
-                        encoding: RelocationEncoding::X86Branch,
+                        encoding,
                         symbol: sym_id,
                         addend: -4,
                     }
