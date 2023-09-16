@@ -257,6 +257,26 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
 
+    /// Updates a jump instruction to a new offset and returns the number of bytes written.
+    fn update_jmp_imm32_offset(
+        buf: &mut Vec<'_, u8>,
+        jmp_location: u64,
+        base_offset: u64,
+        target_offset: u64,
+    ) {
+        let old_buf_len = buf.len();
+
+        // write the jmp at the back of buf
+        let jmp_offset = target_offset as i32 - base_offset as i32;
+        Self::jmp_imm32(buf, jmp_offset);
+
+        // move the new jmp instruction into position
+        buf.copy_within(old_buf_len.., jmp_location as usize);
+
+        // wipe the jmp we created at the end
+        buf.truncate(old_buf_len)
+    }
+
     fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
 
     /// Jumps by an offset of offset bytes if reg is not equal to imm.
@@ -912,7 +932,6 @@ impl<
 
         // Update jumps to returns.
         let ret_offset = self.buf.len() - end_jmp_size;
-        let mut tmp = bumpalo::vec![in self.env.arena];
         for reloc in old_relocs
             .iter()
             .filter(|reloc| matches!(reloc, Relocation::JmpToReturn { .. }))
@@ -924,7 +943,12 @@ impl<
             } = reloc
             {
                 if *inst_loc as usize + *inst_size as usize != self.buf.len() {
-                    self.update_jmp_imm32_offset(&mut tmp, *inst_loc, *offset, ret_offset as u64);
+                    ASM::update_jmp_imm32_offset(
+                        &mut self.buf,
+                        *inst_loc,
+                        *offset,
+                        ret_offset as u64,
+                    );
                 }
             }
         }
@@ -1186,8 +1210,8 @@ impl<
         // Update all return jumps to jump past the default case.
         let ret_offset = self.buf.len();
         for (jmp_location, start_offset) in ret_jumps.into_iter() {
-            self.update_jmp_imm32_offset(
-                &mut tmp,
+            ASM::update_jmp_imm32_offset(
+                &mut self.buf,
                 jmp_location as u64,
                 start_offset as u64,
                 ret_offset as u64,
@@ -1224,7 +1248,6 @@ impl<
         self.build_stmt(layout_ids, body, ret_layout);
 
         // Overwrite the all jumps to the joinpoint with the correct offset.
-        let mut tmp = bumpalo::vec![in self.env.arena];
         for (jmp_location, start_offset) in self
             .join_map
             .remove(id)
@@ -1234,9 +1257,7 @@ impl<
             // jmp_location: byte offset where the jump instruction starts
             // start_offset: byte offset where the jump instruction ends
 
-            // a temporary buffer is needed, but the jump at `jmp_location` is updated in `self.buf`
-            tmp.clear();
-            self.update_jmp_imm32_offset(&mut tmp, jmp_location, start_offset, join_location);
+            ASM::update_jmp_imm32_offset(&mut self.buf, jmp_location, start_offset, join_location);
         }
     }
 
@@ -5373,23 +5394,6 @@ impl<
                 });
             }
         }
-    }
-
-    /// Updates a jump instruction to a new offset and returns the number of bytes written.
-    fn update_jmp_imm32_offset(
-        &mut self,
-        tmp: &mut Vec<'a, u8>,
-        jmp_location: u64,
-        base_offset: u64,
-        target_offset: u64,
-    ) {
-        // write the new jmp instruction into tmp
-        tmp.clear();
-        let jmp_offset = target_offset as i32 - base_offset as i32;
-        ASM::jmp_imm32(tmp, jmp_offset);
-
-        // update the jump in self.buf
-        self.buf[jmp_location as usize..][..tmp.len()].copy_from_slice(&tmp);
     }
 
     /// Loads the alignment bytes of `layout` into the given `symbol`
