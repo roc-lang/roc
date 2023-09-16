@@ -298,13 +298,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         relocs: &mut Vec<'_, Relocation>,
         dst: FloatReg,
         imm: f32,
-    );
+    ) -> Result<(), ()>;
     fn mov_freg64_imm64(
         buf: &mut Vec<'_, u8>,
         relocs: &mut Vec<'_, Relocation>,
         dst: FloatReg,
         imm: f64,
-    );
+    ) -> Result<(), ()>;
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: GeneralReg, imm: i64);
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
 
@@ -4322,14 +4322,34 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, reg, *x as i64);
             }
             (Literal::Float(x), LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64))) => {
-                let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
+                let freg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x;
-                ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
+                if ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, freg, val).is_err() {
+                    // do the naive thing
+                    let tmp = Symbol::DEV_TMP;
+                    let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
+                    let val = i64::from_ne_bytes(val.to_ne_bytes());
+                    ASM::mov_reg64_imm64(&mut self.buf, reg, val);
+
+                    ASM::to_float_freg64_reg64(&mut self.buf, freg, reg);
+
+                    self.storage_manager.free_symbol(&tmp);
+                }
             }
             (Literal::Float(x), LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32))) => {
-                let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
+                let freg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x as f32;
-                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+                if ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, freg, val).is_err() {
+                    // do the naive thing
+                    let tmp = Symbol::DEV_TMP;
+                    let reg = self.storage_manager.claim_general_reg(&mut self.buf, &tmp);
+                    let val = i32::from_ne_bytes(val.to_ne_bytes());
+                    ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
+
+                    ASM::to_float_freg32_reg64(&mut self.buf, freg, reg);
+
+                    self.storage_manager.free_symbol(&tmp);
+                }
             }
             (Literal::Decimal(bytes), LayoutRepr::Builtin(Builtin::Decimal)) => {
                 self.storage_manager.with_tmp_general_reg(

@@ -1268,18 +1268,21 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _relocs: &mut Vec<'_, Relocation>,
         dst: AArch64FloatReg,
         imm: f32,
-    ) {
+    ) -> Result<(), ()> {
         // See https://stackoverflow.com/a/64608524
         if imm == 0.0 && !imm.is_sign_negative() {
             movi_freg_zero(buf, dst);
-            return;
+            return Ok(());
         }
         match encode_f32_to_imm8(imm) {
             Some(imm8) => {
                 fmov_freg_imm8(buf, FloatWidth::F32, dst, imm8);
+
+                Ok(())
             }
             None => {
-                todo!("loading f32 literal over 8 bits for AArch64");
+                // there is no way to load a bigger float without a general register
+                Err(())
             }
         }
     }
@@ -1289,18 +1292,22 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _relocs: &mut Vec<'_, Relocation>,
         dst: AArch64FloatReg,
         imm: f64,
-    ) {
+    ) -> Result<(), ()> {
         // See https://stackoverflow.com/a/64608524
         if imm == 0.0 && !imm.is_sign_negative() {
             movi_freg_zero(buf, dst);
-            return;
+            return Ok(());
         }
+
         match encode_f64_to_imm8(imm) {
             Some(imm8) => {
                 fmov_freg_imm8(buf, FloatWidth::F64, dst, imm8);
+
+                Ok(())
             }
             None => {
-                todo!("loading f64 literal over 8 bits for AArch64");
+                // there is no way to load a bigger float without a general register
+                Err(())
             }
         }
     }
@@ -1321,6 +1328,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             movk_reg64_imm16(buf, dst, remaining as u16, 3);
         }
     }
+
     #[inline(always)]
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
         fmov_freg_freg(buf, FloatWidth::F64, dst, src);
