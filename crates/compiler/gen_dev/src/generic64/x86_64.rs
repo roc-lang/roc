@@ -2111,27 +2111,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
         jmp_imm32(buf, offset);
+
+        // on x86_64, jumps are calculated from the end of the jmp instruction
         buf.len()
-    }
-
-    /// Updates a jump instruction to a new offset and returns the number of bytes written.
-    fn update_jmp_imm32_offset(
-        buf: &mut Vec<'_, u8>,
-        jmp_location: u64,
-        base_offset: u64,
-        target_offset: u64,
-    ) {
-        let old_buf_len = buf.len();
-
-        // write the jmp at the back of buf
-        let jmp_offset = target_offset as i32 - base_offset as i32;
-        Self::jmp_imm32(buf, jmp_offset);
-
-        // move the new jmp instruction into position
-        buf.copy_within(old_buf_len.., jmp_location as usize);
-
-        // wipe the jmp we created at the end
-        buf.truncate(old_buf_len)
     }
 
     #[inline(always)]
@@ -2164,6 +2146,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
 
         jne_imm32(buf, offset);
 
+        // on x86_64, jumps are calculated from the end of the jmp instruction
         buf.len()
     }
 
