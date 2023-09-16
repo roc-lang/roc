@@ -1817,12 +1817,19 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn mov_freg32_mem32_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src: AArch64GeneralReg,
+        offset: i32,
     ) {
-        todo!()
+        if offset < 0 {
+            ldur_freg64_reg64_imm9(buf, dst, src, offset as i16)
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("base offsets over 32k for AArch64");
+        }
     }
 }
 
