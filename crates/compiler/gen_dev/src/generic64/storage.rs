@@ -679,7 +679,7 @@ impl<
             self.symbol_storage_map.insert(*sym, NoData);
             return;
         }
-        let base_offset = self.claim_stack_area(sym, struct_size);
+        let base_offset = self.claim_stack_area_layout(layout_interner, *sym, *layout);
 
         let mut in_layout = *layout;
         let layout = loop {
@@ -955,7 +955,7 @@ impl<
     pub fn ensure_symbol_on_stack(&mut self, buf: &mut Vec<'a, u8>, sym: &Symbol) {
         match self.remove_storage_for_sym(sym) {
             Reg(reg_storage) => {
-                let base_offset = self.claim_stack_size(8);
+                let base_offset = self.claim_stack_size_with_alignment(8, 8);
                 match reg_storage {
                     General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
                     Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
@@ -1015,7 +1015,7 @@ impl<
         match self.remove_storage_for_sym(sym) {
             Reg(reg_storage) => {
                 debug_assert_eq!(reg_storage, wanted_reg);
-                let base_offset = self.claim_stack_size(8);
+                let base_offset = self.claim_stack_size_with_alignment(8, 8);
                 match reg_storage {
                     General(reg) => ASM::mov_base32_reg64(buf, base_offset, reg),
                     Float(reg) => ASM::mov_base32_freg64(buf, base_offset, reg),
@@ -1135,7 +1135,7 @@ impl<
     ) {
         match layout_interner.get_repr(layout) {
             single_register_layouts!() | pointer_layouts!() => {
-                let base_offset = self.claim_stack_size(8);
+                let base_offset = self.claim_stack_size_with_alignment(8, 8);
                 self.symbol_storage_map.insert(
                     symbol,
                     Stack(Primitive {
@@ -1156,7 +1156,7 @@ impl<
                 if stack_size == 0 {
                     self.no_data(&symbol);
                 } else {
-                    self.claim_stack_area(&symbol, stack_size);
+                    self.claim_stack_area_layout(layout_interner, symbol, layout);
                 }
             }
         }
@@ -1288,23 +1288,47 @@ impl<
         self.join_param_map.insert(*id, param_storage);
     }
 
-    /// claim_stack_area is the public wrapper around claim_stack_size.
-    /// It also deals with updating symbol storage.
-    /// It returns the base offset of the stack area.
-    /// It should only be used for complex data and not primitives.
-    pub fn claim_stack_area(&mut self, sym: &Symbol, size: u32) -> i32 {
-        let base_offset = self.claim_stack_size(size);
+    /// Claim space on the stack for a certain layout. Size and alignment are handled
+    ///
+    /// This function:
+    ///
+    /// - deals with updating symbol storage.
+    /// - should only be used for complex data and not primitives.
+    /// - returns the base offset of the stack area.
+    pub(crate) fn claim_stack_area_layout(
+        &mut self,
+        layout_interner: &STLayoutInterner<'_>,
+        sym: Symbol,
+        layout: InLayout<'_>,
+    ) -> i32 {
+        let (size, alignment) = layout_interner.stack_size_and_alignment(layout);
+        self.claim_stack_area_with_alignment(sym, size, Ord::min(alignment, 8))
+    }
+
+    /// Claim space on the stack of a certain size and alignment.
+    ///
+    /// This function:
+    ///
+    /// - deals with updating symbol storage.
+    /// - should only be used for complex data and not primitives.
+    /// - returns the base offset of the stack area.
+    pub fn claim_stack_area_with_alignment(
+        &mut self,
+        sym: Symbol,
+        size: u32,
+        alignment: u32,
+    ) -> i32 {
+        let base_offset = self.claim_stack_size_with_alignment(size, alignment);
         self.symbol_storage_map
-            .insert(*sym, Stack(Complex { base_offset, size }));
+            .insert(sym, Stack(Complex { base_offset, size }));
         self.allocation_map
-            .insert(*sym, Rc::new((base_offset, size)));
+            .insert(sym, Rc::new((base_offset, size)));
         base_offset
     }
 
     pub fn claim_pointer_stack_area(&mut self, sym: Symbol) -> i32 {
-        let size = 8;
-
-        let base_offset = self.claim_stack_size(size);
+        // pointers are 8 bytes wide with an alignment of 8
+        let base_offset = self.claim_stack_size_with_alignment(8, 8);
 
         self.symbol_storage_map.insert(
             sym,
@@ -1317,45 +1341,82 @@ impl<
         base_offset
     }
 
-    /// claim_stack_size claims `amount` bytes from the stack alignind to 8.
-    /// This may be free space in the stack or result in increasing the stack size.
-    /// It returns base pointer relative offset of the new data.
-    fn claim_stack_size(&mut self, amount: u32) -> i32 {
-        debug_assert!(amount > 0);
-        // round value to 8 byte alignment.
-        let amount = if amount % 8 != 0 {
-            amount + 8 - (amount % 8)
-        } else {
-            amount
+    fn claim_stack_size_with_alignment_help(
+        free_stack_chunks: &mut Vec<'a, (i32, u32)>,
+        stack_size: &mut u32,
+        amount: u32,
+        alignment: u32,
+    ) -> i32 {
+        debug_assert_ne!(amount, 0);
+
+        pub const fn next_multiple_of(lhs: u32, rhs: u32) -> u32 {
+            match lhs % rhs {
+                0 => lhs,
+                r => lhs + (rhs - r),
+            }
+        }
+
+        pub const fn is_multiple_of(lhs: i32, rhs: i32) -> bool {
+            match rhs {
+                0 => false,
+                _ => lhs % rhs == 0,
+            }
+        }
+
+        // round value to the alignment.
+        let amount = next_multiple_of(amount, alignment);
+
+        let chunk_fits = |(offset, size): &(i32, u32)| {
+            *size >= amount && is_multiple_of(*offset, alignment as i32)
         };
-        if let Some(fitting_chunk) = self
-            .free_stack_chunks
+
+        // padding on the stack to make sure an allocation is aligned
+        let padding = next_multiple_of(*stack_size, alignment) - *stack_size;
+
+        if let Some(fitting_chunk) = free_stack_chunks
             .iter()
             .enumerate()
-            .filter(|(_, (_, size))| *size >= amount)
+            .filter(|(_, chunk)| chunk_fits(chunk))
             .min_by_key(|(_, (_, size))| size)
         {
             let (pos, (offset, size)) = fitting_chunk;
             let (offset, size) = (*offset, *size);
             if size == amount {
-                self.free_stack_chunks.remove(pos);
+                // fill the whole chunk precisely
+                free_stack_chunks.remove(pos);
                 offset
             } else {
-                let (prev_offset, prev_size) = self.free_stack_chunks[pos];
-                self.free_stack_chunks[pos] = (prev_offset + amount as i32, prev_size - amount);
+                // use part of this chunk
+                let (prev_offset, prev_size) = free_stack_chunks[pos];
+                free_stack_chunks[pos] = (prev_offset + amount as i32, prev_size - amount);
                 prev_offset
             }
-        } else if let Some(new_size) = self.stack_size.checked_add(amount) {
+        } else if let Some(new_size) = stack_size.checked_add(padding + amount) {
             // Since stack size is u32, but the max offset is i32, if we pass i32 max, we have overflowed.
             if new_size > i32::MAX as u32 {
                 internal_error!("Ran out of stack space");
             } else {
-                self.stack_size = new_size;
-                -(self.stack_size as i32)
+                *stack_size = new_size;
+                -(*stack_size as i32)
             }
         } else {
             internal_error!("Ran out of stack space");
         }
+    }
+
+    fn claim_stack_size_with_alignment(&mut self, amount: u32, alignment: u32) -> i32 {
+        // because many instructions work on 8 bytes, we play it safe and make all stack
+        // allocations a multiple of 8 bits wide. This is of course slightly suboptimal
+        // if you want to improve this, good luck!
+        let alignment = Ord::max(8, alignment);
+
+        // the helper is just for testing in this case
+        Self::claim_stack_size_with_alignment_help(
+            &mut self.free_stack_chunks,
+            &mut self.stack_size,
+            amount,
+            alignment,
+        )
     }
 
     pub fn free_symbol(&mut self, sym: &Symbol) {
@@ -1522,5 +1583,69 @@ fn is_primitive(layout_interner: &mut STLayoutInterner<'_>, layout: InLayout<'_>
             is_primitive(layout_interner, lambda_set.runtime_representation())
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::generic64::x86_64::{
+        X86_64Assembler, X86_64FloatReg, X86_64GeneralReg, X86_64SystemV,
+    };
+
+    use super::*;
+
+    type SystemVStorageManager<'a, 'r> =
+        StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, X86_64Assembler, X86_64SystemV>;
+
+    fn claim_helper(
+        mut free_stack_chunks: Vec<'_, (i32, u32)>,
+        mut stack_size: u32,
+        amount: u32,
+        alignment: u32,
+    ) -> (u32, i32, Vec<'_, (i32, u32)>) {
+        let offset = SystemVStorageManager::claim_stack_size_with_alignment_help(
+            &mut free_stack_chunks,
+            &mut stack_size,
+            amount,
+            alignment,
+        );
+
+        (stack_size, offset, free_stack_chunks)
+    }
+
+    #[test]
+    fn claim_stack_memory() {
+        use bumpalo::vec;
+        let arena = bumpalo::Bump::new();
+
+        assert_eq!(
+            claim_helper(vec![in &arena;], 24, 8, 8),
+            (32, -32, vec![in &arena;]),
+        );
+
+        assert_eq!(
+            claim_helper(vec![in &arena;], 8, 8, 8),
+            (16, -16, vec![in &arena;]),
+        );
+
+        assert_eq!(
+            claim_helper(vec![in &arena; (-16, 8)], 56, 4, 4),
+            (56, -16, vec![in &arena; (-12, 4)])
+        );
+
+        assert_eq!(
+            claim_helper(vec![in &arena; (-24, 16)], 32, 8, 8),
+            (32, -24, vec![in &arena; (-16, 8)])
+        );
+
+        assert_eq!(
+            claim_helper(vec![in &arena; ], 0, 2, 1),
+            (2, -2, vec![in &arena;])
+        );
+
+        assert_eq!(
+            claim_helper(vec![in &arena; (-8, 2)], 16, 2, 1),
+            (16, -8, vec![in &arena; ])
+        );
     }
 }

@@ -275,14 +275,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
-        let reloc = write::Relocation {
-            offset: offset + proc_offset,
-            size: 32,
-            kind: RelocationKind::PltRelative,
-            encoding: RelocationEncoding::X86Branch,
-            symbol: sym_id,
-            addend: -4,
-        };
+        let reloc = create_relocation(backend.target_info(), sym_id, offset + proc_offset);
 
         match output.add_relocation(text_section, reloc) {
             Ok(obj) => obj,
@@ -290,6 +283,49 @@ fn generate_wrapper<'a, B: Backend<'a>>(
         }
     } else {
         internal_error!("failed to find fn symbol for {:?}", wraps);
+    }
+}
+
+fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> write::Relocation {
+    let (encoding, size, addend, kind) = match target_info.architecture {
+        roc_target::Architecture::Aarch32 => todo!(),
+        roc_target::Architecture::Aarch64 => {
+            if cfg!(target_os = "macos") {
+                (
+                    RelocationEncoding::Generic,
+                    26,
+                    0,
+                    RelocationKind::MachO {
+                        value: 2,
+                        relative: true,
+                    },
+                )
+            } else {
+                (
+                    RelocationEncoding::AArch64Call,
+                    26,
+                    0,
+                    RelocationKind::PltRelative,
+                )
+            }
+        }
+        roc_target::Architecture::Wasm32 => todo!(),
+        roc_target::Architecture::X86_32 => todo!(),
+        roc_target::Architecture::X86_64 => (
+            RelocationEncoding::X86Branch,
+            32,
+            -4,
+            RelocationKind::PltRelative,
+        ),
+    };
+
+    write::Relocation {
+        offset,
+        size,
+        kind,
+        encoding,
+        symbol,
+        addend,
     }
 }
 
@@ -379,41 +415,77 @@ fn build_object<'a, B: Backend<'a>>(
             let exposed_proc = build_exposed_proc(&mut backend, &proc);
             let exposed_generic_proc = build_exposed_generic_proc(&mut backend, &proc);
 
+            let mode = backend.env().mode;
+
             let (module_id, layout_interner, interns, code_gen_help, _) =
                 backend.module_interns_helpers_mut();
 
             let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-            let test_helper = roc_mono::code_gen_help::test_helper(
-                code_gen_help,
-                ident_ids,
-                layout_interner,
-                &proc,
-            );
+            match mode {
+                AssemblyBackendMode::Test => {
+                    let test_helper = roc_mono::code_gen_help::test_helper(
+                        code_gen_help,
+                        ident_ids,
+                        layout_interner,
+                        &proc,
+                    );
 
-            #[cfg(debug_assertions)]
-            {
-                let module_id = exposed_generic_proc.name.name().module_id();
-                let ident_ids = backend
-                    .interns_mut()
-                    .all_ident_ids
-                    .get_mut(&module_id)
-                    .unwrap();
-                module_id.register_debug_idents(ident_ids);
-            }
+                    #[cfg(debug_assertions)]
+                    {
+                        let module_id = exposed_generic_proc.name.name().module_id();
+                        let ident_ids = backend
+                            .interns_mut()
+                            .all_ident_ids
+                            .get_mut(&module_id)
+                            .unwrap();
+                        module_id.register_debug_idents(ident_ids);
+                    }
 
-            // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
+                    // println!("{}", test_helper.to_pretty(backend.interner(), 200, true));
 
-            if let AssemblyBackendMode::Test = backend.env().mode {
-                build_proc_symbol(
-                    &mut output,
-                    &mut layout_ids,
-                    &mut procs,
-                    &mut backend,
-                    layout,
-                    test_helper,
-                    Exposed::TestMain,
-                );
+                    build_proc_symbol(
+                        &mut output,
+                        &mut layout_ids,
+                        &mut procs,
+                        &mut backend,
+                        layout,
+                        test_helper,
+                        Exposed::TestMain,
+                    );
+                }
+                AssemblyBackendMode::Repl => {
+                    let repl_helper = roc_mono::code_gen_help::repl_helper(
+                        code_gen_help,
+                        ident_ids,
+                        layout_interner,
+                        &proc,
+                    );
+
+                    #[cfg(debug_assertions)]
+                    {
+                        let module_id = exposed_generic_proc.name.name().module_id();
+                        let ident_ids = backend
+                            .interns_mut()
+                            .all_ident_ids
+                            .get_mut(&module_id)
+                            .unwrap();
+                        module_id.register_debug_idents(ident_ids);
+                    }
+
+                    // println!("{}", repl_helper.to_pretty(backend.interner(), 200, true));
+
+                    build_proc_symbol(
+                        &mut output,
+                        &mut layout_ids,
+                        &mut procs,
+                        &mut backend,
+                        layout,
+                        repl_helper,
+                        Exposed::TestMain,
+                    );
+                }
+                AssemblyBackendMode::Binary => { /* do nothing */ }
             }
 
             build_proc_symbol(
@@ -761,6 +833,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
+    let target_info = backend.target_info();
     let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc, layout_ids);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
     for reloc in relocs.iter() {
@@ -846,14 +919,7 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size: 32,
-                        kind: RelocationKind::PltRelative,
-                        encoding: RelocationEncoding::X86Branch,
-                        symbol: sym_id,
-                        addend: -4,
-                    }
+                    create_relocation(target_info, sym_id, offset + proc_offset)
                 } else {
                     internal_error!("failed to find fn symbol for {:?}", name);
                 }

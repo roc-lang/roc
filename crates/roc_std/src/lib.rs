@@ -1,5 +1,5 @@
 //! Provides Rust representations of Roc data structures.
-#![cfg_attr(not(feature = "std"), no_std)]
+// #![cfg_attr(not(feature = "std"), no_std)]
 #![crate_type = "lib"]
 
 use arrayvec::ArrayString;
@@ -227,9 +227,18 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
+
+impl Debug for RocDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RocDec")
+            .field(&self.0)
+            .field(&self.to_str())
+            .finish()
+    }
+}
 
 impl RocDec {
     pub const MIN: Self = Self(i128::MIN.to_ne_bytes());
@@ -384,20 +393,31 @@ impl RocDec {
         // push a dummy character so we have space for the decimal dot
         string.push('$');
 
-        // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
-        let bytes = unsafe { string.as_bytes_mut() };
+        if decimal_location == last_nonzero_byte {
+            // never have a '.' as the last character
+            string.truncate(last_nonzero_byte)
+        } else {
+            // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
+            let bytes = unsafe { string.as_bytes_mut() };
 
-        // shift the fractional part by one
-        bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
+            // shift the fractional part by one
+            bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
 
-        // and put in the decimal dot in the right place
-        bytes[decimal_location] = b'.';
+            // and put in the decimal dot in the right place
+            bytes[decimal_location] = b'.';
+        }
 
         string.as_str()
     }
 
     pub fn to_str(&self) -> RocStr {
         RocStr::from(self.to_str_helper(&mut ArrayString::new()))
+    }
+}
+
+impl From<i32> for RocDec {
+    fn from(value: i32) -> Self {
+        RocDec::from_ne_bytes((RocDec::ONE_POINT_ZERO * value as i128).to_ne_bytes())
     }
 }
 

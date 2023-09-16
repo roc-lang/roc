@@ -348,8 +348,8 @@ Int range : Num (Integer range)
 ##
 ## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
 ##
-## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
-## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
+## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], `0.1 + 0.2` returns `0.3`. [Dec] has 18 decimal places of precision and a range from `-170_141_183_460_469_231_731.687303715884105728` to `170_141_183_460_469_231_731.687303715884105727`.
+## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], `0.1 + 0.2` returns `0.30000000000000004`.
 ##
 ## If you don't specify a type, Roc will default to using [Dec] because it's
 ## the least error-prone overall. For example, suppose you write this:

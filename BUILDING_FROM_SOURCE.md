@@ -57,17 +57,6 @@ Read the instructions [here](devtools/README.md) to make nix work well with your
 If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/).
 Then you will no longer need to execute `nix develop` first.
 
-### Editor
-
-The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
-`cargo run edit` should work on NixOS and MacOS. If you use Linux x86_64, follow the instructions below.
-
-If you're not already in a nix shell, execute `nix develop` at the the root of the repo folder and then execute:
-
-```sh
-nixVulkanIntel cargo run edit
-```
-
 ## Troubleshooting
 
 Create an issue if you run into problems not listed here.
@@ -190,7 +179,7 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 
 ### LLVM installation on Windows
 
-**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, the editor and many tests will not work on windows.
+**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, and many tests will not work on windows.
 The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
 1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z).
