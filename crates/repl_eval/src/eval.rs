@@ -753,6 +753,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             let (tag_id, ptr_to_data) = tag_id_from_recursive_ptr(env, mem, union_layout, addr);
 
+
             let (tag_name, arg_layouts) = &tags_and_layouts[tag_id as usize];
             expr_of_tag(
                 env,
@@ -980,21 +981,44 @@ fn single_tag_union_to_ast<'a, M: ReplAppMemory>(
 
     let loc_tag_expr = &*arena.alloc(Loc::at_zero(tag_expr));
 
+    // logic to sort the fields back into user/syntax order
+    let mut layouts: Vec<_> = payload_vars
+        .iter()
+        .map(|v| env.layout_cache.from_var(env.arena, *v, env.subs).unwrap())
+        .enumerate()
+        .collect_in(env.arena);
+
+    layouts.sort_by(|(_, a), (_, b)| {
+        Ord::cmp(
+            &env.layout_cache.interner.alignment_bytes(*b),
+            &env.layout_cache.interner.alignment_bytes(*a),
+        )
+    });
+
     let output = if field_layouts.len() == payload_vars.len() {
         let it = payload_vars
             .iter()
             .copied()
             .zip(field_layouts.iter().copied());
-        sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable)
     } else if field_layouts.is_empty() && !payload_vars.is_empty() {
         // happens for e.g. `Foo Bar` where unit structures are nested and the inner one is dropped
         let it = payload_vars.iter().copied().zip([Layout::UNIT]);
-        sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable).into_bump_slice()
+        sequence_of_expr(env, mem, addr, it, WhenRecursive::Unreachable)
     } else {
         unreachable!()
     };
 
-    Expr::Apply(loc_tag_expr, output, CalledVia::Space)
+    const DEFAULT: &Loc<Expr> = &Loc::at_zero(Expr::Crash);
+    let mut vec: Vec<_> = std::iter::repeat(DEFAULT)
+        .take(output.len())
+        .collect_in(env.arena);
+
+    for (i, o) in output.into_iter().enumerate() {
+        vec[layouts[i].0] = o;
+    }
+
+    Expr::Apply(loc_tag_expr, vec.into_bump_slice(), CalledVia::Space)
 }
 
 fn sequence_of_expr<'a, 'env, I, M: ReplAppMemory>(

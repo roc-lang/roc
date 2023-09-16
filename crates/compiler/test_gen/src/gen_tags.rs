@@ -198,7 +198,7 @@ fn gen_if_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                if Bool.true then -1.0 else 1.0
+                if Bool.true then -1.0 else 1.0f64
                 "#
         ),
         -1.0,
@@ -766,7 +766,7 @@ fn join_point_when() {
                     when x is
                         Red -> 1
                         White -> 2
-                        Blue -> 3.1
+                        Blue -> 3.1f64
 
                 y
 
@@ -2061,7 +2061,7 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
                     _ -> (\a -> a)
 
 
-            main = ((fn "*") 3) * ((fn "+") 5)
+            main = ((fn "*") 3i64) * ((fn "+") 5)
             "#
         ),
         90,

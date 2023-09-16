@@ -49,7 +49,6 @@ impl Progress {
 pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
-    TooManyLines,
     Eof(Region),
     InvalidPattern,
     BadUtf8,
@@ -266,10 +265,6 @@ pub enum BadInputError {
     HasTab,
     HasMisplacedCarriageReturn,
     HasAsciiControl,
-    ///
-    TooManyLines,
-    ///
-    ///
     BadUtf8,
 }
 

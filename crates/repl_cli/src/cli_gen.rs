@@ -54,8 +54,15 @@ pub fn eval_llvm(
 
     let interns = loaded.interns.clone();
 
+    #[cfg(not(target_os = "linux"))]
     let (lib, main_fn_name, subs, layout_interner) =
-        mono_module_to_dylib(&arena, target, loaded, opt_level).expect("we produce a valid Dylib");
+        mono_module_to_dylib_llvm(&arena, target, loaded, opt_level)
+            .expect("we produce a valid Dylib");
+
+    #[cfg(target_os = "linux")]
+    let (lib, main_fn_name, subs, layout_interner) =
+        mono_module_to_dylib_asm(&arena, target, loaded, opt_level)
+            .expect("we produce a valid Dylib");
 
     let mut app = CliApp { lib };
 
@@ -70,6 +77,7 @@ pub fn eval_llvm(
         layout_interner.into_global().fork(),
         target_info,
     );
+
     let expr_str = format_answer(&arena, expr).to_string();
 
     Some(ReplOutput {
@@ -158,7 +166,8 @@ impl ReplAppMemory for CliMemory {
     }
 }
 
-fn mono_module_to_dylib<'a>(
+#[cfg_attr(target_os = "linux", allow(unused))]
+fn mono_module_to_dylib_llvm<'a>(
     arena: &'a Bump,
     target: &Triple,
     loaded: MonomorphizedModule<'a>,
@@ -258,4 +267,85 @@ fn mono_module_to_dylib<'a>(
 
     llvm_module_to_dylib(env.module, target, opt_level)
         .map(|lib| (lib, main_fn_name, subs, layout_interner))
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(unused))]
+fn mono_module_to_dylib_asm<'a>(
+    arena: &'a Bump,
+    target: &Triple,
+    loaded: MonomorphizedModule<'a>,
+    _opt_level: OptLevel,
+) -> Result<(libloading::Library, &'a str, Subs, STLayoutInterner<'a>), libloading::Error> {
+    // let dir = std::env::temp_dir().join("roc_repl");
+    let dir = tempfile::tempdir().unwrap();
+
+    let app_o_file = dir.path().join("app.o");
+
+    let _target_info = TargetInfo::from(target);
+
+    let MonomorphizedModule {
+        module_id,
+        procedures,
+        host_exposed_lambda_sets: _,
+        exposed_to_host,
+        mut interns,
+        subs,
+        mut layout_interner,
+        ..
+    } = loaded;
+
+    let lazy_literals = true;
+    let env = roc_gen_dev::Env {
+        arena,
+        module_id,
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
+        lazy_literals,
+        mode: roc_gen_dev::AssemblyBackendMode::Repl,
+    };
+
+    let target = target_lexicon::Triple::host();
+    let module_object = roc_gen_dev::build_module(
+        &env,
+        &mut interns,
+        &mut layout_interner,
+        &target,
+        procedures,
+    );
+
+    let module_out = module_object
+        .write()
+        .expect("failed to build output object");
+    std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
+
+    // TODO make this an environment variable
+    if false {
+        let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
+        std::fs::copy(&app_o_file, file_path).unwrap();
+    }
+
+    let builtins_host_tempfile =
+        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+
+    let (mut child, dylib_path) = roc_build::link::link(
+        &target,
+        app_o_file.clone(),
+        // Long term we probably want a smarter way to link in zig builtins.
+        // With the current method all methods are kept and it adds about 100k to all outputs.
+        &[
+            app_o_file.to_str().unwrap(),
+            builtins_host_tempfile.path().to_str().unwrap(),
+        ],
+        roc_build::link::LinkType::Dylib,
+    )
+    .expect("failed to link dynamic library");
+
+    child.wait().unwrap();
+
+    // Load the dylib
+    let path = dylib_path.as_path().to_str().unwrap();
+
+    let lib = unsafe { Library::new(path) }?;
+
+    Ok((lib, "test_main", subs, layout_interner))
 }

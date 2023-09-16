@@ -22,8 +22,8 @@ jobs:
         # this issue may be caused by using older versions of XCode
 
       - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --features "editor" --bin roc
-        # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc
+        # target-cpu=x86-64 -> For maximal compatibility for all CPU's.
           
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV

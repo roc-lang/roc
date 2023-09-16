@@ -1,11 +1,16 @@
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
-use crate::Relocation;
+use crate::{
+    pointer_layouts, single_register_floats, single_register_int_builtins,
+    single_register_integers, single_register_layouts, Relocation,
+};
 use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
-use roc_builtins::bitcode::FloatWidth;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{InLayout, STLayoutInterner};
+use roc_mono::layout::{
+    Builtin, InLayout, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
+};
 
 use super::{CompareOperation, RegisterWidth};
 
@@ -47,51 +52,92 @@ pub enum AArch64GeneralReg {
     ZRSP = 31,
 }
 
+impl AArch64GeneralReg {
+    #[cfg(test)]
+    const fn as_str_32bit(&self) -> &str {
+        match self {
+            AArch64GeneralReg::X0 => "w0",
+            AArch64GeneralReg::X1 => "w1",
+            AArch64GeneralReg::X2 => "w2",
+            AArch64GeneralReg::X3 => "w3",
+            AArch64GeneralReg::X4 => "w4",
+            AArch64GeneralReg::X5 => "w5",
+            AArch64GeneralReg::X6 => "w6",
+            AArch64GeneralReg::X7 => "w7",
+            AArch64GeneralReg::XR => "wr",
+            AArch64GeneralReg::X9 => "w9",
+            AArch64GeneralReg::X10 => "w10",
+            AArch64GeneralReg::X11 => "w11",
+            AArch64GeneralReg::X12 => "w12",
+            AArch64GeneralReg::X13 => "w13",
+            AArch64GeneralReg::X14 => "w14",
+            AArch64GeneralReg::X15 => "w15",
+            AArch64GeneralReg::IP0 => "ip0",
+            AArch64GeneralReg::IP1 => "ip1",
+            AArch64GeneralReg::PR => "pr",
+            AArch64GeneralReg::X19 => "w19",
+            AArch64GeneralReg::X20 => "w20",
+            AArch64GeneralReg::X21 => "w21",
+            AArch64GeneralReg::X22 => "w22",
+            AArch64GeneralReg::X23 => "w23",
+            AArch64GeneralReg::X24 => "w24",
+            AArch64GeneralReg::X25 => "w25",
+            AArch64GeneralReg::X26 => "w26",
+            AArch64GeneralReg::X27 => "w27",
+            AArch64GeneralReg::X28 => "w28",
+            AArch64GeneralReg::FP => "fp",
+            AArch64GeneralReg::LR => "lr",
+            AArch64GeneralReg::ZRSP => "zrsp",
+        }
+    }
+
+    const fn as_str_64bit(&self) -> &str {
+        match self {
+            AArch64GeneralReg::X0 => "x0",
+            AArch64GeneralReg::X1 => "x1",
+            AArch64GeneralReg::X2 => "x2",
+            AArch64GeneralReg::X3 => "x3",
+            AArch64GeneralReg::X4 => "x4",
+            AArch64GeneralReg::X5 => "x5",
+            AArch64GeneralReg::X6 => "x6",
+            AArch64GeneralReg::X7 => "x7",
+            AArch64GeneralReg::XR => "xr",
+            AArch64GeneralReg::X9 => "x9",
+            AArch64GeneralReg::X10 => "x10",
+            AArch64GeneralReg::X11 => "x11",
+            AArch64GeneralReg::X12 => "x12",
+            AArch64GeneralReg::X13 => "x13",
+            AArch64GeneralReg::X14 => "x14",
+            AArch64GeneralReg::X15 => "x15",
+            AArch64GeneralReg::IP0 => "ip0",
+            AArch64GeneralReg::IP1 => "ip1",
+            AArch64GeneralReg::PR => "pr",
+            AArch64GeneralReg::X19 => "x19",
+            AArch64GeneralReg::X20 => "x20",
+            AArch64GeneralReg::X21 => "x21",
+            AArch64GeneralReg::X22 => "x22",
+            AArch64GeneralReg::X23 => "x23",
+            AArch64GeneralReg::X24 => "x24",
+            AArch64GeneralReg::X25 => "x25",
+            AArch64GeneralReg::X26 => "x26",
+            AArch64GeneralReg::X27 => "x27",
+            AArch64GeneralReg::X28 => "x28",
+            AArch64GeneralReg::FP => "fp",
+            AArch64GeneralReg::LR => "lr",
+            AArch64GeneralReg::ZRSP => "zrsp",
+        }
+    }
+}
+
 impl RegTrait for AArch64GeneralReg {
     fn value(&self) -> u8 {
         *self as u8
     }
 }
+
 impl std::fmt::Display for AArch64GeneralReg {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                AArch64GeneralReg::X0 => "x0",
-                AArch64GeneralReg::X1 => "x1",
-                AArch64GeneralReg::X2 => "x2",
-                AArch64GeneralReg::X3 => "x3",
-                AArch64GeneralReg::X4 => "x4",
-                AArch64GeneralReg::X5 => "x5",
-                AArch64GeneralReg::X6 => "x6",
-                AArch64GeneralReg::X7 => "x7",
-                AArch64GeneralReg::XR => "xr",
-                AArch64GeneralReg::X9 => "x9",
-                AArch64GeneralReg::X10 => "x10",
-                AArch64GeneralReg::X11 => "x11",
-                AArch64GeneralReg::X12 => "x12",
-                AArch64GeneralReg::X13 => "x13",
-                AArch64GeneralReg::X14 => "x14",
-                AArch64GeneralReg::X15 => "x15",
-                AArch64GeneralReg::IP0 => "ip0",
-                AArch64GeneralReg::IP1 => "ip1",
-                AArch64GeneralReg::PR => "pr",
-                AArch64GeneralReg::X19 => "x19",
-                AArch64GeneralReg::X20 => "x20",
-                AArch64GeneralReg::X21 => "x21",
-                AArch64GeneralReg::X22 => "x22",
-                AArch64GeneralReg::X23 => "x23",
-                AArch64GeneralReg::X24 => "x24",
-                AArch64GeneralReg::X25 => "x25",
-                AArch64GeneralReg::X26 => "x26",
-                AArch64GeneralReg::X27 => "x27",
-                AArch64GeneralReg::X28 => "x28",
-                AArch64GeneralReg::FP => "fp",
-                AArch64GeneralReg::LR => "lr",
-                AArch64GeneralReg::ZRSP => "zrsp",
-            }
-        )
+        write!(f, "{}", self.as_str_64bit())
     }
 }
 
@@ -258,7 +304,19 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         AArch64GeneralReg::IP0,
         AArch64GeneralReg::IP1,
     ];
-    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = &[];
+
+    // The first eight registers, v0-v7, are used to pass argument values
+    // into a subroutine and to return result values from a function.
+    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = &[
+        AArch64FloatReg::V0,
+        AArch64FloatReg::V1,
+        AArch64FloatReg::V2,
+        AArch64FloatReg::V3,
+        AArch64FloatReg::V4,
+        AArch64FloatReg::V5,
+        AArch64FloatReg::V6,
+        AArch64FloatReg::V7,
+    ];
     const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = Self::FLOAT_PARAM_REGS;
     const FLOAT_DEFAULT_FREE_REGS: &'static [AArch64FloatReg] = &[];
 
@@ -281,8 +339,19 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         )
     }
     #[inline(always)]
-    fn float_callee_saved(_reg: &AArch64FloatReg) -> bool {
-        todo!("AArch64 FloatRegs");
+    fn float_callee_saved(reg: &AArch64FloatReg) -> bool {
+        // Registers v8-v15 must be preserved by a callee across subroutine calls;
+        matches!(
+            reg,
+            AArch64FloatReg::V8
+                | AArch64FloatReg::V9
+                | AArch64FloatReg::V10
+                | AArch64FloatReg::V11
+                | AArch64FloatReg::V12
+                | AArch64FloatReg::V13
+                | AArch64FloatReg::V14
+                | AArch64FloatReg::V15
+        )
     }
 
     #[inline(always)]
@@ -386,86 +455,444 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
     #[inline(always)]
     fn load_args<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _args: &'a [(InLayout<'a>, Symbol)],
-        _ret_layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        args: &'a [(InLayout<'a>, Symbol)],
+        ret_layout: &InLayout<'a>,
     ) {
-        todo!("Loading args for AArch64");
+        let returns_via_pointer = AArch64Call::returns_via_arg_pointer(layout_interner, ret_layout);
+
+        let mut state = AArch64CallLoadArgs {
+            general_i: usize::from(returns_via_pointer),
+            float_i: 0,
+            // 16 is the size of the pushed return address and base pointer.
+            argument_offset: AArch64Call::SHADOW_SPACE_SIZE as i32 + 16,
+        };
+
+        if returns_via_pointer {
+            storage_manager.ret_pointer_arg(AArch64Call::GENERAL_PARAM_REGS[0]);
+        }
+
+        for (in_layout, sym) in args.iter() {
+            state.load_arg(buf, storage_manager, layout_interner, *sym, *in_layout);
+        }
     }
 
     #[inline(always)]
     fn store_args<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _dst: &Symbol,
-        _args: &[Symbol],
-        _arg_layouts: &[InLayout<'a>],
-        _ret_layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        dst: &Symbol,
+        args: &[Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     ) {
-        todo!("Storing args for AArch64");
+        let mut general_i = 0;
+
+        if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
+            // Save space on the stack for the result we will be return.
+            let base_offset =
+                storage_manager.claim_stack_area_layout(layout_interner, *dst, *ret_layout);
+            // Set the first reg to the address base + offset.
+            let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
+            general_i += 1;
+            AArch64Assembler::add_reg64_reg64_imm32(
+                buf,
+                ret_reg,
+                AArch64Call::BASE_PTR_REG,
+                base_offset,
+            );
+        }
+
+        let mut state = AArch64CallStoreArgs {
+            general_i,
+            float_i: 0,
+            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
+        };
+
+        for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
+            state.store_arg(buf, storage_manager, layout_interner, *sym, *in_layout);
+        }
+
+        storage_manager.update_fn_call_stack_size(state.tmp_stack_offset as u32);
     }
 
     fn return_complex_symbol<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _sym: &Symbol,
-        _layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: &Symbol,
+        layout: &InLayout<'a>,
     ) {
-        todo!("Returning complex symbols for AArch64");
+        match layout_interner.get_repr(*layout) {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            _ if layout_interner.stack_size(*layout) == 0 => {}
+            _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
+                let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
+                debug_assert_eq!(base_offset % 8, 0);
+                if size <= 8 {
+                    AArch64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                } else if size <= 16 {
+                    AArch64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[0],
+                        base_offset,
+                    );
+                    AArch64Assembler::mov_reg64_base32(
+                        buf,
+                        Self::GENERAL_RETURN_REGS[1],
+                        base_offset + 8,
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
+            _ => {
+                // This is a large type returned via the arg pointer.
+                storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
+                // Also set the return reg to the arg pointer.
+                storage_manager.load_to_specified_general_reg(
+                    buf,
+                    &Symbol::RET_POINTER,
+                    Self::GENERAL_RETURN_REGS[0],
+                );
+            }
+        }
     }
 
     fn load_returned_complex_symbol<'a>(
-        _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<
-            'a,
-            '_,
-            AArch64GeneralReg,
-            AArch64FloatReg,
-            AArch64Assembler,
-            AArch64Call,
-        >,
-        _layout_interner: &mut STLayoutInterner<'a>,
-        _sym: &Symbol,
-        _layout: &InLayout<'a>,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: &Symbol,
+        layout: &InLayout<'a>,
     ) {
-        todo!("Loading returned complex symbols for AArch64");
+        match layout_interner.get_repr(*layout) {
+            single_register_layouts!() => {
+                internal_error!("single register layouts are not complex symbols");
+            }
+            _ if layout_interner.stack_size(*layout) == 0 => {
+                storage_manager.no_data(sym);
+            }
+            _ if !Self::returns_via_arg_pointer(layout_interner, layout) => {
+                let size = layout_interner.stack_size(*layout);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, *sym, *layout);
+                if size <= 8 {
+                    AArch64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                } else if size <= 16 {
+                    AArch64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
+                    AArch64Assembler::mov_base32_reg64(
+                        buf,
+                        offset + 8,
+                        Self::GENERAL_RETURN_REGS[1],
+                    );
+                } else {
+                    internal_error!(
+                        "types that don't return via arg pointer must be less than 16 bytes"
+                    );
+                }
+            }
+            _ => {
+                // This should have been recieved via an arg pointer.
+                // That means the value is already loaded onto the stack area we allocated before the call.
+                // Nothing to do.
+            }
+        }
     }
 
     fn setjmp(_buf: &mut Vec<'_, u8>) {
-        todo!()
+        eprintln!("setjmp is not implemented on this target!");
     }
 
     fn longjmp(_buf: &mut Vec<'_, u8>) {
-        todo!()
+        eprintln!("longjmp is not implemented on this target!");
     }
 
     fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
-        todo!()
+        eprintln!("roc_panic is not implemented on this target!");
+    }
+}
+
+impl AArch64Call {
+    fn returns_via_arg_pointer<'a>(
+        interner: &STLayoutInterner<'a>,
+        ret_layout: &InLayout<'a>,
+    ) -> bool {
+        // TODO: This will need to be more complex/extended to fully support the calling convention.
+        // details here: https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-1.0.pdf
+        interner.stack_size(*ret_layout) > 16
+    }
+}
+
+type AArch64StorageManager<'a, 'r> =
+    StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, AArch64Assembler, AArch64Call>;
+
+struct AArch64CallLoadArgs {
+    general_i: usize,
+    float_i: usize,
+    argument_offset: i32,
+}
+
+impl AArch64CallLoadArgs {
+    fn load_arg<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: Symbol,
+        in_layout: InLayout<'a>,
+    ) {
+        let stack_size = layout_interner.stack_size(in_layout);
+        match layout_interner.get_repr(in_layout) {
+            single_register_integers!() => self.load_arg_general(storage_manager, sym),
+            pointer_layouts!() => self.load_arg_general(storage_manager, sym),
+            single_register_floats!() => self.load_arg_float(storage_manager, sym),
+            _ if stack_size == 0 => {
+                storage_manager.no_data(&sym);
+            }
+            _ if stack_size > 16 => {
+                // TODO: Double check this.
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
+                buf,
+                storage_manager,
+                layout_interner,
+                sym,
+                lambda_set.runtime_representation(),
+            ),
+            LayoutRepr::Struct { .. } => {
+                // for now, just also store this on the stack
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                self.load_arg_general_128bit(buf, storage_manager, sym);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.load_arg_general_128bit(buf, storage_manager, sym);
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                // for now, just also store this on the stack
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                self.argument_offset += stack_size as i32;
+            }
+            _ => {
+                todo!(
+                    "Loading args with layout {:?}",
+                    layout_interner.dbg(in_layout)
+                );
+            }
+        }
+    }
+
+    fn load_arg_general(
+        &mut self,
+        storage_manager: &mut AArch64StorageManager<'_, '_>,
+        sym: Symbol,
+    ) {
+        if let Some(reg) = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i) {
+            storage_manager.general_reg_arg(&sym, *reg);
+            self.general_i += 1;
+        } else {
+            storage_manager.primitive_stack_arg(&sym, self.argument_offset);
+            self.argument_offset += 8;
+        }
+    }
+
+    fn load_arg_general_128bit(
+        &mut self,
+        buf: &mut Vec<u8>,
+        storage_manager: &mut AArch64StorageManager<'_, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let reg1 = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i);
+        let reg2 = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i + 1);
+
+        match (reg1, reg2) {
+            (Some(reg1), Some(reg2)) => {
+                let offset = storage_manager.claim_stack_area_with_alignment(sym, 16, 16);
+
+                ASM::mov_base32_reg64(buf, offset, *reg1);
+                ASM::mov_base32_reg64(buf, offset + 8, *reg2);
+
+                self.general_i += 2;
+            }
+            _ => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, 16);
+                self.argument_offset += 16;
+            }
+        }
+    }
+
+    fn load_arg_float(&mut self, storage_manager: &mut AArch64StorageManager<'_, '_>, sym: Symbol) {
+        if let Some(reg) = AArch64Call::FLOAT_PARAM_REGS.get(self.float_i) {
+            storage_manager.float_reg_arg(&sym, *reg);
+            self.float_i += 1;
+        } else {
+            storage_manager.primitive_stack_arg(&sym, self.argument_offset);
+            self.argument_offset += 8;
+        }
+    }
+}
+
+struct AArch64CallStoreArgs {
+    general_i: usize,
+    float_i: usize,
+    tmp_stack_offset: i32,
+}
+
+impl AArch64CallStoreArgs {
+    const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_PARAM_REGS;
+    const GENERAL_RETURN_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_RETURN_REGS;
+
+    const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_PARAM_REGS;
+    const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_RETURN_REGS;
+
+    fn store_arg<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        sym: Symbol,
+        in_layout: InLayout<'a>,
+    ) {
+        type ASM = AArch64Assembler;
+
+        // we use the return register as a temporary register; it will be overwritten anyway
+        let _tmp_reg = Self::GENERAL_RETURN_REGS[0];
+
+        match layout_interner.get_repr(in_layout) {
+            single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
+            pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
+            single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
+            LayoutRepr::I128 | LayoutRepr::U128 => {
+                let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+                if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+                    let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+                    ASM::mov_reg64_base32(buf, reg1, offset);
+                    ASM::mov_reg64_base32(buf, reg2, offset + 8);
+
+                    self.general_i += 2;
+                } else {
+                    // Copy to stack using return reg as buffer.
+                    let reg = Self::GENERAL_RETURN_REGS[0];
+
+                    ASM::mov_reg64_base32(buf, reg, offset);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+                    ASM::mov_reg64_base32(buf, reg, offset + 8);
+                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+                    self.tmp_stack_offset += 16;
+                }
+            }
+            _ if layout_interner.stack_size(in_layout) == 0 => {}
+            /*
+            _ if layout_interner.stack_size(in_layout) > 16 => {
+                // TODO: Double check this.
+                // Just copy onto the stack.
+                let stack_offset = self.tmp_stack_offset;
+
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
+
+                self.tmp_stack_offset += size as i32;
+            }
+            LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
+                buf,
+                storage_manager,
+                layout_interner,
+                sym,
+                lambda_set.runtime_representation(),
+            ),
+            LayoutRepr::Struct { .. } => {
+                let stack_offset = self.tmp_stack_offset;
+
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
+
+                self.tmp_stack_offset += size as i32;
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                let stack_offset = self.tmp_stack_offset;
+
+                let size =
+                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
+
+                self.tmp_stack_offset += size as i32;
+            }
+            */
+            _ => {
+                todo!(
+                    "calling with arg type, {:?}",
+                    layout_interner.dbg(in_layout)
+                );
+            }
+        }
+    }
+
+    fn store_arg_general<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                storage_manager.load_to_specified_general_reg(buf, &sym, *reg);
+                self.general_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let tmp = Self::GENERAL_RETURN_REGS[0];
+
+                storage_manager.load_to_specified_general_reg(buf, &sym, tmp);
+                AArch64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
+    }
+
+    fn store_arg_float<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        match Self::FLOAT_PARAM_REGS.get(self.float_i) {
+            Some(reg) => {
+                storage_manager.load_to_specified_float_reg(buf, &sym, *reg);
+                self.float_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let tmp = Self::FLOAT_RETURN_REGS[0];
+
+                storage_manager.load_to_specified_float_reg(buf, &sym, tmp);
+                AArch64Assembler::mov_stack32_freg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
     }
 }
 
@@ -494,7 +921,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         imm32: i32,
     ) {
         if imm32 < 0 {
-            todo!("immediate addition with values less than 0");
+            // add immediates must be signed, so we have to use a register here
+            Self::mov_reg64_imm64(buf, dst, imm32 as i64);
+            add_reg64_reg64_reg64(buf, dst, src, dst);
         } else if imm32 < 0xFFF {
             add_reg64_reg64_imm12(buf, dst, src, imm32 as u16);
         } else {
@@ -530,8 +959,13 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn call(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>, _fn_name: String) {
-        todo!("calling functions literal for AArch64");
+    fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String) {
+        let inst = 0b1001_0100_0000_0000_0000_0000_0000_0000u32;
+        buf.extend(inst.to_le_bytes());
+        relocs.push(Relocation::LinkedFunction {
+            offset: buf.len() as u64 - 4,
+            name: fn_name,
+        });
     }
 
     #[inline(always)]
@@ -551,7 +985,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _fn_name: String,
         _dst: AArch64GeneralReg,
     ) {
-        todo!("data pointer for AArch64");
+        eprintln!("data_pointer not implemented for this target");
     }
 
     #[inline(always)]
@@ -794,68 +1228,79 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         dst: AArch64GeneralReg,
         src: AArch64GeneralReg,
     ) {
-        match register_width {
-            RegisterWidth::W8 => todo!(),
-            RegisterWidth::W16 => todo!(),
-            RegisterWidth::W32 => todo!(),
-            RegisterWidth::W64 => mov_reg64_reg64(buf, dst, src),
+        if dst != src {
+            // TODO can we be more fine-grained here? there is a 32-bit version of this instruction
+            // but that does not really help for W8 and W16
+            match register_width {
+                RegisterWidth::W8 => mov_reg64_reg64(buf, dst, src),
+                RegisterWidth::W16 => mov_reg64_reg64(buf, dst, src),
+                RegisterWidth::W32 => mov_reg64_reg64(buf, dst, src),
+                RegisterWidth::W64 => mov_reg64_reg64(buf, dst, src),
+            }
         }
     }
 
     #[inline(always)]
     fn movsx_reg_reg(
-        _buf: &mut Vec<'_, u8>,
-        _input_width: RegisterWidth,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
     ) {
-        todo!("move with sign extension");
+        sign_extend(buf, input_width, dst, src)
     }
 
     #[inline(always)]
     fn movzx_reg_reg(
-        _buf: &mut Vec<'_, u8>,
-        _input_width: RegisterWidth,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        input_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
     ) {
-        todo!("move with zero extension");
+        // moving with zero extension is the default in arm
+        Self::mov_reg_reg(buf, input_width, dst, src)
     }
 
     #[inline(always)]
-    fn mov_freg64_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        todo!("loading floating point reg from base offset for AArch64");
+    fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, offset: i32) {
+        Self::mov_freg64_mem64_offset32(buf, dst, AArch64GeneralReg::FP, offset)
     }
+
     #[inline(always)]
-    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
+    fn mov_reg_mem_offset32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        src: AArch64GeneralReg,
+        offset: i32,
+    ) {
         if offset < 0 {
-            todo!("negative base offsets for AArch64");
+            ldur_reg_reg_imm9(buf, register_width, dst, src, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
     }
+
     #[inline(always)]
-    fn mov_reg32_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
-        todo!()
+    fn mov_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+    ) {
+        Self::mov_reg_mem_offset32(buf, register_width, dst, AArch64GeneralReg::FP, offset)
+    }
+
+    #[inline(always)]
+    fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
+        Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::FP, offset, src)
     }
     #[inline(always)]
-    fn mov_reg16_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_reg8_base32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _offset: i32) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_base32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        todo!("saving floating point reg to base offset for AArch64");
-    }
-    #[inline(always)]
-    fn mov_base32_freg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        todo!("saving floating point reg to base offset for AArch64");
+    fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
+        Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::FP, offset, src)
     }
     #[inline(always)]
     fn movesd_mem64_offset32_freg64(
@@ -868,126 +1313,47 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
+    fn mov_base32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
+        Self::mov_mem_offset32_reg(buf, register_width, AArch64GeneralReg::FP, offset, src)
+    }
+
+    fn mov_mem_offset32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: AArch64GeneralReg,
+        offset: i32,
+        src: AArch64GeneralReg,
+    ) {
         if offset < 0 {
-            todo!("negative base offsets for AArch64");
+            str_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::FP, (offset as u16) >> 3);
+            str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
         } else {
             todo!("base offsets over 32k for AArch64");
         }
     }
 
     #[inline(always)]
-    fn mov_base32_reg32(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_base32_reg16(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_base32_reg8(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64GeneralReg) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_reg64_mem64_offset32(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src: AArch64GeneralReg,
-        offset: i32,
-    ) {
-        if offset < 0 {
-            todo!("negative mem offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
-        } else {
-            todo!("mem offsets over 32k for AArch64");
-        }
-    }
-    #[inline(always)]
-    fn mov_reg32_mem32_offset32(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        src: AArch64GeneralReg,
-        offset: i32,
-    ) {
-        if offset < 0 {
-            todo!("negative mem offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
-        } else {
-            todo!("mem offsets over 32k for AArch64");
-        }
-    }
-    #[inline(always)]
-    fn mov_reg16_mem16_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
-    ) {
-        todo!()
-    }
-    #[inline(always)]
-    fn mov_reg8_mem8_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
-    ) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_mem64_offset32_reg64(
+    fn mov_mem64_offset32_freg64(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,
         offset: i32,
-        src: AArch64GeneralReg,
+        src: AArch64FloatReg,
     ) {
         if offset < 0 {
-            todo!("negative mem offsets for AArch64");
+            str_freg64_reg64_imm9(buf, src, dst, offset as i16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
+            str_freg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
         } else {
             todo!("mem offsets over 32k for AArch64");
         }
-    }
-
-    #[inline(always)]
-    fn mov_mem32_offset32_reg32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_mem16_offset32_reg16(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!()
-    }
-
-    #[inline(always)]
-    fn mov_mem8_offset32_reg8(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64GeneralReg,
-    ) {
-        todo!()
     }
 
     #[inline(always)]
@@ -997,11 +1363,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         dst: AArch64GeneralReg,
         offset: i32,
     ) {
+        use RegisterWidth::*;
+
+        // move to destination (zero extends)
+        Self::mov_reg_base32(buf, register_width, dst, offset);
+
+        // then sign-extend if needed
         match register_width {
-            RegisterWidth::W8 => todo!("sign extend 1 byte values"),
-            RegisterWidth::W16 => todo!("sign extend 2 byte values"),
-            RegisterWidth::W32 => todo!("sign extend 4 byte values"),
-            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
+            W8 | W16 | W32 => sign_extend(buf, register_width, dst, dst),
+            W64 => { /* do nothing */ }
         }
     }
 
@@ -1012,55 +1382,45 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         dst: AArch64GeneralReg,
         offset: i32,
     ) {
+        use RegisterWidth::*;
+
+        // move to destination (zero extends)
+        Self::mov_reg_base32(buf, register_width, dst, offset);
+
+        // then sign-extend if needed
         match register_width {
-            RegisterWidth::W8 => todo!("zero extend 1 byte values"),
-            RegisterWidth::W16 => todo!("zero extend 2 byte values"),
-            RegisterWidth::W32 => todo!("zero extend 4 byte values"),
-            RegisterWidth::W64 => Self::mov_reg64_base32(buf, dst, offset),
+            W8 | W16 => zero_extend(buf, register_width, dst, dst),
+            W32 | W64 => { /* do nothing */ }
         }
     }
 
     #[inline(always)]
-    fn mov_freg64_stack32(_buf: &mut Vec<'_, u8>, _dst: AArch64FloatReg, _offset: i32) {
-        todo!("loading floating point reg from stack for AArch64");
+    fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, offset: i32) {
+        Self::mov_freg64_mem64_offset32(buf, dst, AArch64GeneralReg::ZRSP, offset)
     }
     #[inline(always)]
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, offset: i32) {
-        if offset < 0 {
-            todo!("negative stack offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            ldr_reg64_reg64_imm12(buf, dst, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-        } else {
-            todo!("stack offsets over 32k for AArch64");
-        }
+        Self::mov_reg_mem_offset32(
+            buf,
+            RegisterWidth::W64,
+            dst,
+            AArch64GeneralReg::ZRSP,
+            offset,
+        )
     }
     #[inline(always)]
-    fn mov_stack32_freg64(_buf: &mut Vec<'_, u8>, _offset: i32, _src: AArch64FloatReg) {
-        todo!("saving floating point reg to stack for AArch64");
+    fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64FloatReg) {
+        Self::mov_mem64_offset32_freg64(buf, AArch64GeneralReg::ZRSP, offset, src)
     }
+
     #[inline(always)]
     fn mov_stack32_reg(
         buf: &mut Vec<'_, u8>,
-        register_width: RegisterWidth,
+        _register_width: RegisterWidth,
         offset: i32,
         src: AArch64GeneralReg,
     ) {
-        match register_width {
-            RegisterWidth::W8 => todo!(),
-            RegisterWidth::W16 => todo!(),
-            RegisterWidth::W32 => todo!(),
-            RegisterWidth::W64 => {
-                if offset < 0 {
-                    todo!("negative stack offsets for AArch64");
-                } else if offset < (0xFFF << 8) {
-                    debug_assert!(offset % 8 == 0);
-                    str_reg64_reg64_imm12(buf, src, AArch64GeneralReg::ZRSP, (offset as u16) >> 3);
-                } else {
-                    todo!("stack offsets over 32k for AArch64");
-                }
-            }
-        }
+        Self::mov_mem64_offset32_reg64(buf, AArch64GeneralReg::ZRSP, offset, src)
     }
     #[inline(always)]
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
@@ -1309,12 +1669,19 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     fn mov_freg64_mem64_offset32(
-        _buf: &mut Vec<'_, u8>,
-        _dst: AArch64FloatReg,
-        _src: AArch64GeneralReg,
-        _offset: i32,
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src: AArch64GeneralReg,
+        offset: i32,
     ) {
-        todo!()
+        if offset < 0 {
+            ldr_freg64_reg64_imm9(buf, dst, src, offset as i16)
+        } else if offset < (0xFFF << 8) {
+            debug_assert!(offset % 8 == 0);
+            ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
+        } else {
+            todo!("base offsets over 32k for AArch64");
+        }
     }
 
     fn mov_freg32_mem32_offset32(
@@ -1949,6 +2316,75 @@ impl UnconditionalBranchImmediate {
     }
 }
 
+#[derive(PackedStruct, Debug)]
+#[packed_struct(endian = "msb")]
+pub struct SignExtend {
+    sf: Integer<u8, packed_bits::Bits<1>>,
+    opc: Integer<u8, packed_bits::Bits<2>>,
+    fixed: Integer<u8, packed_bits::Bits<6>>,
+    n: Integer<u8, packed_bits::Bits<1>>,
+    immr: Integer<u8, packed_bits::Bits<6>>,
+    imms: Integer<u8, packed_bits::Bits<6>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for SignExtend {}
+
+fn sign_extend(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+) {
+    let imms = match register_width {
+        RegisterWidth::W8 => 0b00_0111,  // sxtb
+        RegisterWidth::W16 => 0b00_1111, // sxth
+        RegisterWidth::W32 => 0b01_1111, // sxtw
+        RegisterWidth::W64 => return mov_reg64_reg64(buf, dst, src),
+    };
+
+    let inst = SignExtend {
+        sf: 0b1.into(),
+        opc: 0b00.into(),
+        fixed: 0b100110.into(),
+        n: 0b1.into(),
+        immr: 0b00_0000.into(),
+        imms: imms.into(),
+        rn: src.id().into(),
+        rd: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
+fn zero_extend(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: AArch64GeneralReg,
+    src: AArch64GeneralReg,
+) {
+    let imms = match register_width {
+        RegisterWidth::W8 => 0b00_0111,  // uxtb
+        RegisterWidth::W16 => 0b00_1111, // uxth
+        RegisterWidth::W32 => return mov_reg64_reg64(buf, dst, src),
+        RegisterWidth::W64 => return mov_reg64_reg64(buf, dst, src),
+    };
+
+    let inst = SignExtend {
+        sf: 0b0.into(),
+        opc: 0b10.into(),
+        fixed: 0b100110.into(),
+        n: 0b0.into(),
+        immr: 0b00_0000.into(),
+        imms: imms.into(),
+        rn: src.id().into(),
+        rd: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 // Uses unsigned Offset
 // opc = 0b01 means load
 // opc = 0b00 means store
@@ -2341,10 +2777,10 @@ fn add_reg64_reg64_imm12(
     let inst = ArithmeticImmediate::new(ArithmeticImmediateParams {
         op: false,
         s: false,
+        sh: false,
+        imm12,
         rd: dst,
         rn: src,
-        imm12,
-        sh: false,
     });
 
     buf.extend(inst.bytes());
@@ -2563,18 +2999,98 @@ fn eor_reg64_reg64_reg64(
 /// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn ldr_reg64_reg64_imm12(
+fn ldr_reg_reg_imm12(
     buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
     dst: AArch64GeneralReg,
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
     let inst = LoadStoreRegisterImmediate::new_load(LoadStoreRegisterImmediateParams {
-        size: 0b11,
+        size: register_width as u8,
         imm12,
         rn: base,
         rt: dst,
     });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn ldur_reg_reg_imm9(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: AArch64GeneralReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    #[allow(clippy::identity_op)]
+    let imm12 = (imm9 & 0b0001_1111_1111) << 2 | 0b00;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: (register_width as u8).into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: false,
+        fixed3: 0b00.into(),
+        opc: 0b01.into(), // load
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
+/// `LDR Xt, [Xn, #offset]` -> Load Xn + Offset Xt. ZRSP is SP.
+/// Note: imm12 is the offest divided by 8.
+#[inline(always)]
+fn ldr_freg64_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm12: u16,
+) {
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b01.into(),
+        opc: 0b01.into(), // load
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn ldr_freg64_reg64_imm9(
+    buf: &mut Vec<'_, u8>,
+    dst: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b00.into(),
+        opc: 0b01.into(), // load
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: dst.id().into(),
+    };
 
     buf.extend(inst.bytes());
 }
@@ -2726,21 +3242,97 @@ fn sdiv_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
+fn str_reg_reg_imm9(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    src: AArch64GeneralReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: (register_width as u8).into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: false,
+        fixed3: 0b00.into(),
+        opc: 0b00.into(), // store
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: src.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 /// `STR Xt, [Xn, #offset]` -> Store Xt to Xn + Offset. ZRSP is SP.
 /// Note: imm12 is the offest divided by 8.
 #[inline(always)]
-fn str_reg64_reg64_imm12(
+fn str_reg_reg_imm12(
     buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
     src: AArch64GeneralReg,
     base: AArch64GeneralReg,
     imm12: u16,
 ) {
     let inst = LoadStoreRegisterImmediate::new_store(LoadStoreRegisterImmediateParams {
-        size: 0b11,
+        size: register_width as u8,
         imm12,
         rn: base,
         rt: src,
     });
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn str_freg64_reg64_imm9(
+    buf: &mut Vec<'_, u8>,
+    src: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm9: i16,
+) {
+    // the value must fit in 8 bits (1 bit for the sign)
+    assert!((-256..256).contains(&imm9));
+
+    let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
+    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b11;
+
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b00.into(),
+        opc: 0b00.into(), // store
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: src.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn str_freg64_reg64_imm12(
+    buf: &mut Vec<'_, u8>,
+    src: AArch64FloatReg,
+    base: AArch64GeneralReg,
+    imm12: u16,
+) {
+    let inst = LoadStoreRegisterImmediate {
+        size: 0b11.into(), // 64-bit
+        fixed: 0b111.into(),
+        fixed2: true,
+        fixed3: 0b01.into(),
+        opc: 0b00.into(), // store
+        imm12: imm12.into(),
+        rn: base.id().into(),
+        rt: src.id().into(),
+    };
 
     buf.extend(inst.bytes());
 }
@@ -3189,6 +3781,22 @@ mod tests {
                 _ => format!("{self}"),
             }
         }
+
+        fn capstone_string_32bit(&self, zrsp_kind: ZRSPKind) -> String {
+            match self {
+                AArch64GeneralReg::XR => "w8".to_owned(),
+                AArch64GeneralReg::IP0 => "w16".to_owned(),
+                AArch64GeneralReg::IP1 => "w17".to_owned(),
+                AArch64GeneralReg::PR => "w18".to_owned(),
+                AArch64GeneralReg::FP => "w29".to_owned(),
+                AArch64GeneralReg::LR => "w30".to_owned(),
+                AArch64GeneralReg::ZRSP => match zrsp_kind {
+                    UsesZR => "wzr".to_owned(),
+                    UsesSP => "sp".to_owned(),
+                },
+                _ => self.as_str_32bit().to_string(),
+            }
+        }
     }
 
     impl AArch64FloatReg {
@@ -3200,9 +3808,26 @@ mod tests {
         }
     }
 
+    fn signed_hex_i16(value: i16) -> String {
+        let sign = if value < 0 { "-" } else { "" };
+
+        if value.unsigned_abs() < 16 {
+            format!("#{sign}{}", value.unsigned_abs())
+        } else {
+            format!("#{sign}0x{:x}", value.unsigned_abs())
+        }
+    }
+
     const TEST_U16: u16 = 0x1234;
     //const TEST_I32: i32 = 0x12345678;
     //const TEST_I64: i64 = 0x12345678_9ABCDEF0;
+
+    const ALL_REGISTER_WIDTHS: &[RegisterWidth] = &[
+        RegisterWidth::W8,
+        RegisterWidth::W16,
+        RegisterWidth::W32,
+        RegisterWidth::W64,
+    ];
 
     const ALL_GENERAL_REGS: &[AArch64GeneralReg] = &[
         AArch64GeneralReg::X0,
@@ -3563,16 +4188,66 @@ mod tests {
     #[test]
     fn test_ldr_reg64_reg64_imm12() {
         disassembler_test!(
-            ldr_reg64_reg64_imm12,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+            ldr_reg_reg_imm12,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
                 "ldr {}, [{}, #0x{:x}]",
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 imm << 3
             ),
+            [RegisterWidth::W64],
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_ldr_freg64_reg64_imm12() {
+        disassembler_test!(
+            ldr_freg64_reg64_imm12,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldr {}, [{}, #0x{:x}]",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_ldr_freg64_reg64_imm9() {
+        disassembler_test!(
+            ldr_freg64_reg64_imm9,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldr {}, [{}, {}]!",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm)
+            ),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [4, -4]
+        );
+    }
+
+    #[test]
+    fn test_ldr_reg64_reg64_imm9() {
+        disassembler_test!(
+            ldur_reg_reg_imm9,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "ldur {}, [{}, {}]",
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm),
+            ),
+            [RegisterWidth::W64],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [0x010, -0x010, 4, -4]
         );
     }
 
@@ -3765,16 +4440,66 @@ mod tests {
     #[test]
     fn test_str_reg64_reg64_imm12() {
         disassembler_test!(
-            str_reg64_reg64_imm12,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+            str_reg_reg_imm12,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
                 "str {}, [{}, #0x{:x}]",
                 reg1.capstone_string(UsesZR),
                 reg2.capstone_string(UsesSP),
                 imm << 3
             ),
+            [RegisterWidth::W64],
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [0x123]
+        );
+    }
+
+    #[test]
+    fn test_str_freg64_reg64_imm12() {
+        disassembler_test!(
+            str_freg64_reg64_imm12,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, #0x{:x}]",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                imm << 3
+            ),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [0x123]
+        );
+    }
+
+    #[test]
+    fn test_str_freg64_reg64_imm9() {
+        disassembler_test!(
+            str_freg64_reg64_imm9,
+            |reg1: AArch64FloatReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, {}]!",
+                reg1.capstone_string(FloatWidth::F64),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm),
+            ),
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS,
+            [4, -4]
+        );
+    }
+
+    #[test]
+    fn test_str_reg64_reg64_imm9() {
+        disassembler_test!(
+            str_reg_reg_imm9,
+            |_, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, imm| format!(
+                "str {}, [{}, {}]!", // ! indicates writeback
+                reg1.capstone_string(UsesZR),
+                reg2.capstone_string(UsesSP),
+                signed_hex_i16(imm),
+            ),
+            [RegisterWidth::W64],
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [4, -4]
         );
     }
 
@@ -4235,6 +4960,63 @@ mod tests {
             ),
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_sign_extend() {
+        disassembler_test!(
+            sign_extend,
+            |w, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "{} {}, {}",
+                match w {
+                    RegisterWidth::W8 => "sxtb",
+                    RegisterWidth::W16 => "sxth",
+                    RegisterWidth::W32 => "sxtw",
+                    RegisterWidth::W64 => "mov",
+                },
+                reg1.capstone_string(UsesZR),
+                match w {
+                    RegisterWidth::W8 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W16 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W32 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W64 => reg2.capstone_string(UsesZR),
+                }
+            ),
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_zero_extend() {
+        disassembler_test!(
+            zero_extend,
+            |w, reg1: AArch64GeneralReg, reg2: AArch64GeneralReg| format!(
+                "{} {}, {}",
+                match w {
+                    RegisterWidth::W8 => "uxtb",
+                    RegisterWidth::W16 => "uxth",
+                    RegisterWidth::W32 => "mov",
+                    RegisterWidth::W64 => "mov",
+                },
+                match w {
+                    RegisterWidth::W8 => reg1.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W16 => reg1.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W32 => reg1.capstone_string(UsesZR),
+                    RegisterWidth::W64 => reg1.capstone_string(UsesZR),
+                },
+                match w {
+                    RegisterWidth::W8 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W16 => reg2.capstone_string_32bit(UsesZR),
+                    RegisterWidth::W32 => reg2.capstone_string(UsesZR),
+                    RegisterWidth::W64 => reg2.capstone_string(UsesZR),
+                }
+            ),
+            ALL_REGISTER_WIDTHS,
+            ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
     }

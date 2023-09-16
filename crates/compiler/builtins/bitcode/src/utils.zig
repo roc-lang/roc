@@ -4,6 +4,8 @@ const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const Monotonic = std.builtin.AtomicOrder.Monotonic;
 
 const DEBUG_INCDEC = false;
+const DEBUG_TESTING_ALLOC = false;
+const DEBUG_ALLOC = false;
 
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
@@ -60,18 +62,34 @@ comptime {
 }
 
 fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
-    return @ptrCast(?*anyopaque, std.testing.allocator.alloc(u8, size) catch unreachable);
+    const ptr = @ptrCast(?*anyopaque, std.testing.allocator.alloc(u8, size) catch unreachable);
+
+    if (DEBUG_TESTING_ALLOC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("+ alloc {*}: {} bytes\n", .{ ptr, size });
+    }
+
+    return ptr;
 }
 
 fn testing_roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, _: u32) callconv(.C) ?*anyopaque {
     const ptr = @ptrCast([*]u8, @alignCast(2 * @alignOf(usize), c_ptr));
     const slice = ptr[0..old_size];
 
-    return @ptrCast(?*anyopaque, std.testing.allocator.realloc(slice, new_size) catch unreachable);
+    const new = @ptrCast(?*anyopaque, std.testing.allocator.realloc(slice, new_size) catch unreachable);
+
+    if (DEBUG_TESTING_ALLOC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("- realloc {*}\n", .{new});
+    }
+
+    return new;
 }
 
 fn testing_roc_dealloc(c_ptr: *anyopaque, _: u32) callconv(.C) void {
     const ptr = @ptrCast([*]u8, @alignCast(2 * @alignOf(usize), c_ptr));
+
+    if (DEBUG_TESTING_ALLOC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("💀 dealloc {*}\n", .{ptr});
+    }
 
     std.testing.allocator.destroy(ptr);
 }
@@ -88,6 +106,9 @@ pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
 }
 
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("- realloc {*}\n", .{c_ptr});
+    }
     return @ptrCast([*]u8, roc_realloc(c_ptr, new_size, old_size, alignment));
 }
 
@@ -200,13 +221,14 @@ pub fn decrefDataPtrC(
 ) callconv(.C) void {
     var bytes = bytes_or_null orelse return;
 
-    const ptr = @ptrToInt(bytes);
+    const data_ptr = @ptrToInt(bytes);
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const unmasked_ptr = data_ptr & ~tag_mask;
 
-    const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
+    const isizes: [*]isize = @intToPtr([*]isize, unmasked_ptr);
+    const rc_ptr = isizes - 1;
 
-    return decrefRcPtrC(isizes - 1, alignment);
+    return decrefRcPtrC(rc_ptr, alignment);
 }
 
 pub fn increfDataPtrC(
@@ -269,9 +291,14 @@ inline fn free_ptr_to_refcount(
 ) void {
     if (RC_TYPE == Refcount.none) return;
     const extra_bytes = std.math.max(alignment, @sizeOf(usize));
+    const allocation_ptr = @ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize));
 
     // NOTE: we don't even check whether the refcount is "infinity" here!
-    dealloc(@ptrCast([*]u8, refcount_ptr) - (extra_bytes - @sizeOf(usize)), alignment);
+    dealloc(allocation_ptr, alignment);
+
+    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("💀 freed {*}\n", .{allocation_ptr});
+    }
 }
 
 inline fn decref_ptr_to_refcount(
@@ -326,11 +353,11 @@ pub fn isUnique(
 
     const isizes: [*]isize = @intToPtr([*]isize, masked_ptr);
 
-    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("| is unique {*}\n", .{&bytes[0]});
-    }
-
     const refcount = (isizes - 1)[0];
+
+    if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("| is unique {*}\n", .{isizes - 1});
+    }
 
     return refcount == REFCOUNT_ONE_ISIZE;
 }
@@ -399,6 +426,10 @@ pub fn allocateWithRefcount(
     const length = alignment + data_bytes;
 
     var new_bytes: [*]u8 = alloc(length, alignment) orelse unreachable;
+
+    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("+ allocated {*} ({} bytes with alignment {})\n", .{ new_bytes, data_bytes, alignment });
+    }
 
     const data_ptr = new_bytes + alignment;
     const refcount_ptr = @ptrCast([*]usize, @alignCast(ptr_width, data_ptr) - ptr_width);

@@ -65,7 +65,8 @@ impl<T> RocList<T> {
     /// returns the number of bytes needed to allocate, taking into account both the
     /// size of the elements as well as the size of Storage.
     fn alloc_bytes(num_elems: usize) -> usize {
-        mem::size_of::<Storage>() + (num_elems * mem::size_of::<T>())
+        next_multiple_of(mem::size_of::<Storage>(), mem::align_of::<T>())
+            + (num_elems * mem::size_of::<T>())
     }
 
     fn elems_with_capacity(num_elems: usize) -> NonNull<ManuallyDrop<T>> {
@@ -188,7 +189,14 @@ impl<T> RocList<T> {
     #[inline(always)]
     fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
-        let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>() };
+
+        let offset = match mem::align_of::<T>() {
+            16 => 1,
+            8 | 4 | 2 | 1 => 0,
+            other => unreachable!("invalid alignment {other}"),
+        };
+
+        let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>().add(offset) };
         Some((elements, storage))
     }
 
@@ -203,7 +211,7 @@ impl<T> RocList<T> {
     }
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
-    pub(crate) unsafe fn ptr_to_allocation(&self) -> *mut c_void {
+    pub(crate) fn ptr_to_allocation(&self) -> *mut c_void {
         let alignment = Self::alloc_alignment() as usize;
         if self.is_seamless_slice() {
             ((self.capacity_or_ref_ptr << 1) - alignment) as *mut _
@@ -298,11 +306,10 @@ where
 
         // Use .cloned() to increment the elements' reference counts, if needed.
         for (i, new_elem) in slice.iter().cloned().enumerate() {
+            let dst = unsafe { append_ptr.add(i) };
             unsafe {
                 // Write the element into the slot, without dropping it.
-                append_ptr
-                    .add(i)
-                    .write(ptr::read(&ManuallyDrop::new(new_elem)));
+                ptr::write(dst, ManuallyDrop::new(new_elem));
             }
 
             // It's important that the length is increased one by one, to
@@ -448,7 +455,7 @@ where
     T: PartialEq<U>,
 {
     fn eq(&self, other: &RocList<U>) -> bool {
-        self.deref() == other.deref()
+        self.as_slice() == other.as_slice()
     }
 }
 
@@ -754,5 +761,59 @@ where
         }
 
         Ok(out)
+    }
+}
+
+const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
+    match lhs % rhs {
+        0 => lhs,
+        r => lhs + (rhs - r),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RocDec;
+
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        unsafe { libc::malloc(size) }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_realloc(
+        c_ptr: *mut c_void,
+        new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        unsafe { libc::realloc(c_ptr, new_size) }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+        unsafe { libc::free(c_ptr) }
+    }
+
+    #[test]
+    fn compare_list_dec() {
+        // RocDec is special because it's alignment is 16
+        let a = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
+        let b = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
+
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn clone_list_dec() {
+        // RocDec is special because it's alignment is 16
+        let a = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
+        let b = a.clone();
+
+        assert_eq!(a, b);
+
+        drop(a);
+        drop(b);
     }
 }
