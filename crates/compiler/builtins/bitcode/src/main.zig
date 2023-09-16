@@ -22,6 +22,8 @@ comptime {
     exportDecFn(dec.toStr, "to_str");
     exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.fromF64, "from_f64");
+    exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
