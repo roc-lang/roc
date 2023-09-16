@@ -287,18 +287,42 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> write::Relocation {
-    let (encoding, size, addend) = match target_info.architecture {
+    let (encoding, size, addend, kind) = match target_info.architecture {
         roc_target::Architecture::Aarch32 => todo!(),
-        roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26, 0),
+        roc_target::Architecture::Aarch64 => {
+            if cfg!(target_os = "macos") {
+                (
+                    RelocationEncoding::Generic,
+                    26,
+                    0,
+                    RelocationKind::MachO {
+                        value: 2,
+                        relative: true,
+                    },
+                )
+            } else {
+                (
+                    RelocationEncoding::AArch64Call,
+                    26,
+                    0,
+                    RelocationKind::PltRelative,
+                )
+            }
+        }
         roc_target::Architecture::Wasm32 => todo!(),
         roc_target::Architecture::X86_32 => todo!(),
-        roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32, -4),
+        roc_target::Architecture::X86_64 => (
+            RelocationEncoding::X86Branch,
+            32,
+            -4,
+            RelocationKind::PltRelative,
+        ),
     };
 
     write::Relocation {
         offset,
         size,
-        kind: RelocationKind::PltRelative,
+        kind,
         encoding,
         symbol,
         addend,
