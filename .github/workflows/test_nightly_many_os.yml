@@ -21,7 +21,10 @@ jobs:
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
-        run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+        run:  | 
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+          sudo apt install -y expect
+
 
       - name: get the latest release archive for macos (x86_64)
         if: startsWith(matrix.os, 'macos')
@@ -38,7 +41,6 @@ jobs:
         run: |
           rm -rf roc_nightly
           curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz
-          sudo apt install -y expect
           ./ci/basic_nightly_test.sh
 
 
