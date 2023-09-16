@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 name: Test latest nightly release for macOS Apple Silicon
@@ -37,6 +38,9 @@ jobs:
 
       - name: test platform switching c
         run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc
+
+      - name: test repl
+        run: cd roc_nightly && expect ../ci/repl_test.exp
 
 
         

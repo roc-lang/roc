@@ -1,0 +1,33 @@
+#!/usr/bin/expect
+
+# uncomment line below for debugging
+exp_internal 1
+
+set timeout 7
+
+spawn ./roc repl
+
+sleep 1
+
+expect -exact "\r
+  The rockin’ \u001b\[34mroc repl\u001b\[0m\r
+\u001b\[35m────────────────────────\u001b\[0m\r
+\r
+Enter an expression, or :help, or :q to quit.\r
+\r
+\u001b\[?2004h\r\u001b\[0K\u001b\[34m»\u001b\[0m \r\u001b\[2C" {
+    send -- "1+1\r"
+    sleep 1
+
+    expect -exact "\r
+\r
+2\u001b\[35m : \u001b\[0mNum *                \u001b\[32m # val1\u001b\[0m\r
+\r
+\u001b\[?2004h\r\u001b\[0K\u001b\[34m»\u001b\[0m \r\u001b\[2C"  {
+            exit 0
+    }
+
+}
+
+puts stderr "\nError: output was different from expected value."
+exit 1

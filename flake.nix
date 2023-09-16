@@ -110,6 +110,7 @@
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
           jq
+          expect # for testing the repl
         ]);
 
         aliases = ''
