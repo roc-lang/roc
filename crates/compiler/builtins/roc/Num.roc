@@ -464,14 +464,14 @@ FloatingPoint range := range
 F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
 
-## A decimal number.
+## A [decimal](https://en.wikipedia.org/wiki/Decimal) number.
 ##
-## [Dec] is the best default choice for representing base-10 decimal numbers
-## like currency, because it is base-10 under the hood. In contrast,
-## [F64] and [F32] are base-2 under the hood, which can lead to decimal
+## [Dec] is a more precise way to represent decimal numbers (like currency) than [F32] and [F64]
+## are, because [Dec] is represented in memory as base-10. In contrast, [F64] and [F32]
+## are [base-2](https://en.wikipedia.org/wiki/Binary_number) in memory, which can lead to decimal
 ## precision loss even when doing addition and subtraction. For example, when
-## using [F64], running 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125,
-## whereas when using [Dec], 0.1 + 0.2 returns 0.3.
+## using [F64], adding 0.1 and 0.2 returns 0.30000000000000004,
+## whereas when using [Dec], 0.1 + 0.2 == 0.3.
 ##
 ## Under the hood, a [Dec] is an [I128], and operations on it perform
 ## [base-10 fixed-point arithmetic](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
@@ -485,7 +485,7 @@ F32 : Num (FloatingPoint Binary32)
 ## convert any [U64] to a [Dec] without losing information.
 ##
 ## There are some use cases where [F64] and [F32] can be better choices than [Dec]
-## despite their precision issues. For example, in graphical applications they
+## despite their lower precision. For example, in graphical applications they
 ## can be a better choice for representing coordinates because they take up
 ## less memory, certain relevant calculations run faster (see performance
 ## details, below), and decimal precision loss isn't as big a concern when
@@ -493,9 +493,24 @@ F32 : Num (FloatingPoint Binary32)
 ##
 ## ## Performance Details
 ##
-## [Dec] typically takes slightly less time than [F64] to perform addition and
-## subtraction, but 10-20 times longer to perform multiplication and division.
-## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
+## CPUs have dedicated instructions for many [F32] and [F64] operations, but none for [Dec].
+## Internally, [Dec] is represented as a 128-bit integer and uses multiple instructions to
+## perform fractional operations. This gives [F32] and [F64] performance advantages
+## for many operations.
+##
+## Here's a comparison of about how long [Dec] takes to perform a given operation compared to [F64],
+## based on benchmarks on an [M1](https://en.wikipedia.org/wiki/Apple_M1) CPU:
+## * [add] 0.75x
+## * [sub] 0.75x
+## * [mul] 4x
+## * [div] 32x
+## * [sin] 3x
+## * [asin] 9x
+##
+## Keep in mind that arithmetic instructions are basically [the fastest thing a CPU does](http://norvig.com/21-days.html#answers),
+## so (for example) a network request that takes 10 milliseconds to complete would go on this
+## list as about 10000000x. So these performance differences might be more or less noticeable than
+## the precision differences depending on the use case.
 Dec : Num (FloatingPoint Decimal)
 
 ## Euler's number (e)
