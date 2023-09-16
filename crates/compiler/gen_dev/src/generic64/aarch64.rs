@@ -1119,6 +1119,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         buf.len()
     }
 
+    /// Updates a jump instruction to a new offset and returns the number of bytes written.
+    fn update_jmp_imm32_offset(
+        buf: &mut Vec<'_, u8>,
+        jmp_location: u64,
+        base_offset: u64,
+        target_offset: u64,
+    ) {
+        let old_buf_len = buf.len();
+
+        // write the jmp at the back of buf
+        let jmp_offset = target_offset as i32 - base_offset as i32 + 4;
+        Self::jmp_imm32(buf, jmp_offset);
+
+        // move the new jmp instruction into position
+        buf.copy_within(old_buf_len.., jmp_location as usize);
+
+        // wipe the jmp we created at the end
+        buf.truncate(old_buf_len)
+    }
+
     #[inline(always)]
     fn tail_call(buf: &mut Vec<'_, u8>) -> u64 {
         Self::jmp_imm32(buf, 0);

@@ -263,19 +263,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         jmp_location: u64,
         base_offset: u64,
         target_offset: u64,
-    ) {
-        let old_buf_len = buf.len();
-
-        // write the jmp at the back of buf
-        let jmp_offset = target_offset as i32 - base_offset as i32;
-        Self::jmp_imm32(buf, jmp_offset);
-
-        // move the new jmp instruction into position
-        buf.copy_within(old_buf_len.., jmp_location as usize);
-
-        // wipe the jmp we created at the end
-        buf.truncate(old_buf_len)
-    }
+    );
 
     fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
 
