@@ -824,7 +824,7 @@ impl AArch64CallStoreArgs {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
-            LayoutRepr::I128 | LayoutRepr::U128 => {
+            LayoutRepr::I128 | LayoutRepr::U128 | LayoutRepr::DEC => {
                 let (offset, _) = storage_manager.stack_offset_and_size(&sym);
 
                 if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
