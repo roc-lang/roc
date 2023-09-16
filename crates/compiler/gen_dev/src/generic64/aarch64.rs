@@ -1344,6 +1344,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg32_reg32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64GeneralReg) {
+        fmov_freg_reg(buf, FloatWidth::F32, dst, src)
+    }
+    #[inline(always)]
+    fn mov_freg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64GeneralReg) {
+        fmov_freg_reg(buf, FloatWidth::F64, dst, src)
+    }
+
+    #[inline(always)]
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
@@ -3680,6 +3689,49 @@ fn fdiv_freg_freg_freg(
     buf.extend(inst.bytes());
 }
 
+#[derive(PackedStruct)]
+#[packed_struct(endian = "msb")]
+pub struct FMovGeneral {
+    sf: bool,
+    fixed: Integer<u8, packed_bits::Bits<7>>,
+    ftype: Integer<u8, packed_bits::Bits<2>>,
+    fixed2: bool,
+    rmode: Integer<u8, packed_bits::Bits<2>>,
+    opcode: Integer<u8, packed_bits::Bits<3>>,
+    fixed3: Integer<u8, packed_bits::Bits<6>>,
+    rn: Integer<u8, packed_bits::Bits<5>>,
+    rd: Integer<u8, packed_bits::Bits<5>>,
+}
+
+impl Aarch64Bytes for FMovGeneral {}
+
+fn fmov_freg_reg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatWidth,
+    dst: AArch64FloatReg,
+    src: AArch64GeneralReg,
+) {
+    let inst = FMovGeneral {
+        sf: match ftype {
+            FloatWidth::F32 => false,
+            FloatWidth::F64 => true,
+        },
+        fixed: 0b0011110.into(),
+        ftype: match ftype {
+            FloatWidth::F32 => 0b00.into(),
+            FloatWidth::F64 => 0b01.into(),
+        },
+        fixed2: true,
+        rmode: 0b00.into(),
+        opcode: 0b111.into(),
+        fixed3: 0b000000.into(),
+        rn: src.id().into(),
+        rd: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 /// `FMOV Sd/Dd, Sn/Dn` -> Move Sn/Dn to Sd/Dd.
 #[inline(always)]
 fn fmov_freg_freg(
@@ -4872,6 +4924,24 @@ mod tests {
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
             ALL_FLOAT_REGS
+        );
+    }
+
+    #[test]
+    fn test_fmov_freg_reg() {
+        disassembler_test!(
+            fmov_freg_reg,
+            |ftype: FloatWidth, reg1: AArch64FloatReg, reg2: AArch64GeneralReg| format!(
+                "fmov {}, {}",
+                reg1.capstone_string(ftype),
+                match ftype {
+                    FloatWidth::F32 => reg2.capstone_string_32bit(UsesZR),
+                    FloatWidth::F64 => reg2.capstone_string(UsesZR),
+                }
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_FLOAT_REGS,
+            ALL_GENERAL_REGS
         );
     }
 

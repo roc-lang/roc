@@ -2199,6 +2199,15 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg32_reg32(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _src: X86_64GeneralReg) {
+        unimplemented!("`mov_freg32_reg32` is not currently used by the x86 backend")
+    }
+    #[inline(always)]
+    fn mov_freg64_reg64(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _src: X86_64GeneralReg) {
+        unimplemented!("`mov_freg64_reg64` is not currently used by the x86 backend")
+    }
+
+    #[inline(always)]
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,

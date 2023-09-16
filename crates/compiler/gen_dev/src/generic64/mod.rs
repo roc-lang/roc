@@ -311,6 +311,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn mov_reg32_freg32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg);
     fn mov_reg64_freg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg);
 
+    fn mov_freg32_reg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+    fn mov_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
@@ -4331,7 +4334,7 @@ impl<
                     let val = i64::from_ne_bytes(val.to_ne_bytes());
                     ASM::mov_reg64_imm64(&mut self.buf, reg, val);
 
-                    ASM::to_float_freg64_reg64(&mut self.buf, freg, reg);
+                    ASM::mov_freg64_reg64(&mut self.buf, freg, reg);
 
                     self.storage_manager.free_symbol(&tmp);
                 }
@@ -4346,7 +4349,7 @@ impl<
                     let val = i32::from_ne_bytes(val.to_ne_bytes());
                     ASM::mov_reg64_imm64(&mut self.buf, reg, val as i64);
 
-                    ASM::to_float_freg32_reg64(&mut self.buf, freg, reg);
+                    ASM::mov_freg32_reg32(&mut self.buf, freg, reg);
 
                     self.storage_manager.free_symbol(&tmp);
                 }
