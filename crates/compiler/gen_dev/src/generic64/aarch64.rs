@@ -505,17 +505,15 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
     ) {
-        let returns_via_pointer = AArch64Call::returns_via_arg_pointer(layout_interner, ret_layout);
-
         let mut state = AArch64CallLoadArgs {
-            general_i: usize::from(returns_via_pointer),
+            general_i: 0,
             float_i: 0,
             // 16 is the size of the pushed return address and base pointer.
             argument_offset: AArch64Call::SHADOW_SPACE_SIZE as i32 + 16,
         };
 
-        if returns_via_pointer {
-            storage_manager.ret_pointer_arg(AArch64Call::GENERAL_PARAM_REGS[0]);
+        if AArch64Call::returns_via_arg_pointer(layout_interner, ret_layout) {
+            storage_manager.ret_pointer_arg(AArch64GeneralReg::XR);
         }
 
         for (in_layout, sym) in args.iter() {
@@ -533,25 +531,22 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        let mut general_i = 0;
-
         if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
             // Save space on the stack for the result we will be return.
             let base_offset =
                 storage_manager.claim_stack_area_layout(layout_interner, *dst, *ret_layout);
-            // Set the first reg to the address base + offset.
-            let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
-            general_i += 1;
+
+            // Set the xr (x8) register to the address base + offset.
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
-                ret_reg,
+                AArch64GeneralReg::XR,
                 AArch64Call::BASE_PTR_REG,
                 base_offset,
             );
         }
 
         let mut state = AArch64CallStoreArgs {
-            general_i,
+            general_i: 0,
             float_i: 0,
             tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
         };
@@ -570,6 +565,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         sym: &Symbol,
         layout: &InLayout<'a>,
     ) {
+        type ASM = AArch64Assembler;
+
         match layout_interner.get_repr(*layout) {
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
@@ -579,22 +576,10 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 if size <= 8 {
-                    AArch64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[0],
-                        base_offset,
-                    );
+                    ASM::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
                 } else if size <= 16 {
-                    AArch64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[0],
-                        base_offset,
-                    );
-                    AArch64Assembler::mov_reg64_base32(
-                        buf,
-                        Self::GENERAL_RETURN_REGS[1],
-                        base_offset + 8,
-                    );
+                    ASM::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[0], base_offset);
+                    ASM::mov_reg64_base32(buf, Self::GENERAL_RETURN_REGS[1], base_offset + 8);
                 } else {
                     internal_error!(
                         "types that don't return via arg pointer must be less than 16 bytes"
@@ -604,6 +589,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             _ => {
                 // This is a large type returned via the arg pointer.
                 storage_manager.copy_symbol_to_arg_pointer(buf, sym, layout);
+
                 // Also set the return reg to the arg pointer.
                 storage_manager.load_to_specified_general_reg(
                     buf,
