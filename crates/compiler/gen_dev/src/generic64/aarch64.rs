@@ -370,23 +370,35 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             Some(size) => size,
             _ => internal_error!("Ran out of stack space"),
         };
+
         let alignment = if full_stack_size <= 0 {
             0
         } else {
             full_stack_size % STACK_ALIGNMENT as i32
         };
+
         let offset = if alignment == 0 {
             0
         } else {
             STACK_ALIGNMENT - alignment as u8
         };
+
         if let Some(aligned_stack_size) = full_stack_size.checked_add(offset as i32) {
             if aligned_stack_size > 0 {
-                AArch64Assembler::mov_reg64_reg64(
+                //                // mov x29, sp
+                //                AArch64Assembler::mov_reg64_reg64(
+                //                    buf,
+                //                    AArch64GeneralReg::FP,
+                //                    AArch64GeneralReg::ZRSP,
+                //                );
+                AArch64Assembler::sub_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::FP,
                     AArch64GeneralReg::ZRSP,
+                    0,
                 );
+
+                // sub     sp, sp, #0x10
                 AArch64Assembler::sub_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::ZRSP,
