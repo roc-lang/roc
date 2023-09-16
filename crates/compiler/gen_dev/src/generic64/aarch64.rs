@@ -1335,12 +1335,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn mov_reg32_freg32(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64FloatReg) {
-        unimplemented!();
+    fn mov_reg32_freg32(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64FloatReg) {
+        fmov_reg_freg(buf, FloatWidth::F32, dst, src)
     }
     #[inline(always)]
-    fn mov_reg64_freg64(_buf: &mut Vec<'_, u8>, _dst: AArch64GeneralReg, _src: AArch64FloatReg) {
-        unimplemented!();
+    fn mov_reg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64FloatReg) {
+        fmov_reg_freg(buf, FloatWidth::F64, dst, src)
     }
 
     #[inline(always)]
@@ -3739,6 +3739,33 @@ fn fmov_freg_reg(
     buf.extend(inst.bytes());
 }
 
+fn fmov_reg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatWidth,
+    dst: AArch64GeneralReg,
+    src: AArch64FloatReg,
+) {
+    let inst = FMovGeneral {
+        sf: match ftype {
+            FloatWidth::F32 => false,
+            FloatWidth::F64 => true,
+        },
+        fixed: 0b0011110.into(),
+        ftype: match ftype {
+            FloatWidth::F32 => 0b00.into(),
+            FloatWidth::F64 => 0b01.into(),
+        },
+        fixed2: true,
+        rmode: 0b00.into(),
+        opcode: 0b110.into(),
+        fixed3: 0b000000.into(),
+        rn: src.id().into(),
+        rd: dst.id().into(),
+    };
+
+    buf.extend(inst.bytes());
+}
+
 /// `FMOV Sd/Dd, Sn/Dn` -> Move Sn/Dn to Sd/Dd.
 #[inline(always)]
 fn fmov_freg_freg(
@@ -4949,6 +4976,24 @@ mod tests {
             ALL_FLOAT_TYPES,
             ALL_FLOAT_REGS,
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_fmov_reg_freg() {
+        disassembler_test!(
+            fmov_reg_freg,
+            |ftype: FloatWidth, reg1: AArch64GeneralReg, reg2: AArch64FloatReg| format!(
+                "fmov {}, {}",
+                match ftype {
+                    FloatWidth::F32 => reg1.capstone_string_32bit(UsesZR),
+                    FloatWidth::F64 => reg1.capstone_string(UsesZR),
+                },
+                reg2.capstone_string(ftype),
+            ),
+            ALL_FLOAT_TYPES,
+            ALL_GENERAL_REGS,
+            ALL_FLOAT_REGS
         );
     }
 
