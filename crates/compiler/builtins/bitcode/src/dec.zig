@@ -1203,6 +1203,10 @@ pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     }
 }
 
+pub fn toF64(arg: RocDec) callconv(.C) f64 {
+    return @call(.{ .modifier = always_inline }, RocDec.toF64, .{arg});
+}
+
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T) callconv(.C) i128 {

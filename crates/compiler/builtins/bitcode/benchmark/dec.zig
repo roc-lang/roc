@@ -44,6 +44,12 @@ pub fn main() !void {
     try stdout.print("{} divisions took ", .{n});
     const decDiv = try avg_runs(RocDec, n, RocDec.div, dec1);
 
+    try stdout.print("{} sin took ", .{n});
+    const decSin = try avg_runs(RocDec, n, sinDec, dec1);
+
+    try stdout.print("{} asin took ", .{n});
+    const decAsin = try avg_runs(RocDec, n, asinDec, dec1);
+
     try stdout.print("\n\nF64:\n", .{});
     try stdout.print("{} additions took ", .{n});
     const f64Add = try avg_runs(f64, n, addF64, f1);
@@ -57,11 +63,19 @@ pub fn main() !void {
     try stdout.print("{} divisions took ", .{n});
     const f64Div = try avg_runs(f64, n, divF64, f1);
 
+    try stdout.print("{} sin took ", .{n});
+    const f64Sin = try avg_runs(f64, n, sinF64, f1);
+
+    try stdout.print("{} asin took ", .{n});
+    const f64Asin = try avg_runs(f64, n, asinF64, f1);
+
     try stdout.print("\n\nDec/F64:\n", .{});
     try stdout.print("addition:       {d:0.2}\n", .{@intToFloat(f64, decAdd) / @intToFloat(f64, f64Add)});
     try stdout.print("subtraction:    {d:0.2}\n", .{@intToFloat(f64, decSub) / @intToFloat(f64, f64Sub)});
     try stdout.print("multiplication: {d:0.2}\n", .{@intToFloat(f64, decMul) / @intToFloat(f64, f64Mul)});
     try stdout.print("division:       {d:0.2}\n", .{@intToFloat(f64, decDiv) / @intToFloat(f64, f64Div)});
+    try stdout.print("sin:            {d:0.2}\n", .{@intToFloat(f64, decSin) / @intToFloat(f64, f64Sin)});
+    try stdout.print("asin:           {d:0.2}\n", .{@intToFloat(f64, decAsin) / @intToFloat(f64, f64Asin)});
 }
 
 fn avg_runs(comptime T: type, comptime n: usize, op: fn (T, T) T, v: T) !u64 {
@@ -133,4 +147,17 @@ fn mulF64(x: f64, y: f64) f64 {
 }
 fn divF64(x: f64, y: f64) f64 {
     return x / y;
+}
+fn sinF64(x: f64, _: f64) f64 {
+    return std.math.sin(x);
+}
+fn asinF64(x: f64, _: f64) f64 {
+    return std.math.asin(x);
+}
+
+fn sinDec(x: RocDec, _: RocDec) RocDec {
+    return x.sin();
+}
+fn asinDec(x: RocDec, _: RocDec) RocDec {
+    return x.asin();
 }
