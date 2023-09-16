@@ -1350,12 +1350,12 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
     #[inline(always)]
     fn movesd_mem64_offset32_freg64(
-        _buf: &mut Vec<'_, u8>,
-        _ptr: AArch64GeneralReg,
-        _offset: i32,
-        _src: AArch64FloatReg,
+        buf: &mut Vec<'_, u8>,
+        ptr: AArch64GeneralReg,
+        offset: i32,
+        src: AArch64FloatReg,
     ) {
-        todo!()
+        Self::mov_mem64_offset32_freg64(buf, ptr, offset, src)
     }
 
     #[inline(always)]
