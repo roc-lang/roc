@@ -1230,6 +1230,11 @@ impl<
             .remove(id)
             .unwrap_or_else(|| internal_error!("join point not defined"))
         {
+            // join_location: byte offset where the body of the joinpoint starts
+            // jmp_location: byte offset where the jump instruction starts
+            // start_offset: byte offset where the jump instruction ends
+
+            // a temporary buffer is needed, but the jump at `jmp_location` is updated in `self.buf`
             tmp.clear();
             self.update_jmp_imm32_offset(&mut tmp, jmp_location, start_offset, join_location);
         }
@@ -5378,12 +5383,13 @@ impl<
         base_offset: u64,
         target_offset: u64,
     ) {
+        // write the new jmp instruction into tmp
         tmp.clear();
         let jmp_offset = target_offset as i32 - base_offset as i32;
         ASM::jmp_imm32(tmp, jmp_offset);
-        for (i, byte) in tmp.iter().enumerate() {
-            self.buf[jmp_location as usize + i] = *byte;
-        }
+
+        // update the jump in self.buf
+        self.buf[jmp_location as usize..][..tmp.len()].copy_from_slice(&tmp);
     }
 
     /// Loads the alignment bytes of `layout` into the given `symbol`
