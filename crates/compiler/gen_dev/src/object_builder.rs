@@ -287,22 +287,22 @@ fn generate_wrapper<'a, B: Backend<'a>>(
 }
 
 fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> write::Relocation {
-    let (encoding, size) = match target_info.architecture {
+    let (encoding, size, addend) = match target_info.architecture {
         roc_target::Architecture::Aarch32 => todo!(),
-        roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26),
+        roc_target::Architecture::Aarch64 => (RelocationEncoding::AArch64Call, 26, 0),
         roc_target::Architecture::Wasm32 => todo!(),
         roc_target::Architecture::X86_32 => todo!(),
-        roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32),
+        roc_target::Architecture::X86_64 => (RelocationEncoding::X86Branch, 32, -4),
     };
 
-    dbg!(write::Relocation {
+    write::Relocation {
         offset,
         size,
         kind: RelocationKind::PltRelative,
         encoding,
         symbol,
-        addend: -4,
-    })
+        addend,
+    }
 }
 
 fn build_object<'a, B: Backend<'a>>(
