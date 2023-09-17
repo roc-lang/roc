@@ -1400,8 +1400,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src: AArch64GeneralReg,
         offset: i32,
     ) {
-        if offset < 0 {
+        if (-256..256).contains(&offset) {
             ldur_reg_reg_imm9(buf, register_width, dst, src, offset as i16);
+        } else if offset < 0 {
+            add_reg64_reg64_imm12(buf, src, src, offset as u16);
+
+            debug_assert!(offset % 8 == 0);
+            ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
+
+            sub_reg64_reg64_imm12(buf, src, src, offset as u16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
@@ -1455,8 +1462,15 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         offset: i32,
         src: AArch64GeneralReg,
     ) {
-        if offset < 0 {
+        if (-256..256).contains(&offset) {
             stur_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
+        } else if offset < 0 {
+            add_reg64_reg64_imm12(buf, src, src, offset as u16);
+
+            debug_assert!(offset % 8 == 0);
+            str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
+
+            sub_reg64_reg64_imm12(buf, src, src, offset as u16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
