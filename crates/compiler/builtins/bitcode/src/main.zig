@@ -22,10 +22,17 @@ comptime {
     exportDecFn(dec.toStr, "to_str");
     exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.eqC, "eq");
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
     exportDecFn(dec.divC, "div");
+    exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.cosC, "cos");
+    exportDecFn(dec.tanC, "tan");
+    exportDecFn(dec.asinC, "asin");
+    exportDecFn(dec.acosC, "acos");
+    exportDecFn(dec.atanC, "atan");
 
     exportDecFn(dec.addC, "add_with_overflow");
     exportDecFn(dec.addOrPanicC, "add_or_panic");
@@ -161,6 +168,7 @@ comptime {
 
         num.exportSin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sin.");
         num.exportCos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".cos.");
+        num.exportTan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".tan.");
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");

@@ -272,6 +272,7 @@ macro_rules! int_intrinsic {
 
 pub const NUM_SIN: IntrinsicName = float_intrinsic!("roc_builtins.num.sin");
 pub const NUM_COS: IntrinsicName = float_intrinsic!("roc_builtins.num.cos");
+pub const NUM_TAN: IntrinsicName = float_intrinsic!("roc_builtins.num.tan");
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
 pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
 pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
@@ -412,6 +413,12 @@ pub const DEC_SUB_OR_PANIC: &str = "roc_builtins.dec.sub_or_panic";
 pub const DEC_SUB_SATURATED: &str = "roc_builtins.dec.sub_saturated";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
+pub const DEC_SIN: &str = "roc_builtins.dec.sin";
+pub const DEC_COS: &str = "roc_builtins.dec.cos";
+pub const DEC_TAN: &str = "roc_builtins.dec.tan";
+pub const DEC_ASIN: &str = "roc_builtins.dec.asin";
+pub const DEC_ACOS: &str = "roc_builtins.dec.acos";
+pub const DEC_ATAN: &str = "roc_builtins.dec.atan";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";

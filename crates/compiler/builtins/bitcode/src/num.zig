@@ -168,6 +168,15 @@ pub fn exportCos(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn exportTan(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) T {
+            return math.tan(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
 pub fn exportLog(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(input: T) callconv(.C) T {
