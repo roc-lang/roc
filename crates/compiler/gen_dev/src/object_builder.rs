@@ -147,7 +147,7 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
         value: 0,
         size: SIZE as u64,
         kind: SymbolKind::Data,
-        scope: SymbolScope::Dynamic,
+        scope: SymbolScope::Linkage,
         weak: false,
         section: SymbolSection::Section(bss_section),
         flags: SymbolFlags::None,
@@ -226,7 +226,7 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                             kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
                             encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
-                            addend: -4,
+                            addend: 0,
                         };
 
                         output.add_relocation(text_section, relocation).unwrap();
@@ -234,7 +234,7 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //     704: 91000021     	add	x1, x1, #0x0
                         //		0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC	.rodata+0x650
                         write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: offset + proc_offset + 4,
                             size: 12,
                             kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
                             encoding: RelocationEncoding::Generic,
@@ -253,7 +253,7 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                             },
                             encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
-                            addend: -4,
+                            addend: 0,
                         };
 
                         output.add_relocation(text_section, relocation).unwrap();
@@ -261,7 +261,7 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //     4e0: 91000021     	add	x1, x1, #0x0
                         //		00000000000004e0:  ARM64_RELOC_PAGEOFF12	___unnamed_6
                         write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: offset + proc_offset + 4,
                             size: 32,
                             kind: RelocationKind::MachO {
                                 value: object::macho::ARM64_RELOC_PAGEOFF12,
