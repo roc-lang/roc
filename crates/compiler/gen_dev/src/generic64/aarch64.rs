@@ -1077,6 +1077,17 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         fn_name: String,
         dst: AArch64GeneralReg,
     ) {
+        // a function pointer is the same as a data pointer on AArch64
+        Self::data_pointer(buf, relocs, fn_name, dst)
+    }
+
+    #[inline(always)]
+    fn data_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: AArch64GeneralReg,
+    ) {
         // an `adrp` instruction and an addition to add in the lower bits
         buf.extend((0x9000_0000u32 | dst.id() as u32).to_le_bytes());
         Self::add_reg64_reg64_imm32(buf, dst, dst, 0);
@@ -1095,21 +1106,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         //     4e0: 91000021     	add	x1, x1, #0x0
         //		00000000000004e0:  ARM64_RELOC_PAGEOFF12	___unnamed_6
 
-        // in practice, that just looks a lot like a data relocation
         relocs.push(Relocation::LinkedData {
             offset: buf.len() as u64 - 8,
             name: fn_name,
         });
-    }
-
-    #[inline(always)]
-    fn data_pointer(
-        _buf: &mut Vec<'_, u8>,
-        _relocs: &mut Vec<'_, Relocation>,
-        _fn_name: String,
-        _dst: AArch64GeneralReg,
-    ) {
-        eprintln!("data_pointer not implemented for this target");
     }
 
     #[inline(always)]
