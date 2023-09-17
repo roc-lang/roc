@@ -273,6 +273,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         // Don't use platform register: AArch64GeneralReg::PR,
         // Don't use link register: AArch64GeneralReg::LR,
         // Don't use zero register/stack pointer: AArch64GeneralReg::ZRSP,
+        // Don't use x15: we use it as a scratch register in our assembly
 
         // Use callee saved regs last.
         AArch64GeneralReg::X19,
@@ -300,7 +301,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         AArch64GeneralReg::X12,
         AArch64GeneralReg::X13,
         AArch64GeneralReg::X14,
-        AArch64GeneralReg::X15,
+        // AArch64GeneralReg::X15, used in our assembly as a temporary register
         AArch64GeneralReg::IP0,
         AArch64GeneralReg::IP1,
     ];
@@ -1402,18 +1403,14 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if (-256..256).contains(&offset) {
             ldur_reg_reg_imm9(buf, register_width, dst, src, offset as i16);
-        } else if offset < 0 {
-            add_reg64_reg64_imm12(buf, src, src, offset as u16);
-
-            debug_assert!(offset % 8 == 0);
-            ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
-
-            sub_reg64_reg64_imm12(buf, src, src, offset as u16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
         } else {
-            todo!("base offsets over 32k for AArch64");
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, offset as i64);
+            Self::add_reg64_reg64_reg64(buf, tmp, tmp, src);
+            ldr_reg_reg_imm12(buf, register_width, dst, tmp, 0);
         }
     }
 
@@ -1464,18 +1461,14 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if (-256..256).contains(&offset) {
             stur_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
-        } else if offset < 0 {
-            add_reg64_reg64_imm12(buf, src, src, offset as u16);
-
-            debug_assert!(offset % 8 == 0);
-            str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
-
-            sub_reg64_reg64_imm12(buf, src, src, offset as u16)
         } else if offset < (0xFFF << 8) {
             debug_assert!(offset % 8 == 0);
             str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
         } else {
-            todo!("base offsets over 32k for AArch64");
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, offset as i64);
+            Self::add_reg64_reg64_reg64(buf, tmp, tmp, dst);
+            str_reg_reg_imm12(buf, register_width, src, tmp, 0);
         }
     }
 
@@ -1492,7 +1485,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             debug_assert!(offset % 8 == 0);
             str_freg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
         } else {
-            todo!("mem offsets over 32k for AArch64");
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, offset as i64);
+            Self::add_reg64_reg64_reg64(buf, tmp, tmp, dst);
+            str_freg64_reg64_imm12(buf, src, tmp, 0);
         }
     }
 
