@@ -266,6 +266,7 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _)))
                 | Err((_, EExpr::When(EWhen::Pattern(EPattern::Start(_), _), _)))
+                | Err((_, EExpr::Record(_, _)))
                 | Err((_, EExpr::Start(_)))
                 | Err((_, EExpr::IndentStart(_))) => ParseOutcome::Incomplete,
                 Err((_, EExpr::DefMissingFinalExpr(_)))
