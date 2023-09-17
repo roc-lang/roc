@@ -4,7 +4,7 @@ pub mod colors;
 pub mod repl_state;
 
 use bumpalo::Bump;
-use colors::{BLUE, END_COL, GREEN, PINK};
+use colors::{BLUE, END_COL, PINK};
 use const_format::concatcp;
 use repl_state::{parse_src, ParseOutcome};
 use roc_parse::ast::{Expr, ValueDef};
@@ -29,16 +29,7 @@ pub const TIPS: &str = concatcp!(
     BLUE,
     "x = 1",
     END_COL,
-    ") to use in future expressions.\n\nUnless there was a compile-time error, expressions get automatically named so you can refer to them later.\nFor example, if you see ",
-    GREEN,
-    "# val1",
-    END_COL,
-    " after an output, you can now refer to that expression as ",
-    BLUE,
-    "val1",
-    END_COL,
-    " in future expressions.\n\n",
-    "Tips:\n\n",
+    ") to use in future expressions.\n\nTips:\n\n",
     if cfg!(target_family = "wasm") {
         // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
         // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
@@ -121,8 +112,6 @@ pub fn format_output(
     style_codes: StyleCodes,
     opt_output: Option<ReplOutput>,
     problems: Problems,
-    opt_var_name: Option<String>,
-    dimensions: Option<(usize, usize)>,
 ) -> String {
     let mut buf = String::new();
 
@@ -145,17 +134,9 @@ pub fn format_output(
         if !expr.is_empty() && problems.errors.is_empty() {
             const EXPR_TYPE_SEPARATOR: &str = " : "; // e.g. in "5 : Num *"
 
-            // Print var_name on the line before the output
-            if let Some(var_name) = opt_var_name {
-                buf.push_str(style_codes.green);
-                buf.push_str(" # ");
-                buf.push_str(&var_name);
-                buf.push_str(style_codes.reset);
-            }
-
             // Print the expr and its type
             {
-                buf.push_str("\n\n");
+                buf.push('\n');
                 buf.push_str(&expr);
                 buf.push_str(style_codes.magenta); // Color for the type separator
                 buf.push_str(EXPR_TYPE_SEPARATOR);

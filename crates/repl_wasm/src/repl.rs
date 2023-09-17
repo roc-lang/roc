@@ -203,23 +203,13 @@ pub async fn entrypoint_from_js(src: String) -> String {
             "To exit the web version of the REPL, just close the browser tab!".to_string()
         }
         ReplAction::Nothing => String::new(),
-        ReplAction::Eval {
-            opt_mono,
-            problems,
-            opt_var_name,
-        } => {
+        ReplAction::Eval { opt_mono, problems } => {
             let opt_output = match opt_mono {
                 Some(mono) => eval_wasm(arena, target_info, mono).await,
                 None => None,
             };
-            let dimensions = None; // TODO: we could get the window dimensions from JS...
-            format_output(
-                HTML_STYLE_CODES,
-                opt_output,
-                problems,
-                opt_var_name,
-                dimensions,
-            )
+
+            format_output(HTML_STYLE_CODES, opt_output, problems)
         }
     }
 }

@@ -49,27 +49,19 @@ pub fn main() -> i32 {
 
                 editor.add_history_entry(line);
 
-                let dimensions = editor.dimensions();
                 let repl_state = &mut editor
                     .helper_mut()
                     .expect("Editor helper was not set")
                     .state;
 
                 arena.reset();
-                match repl_state.step(&arena, &line, target_info, DEFAULT_PALETTE) {
-                    ReplAction::Eval {
-                        opt_mono,
-                        problems,
-                        opt_var_name,
-                    } => {
-                        let output =
-                            evaluate(opt_mono, problems, opt_var_name, &target, dimensions);
+                match repl_state.step(&arena, line, target_info, DEFAULT_PALETTE) {
+                    ReplAction::Eval { opt_mono, problems } => {
+                        let output = evaluate(opt_mono, problems, &target);
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
                         if !output.is_empty() {
-                            // Overwrite the previous line so we can do things like
-                            // print " #val1" after what the user just entered.
-                            println!("\x1B[A{PROMPT}{line}{output}");
+                            println!("{output}");
                         }
                     }
                     ReplAction::Exit => {
@@ -104,18 +96,10 @@ pub fn main() -> i32 {
 pub fn evaluate(
     opt_mono: Option<MonomorphizedModule<'_>>,
     problems: Problems,
-    opt_var_name: Option<String>,
     target: &Triple,
-    dimensions: Option<(usize, usize)>,
 ) -> String {
     let opt_output = opt_mono.and_then(|mono| eval_llvm(mono, target, OptLevel::Normal));
-    format_output(
-        ANSI_STYLE_CODES,
-        opt_output,
-        problems,
-        opt_var_name,
-        dimensions,
-    )
+    format_output(ANSI_STYLE_CODES, opt_output, problems)
 }
 
 #[derive(Default)]
