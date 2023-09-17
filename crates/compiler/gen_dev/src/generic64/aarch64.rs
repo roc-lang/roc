@@ -1403,7 +1403,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if (-256..256).contains(&offset) {
             ldur_reg_reg_imm9(buf, register_width, dst, src, offset as i16);
-        } else if offset < (0xFFF << 8) {
+        } else if offset < (0xFFF << 3) {
             debug_assert!(offset % 8 == 0);
             ldr_reg_reg_imm12(buf, register_width, dst, src, (offset as u16) >> 3);
         } else {
@@ -1461,7 +1461,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if (-256..256).contains(&offset) {
             stur_reg_reg_imm9(buf, register_width, src, dst, offset as i16);
-        } else if offset < (0xFFF << 8) {
+        } else if offset < (0xFFF << 3) {
             debug_assert!(offset % 8 == 0);
             str_reg_reg_imm12(buf, register_width, src, dst, (offset as u16) >> 3);
         } else {
@@ -1481,7 +1481,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if offset < 0 {
             stur_freg64_reg64_imm9(buf, src, dst, offset as i16)
-        } else if offset < (0xFFF << 8) {
+        } else if offset < (0xFFF << 3) {
             debug_assert!(offset % 8 == 0);
             str_freg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
         } else {
@@ -1854,7 +1854,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if offset < 0 {
             ldur_freg64_reg64_imm9(buf, dst, src, offset as i16)
-        } else if offset < (0xFFF << 8) {
+        } else if offset < (0xFFF << 3) {
             debug_assert!(offset % 8 == 0);
             ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
         } else {
@@ -1870,7 +1870,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         if offset < 0 {
             ldur_freg64_reg64_imm9(buf, dst, src, offset as i16)
-        } else if offset < (0xFFF << 8) {
+        } else if offset < (0xFFF << 3) {
             debug_assert!(offset % 8 == 0);
             ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
         } else {
