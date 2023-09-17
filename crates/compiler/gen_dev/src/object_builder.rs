@@ -217,13 +217,69 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
         let relocation = match r {
             Relocation::LinkedData { offset, name } => {
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size: 32,
-                        kind: RelocationKind::GotRelative,
-                        encoding: RelocationEncoding::Generic,
-                        symbol: sym_id,
-                        addend: -4,
+                    if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+                        //     700: 90000001     	adrp	x1, 0x0 <std.builtin.default_panic>
+                        //		0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21	.rodata+0x650
+                        let relocation = write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 21,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        };
+
+                        output.add_relocation(text_section, relocation).unwrap();
+
+                        //     704: 91000021     	add	x1, x1, #0x0
+                        //		0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC	.rodata+0x650
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 12,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+                        //     4dc: 90000001     	adrp	x1, 0x0 <ltmp0>
+                        //		00000000000004dc:  ARM64_RELOC_PAGE21	___unnamed_6
+                        let relocation = write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::MachO {
+                                value: object::macho::ARM64_RELOC_PAGE21,
+                                relative: true,
+                            },
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        };
+
+                        output.add_relocation(text_section, relocation).unwrap();
+
+                        //     4e0: 91000021     	add	x1, x1, #0x0
+                        //		00000000000004e0:  ARM64_RELOC_PAGEOFF12	___unnamed_6
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::MachO {
+                                value: object::macho::ARM64_RELOC_PAGEOFF12,
+                                relative: true,
+                            },
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else {
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::GotRelative,
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        }
                     }
                 } else {
                     internal_error!("failed to find data symbol for {:?}", name);
@@ -865,14 +921,42 @@ fn build_proc<'a, B: Backend<'a>>(
             }
             Relocation::LinkedData { offset, name } => {
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size: 32,
-                        kind: RelocationKind::GotRelative,
-                        encoding: RelocationEncoding::Generic,
-                        symbol: sym_id,
-                        addend: -4,
+                    if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+                        //     700: 90000001     	adrp	x1, 0x0 <std.builtin.default_panic>
+                        //		0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21	.rodata+0x650
+                        let r = write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 21,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        };
+
+                        relocations.push((section_id, r));
+
+                        //     704: 91000021     	add	x1, x1, #0x0
+                        //		0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC	.rodata+0x650
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 12,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else {
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::GotRelative,
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        }
                     }
+                } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+                    todo!()
                 } else {
                     internal_error!("failed to find data symbol for {:?}", name);
                 }
