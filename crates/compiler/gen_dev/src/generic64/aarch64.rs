@@ -1690,47 +1690,6 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn add_with_overflow(
-        buf: &mut Vec<'_, u8>,
-        _register_width: RegisterWidth,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-        overflow: AArch64GeneralReg,
-    ) {
-        adds_reg64_reg64_reg64(buf, dst, src1, src2);
-        Self::set_if_overflow(buf, overflow)
-    }
-
-    #[inline(always)]
-    fn sub_with_overflow(
-        buf: &mut Vec<'_, u8>,
-        _register_width: RegisterWidth,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-        overflow: AArch64GeneralReg,
-    ) {
-        subs_reg64_reg64_reg64(buf, dst, src1, src2);
-        Self::set_if_overflow(buf, overflow)
-    }
-
-    #[inline(always)]
-    fn imul_with_overflow(
-        buf: &mut Vec<'_, u8>,
-        _register_width: RegisterWidth,
-        dst: AArch64GeneralReg,
-        src1: AArch64GeneralReg,
-        src2: AArch64GeneralReg,
-        overflow: AArch64GeneralReg,
-    ) {
-        smulh_reg64_reg64_reg64(buf, overflow, src1, src2);
-        mul_reg64_reg64_reg64(buf, dst, src1, src2);
-        subs_reg64_reg64_reg64(buf, overflow, overflow, dst); // arithmetic shift right 63
-        cset_reg64_cond(buf, overflow, ConditionCode::NE);
-    }
-
-    #[inline(always)]
     fn ret(buf: &mut Vec<'_, u8>) {
         ret_reg64(buf, AArch64GeneralReg::LR)
     }
@@ -2991,32 +2950,6 @@ fn add_reg64_reg64_reg64(
     buf.extend(inst.bytes());
 }
 
-/// add and set flags
-#[inline(always)]
-fn adds_reg64_reg64_reg64(
-    buf: &mut Vec<'_, u8>,
-    dst: AArch64GeneralReg,
-    src1: AArch64GeneralReg,
-    src2: AArch64GeneralReg,
-) {
-    let inst = ArithmeticShifted {
-        // true for 64 bit addition
-        // false for 32 bit addition
-        sf: true,
-        op: false,
-        s: true,
-        fixed: 0b01011.into(),
-        shift: 0b00.into(),
-        fixed2: false,
-        reg_m: src2.id().into(),
-        imm6: 0b00_0000.into(),
-        reg_d: dst.id().into(),
-        reg_n: src1.id().into(),
-    };
-
-    buf.extend(inst.bytes());
-}
-
 /// `AND Xd, Xn, Xm` -> Bitwise AND Xn and Xm and place the result into Xd.
 #[inline(always)]
 fn and_reg64_reg64_reg64(
@@ -3405,46 +3338,6 @@ fn mul_reg64_reg64_reg64(
     src2: AArch64GeneralReg,
 ) {
     madd_reg64_reg64_reg64_reg64(buf, dst, src1, src2, AArch64GeneralReg::ZRSP);
-}
-
-#[inline(always)]
-fn smulh_reg64_reg64_reg64(
-    buf: &mut Vec<'_, u8>,
-    dst: AArch64GeneralReg,
-    src1: AArch64GeneralReg,
-    src2: AArch64GeneralReg,
-) {
-    #[derive(PackedStruct)]
-    #[packed_struct(endian = "msb")]
-    pub struct Inst {
-        fixed: Integer<u8, packed_bits::Bits<1>>,
-        fixed1: Integer<u8, packed_bits::Bits<2>>,
-        fixed2: Integer<u8, packed_bits::Bits<5>>,
-        u: Integer<u8, packed_bits::Bits<1>>,
-        fixed3: Integer<u8, packed_bits::Bits<2>>,
-        rm: Integer<u8, packed_bits::Bits<5>>,
-        o0: bool,
-        ra: Integer<u8, packed_bits::Bits<5>>,
-        rn: Integer<u8, packed_bits::Bits<5>>,
-        rd: Integer<u8, packed_bits::Bits<5>>,
-    }
-
-    impl Aarch64Bytes for Inst {}
-
-    let inst = Inst {
-        fixed: 0b1.into(),
-        fixed1: 0b00.into(),
-        fixed2: 0b11011.into(),
-        u: 0b0.into(),
-        fixed3: 0b10.into(),
-        rm: src2.id().into(),
-        o0: false,
-        ra: 0b11111.into(),
-        rn: src1.id().into(),
-        rd: dst.id().into(),
-    };
-
-    buf.extend(inst.bytes());
 }
 
 /// `NEG Xd, Xm` -> Negate Xm and place the result into Xd.
@@ -4714,22 +4607,6 @@ mod tests {
     }
 
     #[test]
-    fn test_smulh_reg64_reg64_reg64() {
-        disassembler_test!(
-            smulh_reg64_reg64_reg64,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| format!(
-                "smulh {}, {}, {}",
-                reg1.capstone_string(UsesZR),
-                reg2.capstone_string(UsesZR),
-                reg3.capstone_string(UsesZR)
-            ),
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS
-        );
-    }
-
-    #[test]
     fn test_neg_reg64_reg64() {
         disassembler_test!(
             neg_reg64_reg64,
@@ -4962,34 +4839,6 @@ mod tests {
                 } else {
                     format!(
                         "subs {}, {}, {}",
-                        reg1.capstone_string(UsesZR),
-                        reg2.capstone_string(UsesZR),
-                        reg3.capstone_string(UsesZR)
-                    )
-                }
-            },
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS
-        );
-    }
-
-    #[test]
-    fn test_adds_reg64_reg64_reg64() {
-        disassembler_test!(
-            adds_reg64_reg64_reg64,
-            |reg1: AArch64GeneralReg, reg2: AArch64GeneralReg, reg3: AArch64GeneralReg| {
-                if reg1 == AArch64GeneralReg::ZRSP {
-                    // When the first register is SP, it gets disassembled as cmp,
-                    // which is an alias for subs.
-                    format!(
-                        "cmn {}, {}",
-                        reg2.capstone_string(UsesZR),
-                        reg3.capstone_string(UsesZR)
-                    )
-                } else {
-                    format!(
-                        "adds {}, {}, {}",
                         reg1.capstone_string(UsesZR),
                         reg2.capstone_string(UsesZR),
                         reg3.capstone_string(UsesZR)

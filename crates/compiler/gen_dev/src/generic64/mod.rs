@@ -717,33 +717,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: GeneralReg);
 
-    fn add_with_overflow(
-        buf: &mut Vec<'_, u8>,
-        register_width: RegisterWidth,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
-        overflow: GeneralReg,
-    );
-
-    fn sub_with_overflow(
-        buf: &mut Vec<'_, u8>,
-        register_width: RegisterWidth,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
-        overflow: GeneralReg,
-    );
-
-    fn imul_with_overflow(
-        buf: &mut Vec<'_, u8>,
-        register_width: RegisterWidth,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
-        overflow: GeneralReg,
-    );
-
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
