@@ -1320,7 +1320,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_freg64_freg64(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, src: AArch64FloatReg) {
-        fmov_freg_freg(buf, FloatWidth::F64, dst, src);
+        if dst != src {
+            fmov_freg_freg(buf, FloatWidth::F64, dst, src);
+        }
     }
 
     #[inline(always)]
