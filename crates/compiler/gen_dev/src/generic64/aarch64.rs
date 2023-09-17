@@ -1072,12 +1072,34 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn function_pointer(
-        _buf: &mut Vec<'_, u8>,
-        _relocs: &mut Vec<'_, Relocation>,
-        _fn_name: String,
-        _dst: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: AArch64GeneralReg,
     ) {
-        todo!("function pointer for AArch64");
+        // an `adrp` instruction and an addition to add in the lower bits
+        buf.extend((0x9000_0000u32 | dst.id() as u32).to_le_bytes());
+        Self::add_reg64_reg64_imm32(buf, dst, dst, 0);
+
+        // with elf
+        //
+        //     700: 90000001     	adrp	x1, 0x0 <std.builtin.default_panic>
+        //		0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21	.rodata+0x650
+        //     704: 91000021     	add	x1, x1, #0x0
+        //		0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC	.rodata+0x650
+        //
+        // with macho
+        //
+        //     4dc: 90000001     	adrp	x1, 0x0 <ltmp0>
+        //		00000000000004dc:  ARM64_RELOC_PAGE21	___unnamed_6
+        //     4e0: 91000021     	add	x1, x1, #0x0
+        //		00000000000004e0:  ARM64_RELOC_PAGEOFF12	___unnamed_6
+
+        // in practice, that just looks a lot like a data relocation
+        relocs.push(Relocation::LinkedData {
+            offset: buf.len() as u64 - 8,
+            name: fn_name,
+        });
     }
 
     #[inline(always)]
