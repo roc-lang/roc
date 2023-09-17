@@ -1531,17 +1531,26 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_SIN[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_SIN);
+                }
                 _ => panic_ret_type(),
             },
             NumCos => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_COS[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_COS);
+                }
                 _ => panic_ret_type(),
             },
             NumTan => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_TAN[width]);
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_TAN);
                 }
                 _ => panic_ret_type(),
             },
@@ -1726,17 +1735,26 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ATAN[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ATAN);
+                }
                 _ => panic_ret_type(),
             },
             NumAcos => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ACOS[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ACOS);
+                }
                 _ => panic_ret_type(),
             },
             NumAsin => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ASIN[width]);
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ASIN);
                 }
                 _ => panic_ret_type(),
             },
