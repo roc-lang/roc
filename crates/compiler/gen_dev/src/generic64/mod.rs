@@ -1404,80 +1404,20 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        use Builtin::{Float, Int};
+        let function_name = match self.interner().get_repr(*num_layout) {
+            LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_ADD_CHECKED_INT[width],
+            LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_ADD_CHECKED_FLOAT[width],
+            LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_ADD_WITH_OVERFLOW,
+            x => internal_error!("NumAddChecked is not defined for {:?}", x),
+        };
 
-        let buf = &mut self.buf;
-
-        let base_offset = self.storage_manager.claim_stack_area_layout(
-            self.layout_interner,
-            *dst,
-            *return_layout,
-        );
-
-        match self.layout_interner.get_repr(*num_layout) {
-            LayoutRepr::Builtin(Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
-                let dst_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
-
-                let overflow_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
-
-                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
-                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
-
-                ASM::add_with_overflow(
-                    buf,
-                    RegisterWidth::W64, // TODO
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                    overflow_reg,
-                );
-
-                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            LayoutRepr::Builtin(Int(
-                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
-            )) => {
-                todo!("addChecked for unsigned integers")
-            }
-            LayoutRepr::Builtin(Int(int_width @ (IntWidth::U128 | IntWidth::I128))) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_ADD_CHECKED_INT[int_width].to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            LayoutRepr::Builtin(Float(float_width @ (FloatWidth::F64 | FloatWidth::F32))) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_ADD_CHECKED_FLOAT[float_width].to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::DEC_ADD_WITH_OVERFLOW.to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            x => todo!("NumAdd: layout, {:?}", x),
-        }
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
     }
 
     fn build_num_sub_checked(
@@ -1622,69 +1562,20 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        use Builtin::Int;
+        let function_name = match self.interner().get_repr(*num_layout) {
+            LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_MUL_CHECKED_INT[width],
+            LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_MUL_CHECKED_FLOAT[width],
+            LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_MUL_WITH_OVERFLOW,
+            x => internal_error!("NumMulChecked is not defined for {:?}", x),
+        };
 
-        let buf = &mut self.buf;
-
-        match self.layout_interner.get_repr(*num_layout) {
-            LayoutRepr::Builtin(Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
-                let base_offset = self.storage_manager.claim_stack_area_layout(
-                    self.layout_interner,
-                    *dst,
-                    *return_layout,
-                );
-
-                let dst_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
-
-                let overflow_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
-
-                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
-                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
-
-                ASM::imul_with_overflow(
-                    buf,
-                    RegisterWidth::W64, // TODO
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                    overflow_reg,
-                );
-
-                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_MUL_CHECKED_INT[int_width].to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            LayoutRepr::Builtin(Builtin::Float(_width)) => {
-                todo!("mulChecked for floats")
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::DEC_MUL_WITH_OVERFLOW.to_string(),
-                    &[*src1, *src2],
-                    &[Layout::DEC, Layout::DEC],
-                    return_layout,
-                );
-            }
-            x => todo!("mulChecked: layout, {:?}", x),
-        }
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
     }
 
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
