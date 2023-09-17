@@ -1262,6 +1262,12 @@ fn gen_is_even() {
 fn sin() {
     assert_evals_to!("Num.sin 0f64", 0.0, f64);
     assert_evals_to!("Num.sin 1.41421356237f64", 0.9877659459922529, f64);
+    assert_evals_to!("Num.sin 0dec", RocDec::from_str("0.0").unwrap(), RocDec);
+    assert_evals_to!(
+        "Num.sin 1.414213562373095049dec",
+        RocDec::from_str("0.987765945992735616").unwrap(),
+        RocDec
+    );
 }
 
 #[test]
@@ -1269,13 +1275,25 @@ fn sin() {
 fn cos() {
     assert_evals_to!("Num.cos 0f64", 1.0, f64);
     assert_evals_to!("Num.cos 3.14159265359f64", -1.0, f64);
+    assert_evals_to!("Num.cos 0dec", RocDec::from_str("1.0").unwrap(), RocDec);
+    assert_evals_to!(
+        "Num.cos 3.141592653589793238dec",
+        RocDec::from_str("-1.0").unwrap(),
+        RocDec
+    );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn tan() {
     assert_evals_to!("Num.tan 0f64", 0.0f64, f64);
-    assert_evals_to!("Num.tan 1f64", 1.557407724654902f64, f64);
+    assert_evals_to!("Num.tan 1f64", 1.5574077246549023f64, f64);
+    assert_evals_to!("Num.tan 0dec", RocDec::from_str("0.0").unwrap(), RocDec);
+    assert_evals_to!(
+        "Num.tan 1dec",
+        RocDec::from_str("1.557407724654902272").unwrap(),
+        RocDec
+    );
 }
 
 #[test]
