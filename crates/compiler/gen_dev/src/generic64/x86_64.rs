@@ -2616,6 +2616,42 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         seto_reg64(buf, dst);
     }
 
+    fn add_with_overflow(
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+        overflow: X86_64GeneralReg,
+    ) {
+        Self::add_reg64_reg64_reg64(buf, dst, src1, src2);
+        Self::set_if_overflow(buf, overflow);
+    }
+
+    fn sub_with_overflow(
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+        overflow: X86_64GeneralReg,
+    ) {
+        Self::sub_reg64_reg64_reg64(buf, dst, src1, src2);
+        Self::set_if_overflow(buf, overflow);
+    }
+
+    fn imul_with_overflow(
+        buf: &mut Vec<'_, u8>,
+        _register_width: RegisterWidth,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+        overflow: X86_64GeneralReg,
+    ) {
+        Self::imul_reg64_reg64_reg64(buf, dst, src1, src2);
+        Self::set_if_overflow(buf, overflow);
+    }
+
     fn and_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
         binop_move_src_to_dst_reg64(buf, and_reg64_reg64, dst, src1, src2)
     }

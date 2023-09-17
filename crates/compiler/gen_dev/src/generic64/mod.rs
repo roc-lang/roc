@@ -717,6 +717,33 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn set_if_overflow(buf: &mut Vec<'_, u8>, dst: GeneralReg);
 
+    fn add_with_overflow(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+        overflow: GeneralReg,
+    );
+
+    fn sub_with_overflow(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+        overflow: GeneralReg,
+    );
+
+    fn imul_with_overflow(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+        overflow: GeneralReg,
+    );
+
     fn ret(buf: &mut Vec<'_, u8>);
 }
 
@@ -1402,8 +1429,14 @@ impl<
                 let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
                 let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
 
-                ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
-                ASM::set_if_overflow(buf, overflow_reg);
+                ASM::add_with_overflow(
+                    buf,
+                    RegisterWidth::W64, // TODO
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    overflow_reg,
+                );
 
                 ASM::mov_base32_reg64(buf, base_offset, dst_reg);
                 ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
@@ -1614,8 +1647,14 @@ impl<
                 let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
                 let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
 
-                ASM::imul_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
-                ASM::set_if_overflow(buf, overflow_reg);
+                ASM::imul_with_overflow(
+                    buf,
+                    RegisterWidth::W64, // TODO
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                    overflow_reg,
+                );
 
                 ASM::mov_base32_reg64(buf, base_offset, dst_reg);
                 ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
