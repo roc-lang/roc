@@ -977,6 +977,10 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             op,
                             float_width,
                         ),
+                        Decimal => {
+                            build_dec_unary_op(env, layout_interner, parent, arg, layout, op)
+                        }
+
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
                         }
@@ -1256,7 +1260,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         I128OfDec => {
             arguments!(dec);
-            dec_to_i128(env, dec)
+            dec_unary_op(env, bitcode::DEC_TO_I128, dec)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -2021,20 +2025,19 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
     }
 }
 
-fn dec_to_i128<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+fn dec_unary_op<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    fn_name: &str,
+    dec: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
     use roc_target::OperatingSystem::*;
 
     let dec = dec.into_int_value();
-
     match env.target_info.operating_system {
-        Windows => {
-            //
-            call_bitcode_fn(env, &[dec_alloca(env, dec).into()], bitcode::DEC_TO_I128)
-        }
+        Windows => call_bitcode_fn(env, &[dec_alloca(env, dec).into()], fn_name),
         Unix => {
             let (low, high) = dec_split_into_words(env, dec);
-
-            call_bitcode_fn(env, &[low.into(), high.into()], bitcode::DEC_TO_I128)
+            call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
         }
         Wasi => unimplemented!(),
     }
@@ -2154,6 +2157,30 @@ fn change_with_overflow_to_roc_type<'a, 'ctx>(
     )
 }
 
+fn build_dec_unary_op<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    _layout_interner: &STLayoutInterner<'a>,
+    _parent: FunctionValue<'ctx>,
+    arg: BasicValueEnum<'ctx>,
+    _return_layout: InLayout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumSin => dec_unary_op(env, &bitcode::DEC_SIN, arg),
+        NumCos => dec_unary_op(env, &bitcode::DEC_COS, arg),
+        NumTan => dec_unary_op(env, &bitcode::DEC_TAN, arg),
+        NumAsin => dec_unary_op(env, &bitcode::DEC_ASIN, arg),
+        NumAcos => dec_unary_op(env, &bitcode::DEC_ACOS, arg),
+        NumAtan => dec_unary_op(env, &bitcode::DEC_ATAN, arg),
+
+        _ => {
+            unreachable!("Unrecognized dec unary operation: {:?}", op);
+        }
+    }
+}
+
 fn build_dec_binop<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -2207,7 +2234,7 @@ fn build_dec_binop<'a, 'ctx>(
         NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),
         NumGt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_GREATER_THAN[IntWidth::I128]),
         _ => {
-            unreachable!("Unrecognized int binary operation: {:?}", op);
+            unreachable!("Unrecognized dec binary operation: {:?}", op);
         }
     }
 }

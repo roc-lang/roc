@@ -28,6 +28,12 @@ comptime {
     exportDecFn(dec.neqC, "neq");
     exportDecFn(dec.negateC, "negate");
     exportDecFn(dec.divC, "div");
+    exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.cosC, "cos");
+    exportDecFn(dec.tanC, "tan");
+    exportDecFn(dec.asinC, "asin");
+    exportDecFn(dec.acosC, "acos");
+    exportDecFn(dec.atanC, "atan");
 
     exportDecFn(dec.addC, "add_with_overflow");
     exportDecFn(dec.addOrPanicC, "add_or_panic");

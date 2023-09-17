@@ -1260,6 +1260,30 @@ pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
 }
 
+pub fn sinC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.sin, .{arg}).num;
+}
+
+pub fn cosC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.cos, .{arg}).num;
+}
+
+pub fn tanC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.tan, .{arg}).num;
+}
+
+pub fn asinC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.asin, .{arg}).num;
+}
+
+pub fn acosC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.acos, .{arg}).num;
+}
+
+pub fn atanC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.atan, .{arg}).num;
+}
+
 pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 });
 }
