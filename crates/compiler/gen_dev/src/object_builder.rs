@@ -945,6 +945,8 @@ fn build_proc<'a, B: Backend<'a>>(
                             symbol: sym_id,
                             addend: 0,
                         }
+                    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+                        todo!()
                     } else {
                         write::Relocation {
                             offset: offset + proc_offset,
@@ -955,8 +957,6 @@ fn build_proc<'a, B: Backend<'a>>(
                             addend: -4,
                         }
                     }
-                } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
-                    todo!()
                 } else {
                     internal_error!("failed to find data symbol for {:?}", name);
                 }
