@@ -3541,7 +3541,7 @@ fn stur_freg64_reg64_imm9(
     assert!((-256..256).contains(&imm9));
 
     let imm9 = u16::from_ne_bytes(imm9.to_ne_bytes());
-    let imm12 = ((imm9 & 0b0001_1111_1111) << 2) | 0b00;
+    let imm12 = (imm9 & 0b0001_1111_1111) << 2;
 
     let inst = LoadStoreRegisterImmediate {
         size: 0b11.into(), // 64-bit
