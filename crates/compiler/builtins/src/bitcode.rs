@@ -272,6 +272,7 @@ macro_rules! int_intrinsic {
 
 pub const NUM_SIN: IntrinsicName = float_intrinsic!("roc_builtins.num.sin");
 pub const NUM_COS: IntrinsicName = float_intrinsic!("roc_builtins.num.cos");
+pub const NUM_TAN: IntrinsicName = float_intrinsic!("roc_builtins.num.tan");
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
 pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
 pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");

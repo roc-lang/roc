@@ -1539,6 +1539,12 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
+            NumTan => match self.ret_layout_raw {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_TAN[width]);
+                }
+                _ => panic_ret_type(),
+            },
             NumSqrtUnchecked => {
                 self.load_args(backend);
                 match self.ret_layout_raw {

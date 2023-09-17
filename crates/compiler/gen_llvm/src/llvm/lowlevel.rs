@@ -935,6 +935,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         | NumLogUnchecked
         | NumSin
         | NumCos
+        | NumTan
         | NumCeiling
         | NumFloor
         | NumToFrac
@@ -2655,6 +2656,7 @@ fn build_float_unary_op<'a, 'ctx>(
         // trigonometry
         NumSin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SIN[float_width]),
         NumCos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COS[float_width]),
+        NumTan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_TAN[float_width]),
 
         NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN[float_width]),
         NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS[float_width]),

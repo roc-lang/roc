@@ -825,11 +825,7 @@ max = \a, b ->
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
-
 tan : Frac a -> Frac a
-tan = \x ->
-    # `tan` is not available as an intrinsic in LLVM
-    Num.div (Num.sin x) (Num.cos x)
 
 asin : Frac a -> Frac a
 acos : Frac a -> Frac a

@@ -163,6 +163,7 @@ comptime {
 
         num.exportSin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sin.");
         num.exportCos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".cos.");
+        num.exportTan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".tan.");
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
