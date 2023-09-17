@@ -3923,10 +3923,10 @@ fn bool_in_switch() {
             loop : [ Continue {}, Break {} ]
             loop = Continue {}
 
-            all = \{} -> 
+            all = \{} ->
                 when loop is
-                    Continue {} -> Bool.true 
-                    Break {} -> Bool.false 
+                    Continue {} -> Bool.true
+                    Break {} -> Bool.false
 
             main = all {}
             "#
@@ -3942,11 +3942,11 @@ fn add_checked_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-            Num.addChecked 2.0dec 4.0dec == Ok 6.0dec
+            Num.addChecked 2.0dec 4.0dec
             "#
         ),
-        true,
-        bool
+        RocResult::ok(RocDec::from(6)),
+        RocResult<RocDec, ()>
     );
 }
 
@@ -3956,11 +3956,11 @@ fn sub_checked_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-            Num.subChecked 5.0dec 2.0dec == Ok 3.0dec
+            Num.subChecked 5.0dec 2.0dec
             "#
         ),
-        true,
-        bool
+        RocResult::ok(RocDec::from(3)),
+        RocResult<RocDec, ()>
     );
 }
 
