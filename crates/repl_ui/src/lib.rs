@@ -159,41 +159,30 @@ pub fn format_output(
             if let Some(var_name) = opt_var_name {
                 use unicode_segmentation::UnicodeSegmentation;
 
-                const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
-                const VAR_NAME_COLUMN_MAX: usize = 32; // Right-align the var_name at this column
+                const VAR_NAME_COLUMN_MIN: usize = 16; // Always draw the line under the answer at least this wide
 
                 let term_width = match dimensions {
-                    Some((width, _)) => width.min(VAR_NAME_COLUMN_MAX),
-                    None => VAR_NAME_COLUMN_MAX,
+                    Some((width, _)) => width.max(VAR_NAME_COLUMN_MIN),
+                    None => VAR_NAME_COLUMN_MIN,
                 };
-
-                let expr_with_type = format!("{expr}{EXPR_TYPE_SEPARATOR}{expr_type}");
 
                 // Count graphemes because we care about what's *rendered* in the terminal
-                let last_line_len = expr_with_type
-                    .split('\n')
-                    .last()
-                    .unwrap_or_default()
-                    .graphemes(true)
-                    .count();
-                let var_name_len =
-                    var_name.graphemes(true).count() + VAR_NAME_PREFIX.graphemes(true).count();
-                let spaces_needed = if last_line_len + var_name_len > term_width {
-                    buf.push('\n');
-                    term_width - var_name_len
-                } else {
-                    term_width - last_line_len - var_name_len
-                };
+                let var_name_len = var_name.graphemes(true).count();
 
-                for _ in 0..spaces_needed {
-                    buf.push(' ');
+                // Subtract 2 to make room for a space on either side of var_name
+                let line_width = term_width.saturating_sub(var_name_len).saturating_sub(2);
+
+                buf.push('\n');
+                buf.push_str(style_codes.white);
+
+                for _ in 0..line_width {
+                    buf.push('─');
                 }
 
-                buf.push_str(style_codes.green);
-                buf.push_str(VAR_NAME_PREFIX);
+                buf.push(' ');
                 buf.push_str(&var_name);
+                buf.push(' ');
                 buf.push_str(style_codes.reset);
-                buf.push('\n');
             }
         }
     }

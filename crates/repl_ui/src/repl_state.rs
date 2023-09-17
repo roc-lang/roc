@@ -16,6 +16,7 @@ use roc_target::TargetInfo;
 /// The prefix we use for the automatic variable names we assign to each expr,
 /// e.g. if the prefix is "val" then the first expr you enter will be named "val1"
 pub const AUTO_VAR_PREFIX: &str = "val";
+
 #[derive(Debug, Clone, PartialEq)]
 struct PastDef {
     ident: String,
