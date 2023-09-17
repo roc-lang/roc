@@ -357,7 +357,12 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         AArch64FloatReg::V0,
     ];
 
-    const SHADOW_SPACE_SIZE: u8 = 0;
+    /// 16 is the size of the pushed return address and base pointer. These are usually stored like so
+    ///
+    ///  213560:       d101c3ff        sub     sp, sp, #0x70
+    ///  213564:       f90037fe        str     x30, [sp, #104]
+    ///  213568:       f90033fd        str     x29, [sp, #96]
+    const SHADOW_SPACE_SIZE: u8 = 16;
 
     #[inline(always)]
     fn general_callee_saved(reg: &AArch64GeneralReg) -> bool {
@@ -509,7 +514,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             general_i: 0,
             float_i: 0,
             // 16 is the size of the pushed return address and base pointer.
-            argument_offset: AArch64Call::SHADOW_SPACE_SIZE as i32 + 16,
+            argument_offset: AArch64Call::SHADOW_SPACE_SIZE as i32,
         };
 
         if AArch64Call::returns_via_arg_pointer(layout_interner, ret_layout) {
@@ -548,7 +553,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         let mut state = AArch64CallStoreArgs {
             general_i: 0,
             float_i: 0,
-            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32 + 16,
+            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
         };
 
         for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
