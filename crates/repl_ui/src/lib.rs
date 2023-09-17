@@ -145,44 +145,22 @@ pub fn format_output(
         if !expr.is_empty() && problems.errors.is_empty() {
             const EXPR_TYPE_SEPARATOR: &str = " : "; // e.g. in "5 : Num *"
 
+            // Print var_name on the line before the output
+            if let Some(var_name) = opt_var_name {
+                buf.push_str(style_codes.green);
+                buf.push_str(" # ");
+                buf.push_str(&var_name);
+                buf.push_str(style_codes.reset);
+            }
+
             // Print the expr and its type
             {
-                buf.push('\n');
+                buf.push_str("\n\n");
                 buf.push_str(&expr);
                 buf.push_str(style_codes.magenta); // Color for the type separator
                 buf.push_str(EXPR_TYPE_SEPARATOR);
                 buf.push_str(style_codes.reset);
                 buf.push_str(&expr_type);
-            }
-
-            // Print var_name right-aligned on the last line of output.
-            if let Some(var_name) = opt_var_name {
-                use unicode_segmentation::UnicodeSegmentation;
-
-                const VAR_NAME_COLUMN_MIN: usize = 16; // Always draw the line under the answer at least this wide
-
-                let term_width = match dimensions {
-                    Some((width, _)) => width.max(VAR_NAME_COLUMN_MIN),
-                    None => VAR_NAME_COLUMN_MIN,
-                };
-
-                // Count graphemes because we care about what's *rendered* in the terminal
-                let var_name_len = var_name.graphemes(true).count();
-
-                // Subtract 2 to make room for a space on either side of var_name
-                let line_width = term_width.saturating_sub(var_name_len).saturating_sub(2);
-
-                buf.push('\n');
-                buf.push_str(style_codes.white);
-
-                for _ in 0..line_width {
-                    buf.push('─');
-                }
-
-                buf.push(' ');
-                buf.push_str(&var_name);
-                buf.push(' ');
-                buf.push_str(style_codes.reset);
             }
         }
     }

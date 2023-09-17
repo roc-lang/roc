@@ -45,7 +45,9 @@ pub fn main() -> i32 {
     loop {
         match editor.readline(PROMPT) {
             Ok(line) => {
-                editor.add_history_entry(line.trim());
+                let line = line.trim();
+
+                editor.add_history_entry(line);
 
                 let dimensions = editor.dimensions();
                 let repl_state = &mut editor
@@ -65,7 +67,9 @@ pub fn main() -> i32 {
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
                         if !output.is_empty() {
-                            println!("{output}");
+                            // Overwrite the previous line so we can do things like
+                            // print " #val1" after what the user just entered.
+                            println!("\x1B[A{PROMPT}{line}{output}");
                         }
                     }
                     ReplAction::Exit => {
