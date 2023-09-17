@@ -1262,21 +1262,21 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _relocs: &mut Vec<'_, Relocation>,
         dst: AArch64FloatReg,
         imm: f32,
-    ) -> Result<(), ()> {
+    ) {
         // See https://stackoverflow.com/a/64608524
         if imm == 0.0 && !imm.is_sign_negative() {
             movi_freg_zero(buf, dst);
-            return Ok(());
+            return;
         }
+
         match encode_f32_to_imm8(imm) {
             Some(imm8) => {
                 fmov_freg_imm8(buf, FloatWidth::F32, dst, imm8);
-
-                Ok(())
             }
             None => {
-                // there is no way to load a bigger float without a general register
-                Err(())
+                let tmp = AArch64GeneralReg::X15;
+                Self::mov_reg64_imm64(buf, tmp, i32::from_ne_bytes(imm.to_ne_bytes()) as i64);
+                Self::mov_freg32_reg32(buf, dst, tmp);
             }
         }
     }
@@ -1286,22 +1286,21 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _relocs: &mut Vec<'_, Relocation>,
         dst: AArch64FloatReg,
         imm: f64,
-    ) -> Result<(), ()> {
+    ) {
         // See https://stackoverflow.com/a/64608524
         if imm == 0.0 && !imm.is_sign_negative() {
             movi_freg_zero(buf, dst);
-            return Ok(());
+            return;
         }
 
         match encode_f64_to_imm8(imm) {
             Some(imm8) => {
                 fmov_freg_imm8(buf, FloatWidth::F64, dst, imm8);
-
-                Ok(())
             }
             None => {
-                // there is no way to load a bigger float without a general register
-                Err(())
+                let tmp = AArch64GeneralReg::X15;
+                Self::mov_reg64_imm64(buf, tmp, i64::from_ne_bytes(imm.to_ne_bytes()));
+                Self::mov_freg64_reg64(buf, dst, tmp)
             }
         }
     }

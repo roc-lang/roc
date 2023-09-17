@@ -2156,14 +2156,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         relocs: &mut Vec<'_, Relocation>,
         dst: X86_64FloatReg,
         imm: f32,
-    ) -> Result<(), ()> {
+    ) {
         movss_freg32_rip_offset32(buf, dst, 0);
         relocs.push(Relocation::LocalData {
             offset: buf.len() as u64 - 4,
             data: imm.to_le_bytes().to_vec(),
         });
-
-        Ok(())
     }
     #[inline(always)]
     fn mov_freg64_imm64(
@@ -2171,14 +2169,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         relocs: &mut Vec<'_, Relocation>,
         dst: X86_64FloatReg,
         imm: f64,
-    ) -> Result<(), ()> {
+    ) {
         movsd_freg64_rip_offset32(buf, dst, 0);
         relocs.push(Relocation::LocalData {
             offset: buf.len() as u64 - 4,
             data: imm.to_le_bytes().to_vec(),
         });
-
-        Ok(())
     }
     #[inline(always)]
     fn mov_reg64_imm64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i64) {
