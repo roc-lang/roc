@@ -86,16 +86,16 @@ procedure List.96 (List.450, List.451, List.452):
     ret List.556;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.295 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.295;
-
-procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.294 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.294;
 
-procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.293 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.293 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
     ret Num.293;
+
+procedure Num.77 (#Attr.2, #Attr.3):
+    let Num.292 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Test.3 (Test.4, Test.12):
     let Test.13 : [C U64, C U64] = TagId(0) Test.4;

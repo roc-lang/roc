@@ -28,12 +28,12 @@ procedure List.86 (#Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_g
     jump List.538 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.293 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.292 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.291 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Test.10 (Test.69, #Attr.12):
     let Test.72 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
