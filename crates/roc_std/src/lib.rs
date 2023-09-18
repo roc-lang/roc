@@ -372,13 +372,11 @@ impl RocDec {
         // get their leading zeros placed in bytes for us. i.e. `string = b"0012340000000000000"`
         write!(string, "{:019}", self.as_i128()).unwrap();
 
-        let is_negative = self.as_i128() < 0;
-        let decimal_location = string.len() - Self::DECIMAL_PLACES + (is_negative as usize);
-
+        let decimal_location = string.len() - Self::DECIMAL_PLACES;
         // skip trailing zeros
         let last_nonzero_byte = string.trim_end_matches('0').len();
 
-        if last_nonzero_byte < decimal_location {
+        if last_nonzero_byte <= decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
             string.truncate(decimal_location);
@@ -393,19 +391,14 @@ impl RocDec {
         // push a dummy character so we have space for the decimal dot
         string.push('$');
 
-        if decimal_location == last_nonzero_byte {
-            // never have a '.' as the last character
-            string.truncate(last_nonzero_byte)
-        } else {
-            // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
-            let bytes = unsafe { string.as_bytes_mut() };
+        // Safety: at any time, the string only contains ascii characters, so it is always valid utf8
+        let bytes = unsafe { string.as_bytes_mut() };
 
-            // shift the fractional part by one
-            bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
+        // shift the fractional part by one
+        bytes.copy_within(decimal_location..last_nonzero_byte, decimal_location + 1);
 
-            // and put in the decimal dot in the right place
-            bytes[decimal_location] = b'.';
-        }
+        // and put in the decimal dot in the right place
+        bytes[decimal_location] = b'.';
 
         string.as_str()
     }
