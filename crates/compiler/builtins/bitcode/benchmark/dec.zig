@@ -24,12 +24,12 @@ pub fn main() !void {
     try stdout.print("Warning: Timer seems to step in units of 41ns\n\n", .{});
     timer = try Timer.start();
 
-    const n = 10000;
+    const n = 1000;
 
     // This number are very close to 1 to avoid over and underflow.
     const str1 = "1.00123";
     const f1 = 1.00123;
-    const dec1 = RocDec.fromStr(RocStr.init(str1, 3)).?;
+    const dec1 = RocDec.fromStr(RocStr.init(str1, str1.len)).?;
 
     try stdout.print("Dec:\n", .{});
     try stdout.print("{} additions took ", .{n});
@@ -78,15 +78,16 @@ pub fn main() !void {
     try stdout.print("asin:           {d:0.2}\n", .{@intToFloat(f64, decAsin) / @intToFloat(f64, f64Asin)});
 }
 
-fn avg_runs(comptime T: type, comptime n: usize, op: fn (T, T) T, v: T) !u64 {
+fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) !u64 {
     const stdout = std.io.getStdOut().writer();
 
-    const repeats = 1000;
+    const repeats = 10000;
     var runs = [_]u64{0} ** repeats;
 
     var i: usize = 0;
     while (i < repeats) : (i += 1) {
-        runs[i] = run(T, n, op, v);
+        // Never inline run to ensure it doesn't optimize for the value of `v`.
+        runs[i] = callWrapper(u64, .never_inline, run, .{ T, n, op, v });
     }
 
     std.sort.sort(u64, &runs, {}, comptime std.sort.asc(u64));
@@ -99,41 +100,39 @@ fn avg_runs(comptime T: type, comptime n: usize, op: fn (T, T) T, v: T) !u64 {
     return median;
 }
 
-fn run(comptime T: type, comptime n: usize, op: fn (T, T) T, v: T) u64 {
+fn run(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) u64 {
     var a = v;
     timer.reset();
 
     // Split into outer and inner loop to avoid breaking comptime.
-    comptime var outer = n / 500;
-    comptime var inner = std.math.min(n, 500);
+    const max_inline = 100;
+    comptime var outer = n / max_inline;
+    comptime var inner = std.math.min(n, max_inline);
     var i: usize = 0;
     while (i < outer) : (i += 1) {
         comptime var j = 0;
         inline while (j < inner) : (j += 1) {
-            a = op(a, v);
-
-            // Clobber a to avoid optimizations and removal of dead code.
-            asm volatile (""
-                :
-                : [a] "r,m" (&a),
-                : "memory"
-            );
+            a = callWrapper(T, .always_inline, op, .{ a, v });
         }
     }
-    comptime var rem = n % 500;
-    i = 0;
-    inline while (i < rem) : (i += 1) {
-        a = op(a, v);
-
-        // Clobber a to avoid optimizations and removal of dead code.
-        asm volatile (""
-            :
-            : [a] "r,m" (&a),
-            : "memory"
-        );
+    const rem = n % max_inline;
+    comptime var j = 0;
+    inline while (j < rem) : (j += 1) {
+        a = callWrapper(T, .always_inline, op, .{ a, v });
     }
 
+    // Clobber `a` to avoid removal as dead code.
+    asm volatile (""
+        :
+        : [a] "r,m" (&a),
+        : "memory"
+    );
     return timer.read();
+}
+
+// This is needed to work around a bug with using `@call` in loops.
+inline fn callWrapper(comptime T: type, call_modifier: anytype, comptime func: anytype, params: anytype) T {
+    return @call(.{ .modifier = call_modifier }, func, params);
 }
 
 fn addF64(x: f64, y: f64) f64 {
