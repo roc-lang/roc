@@ -6,7 +6,7 @@ body {
   height: 100%;
 }
 
-.body-wrapper {
+main {
   display: flex;
   flex-direction: column;
   max-width: 900px;
@@ -16,9 +16,9 @@ body {
 
 h1 {
   font-family: "Merriweather";
-  font-size: 24px;
-  line-height: 24px;
-  padding: 18px 0;
+  font-size: 48px;
+  line-height: 48px;
+  padding: 48px 0;
   margin: 0;
   color: var(--header-link-color);
 }
@@ -52,6 +52,7 @@ h1 {
   padding-left: 2.4em;
   border: 1px solid transparent;
   margin: 0;
+  margin-bottom: 2em;
   box-sizing: border-box;
 }
 
