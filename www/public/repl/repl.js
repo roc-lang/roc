@@ -37,7 +37,6 @@ const repl = {
 
 // Initialise
 repl.elemSourceInput.addEventListener("input", onInput);
-repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
@@ -70,7 +69,7 @@ function onInput(event) {
   target.style.height = target.scrollHeight + 8 + "px";
 }
 
-function onInputChange(event) {
+function onEnter(event) {
   const inputText = event.target.value.trim();
 
   event.target.value = "";
@@ -120,7 +119,7 @@ function onInputKeyup(event) {
 
     case ENTER:
       if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
-        onInputChange({ target: repl.elemSourceInput });
+        onEnter({ target: repl.elemSourceInput });
       }
       break;
 
