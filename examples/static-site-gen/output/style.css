@@ -53,8 +53,7 @@ samp .ann {
   color: #f384fd;
 }
 
-samp .autovar .comment {
-  /* automatic variable names in the repl, e.g. # val1 */
+samp .comment {
   color: #338545;
 }
 

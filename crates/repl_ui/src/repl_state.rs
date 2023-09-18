@@ -13,9 +13,6 @@ use roc_repl_eval::gen::{compile_to_mono, Problems};
 use roc_reporting::report::Palette;
 use roc_target::TargetInfo;
 
-/// The prefix we use for the automatic variable names we assign to each expr,
-/// e.g. if the prefix is "val" then the first expr you enter will be named "val1"
-pub const AUTO_VAR_PREFIX: &str = "val";
 #[derive(Debug, Clone, PartialEq)]
 struct PastDef {
     ident: String,
@@ -25,7 +22,6 @@ struct PastDef {
 pub struct ReplState {
     past_defs: Vec<PastDef>,
     past_def_idents: MutSet<String>,
-    last_auto_ident: u64,
 }
 
 impl Default for ReplState {
@@ -40,7 +36,6 @@ pub enum ReplAction<'a> {
     Eval {
         opt_mono: Option<MonomorphizedModule<'a>>,
         problems: Problems,
-        opt_var_name: Option<String>,
     },
     Exit,
     Help,
@@ -52,7 +47,6 @@ impl ReplState {
         Self {
             past_defs: Default::default(),
             past_def_idents: Default::default(),
-            last_auto_ident: 0,
         }
     }
 
@@ -64,17 +58,15 @@ impl ReplState {
         palette: Palette,
     ) -> ReplAction<'a> {
         let pending_past_def;
-        let mut opt_var_name;
         let src: &str = match parse_src(arena, line) {
             ParseOutcome::Empty | ParseOutcome::Help => return ReplAction::Help,
             ParseOutcome::Exit => return ReplAction::Exit,
             ParseOutcome::Expr(_) | ParseOutcome::Incomplete | ParseOutcome::SyntaxErr => {
                 pending_past_def = None;
+
                 // If it's a SyntaxErr (or Incomplete at this point, meaning it will
                 // become a SyntaxErr as soon as we evaluate it),
                 // proceed as normal and let the error reporting happen during eval.
-                opt_var_name = None;
-
                 line
             }
             ParseOutcome::ValueDef(value_def) => {
@@ -109,7 +101,6 @@ impl ReplState {
                         ..
                     } => {
                         pending_past_def = Some((ident.to_string(), line.to_string()));
-                        opt_var_name = Some(ident.to_string());
 
                         // Recreate the body of the def and then evaluate it as a lookup.
                         // We do this so that any errors will get reported as part of this expr;
@@ -175,61 +166,19 @@ impl ReplState {
             }
         };
 
-        // Record e.g. "val1" as a past def, unless our input was exactly the name of
-        // an existing identifer (e.g. I just typed "val1" into the prompt - there's no
-        // need to reassign "val1" to "val2" just because I wanted to see what its value was!)
-        let (opt_mono, problems) =
-            match opt_var_name.or_else(|| self.past_def_idents.get(src.trim()).cloned()) {
-                Some(existing_ident) => {
-                    opt_var_name = Some(existing_ident);
-
-                    compile_to_mono(
-                        arena,
-                        self.past_defs.iter().map(|def| def.src.as_str()),
-                        src,
-                        target_info,
-                        palette,
-                    )
-                }
-                None => {
-                    let (output, problems) = compile_to_mono(
-                        arena,
-                        self.past_defs.iter().map(|def| def.src.as_str()),
-                        src,
-                        target_info,
-                        palette,
-                    );
-
-                    // Don't persist defs that have compile errors
-                    if problems.errors.is_empty() {
-                        let var_name = format!("{AUTO_VAR_PREFIX}{}", self.next_auto_ident());
-                        let src = format!("{var_name} = {}", src.trim_end());
-
-                        opt_var_name = Some(var_name.clone());
-
-                        self.add_past_def(var_name, src);
-                    } else {
-                        opt_var_name = None;
-                    }
-
-                    (output, problems)
-                }
-            };
+        let (opt_mono, problems) = compile_to_mono(
+            arena,
+            self.past_defs.iter().map(|def| def.src.as_str()),
+            src,
+            target_info,
+            palette,
+        );
 
         if let Some((ident, src)) = pending_past_def {
             self.add_past_def(ident, src);
         }
 
-        ReplAction::Eval {
-            opt_mono,
-            problems,
-            opt_var_name,
-        }
-    }
-
-    fn next_auto_ident(&mut self) -> u64 {
-        self.last_auto_ident += 1;
-        self.last_auto_ident
+        ReplAction::Eval { opt_mono, problems }
     }
 
     fn add_past_def(&mut self, ident: String, src: String) {

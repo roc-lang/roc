@@ -20,15 +20,13 @@ Try typing this in the REPL and pressing Enter:
 
 The REPL should cheerfully display the following:
 
-<pre><samp><span class="literal">"Hello, World!" </span><span class="colon">:</span> Str <span class="comment">               # val1</span></samp></pre>
+<pre><samp><span class="literal">"Hello, World!" </span><span class="colon">:</span> Str</samp></pre>
 
 Congratulations! You've just written your first Roc code.
 
 ### [Naming Things](#naming-things) {#naming-things}
 
 When you entered the _expression_ `"Hello, World!"`, the REPL printed it back out. It also printed `: Str`, because `Str` is that expression's type. We'll talk about types later; for now, let's ignore the `:` and whatever comes after it whenever we see them.
-
-The REPL also printed `# val1` at the end of the line. That means from now on you can use the variable name `val1` to refer to the `"Hello, World!"` expression you just entered.
 
 Let's try that out. Put this into the repl and press Enter:
 
@@ -54,8 +52,6 @@ You should see this output:
 <pre><samp>2 <span class="colon">:</span> Num * <span class="comment">               # val2</span></samp></pre>
 
 According to the REPL, one plus one equals two. Sounds right!
-
-> Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
 
 Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_operations) when using multiple arithmetic operators like `+` and `-`, but you can use parentheses to specify exactly how they should be grouped.
 

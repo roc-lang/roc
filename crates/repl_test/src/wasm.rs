@@ -160,12 +160,8 @@ pub fn expect(input: &'static str, expected: &str) {
 
     // We need to get rid of HTML tags, and we can be quite specific about it!
     // If we ever write more complex test cases, we might need regex here.
-    let without_html = raw_output
-        .replace("<span class='color-magenta'> : </span>", " : ")
-        .replace("<span class='color-green'> # val1</span>", "");
+    let without_html = raw_output.replace("<span class='color-magenta'> : </span>", " : ");
 
-    // Whitespace that was originally in front of the `# val1` is now at the end,
-    // and there's other whitespace at both ends too. Trim it all.
     let clean_output = without_html.trim();
 
     assert_eq!(clean_output, expected);

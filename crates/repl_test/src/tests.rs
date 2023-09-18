@@ -588,11 +588,7 @@ fn multiline_string_non_wasm() {
     );
 
     assert_multiline_str_eq!("", out.stderr.as_str());
-
-    // Don't consider the auto variable name ("# val1") at the end.
-    // The state.rs tests do that!
-    assert_multiline_str_eq!(expected, out.stdout.replace("# val1", "").trim());
-
+    assert_multiline_str_eq!(expected, out.stdout.trim());
     assert!(out.status.success());
 }
 
@@ -1408,9 +1404,6 @@ fn interpolation_with_nested_interpolation() {
 
 
                 Enter an expression to evaluate, or a definition (like x = 1) to use in future expressions.
-
-                Unless there was a compile-time error, expressions get automatically named so you can refer to them later.
-                For example, if you see # val1 after an output, you can now refer to that expression as val1 in future expressions.
 
                 Tips:
 

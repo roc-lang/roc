@@ -14,27 +14,16 @@ use target_lexicon::Triple;
 
 #[test]
 fn one_plus_one() {
-    complete("1 + 1", &mut ReplState::new(), "2 : Num *", "val1");
-}
-
-#[test]
-fn generated_expr_names() {
-    let mut state = ReplState::new();
-
-    complete("2 * 3", &mut state, "6 : Num *", "val1");
-    complete("4 - 1", &mut state, "3 : Num *", "val2");
-    complete("val1 + val2", &mut state, "9 : Num *", "val3");
-    complete("1 + (val2 * val3)", &mut state, "28 : Num *", "val4");
+    complete("1 + 1", &mut ReplState::new(), "2 : Num *");
 }
 
 #[test]
 fn persisted_defs() {
     let mut state = ReplState::new();
 
-    complete("x = 5", &mut state, "5 : Num *", "x");
-    complete("7 - 3", &mut state, "4 : Num *", "val1");
-    complete("y = 6", &mut state, "6 : Num *", "y");
-    complete("val1 + x + y", &mut state, "15 : Num *", "val2");
+    complete("x = 5", &mut state, "5 : Num *");
+    complete("7 - 3", &mut state, "4 : Num *");
+    complete("y = 6", &mut state, "6 : Num *");
 }
 
 #[test]
@@ -45,7 +34,7 @@ fn annotated_body() {
 
     input.push_str("t = A");
 
-    complete(&input, &mut ReplState::new(), "A : [A, B, C]", "t");
+    complete(&input, &mut ReplState::new(), "A : [A, B, C]");
 }
 
 #[test]
@@ -60,7 +49,7 @@ fn exhaustiveness_problem() {
 
         input.push_str("t = A");
 
-        complete(&input, &mut state, "A : [A, B, C]", "t");
+        complete(&input, &mut state, "A : [A, B, C]");
     }
 
     // Run a `when` on it that isn't exhaustive
@@ -166,7 +155,7 @@ fn standalone_annotation() {
 
 /// validate and step the given input, then check the Result vs the output
 /// with ANSI escape codes stripped.
-fn complete(input: &str, state: &mut ReplState, expected_start: &str, expected_end: &str) {
+fn complete(input: &str, state: &mut ReplState, expected_start: &str) {
     assert!(!is_incomplete(input));
     let arena = Bump::new();
     let target = Triple::host();
@@ -175,15 +164,10 @@ fn complete(input: &str, state: &mut ReplState, expected_start: &str, expected_e
     let repl_helper = ReplHelper::default();
     let mut editor = Editor::<ReplHelper>::new();
     editor.set_helper(Some(repl_helper));
-    let dimensions = editor.dimensions();
 
     match action {
-        ReplAction::Eval {
-            opt_mono,
-            problems,
-            opt_var_name,
-        } => {
-            let string = evaluate(opt_mono, problems, opt_var_name, &target, dimensions);
+        ReplAction::Eval { opt_mono, problems } => {
+            let string = evaluate(opt_mono, problems, &target);
             let escaped =
                 std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap())
                     .unwrap();
@@ -191,12 +175,6 @@ fn complete(input: &str, state: &mut ReplState, expected_start: &str, expected_e
             let comment_index = escaped.rfind('#').unwrap_or(escaped.len());
 
             assert_eq!(expected_start, (escaped[0..comment_index].trim()));
-
-            assert_eq!(
-                expected_end,
-                // +1 because we want to skip over the '#' itself
-                (escaped[comment_index + 1..].trim())
-            );
         }
         _ => {
             panic!("Unexpected action: {:?}", action);
@@ -223,15 +201,10 @@ fn error(input: &str, state: &mut ReplState, expected_step_result: String) {
     let repl_helper = ReplHelper::default();
     let mut editor = Editor::<ReplHelper>::new();
     editor.set_helper(Some(repl_helper));
-    let dimensions = editor.dimensions();
 
     match action {
-        ReplAction::Eval {
-            opt_mono,
-            problems,
-            opt_var_name,
-        } => {
-            let string = evaluate(opt_mono, problems, opt_var_name, &target, dimensions);
+        ReplAction::Eval { opt_mono, problems } => {
+            let string = evaluate(opt_mono, problems, &target);
             let escaped =
                 std::string::String::from_utf8(strip_ansi_escapes::strip(string.trim()).unwrap())
                     .unwrap();

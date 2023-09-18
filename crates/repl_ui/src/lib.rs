@@ -4,7 +4,7 @@ pub mod colors;
 pub mod repl_state;
 
 use bumpalo::Bump;
-use colors::{BLUE, END_COL, GREEN, PINK};
+use colors::{BLUE, END_COL, PINK};
 use const_format::concatcp;
 use repl_state::{parse_src, ParseOutcome};
 use roc_parse::ast::{Expr, ValueDef};
@@ -29,16 +29,7 @@ pub const TIPS: &str = concatcp!(
     BLUE,
     "x = 1",
     END_COL,
-    ") to use in future expressions.\n\nUnless there was a compile-time error, expressions get automatically named so you can refer to them later.\nFor example, if you see ",
-    GREEN,
-    "# val1",
-    END_COL,
-    " after an output, you can now refer to that expression as ",
-    BLUE,
-    "val1",
-    END_COL,
-    " in future expressions.\n\n",
-    "Tips:\n\n",
+    ") to use in future expressions.\n\nTips:\n\n",
     if cfg!(target_family = "wasm") {
         // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
         // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
@@ -121,8 +112,6 @@ pub fn format_output(
     style_codes: StyleCodes,
     opt_output: Option<ReplOutput>,
     problems: Problems,
-    opt_var_name: Option<String>,
-    dimensions: Option<(usize, usize)>,
 ) -> String {
     let mut buf = String::new();
 
@@ -153,47 +142,6 @@ pub fn format_output(
                 buf.push_str(EXPR_TYPE_SEPARATOR);
                 buf.push_str(style_codes.reset);
                 buf.push_str(&expr_type);
-            }
-
-            // Print var_name right-aligned on the last line of output.
-            if let Some(var_name) = opt_var_name {
-                use unicode_segmentation::UnicodeSegmentation;
-
-                const VAR_NAME_PREFIX: &str = " # "; // e.g. in " # val1"
-                const VAR_NAME_COLUMN_MAX: usize = 32; // Right-align the var_name at this column
-
-                let term_width = match dimensions {
-                    Some((width, _)) => width.min(VAR_NAME_COLUMN_MAX),
-                    None => VAR_NAME_COLUMN_MAX,
-                };
-
-                let expr_with_type = format!("{expr}{EXPR_TYPE_SEPARATOR}{expr_type}");
-
-                // Count graphemes because we care about what's *rendered* in the terminal
-                let last_line_len = expr_with_type
-                    .split('\n')
-                    .last()
-                    .unwrap_or_default()
-                    .graphemes(true)
-                    .count();
-                let var_name_len =
-                    var_name.graphemes(true).count() + VAR_NAME_PREFIX.graphemes(true).count();
-                let spaces_needed = if last_line_len + var_name_len > term_width {
-                    buf.push('\n');
-                    term_width - var_name_len
-                } else {
-                    term_width - last_line_len - var_name_len
-                };
-
-                for _ in 0..spaces_needed {
-                    buf.push(' ');
-                }
-
-                buf.push_str(style_codes.green);
-                buf.push_str(VAR_NAME_PREFIX);
-                buf.push_str(&var_name);
-                buf.push_str(style_codes.reset);
-                buf.push('\n');
             }
         }
     }
