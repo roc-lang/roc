@@ -32,8 +32,10 @@ h1 {
 #source-input-wrapper::before {
   content: "» ";
   position: absolute;
-  left: 1em;
-  top: 14px;
+  left: 15px;
+  top: 18px;
+  line-height: 16px;
+  height: 16px;
   z-index: 2;
   font-family: var(--font-mono);
   color: var(--cyan);
@@ -48,8 +50,8 @@ h1 {
   background-color: var(--code-bg);
   display: inline-block;
   height: 5em;
-  padding: calc(1em - 1px);
-  padding-left: 2.4em;
+  padding: 16px;
+  padding-left: 36px;
   border: 1px solid transparent;
   margin: 0;
   margin-bottom: 2em;
