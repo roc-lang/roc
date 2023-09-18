@@ -27,9 +27,12 @@ pub fn main() !void {
     const n = 1000;
 
     // This number are very close to 1 to avoid over and underflow.
-    const str1 = "1.00123";
     const f1 = 1.00123;
-    const dec1 = RocDec.fromStr(RocStr.init(str1, str1.len)).?;
+    const dec1 = RocDec.fromF64(f1).?;
+
+    // `asin` and `acos` have a limited range, so they will use this value.
+    const f2 = 0.00130000847;
+    const dec2 = RocDec.fromF64(f2).?;
 
     try stdout.print("Dec:\n", .{});
     try stdout.print("{} additions took ", .{n});
@@ -54,10 +57,10 @@ pub fn main() !void {
     const decTan = try avg_runs(RocDec, n, tanDec, dec1);
 
     try stdout.print("{} asin took ", .{n});
-    const decAsin = try avg_runs(RocDec, n, asinDec, dec1);
+    const decAsin = try avg_runs(RocDec, n, asinDec, dec2);
 
     try stdout.print("{} acos took ", .{n});
-    const decAcos = try avg_runs(RocDec, n, acosDec, dec1);
+    const decAcos = try avg_runs(RocDec, n, acosDec, dec2);
 
     try stdout.print("{} atan took ", .{n});
     const decAtan = try avg_runs(RocDec, n, atanDec, dec1);
@@ -85,10 +88,10 @@ pub fn main() !void {
     const f64Tan = try avg_runs(f64, n, tanF64, f1);
 
     try stdout.print("{} asin took ", .{n});
-    const f64Asin = try avg_runs(f64, n, asinF64, f1);
+    const f64Asin = try avg_runs(f64, n, asinF64, f2);
 
     try stdout.print("{} acos took ", .{n});
-    const f64Acos = try avg_runs(f64, n, acosF64, f1);
+    const f64Acos = try avg_runs(f64, n, acosF64, f2);
 
     try stdout.print("{} atan took ", .{n});
     const f64Atan = try avg_runs(f64, n, atanF64, f1);
@@ -187,8 +190,11 @@ fn tanF64(x: f64, _: f64) f64 {
 fn asinF64(x: f64, _: f64) f64 {
     return std.math.asin(x);
 }
+const pi_over_2 = std.math.pi / 2.0;
 fn acosF64(x: f64, _: f64) f64 {
-    return std.math.acos(x);
+    // acos is only stable if we subtract pi/2.
+    // The perf should be essentially the same because subtraction is much faster than acos.
+    return std.math.acos(x) - pi_over_2;
 }
 fn atanF64(x: f64, _: f64) f64 {
     return std.math.atan(x);
@@ -206,8 +212,11 @@ fn tanDec(x: RocDec, _: RocDec) RocDec {
 fn asinDec(x: RocDec, _: RocDec) RocDec {
     return x.asin();
 }
+const pi_over_2_dec = RocDec.fromF64(pi_over_2).?;
 fn acosDec(x: RocDec, _: RocDec) RocDec {
-    return x.acos();
+    // acos is only stable if we subtract pi/2.
+    // The perf should be essentially the same because subtraction is much faster than acos.
+    return x.acos().sub(pi_over_2_dec);
 }
 fn atanDec(x: RocDec, _: RocDec) RocDec {
     return x.atan();
