@@ -1,39 +1,41 @@
 <!DOCTYPE html>
 
 <html>
-  <head>
-    <title>Roc REPL</title>
-    <link rel="stylesheet" href="/repl/repl.css" />
-  </head>
 
-  <body>
-    <div class="body-wrapper">
-      <section class="text">
-        <h1>The rockin' Roc REPL</h1>
-      </section>
+<head>
+  <title>Roc REPL</title>
+  <link rel="stylesheet" href="/repl/repl.css" />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="/favicon.svg">
+  <!-- Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
+    fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
+  -->
+  <link rel="mask-icon" href="/favicon.svg" color="#7d59dd">
+</head>
 
-      <section class="history">
-        <div class="scroll code">
-          <div id="help-text"></div>
-          <div id="history-text">
-            <div id="loading-message">
-              Loading Roc compiler as a WebAssembly module... please wait!
-            </div>
+<body>
+  <div class="body-wrapper">
+    <section class="text">
+      <h1>The rockin’ Roc REPL</h1>
+    </section>
+
+    <section class="history">
+      <div class="scroll code">
+        <div id="help-text"></div>
+        <div id="history-text">
+          <div id="loading-message">
+            Loading Roc compiler as a WebAssembly module…please wait!
           </div>
         </div>
-      </section>
+      </div>
+    </section>
 
-      <section class="source">
-        <textarea
-          rows="5"
-          autofocus
-          id="source-input"
-          class="code"
-          placeholder="You can enter Roc code here after the compiler is loaded!"
-          disabled
-        ></textarea>
-      </section>
-    </div>
-    <script type="module" src="/repl/repl.js"></script>
-  </body>
+    <section class="source">
+      <textarea rows="5" autofocus id="source-input" class="code"
+        placeholder="You can enter Roc code here after the compiler is loaded!" disabled></textarea>
+    </section>
+  </div>
+  <script type="module" src="/repl/repl.js"></script>
+</body>
+
 </html>
