@@ -71,7 +71,7 @@ fn exhaustiveness_problem() {
         input.push_str("    A -> 1");
         incomplete(&mut input);
 
-        const EXPECTED_ERROR: &str = indoc!(
+        let expected_error: &str = indoc!(
             r#"
             ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
 
@@ -88,7 +88,55 @@ fn exhaustiveness_problem() {
             I would have to crash if I saw one of those! Add branches for them!"#
         );
 
-        error(&input, &mut state, EXPECTED_ERROR.to_string());
+        error(&input, &mut state, expected_error.to_string());
+    }
+}
+
+#[test]
+fn partial_record_definition() {
+    // Partially define a record successfully
+    {
+        let mut state = ReplState::new();
+        let mut input = "successfulRecord = {".to_string();
+        incomplete(&mut input);
+
+        input.push_str("field: \"field\",");
+        incomplete(&mut input);
+
+        input.push('}');
+        complete(
+            &input,
+            &mut state,
+            "{ field: \"field\" } : { field : Str }",
+            "successfulRecord",
+        );
+    }
+
+    // Partially define a record incompletely
+    {
+        let mut state = ReplState::new();
+        let mut input = "failedRecord = {".to_string();
+        incomplete(&mut input);
+
+        input.push_str("field: \"field\",");
+        incomplete(&mut input);
+
+        input.push('\n');
+        let expected_error: &str = indoc!(
+            r#"
+            ── RECORD PARSE PROBLEM ────────────────────────────────────────────────────────
+
+            I am partway through parsing a record, but I got stuck here:
+
+            1│  app "app" provides [replOutput] to "./platform"
+            2│
+            3│  replOutput =
+            4│      failedRecord = {
+                                   ^
+
+            TODO provide more context."#
+        );
+        error(&input, &mut state, expected_error.to_string());
     }
 }
 
