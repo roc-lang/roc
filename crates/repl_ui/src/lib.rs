@@ -34,7 +34,7 @@ pub const TIPS: &str = concatcp!(
             PINK,
             "Ctrl-Enter",
             END_COL,
-            " makes a newline\n\n",
+            " makes a newline\n",
             BLUE,
             "  - ",
             END_COL,
