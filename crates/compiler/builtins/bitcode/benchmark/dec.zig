@@ -47,8 +47,20 @@ pub fn main() !void {
     try stdout.print("{} sin took ", .{n});
     const decSin = try avg_runs(RocDec, n, sinDec, dec1);
 
+    try stdout.print("{} cos took ", .{n});
+    const decCos = try avg_runs(RocDec, n, cosDec, dec1);
+
+    try stdout.print("{} tan took ", .{n});
+    const decTan = try avg_runs(RocDec, n, tanDec, dec1);
+
     try stdout.print("{} asin took ", .{n});
     const decAsin = try avg_runs(RocDec, n, asinDec, dec1);
+
+    try stdout.print("{} acos took ", .{n});
+    const decAcos = try avg_runs(RocDec, n, acosDec, dec1);
+
+    try stdout.print("{} atan took ", .{n});
+    const decAtan = try avg_runs(RocDec, n, atanDec, dec1);
 
     try stdout.print("\n\nF64:\n", .{});
     try stdout.print("{} additions took ", .{n});
@@ -66,8 +78,20 @@ pub fn main() !void {
     try stdout.print("{} sin took ", .{n});
     const f64Sin = try avg_runs(f64, n, sinF64, f1);
 
+    try stdout.print("{} cos took ", .{n});
+    const f64Cos = try avg_runs(f64, n, cosF64, f1);
+
+    try stdout.print("{} tan took ", .{n});
+    const f64Tan = try avg_runs(f64, n, tanF64, f1);
+
     try stdout.print("{} asin took ", .{n});
     const f64Asin = try avg_runs(f64, n, asinF64, f1);
+
+    try stdout.print("{} acos took ", .{n});
+    const f64Acos = try avg_runs(f64, n, acosF64, f1);
+
+    try stdout.print("{} atan took ", .{n});
+    const f64Atan = try avg_runs(f64, n, atanF64, f1);
 
     try stdout.print("\n\nDec/F64:\n", .{});
     try stdout.print("addition:       {d:0.2}\n", .{@intToFloat(f64, decAdd) / @intToFloat(f64, f64Add)});
@@ -75,7 +99,11 @@ pub fn main() !void {
     try stdout.print("multiplication: {d:0.2}\n", .{@intToFloat(f64, decMul) / @intToFloat(f64, f64Mul)});
     try stdout.print("division:       {d:0.2}\n", .{@intToFloat(f64, decDiv) / @intToFloat(f64, f64Div)});
     try stdout.print("sin:            {d:0.2}\n", .{@intToFloat(f64, decSin) / @intToFloat(f64, f64Sin)});
+    try stdout.print("cos:            {d:0.2}\n", .{@intToFloat(f64, decCos) / @intToFloat(f64, f64Cos)});
+    try stdout.print("tan:            {d:0.2}\n", .{@intToFloat(f64, decTan) / @intToFloat(f64, f64Tan)});
     try stdout.print("asin:           {d:0.2}\n", .{@intToFloat(f64, decAsin) / @intToFloat(f64, f64Asin)});
+    try stdout.print("acos:           {d:0.2}\n", .{@intToFloat(f64, decAcos) / @intToFloat(f64, f64Acos)});
+    try stdout.print("atan:           {d:0.2}\n", .{@intToFloat(f64, decAtan) / @intToFloat(f64, f64Atan)});
 }
 
 fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) !u64 {
@@ -150,13 +178,37 @@ fn divF64(x: f64, y: f64) f64 {
 fn sinF64(x: f64, _: f64) f64 {
     return std.math.sin(x);
 }
+fn cosF64(x: f64, _: f64) f64 {
+    return std.math.cos(x);
+}
+fn tanF64(x: f64, _: f64) f64 {
+    return std.math.tan(x);
+}
 fn asinF64(x: f64, _: f64) f64 {
     return std.math.asin(x);
+}
+fn acosF64(x: f64, _: f64) f64 {
+    return std.math.acos(x);
+}
+fn atanF64(x: f64, _: f64) f64 {
+    return std.math.atan(x);
 }
 
 fn sinDec(x: RocDec, _: RocDec) RocDec {
     return x.sin();
 }
+fn cosDec(x: RocDec, _: RocDec) RocDec {
+    return x.cos();
+}
+fn tanDec(x: RocDec, _: RocDec) RocDec {
+    return x.tan();
+}
 fn asinDec(x: RocDec, _: RocDec) RocDec {
     return x.asin();
+}
+fn acosDec(x: RocDec, _: RocDec) RocDec {
+    return x.acos();
+}
+fn atanDec(x: RocDec, _: RocDec) RocDec {
+    return x.atan();
 }
