@@ -26,6 +26,9 @@ pub fn main() !void {
 
     const n = 1000;
 
+    // Add/Sub are too fast and need a higher n.
+    const add_sub_n = 10000;
+
     // This number are very close to 1 to avoid over and underflow.
     const f1 = 1.00123;
     const dec1 = RocDec.fromF64(f1).?;
@@ -35,11 +38,11 @@ pub fn main() !void {
     const dec2 = RocDec.fromF64(f2).?;
 
     try stdout.print("Dec:\n", .{});
-    try stdout.print("{} additions took ", .{n});
-    const decAdd = try avg_runs(RocDec, n, RocDec.add, dec1);
+    try stdout.print("{} additions took ", .{add_sub_n});
+    const decAdd = try avg_runs(RocDec, add_sub_n, RocDec.add, dec1);
 
-    try stdout.print("{} subtractions took ", .{n});
-    const decSub = try avg_runs(RocDec, n, RocDec.sub, dec1);
+    try stdout.print("{} subtractions took ", .{add_sub_n});
+    const decSub = try avg_runs(RocDec, add_sub_n, RocDec.sub, dec1);
 
     try stdout.print("{} multiplications took ", .{n});
     const decMul = try avg_runs(RocDec, n, RocDec.mul, dec1);
@@ -66,11 +69,11 @@ pub fn main() !void {
     const decAtan = try avg_runs(RocDec, n, atanDec, dec1);
 
     try stdout.print("\n\nF64:\n", .{});
-    try stdout.print("{} additions took ", .{n});
-    const f64Add = try avg_runs(f64, n, addF64, f1);
+    try stdout.print("{} additions took ", .{add_sub_n});
+    const f64Add = try avg_runs(f64, add_sub_n, addF64, f1);
 
-    try stdout.print("{} subtractions took ", .{n});
-    const f64Sub = try avg_runs(f64, n, subF64, f1);
+    try stdout.print("{} subtractions took ", .{add_sub_n});
+    const f64Sub = try avg_runs(f64, add_sub_n, subF64, f1);
 
     try stdout.print("{} multiplications took ", .{n});
     const f64Mul = try avg_runs(f64, n, mulF64, f1);
@@ -112,20 +115,22 @@ pub fn main() !void {
 fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) !u64 {
     const stdout = std.io.getStdOut().writer();
 
+    const warmups = 10000;
     const repeats = 10000;
-    var runs = [_]u64{0} ** repeats;
+    var runs = [_]u64{0} ** (warmups + repeats);
 
     var i: usize = 0;
-    while (i < repeats) : (i += 1) {
+    while (i < warmups + repeats) : (i += 1) {
         // Never inline run to ensure it doesn't optimize for the value of `v`.
         runs[i] = callWrapper(u64, .never_inline, run, .{ T, n, op, v });
     }
 
-    std.sort.sort(u64, &runs, {}, comptime std.sort.asc(u64));
+    var real_runs = runs[warmups..runs.len];
+    std.sort.sort(u64, real_runs, {}, comptime std.sort.asc(u64));
 
-    const median = runs[runs.len / 2];
-    const highest = runs[runs.len - 1];
-    const lowest = runs[0];
+    const median = real_runs[real_runs.len / 2];
+    const highest = real_runs[real_runs.len - 1];
+    const lowest = real_runs[0];
 
     try stdout.print("{}ns (lowest: {}ns, highest: {}ns)\n", .{ median, lowest, highest });
     return median;
