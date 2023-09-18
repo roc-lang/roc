@@ -601,7 +601,7 @@ where
     size
 }
 
-fn copy_to_base_offset<GeneralReg, FloatReg, ASM>(
+pub(crate) fn copy_to_base_offset<GeneralReg, FloatReg, ASM>(
     buf: &mut Vec<'_, u8>,
     dst_base_offset: i32,
     stack_size: u32,
