@@ -3,9 +3,9 @@
 <html>
 
 <head>
-  <title>Roc REPL</title>
+  <title>REPL</title>
+  <link rel="stylesheet" href="/site.css" />
   <link rel="stylesheet" href="/repl/repl.css" />
-  <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="/favicon.svg">
   <!-- Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
     fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
@@ -15,23 +15,17 @@
 
 <body>
   <div class="body-wrapper">
-    <section class="text">
-      <h1>The rockin’ Roc REPL</h1>
-    </section>
-
-    <section class="history">
-      <div class="scroll code">
-        <div id="help-text"></div>
-        <div id="history-text">
-          <div id="loading-message">
-            Loading Roc compiler as a WebAssembly module…please wait!
-          </div>
+    <h1>The rockin’ Roc REPL</h1>
+    <code class="history">
+      <div id="help-text"></div>
+      <div id="history-text">
+        <div id="loading-message">
+          Loading Roc compiler as a WebAssembly module…please wait!
         </div>
       </div>
-    </section>
-
-    <section class="source">
-      <textarea rows="5" autofocus id="source-input" class="code"
+    </code>
+    <section id="source-input-wrapper">
+      <textarea rows="5" autofocus id="source-input"
         placeholder="You can enter Roc code here after the compiler is loaded!" disabled></textarea>
     </section>
   </div>

@@ -36,20 +36,22 @@ const repl = {
 };
 
 // Initialise
+repl.elemSourceInput.addEventListener("input", onInput);
 repl.elemSourceInput.addEventListener("change", onInputChange);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder =
-    "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line input)";
+    "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line.)";
+  repl.elemSourceInput.focus();
   repl.compiler = instance;
 
   // Get help text from the compiler, and display it at top of the history panel
   try {
     const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
     const helpElem = document.getElementById("help-text");
-    helpElem.innerHTML = helpText.replace(/\n/g, '<br>');
+    helpElem.innerHTML = helpText.trim().replace(/\n/g, '<br>');
   } catch (e) {
     // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
     console.warn(e);
@@ -60,10 +62,19 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
 // Handle inputs
 // ----------------------------------------------------------------------------
 
+function onInput(event) {
+  const target = event.target;
+
+  // Have the textarea grow with the input
+  target.style.height = ""; // Reset height
+  target.style.height = target.scrollHeight + 8 + "px";
+}
+
 function onInputChange(event) {
   const inputText = event.target.value.trim();
 
   event.target.value = "";
+  event.target.style.height = "";
 
   repl.inputQueue.push(inputText);
   if (repl.inputQueue.length === 1) {
@@ -215,7 +226,6 @@ function createHistoryEntry(inputText) {
   historyItem.classList.add("history-item");
 
   repl.elemHistory.appendChild(historyItem);
-  repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
 
   return historyIndex;
 }
@@ -228,5 +238,6 @@ function updateHistoryEntry(index, ok, outputText) {
   const historyItem = repl.elemHistory.children[index];
   historyItem.appendChild(outputElem);
 
-  repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
+  // Scroll the page to the bottom so you can see the most recent output.
+  window.scrollTo(0, document.body.scrollHeight);
 }
