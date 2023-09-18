@@ -2111,6 +2111,8 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize {
         jmp_imm32(buf, offset);
+
+        // on x86_64, jumps are calculated from the end of the jmp instruction
         buf.len()
     }
 
@@ -2144,6 +2146,7 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
 
         jne_imm32(buf, offset);
 
+        // on x86_64, jumps are calculated from the end of the jmp instruction
         buf.len()
     }
 
@@ -2189,6 +2192,15 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     #[inline(always)]
     fn mov_reg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64FloatReg) {
         movq_reg64_freg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn mov_freg32_reg32(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _src: X86_64GeneralReg) {
+        unimplemented!("`mov_freg32_reg32` is not currently used by the x86 backend")
+    }
+    #[inline(always)]
+    fn mov_freg64_reg64(_buf: &mut Vec<'_, u8>, _dst: X86_64FloatReg, _src: X86_64GeneralReg) {
+        unimplemented!("`mov_freg64_reg64` is not currently used by the x86 backend")
     }
 
     #[inline(always)]

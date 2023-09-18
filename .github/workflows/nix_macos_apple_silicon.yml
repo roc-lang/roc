@@ -40,9 +40,9 @@ jobs:
 
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
-        
+
       - name: test aarch64 dev backend
-        run: nix develop -c cargo test-gen-dev bitwise_and --locked --release
+        run: nix develop -c cargo nextest-gen-dev --locked --release --no-fail-fast -E 'test(gen_num) + test(gen_records)'
 
       # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
       - name: execute llvm wasm tests with --release

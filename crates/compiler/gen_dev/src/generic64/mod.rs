@@ -257,6 +257,26 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
 
+    /// Updates a jump instruction to a new offset and returns the number of bytes written.
+    fn update_jmp_imm32_offset(
+        buf: &mut Vec<'_, u8>,
+        jmp_location: u64,
+        base_offset: u64,
+        target_offset: u64,
+    ) {
+        let old_buf_len = buf.len();
+
+        // write the jmp at the back of buf
+        let jmp_offset = target_offset as i32 - base_offset as i32;
+        Self::jmp_imm32(buf, jmp_offset);
+
+        // move the new jmp instruction into position
+        buf.copy_within(old_buf_len.., jmp_location as usize);
+
+        // wipe the jmp we created at the end
+        buf.truncate(old_buf_len)
+    }
+
     fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
 
     /// Jumps by an offset of offset bytes if reg is not equal to imm.
@@ -290,6 +310,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn mov_reg32_freg32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg);
     fn mov_reg64_freg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg);
+
+    fn mov_freg32_reg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+    fn mov_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
 
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
@@ -912,7 +935,6 @@ impl<
 
         // Update jumps to returns.
         let ret_offset = self.buf.len() - end_jmp_size;
-        let mut tmp = bumpalo::vec![in self.env.arena];
         for reloc in old_relocs
             .iter()
             .filter(|reloc| matches!(reloc, Relocation::JmpToReturn { .. }))
@@ -924,7 +946,12 @@ impl<
             } = reloc
             {
                 if *inst_loc as usize + *inst_size as usize != self.buf.len() {
-                    self.update_jmp_imm32_offset(&mut tmp, *inst_loc, *offset, ret_offset as u64);
+                    ASM::update_jmp_imm32_offset(
+                        &mut self.buf,
+                        *inst_loc,
+                        *offset,
+                        ret_offset as u64,
+                    );
                 }
             }
         }
@@ -1186,8 +1213,8 @@ impl<
         // Update all return jumps to jump past the default case.
         let ret_offset = self.buf.len();
         for (jmp_location, start_offset) in ret_jumps.into_iter() {
-            self.update_jmp_imm32_offset(
-                &mut tmp,
+            ASM::update_jmp_imm32_offset(
+                &mut self.buf,
                 jmp_location as u64,
                 start_offset as u64,
                 ret_offset as u64,
@@ -1224,14 +1251,16 @@ impl<
         self.build_stmt(layout_ids, body, ret_layout);
 
         // Overwrite the all jumps to the joinpoint with the correct offset.
-        let mut tmp = bumpalo::vec![in self.env.arena];
         for (jmp_location, start_offset) in self
             .join_map
             .remove(id)
             .unwrap_or_else(|| internal_error!("join point not defined"))
         {
-            tmp.clear();
-            self.update_jmp_imm32_offset(&mut tmp, jmp_location, start_offset, join_location);
+            // join_location: byte offset where the body of the joinpoint starts
+            // jmp_location: byte offset where the jump instruction starts
+            // start_offset: byte offset where the jump instruction ends
+
+            ASM::update_jmp_imm32_offset(&mut self.buf, jmp_location, start_offset, join_location);
         }
     }
 
@@ -1348,74 +1377,20 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        use Builtin::{Float, Int};
+        let function_name = match self.interner().get_repr(*num_layout) {
+            LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_ADD_CHECKED_INT[width],
+            LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_ADD_CHECKED_FLOAT[width],
+            LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_ADD_WITH_OVERFLOW,
+            x => internal_error!("NumAddChecked is not defined for {:?}", x),
+        };
 
-        let buf = &mut self.buf;
-
-        let base_offset = self.storage_manager.claim_stack_area_layout(
-            self.layout_interner,
-            *dst,
-            *return_layout,
-        );
-
-        match self.layout_interner.get_repr(*num_layout) {
-            LayoutRepr::Builtin(Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
-                let dst_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
-
-                let overflow_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
-
-                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
-                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
-
-                ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
-                ASM::set_if_overflow(buf, overflow_reg);
-
-                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            LayoutRepr::Builtin(Int(
-                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
-            )) => {
-                todo!("addChecked for unsigned integers")
-            }
-            LayoutRepr::Builtin(Int(int_width @ (IntWidth::U128 | IntWidth::I128))) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_ADD_CHECKED_INT[int_width].to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            LayoutRepr::Builtin(Float(float_width @ (FloatWidth::F64 | FloatWidth::F32))) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_ADD_CHECKED_FLOAT[float_width].to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::DEC_ADD_WITH_OVERFLOW.to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            x => todo!("NumAdd: layout, {:?}", x),
-        }
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
     }
 
     fn build_num_sub_checked(
@@ -1560,63 +1535,20 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        use Builtin::Int;
+        let function_name = match self.interner().get_repr(*num_layout) {
+            LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_MUL_CHECKED_INT[width],
+            LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_MUL_CHECKED_FLOAT[width],
+            LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_MUL_WITH_OVERFLOW,
+            x => internal_error!("NumMulChecked is not defined for {:?}", x),
+        };
 
-        let buf = &mut self.buf;
-
-        match self.layout_interner.get_repr(*num_layout) {
-            LayoutRepr::Builtin(Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
-                let base_offset = self.storage_manager.claim_stack_area_layout(
-                    self.layout_interner,
-                    *dst,
-                    *return_layout,
-                );
-
-                let dst_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
-
-                let overflow_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
-
-                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
-                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
-
-                ASM::imul_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
-                ASM::set_if_overflow(buf, overflow_reg);
-
-                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_MUL_CHECKED_INT[int_width].to_string(),
-                    &[*src1, *src2],
-                    &[*num_layout, *num_layout],
-                    return_layout,
-                );
-            }
-            LayoutRepr::Builtin(Builtin::Float(_width)) => {
-                todo!("mulChecked for floats")
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::DEC_MUL_WITH_OVERFLOW.to_string(),
-                    &[*src1, *src2],
-                    &[Layout::DEC, Layout::DEC],
-                    return_layout,
-                );
-            }
-            x => todo!("mulChecked: layout, {:?}", x),
-        }
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
     }
 
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
@@ -4296,14 +4228,14 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, reg, *x as i64);
             }
             (Literal::Float(x), LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64))) => {
-                let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
+                let freg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x;
-                ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
+                ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, freg, val);
             }
             (Literal::Float(x), LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32))) => {
-                let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
+                let freg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x as f32;
-                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, freg, val);
             }
             (Literal::Decimal(bytes), LayoutRepr::Builtin(Builtin::Decimal)) => {
                 self.storage_manager.with_tmp_general_reg(
@@ -5367,22 +5299,6 @@ impl<
                     }
                 });
             }
-        }
-    }
-
-    /// Updates a jump instruction to a new offset and returns the number of bytes written.
-    fn update_jmp_imm32_offset(
-        &mut self,
-        tmp: &mut Vec<'a, u8>,
-        jmp_location: u64,
-        base_offset: u64,
-        target_offset: u64,
-    ) {
-        tmp.clear();
-        let jmp_offset = target_offset as i32 - base_offset as i32;
-        ASM::jmp_imm32(tmp, jmp_offset);
-        for (i, byte) in tmp.iter().enumerate() {
-            self.buf[jmp_location as usize + i] = *byte;
         }
     }
 

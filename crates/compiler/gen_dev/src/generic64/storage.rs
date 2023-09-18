@@ -247,7 +247,7 @@ impl<
             self.free_to_stack(buf, &sym, Float(reg));
             reg
         } else {
-            internal_error!("completely out of general purpose registers");
+            internal_error!("completely out of float registers");
         }
     }
 
