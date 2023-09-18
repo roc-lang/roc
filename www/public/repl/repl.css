@@ -72,9 +72,7 @@ li {
 }
 
 #history-text {
-  margin: 16px 0;
-  padding: 8px;
-  padding-bottom: 0;
+  margin-top: 16px;
 }
 
 #loading-message {

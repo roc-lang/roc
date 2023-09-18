@@ -1408,10 +1408,8 @@ fn interpolation_with_nested_interpolation() {
                 Tips:
 
                   - ctrl-v + ctrl-j makes a newline
-
                   - :q to quit
-
-                  - :help"#
+                  - :help shows this text again"#
         ),
         // TODO figure out why the tests prints the repl help text at the end, but only after syntax errors or something?
         // In the actual repl this doesn't happen, only in the test.
