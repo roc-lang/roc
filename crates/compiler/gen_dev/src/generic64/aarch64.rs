@@ -766,7 +766,8 @@ impl AArch64CallLoadArgs {
                             sym,
                             in_layout,
                         );
-                        let tmp_reg = AArch64Call::GENERAL_RETURN_REGS[0];
+
+                        let tmp_reg = AArch64GeneralReg::XR;
 
                         super::x86_64::copy_to_base_offset::<_, _, AArch64Assembler>(
                             buf,
@@ -918,7 +919,7 @@ impl AArch64CallStoreArgs {
         type ASM = AArch64Assembler;
 
         // we use the return register as a temporary register; it will be overwritten anyway
-        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+        let tmp_reg = AArch64GeneralReg::XR;
 
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
@@ -1011,7 +1012,7 @@ impl AArch64CallStoreArgs {
             }
             None => {
                 // Copy to stack using return reg as buffer.
-                let reg = Self::GENERAL_RETURN_REGS[0];
+                let reg = AArch64GeneralReg::XR;
 
                 ASM::mov_reg64_base32(buf, reg, offset);
                 ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
@@ -1041,7 +1042,7 @@ impl AArch64CallStoreArgs {
             self.general_i += 2;
         } else {
             // Copy to stack using return reg as buffer.
-            let reg = Self::GENERAL_RETURN_REGS[0];
+            let reg = AArch64GeneralReg::XR;
 
             ASM::mov_reg64_base32(buf, reg, offset);
             ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
@@ -1066,7 +1067,7 @@ impl AArch64CallStoreArgs {
             }
             None => {
                 // Copy to stack using return reg as buffer.
-                let tmp = Self::GENERAL_RETURN_REGS[0];
+                let tmp = AArch64GeneralReg::XR;
 
                 storage_manager.load_to_specified_general_reg(buf, &sym, tmp);
                 AArch64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
