@@ -37,6 +37,7 @@ const repl = {
 
 // Initialise
 repl.elemSourceInput.addEventListener("input", onInput);
+repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
@@ -66,22 +67,32 @@ function onInput(event) {
   event.target.style.height = event.target.scrollHeight + 2 + "px"; // +2 for the border
 }
 
-function onEnter(event) {
-  const inputText = event.target.value.trim();
+function onInputKeydown(event) {
+  const ENTER = 13;
 
-  event.target.value = "";
-  event.target.style.height = "";
+  const { keyCode } = event;
 
-  repl.inputQueue.push(inputText);
-  if (repl.inputQueue.length === 1) {
-    processInputQueue();
+  if (keyCode === ENTER) {
+    if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
+      // Don't advance the caret to the next line
+      event.preventDefault();
+
+      const inputText = repl.elemSourceInput.value.trim();
+
+      repl.elemSourceInput.value = "";
+      repl.elemSourceInput.style.height = "";
+
+      repl.inputQueue.push(inputText);
+      if (repl.inputQueue.length === 1) {
+        processInputQueue();
+      }
+    }
   }
 }
 
 function onInputKeyup(event) {
   const UP = 38;
   const DOWN = 40;
-  const ENTER = 13;
 
   const { keyCode } = event;
 
@@ -111,12 +122,6 @@ function onInputKeyup(event) {
       } else {
         repl.inputHistoryIndex++;
         setInput(repl.inputHistory[repl.inputHistoryIndex]);
-      }
-      break;
-
-    case ENTER:
-      if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
-        onEnter({ target: repl.elemSourceInput });
       }
       break;
 
