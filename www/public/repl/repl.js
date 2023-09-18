@@ -62,11 +62,8 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
 // ----------------------------------------------------------------------------
 
 function onInput(event) {
-  const target = event.target;
-
   // Have the textarea grow with the input
-  target.style.height = ""; // Reset height
-  target.style.height = target.scrollHeight + 8 + "px";
+  event.target.style.height = event.target.scrollHeight + 2 + "px"; // +2 for the border
 }
 
 function onEnter(event) {

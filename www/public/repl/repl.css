@@ -49,7 +49,7 @@ h1 {
   color: var(--code-color);
   background-color: var(--code-bg);
   display: inline-block;
-  height: 5em;
+  height: 76px;
   padding: 16px;
   padding-left: 36px;
   border: 1px solid transparent;
