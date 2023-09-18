@@ -73,6 +73,12 @@ li {
   padding-bottom: 0;
 }
 
+#help-text,
+#history-text {
+  white-space: pre-wrap;
+
+}
+
 #history-text {
   margin-top: 16px;
 }

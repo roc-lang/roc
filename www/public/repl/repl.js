@@ -51,7 +51,7 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   try {
     const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
     const helpElem = document.getElementById("help-text");
-    helpElem.innerHTML = helpText.trim().replace(/\n/g, '<br>');
+    helpElem.innerHTML = helpText.trim();
   } catch (e) {
     // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
     console.warn(e);
@@ -233,7 +233,7 @@ function createHistoryEntry(inputText) {
 
 function updateHistoryEntry(index, ok, outputText) {
   const outputElem = document.createElement("div");
-  outputElem.innerHTML = outputText.replace(/\n/g, "<br>");
+  outputElem.innerHTML = outputText;
   outputElem.classList.add("output", ok ? "output-ok" : "output-error");
 
   const historyItem = repl.elemHistory.children[index];
