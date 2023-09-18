@@ -11,25 +11,13 @@ use roc_parse::ast::{Expr, ValueDef};
 use roc_repl_eval::gen::{Problems, ReplOutput};
 use roc_reporting::report::StyleCodes;
 
-pub const WELCOME_MESSAGE: &str = concatcp!(
-    "\n  The rockin’ ",
-    BLUE,
-    "roc repl",
-    END_COL,
-    "\n",
-    PINK,
-    "────────────────────────",
-    END_COL,
-    "\n\n"
-);
-
 // TODO add link to repl tutorial(does not yet exist).
 pub const TIPS: &str = concatcp!(
     "\nEnter an expression to evaluate, or a definition (like ",
     BLUE,
     "x = 1",
     END_COL,
-    ") to use in future expressions.\n\nTips:\n\n",
+    ") to use later.\n\nTips:\n\n",
     if cfg!(target_family = "wasm") {
         // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
         // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)

@@ -1403,7 +1403,7 @@ fn interpolation_with_nested_interpolation() {
                 <https://www.roc-lang.org/tutorial#string-interpolation>
 
 
-                Enter an expression to evaluate, or a definition (like x = 1) to use in future expressions.
+                Enter an expression to evaluate, or a definition (like x = 1) to use later.
 
                 Tips:
 

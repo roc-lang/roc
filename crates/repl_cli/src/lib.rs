@@ -20,6 +20,18 @@ use target_lexicon::Triple;
 
 use crate::cli_gen::eval_llvm;
 
+pub const WELCOME_MESSAGE: &str = concatcp!(
+    "\n  The rockin’ ",
+    BLUE,
+    "roc repl",
+    END_COL,
+    "\n",
+    PINK,
+    "────────────────────────",
+    END_COL,
+    "\n\n"
+);
+
 #[derive(Completer, Helper, Hinter, Default)]
 pub struct ReplHelper {
     validator: InputValidator,
