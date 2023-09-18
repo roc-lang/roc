@@ -3334,6 +3334,16 @@ fn box_num() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_record() {
+    assert_evals_to!(
+        "Box.box { x: 1u64, y: 2u64 }",
+        RocBox::new((1u64, 2u64)),
+        RocBox<(u64, u64)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_str() {
     assert_evals_to!(
         "Box.box \"short\"",

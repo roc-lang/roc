@@ -752,9 +752,33 @@ impl AArch64CallLoadArgs {
                 storage_manager.no_data(&sym);
             }
             _ if stack_size > 16 => {
-                // TODO: Double check this.
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
+                match AArch64Call::GENERAL_PARAM_REGS.get(self.general_i) {
+                    Some(ptr_reg) => {
+                        // if there is a general purpose register available, use it to store a pointer to the value
+                        let base_offset = storage_manager.claim_stack_area_layout(
+                            layout_interner,
+                            sym,
+                            in_layout,
+                        );
+                        let tmp_reg = AArch64Call::GENERAL_RETURN_REGS[0];
+
+                        super::x86_64::copy_to_base_offset::<_, _, AArch64Assembler>(
+                            buf,
+                            base_offset,
+                            stack_size,
+                            *ptr_reg,
+                            tmp_reg,
+                            0,
+                        );
+
+                        self.general_i += 1;
+                    }
+                    None => {
+                        // else, pass the value implicitly by copying to the stack (of the new frame)
+                        storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                        self.argument_offset += stack_size as i32;
+                    }
+                }
             }
             LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
                 buf,
@@ -897,19 +921,30 @@ impl AArch64CallStoreArgs {
             }
             _ if layout_interner.stack_size(in_layout) == 0 => {}
             _ if layout_interner.stack_size(in_layout) > 16 => {
-                // TODO: Double check this.
-                // Just copy onto the stack.
-                let stack_offset = self.tmp_stack_offset;
+                match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+                    Some(reg) => {
+                        // if there is a general purpose register available, use it to store a pointer to the value
+                        let (base_offset, _size) = storage_manager.stack_offset_and_size(&sym);
 
-                let size = copy_symbol_to_stack_offset::<CC>(
-                    buf,
-                    storage_manager,
-                    sym,
-                    tmp_reg,
-                    stack_offset,
-                );
+                        ASM::add_reg64_reg64_imm32(buf, *reg, AArch64GeneralReg::FP, base_offset);
 
-                self.tmp_stack_offset += size as i32;
+                        self.general_i += 1;
+                    }
+                    None => {
+                        // else, pass the value implicitly by copying to the stack (of the new frame)
+                        let stack_offset = self.tmp_stack_offset;
+
+                        let size = copy_symbol_to_stack_offset::<CC>(
+                            buf,
+                            storage_manager,
+                            sym,
+                            tmp_reg,
+                            stack_offset,
+                        );
+
+                        self.tmp_stack_offset += size as i32;
+                    }
+                }
             }
             LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
                 buf,
