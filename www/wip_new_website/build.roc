@@ -26,12 +26,13 @@ main =
         |> Task.onErr \_ -> crash "Failed to build site"
         |> Task.await
 
-    # Copy CSS file
-    {} <- cp "static/site.css"  "dist/wip/" |> Task.await
-    # TODO inline this into repl.js - no need for a separate network request for this.
-    {} <- cp "../public/repl/wasi.js"  "dist/wip/" |> Task.await
-    # TODO copy this inline into index.html instead of having a separate network request for this tiny file!
-    {} <- cp "../public/repl/repl.js"  "dist/wip/" |> Task.await
+    # Copy static files
+    {} <-
+        Cmd.new "cp"
+        |> Cmd.args ["-r", "static/site.css", "dist/wip/"]
+        |> Cmd.status
+        |> Task.onErr \_ -> crash "Failed to copy static files"
+        |> Task.await
 
     # Copy font files - assume that www/build.sh has been run previously and the
     # fonts are available locally in ../build/fonts
@@ -51,9 +52,3 @@ main =
         |> Task.await
 
     Task.ok {}
-
-cp = \src, dest ->
-    Cmd.new "cp"
-    |> Cmd.args ["-r", src, dest]
-    |> Cmd.status
-    |> Task.onErr \_ -> crash "Failed to cp from \(src) to \(dest)"
