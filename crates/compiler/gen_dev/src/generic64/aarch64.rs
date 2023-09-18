@@ -748,6 +748,12 @@ impl AArch64CallLoadArgs {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
             pointer_layouts!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
+                self.load_arg_general_128bit(buf, storage_manager, sym);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.load_arg_general_128bit(buf, storage_manager, sym);
+            }
             _ if stack_size == 0 => {
                 storage_manager.no_data(&sym);
             }
@@ -788,15 +794,13 @@ impl AArch64CallLoadArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                // for now, just also store this on the stack
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
-            }
-            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
+                if stack_size <= 8 {
+                    self.load_arg_general_64bit(buf, storage_manager, sym);
+                } else if stack_size <= 16 {
+                    self.load_arg_general_128bit(buf, storage_manager, sym);
+                } else {
+                    unreachable!("covered by an earlier branch")
+                }
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 // for now, just also store this on the stack
@@ -823,6 +827,31 @@ impl AArch64CallLoadArgs {
         } else {
             storage_manager.primitive_stack_arg(&sym, self.argument_offset);
             self.argument_offset += 8;
+        }
+    }
+
+    fn load_arg_general_64bit(
+        &mut self,
+        buf: &mut Vec<u8>,
+        storage_manager: &mut AArch64StorageManager<'_, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let reg1 = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i);
+
+        match reg1 {
+            Some(reg1) => {
+                let offset = storage_manager.claim_stack_area_with_alignment(sym, 8, 8);
+
+                ASM::mov_base32_reg64(buf, offset, *reg1);
+
+                self.general_i += 2;
+            }
+            None => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, 8);
+                self.argument_offset += 8;
+            }
         }
     }
 
@@ -896,28 +925,7 @@ impl AArch64CallStoreArgs {
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
             LayoutRepr::I128 | LayoutRepr::U128 | LayoutRepr::DEC => {
-                let (offset, _) = storage_manager.stack_offset_and_size(&sym);
-
-                if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
-                    let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
-
-                    ASM::mov_reg64_base32(buf, reg1, offset);
-                    ASM::mov_reg64_base32(buf, reg2, offset + 8);
-
-                    self.general_i += 2;
-                } else {
-                    // Copy to stack using return reg as buffer.
-                    let reg = Self::GENERAL_RETURN_REGS[0];
-
-                    ASM::mov_reg64_base32(buf, reg, offset);
-                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
-
-                    ASM::mov_reg64_base32(buf, reg, offset + 8);
-                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
-
-                    self.tmp_stack_offset += 16;
-                }
+                self.store_arg_128bit(buf, storage_manager, sym)
             }
             _ if layout_interner.stack_size(in_layout) == 0 => {}
             _ if layout_interner.stack_size(in_layout) > 16 => {
@@ -954,17 +962,14 @@ impl AArch64CallStoreArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                let stack_offset = self.tmp_stack_offset;
-
-                let size = copy_symbol_to_stack_offset::<CC>(
-                    buf,
-                    storage_manager,
-                    sym,
-                    tmp_reg,
-                    stack_offset,
-                );
-
-                self.tmp_stack_offset += size as i32;
+                let stack_size = layout_interner.stack_size(in_layout);
+                if stack_size <= 8 {
+                    self.store_arg_64bit(buf, storage_manager, sym);
+                } else if stack_size <= 16 {
+                    self.store_arg_128bit(buf, storage_manager, sym);
+                } else {
+                    unreachable!("covered by earlier branch");
+                }
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let stack_offset = self.tmp_stack_offset;
@@ -985,6 +990,66 @@ impl AArch64CallStoreArgs {
                     layout_interner.dbg(in_layout)
                 );
             }
+        }
+    }
+
+    fn store_arg_64bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                ASM::mov_reg64_base32(buf, *reg, offset);
+
+                self.general_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let reg = Self::GENERAL_RETURN_REGS[0];
+
+                ASM::mov_reg64_base32(buf, reg, offset);
+                ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
+    }
+
+    fn store_arg_128bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+            let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+            let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+            ASM::mov_reg64_base32(buf, reg1, offset);
+            ASM::mov_reg64_base32(buf, reg2, offset + 8);
+
+            self.general_i += 2;
+        } else {
+            // Copy to stack using return reg as buffer.
+            let reg = Self::GENERAL_RETURN_REGS[0];
+
+            ASM::mov_reg64_base32(buf, reg, offset);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+            ASM::mov_reg64_base32(buf, reg, offset + 8);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+            self.tmp_stack_offset += 16;
         }
     }
 
