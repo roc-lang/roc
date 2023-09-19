@@ -479,7 +479,6 @@ mod cli_run {
 
     #[test]
     #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
     fn hello_world_no_url() {
         test_roc_app_slim(
             "examples",
@@ -561,7 +560,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -647,7 +645,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn fibonacci() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -695,7 +692,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -1318,7 +1314,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_str)]
-    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
@@ -1352,7 +1347,6 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
