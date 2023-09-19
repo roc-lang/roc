@@ -102,9 +102,6 @@ pub fn generate_docs_html(root_file: PathBuf) {
     // Insert asset urls & sidebar links
     let template_html = assets
         .raw_template_html
-        .replace("<!-- search.js -->", "search.js")
-        .replace("<!-- styles.css -->", "styles.css")
-        .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
             "<!-- Prefetch links -->",
             loaded_module

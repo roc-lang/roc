@@ -1,10 +1,10 @@
+use roc_repl_cli::WELCOME_MESSAGE;
+use roc_repl_ui::SHORT_INSTRUCTIONS;
+use roc_test_utils::assert_multiline_str_eq;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
-
-use roc_repl_ui::{SHORT_INSTRUCTIONS, WELCOME_MESSAGE};
-use roc_test_utils::assert_multiline_str_eq;
 
 const ERROR_MESSAGE_START: char = '─';
 

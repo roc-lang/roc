@@ -1,103 +1,142 @@
-html {
-  height: 100%;
-}
-body {
-  height: 92%;
-  background-color: #222;
-  color: #ccc;
-  font-family: sans-serif;
-  font-size: 12px;
-}
-.body-wrapper {
+main {
   display: flex;
   flex-direction: column;
-  max-width: 900px;
-  height: 100%;
-  margin: 0 auto;
-  padding: 0 24px;
 }
+
 h1 {
-  margin: 32px auto;
-  color: #eee;
-  text-align: center;
+  font-family: "Merriweather";
+  font-size: 48px;
+  line-height: 48px;
+  padding: 48px 0;
+  margin: 0;
+  color: var(--header-link-color);
 }
+
+#source-input-wrapper {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#source-input-wrapper::before {
+  content: "» ";
+  position: absolute;
+  left: 15px;
+  top: 18px;
+  line-height: 16px;
+  height: 16px;
+  z-index: 2;
+  font-family: var(--font-mono);
+  color: var(--cyan);
+  /* Let clicks pass through to the textarea */
+  pointer-events: none;
+}
+
+#source-input {
+  width: 100%;
+  font-family: var(--font-mono);
+  color: var(--code-color);
+  background-color: var(--code-bg);
+  display: inline-block;
+  height: 76px;
+  padding: 16px;
+  padding-left: 36px;
+  border: 1px solid transparent;
+  margin: 0;
+  margin-bottom: 2em;
+  box-sizing: border-box;
+}
+
+#source-input:focus {
+  border: 1px solid var(--cyan);
+  box-sizing: border-box;
+  outline: none;
+}
+
 li {
   margin: 8px;
 }
-section.history {
-  flex: 1;
-  position: relative;
-  height: 100%;
+
+.history {
+  padding: 1em;
+  padding-bottom: 0;
 }
-.scroll {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  overflow: auto;
-}
+
+#help-text,
 #history-text {
-  margin: 16px 0;
-  padding: 8px;
+  white-space: pre-wrap;
+
 }
+
+#history-text {
+  margin-top: 16px;
+}
+
 #loading-message {
   margin: 40% 10%;
 }
+
 .history-item {
   margin-bottom: 24px;
 }
+
 .history-item .input {
   margin: 0;
   margin-bottom: 8px;
 }
+
 .history-item .output {
   margin: 0;
 }
+
 .panic {
   color: red;
 }
+
 .input-line-prefix {
-  color: cyan;
-}
-.code {
-  font-family: "Courier New", Courier, monospace;
-  background-color: #111;
-  color: #fff;
-}
-section.source {
-  display: flex;
-  flex-direction: column;
-}
-section.source textarea {
-  padding: 8px;
-  margin-bottom: 16px;
+  color: var(--cyan);
 }
 
 .color-red {
   color: red;
 }
+
 .color-green {
-  color: green;
+  color: var(--green);
 }
+
 .color-yellow {
-  color: yellow;
+  color: var(--orange);
 }
+
 .color-blue {
-  color: blue;
+  color: var(--cyan);
 }
+
 .color-magenta {
-  color: magenta;
+  color: var(--magenta);
 }
+
 .color-cyan {
-  color: cyan;
+  color: var(--cyan);
 }
+
 .color-white {
-  color: white;
+  /* Really this isn't white so much as "default text color." For the repl, this should be black
+  in a light color scheme, and only white in dark mode. The name could be better! */
+  color: black;
 }
+
+@media (prefers-color-scheme: dark) {
+  .color-white {
+    color: white;
+  }
+}
+
 .bold {
   font-weight: bold;
 }
+
 .underline {
   text-decoration: underline;
 }

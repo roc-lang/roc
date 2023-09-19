@@ -11,17 +11,7 @@ use roc_parse::ast::{Expr, ValueDef};
 use roc_repl_eval::gen::{Problems, ReplOutput};
 use roc_reporting::report::StyleCodes;
 
-pub const WELCOME_MESSAGE: &str = concatcp!(
-    "\n  The rockin’ ",
-    BLUE,
-    "roc repl",
-    END_COL,
-    "\n",
-    PINK,
-    "────────────────────────",
-    END_COL,
-    "\n\n"
-);
+use crate::colors::GREEN;
 
 // TODO add link to repl tutorial(does not yet exist).
 pub const TIPS: &str = concatcp!(
@@ -29,7 +19,7 @@ pub const TIPS: &str = concatcp!(
     BLUE,
     "x = 1",
     END_COL,
-    ") to use in future expressions.\n\nTips:\n\n",
+    ") to use later.\n\n",
     if cfg!(target_family = "wasm") {
         // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
         // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
@@ -44,7 +34,7 @@ pub const TIPS: &str = concatcp!(
             PINK,
             "Ctrl-Enter",
             END_COL,
-            " makes a newline\n\n",
+            " makes a newline\n",
             BLUE,
             "  - ",
             END_COL,
@@ -63,15 +53,21 @@ pub const TIPS: &str = concatcp!(
             PINK,
             "ctrl-j",
             END_COL,
-            " makes a newline\n\n",
+            " makes a newline\n",
             BLUE,
             "  - ",
             END_COL,
-            ":q to quit\n\n",
+            GREEN,
+            ":q",
+            END_COL,
+            " quits\n",
             BLUE,
             "  - ",
             END_COL,
-            ":help"
+            GREEN,
+            ":help",
+            END_COL,
+            " shows this text again\n",
         )
     }
 );

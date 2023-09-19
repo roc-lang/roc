@@ -1,24 +1,35 @@
 //! Command Line Interface (CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
 mod cli_gen;
 
-use std::borrow::Cow;
-
 use bumpalo::Bump;
+use const_format::concatcp;
 use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
 use roc_repl_eval::gen::Problems;
+use roc_repl_ui::colors::{BLUE, END_COL, PINK};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
-use roc_repl_ui::{
-    format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS, WELCOME_MESSAGE,
-};
+use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
 use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
 use roc_target::TargetInfo;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
 use rustyline_derive::{Completer, Helper, Hinter};
+use std::borrow::Cow;
 use target_lexicon::Triple;
 
 use crate::cli_gen::eval_llvm;
+
+pub const WELCOME_MESSAGE: &str = concatcp!(
+    "\n  The rockin’ ",
+    BLUE,
+    "roc repl",
+    END_COL,
+    "\n",
+    PINK,
+    "────────────────────────",
+    END_COL,
+    "\n\n"
+);
 
 #[derive(Completer, Helper, Hinter, Default)]
 pub struct ReplHelper {

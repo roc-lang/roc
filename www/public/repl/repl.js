@@ -36,20 +36,22 @@ const repl = {
 };
 
 // Initialise
-repl.elemSourceInput.addEventListener("change", onInputChange);
+repl.elemSourceInput.addEventListener("input", onInput);
+repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder =
-    "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line input)";
+    "Type some Roc code and press Enter. (Use Shift-Enter or Ctrl-Enter for multi-line.)";
+  repl.elemSourceInput.focus();
   repl.compiler = instance;
 
   // Get help text from the compiler, and display it at top of the history panel
   try {
     const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
     const helpElem = document.getElementById("help-text");
-    helpElem.innerHTML = helpText.replace(/\n/g, '<br>');
+    helpElem.innerHTML = helpText.trim();
   } catch (e) {
     // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
     console.warn(e);
@@ -60,21 +62,37 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
 // Handle inputs
 // ----------------------------------------------------------------------------
 
-function onInputChange(event) {
-  const inputText = event.target.value.trim();
+function onInput(event) {
+  // Have the textarea grow with the input
+  event.target.style.height = event.target.scrollHeight + 2 + "px"; // +2 for the border
+}
 
-  event.target.value = "";
+function onInputKeydown(event) {
+  const ENTER = 13;
 
-  repl.inputQueue.push(inputText);
-  if (repl.inputQueue.length === 1) {
-    processInputQueue();
+  const { keyCode } = event;
+
+  if (keyCode === ENTER) {
+    if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
+      // Don't advance the caret to the next line
+      event.preventDefault();
+
+      const inputText = repl.elemSourceInput.value.trim();
+
+      repl.elemSourceInput.value = "";
+      repl.elemSourceInput.style.height = "";
+
+      repl.inputQueue.push(inputText);
+      if (repl.inputQueue.length === 1) {
+        processInputQueue();
+      }
+    }
   }
 }
 
 function onInputKeyup(event) {
   const UP = 38;
   const DOWN = 40;
-  const ENTER = 13;
 
   const { keyCode } = event;
 
@@ -104,12 +122,6 @@ function onInputKeyup(event) {
       } else {
         repl.inputHistoryIndex++;
         setInput(repl.inputHistory[repl.inputHistoryIndex]);
-      }
-      break;
-
-    case ENTER:
-      if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
-        onInputChange({ target: repl.elemSourceInput });
       }
       break;
 
@@ -215,18 +227,18 @@ function createHistoryEntry(inputText) {
   historyItem.classList.add("history-item");
 
   repl.elemHistory.appendChild(historyItem);
-  repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
 
   return historyIndex;
 }
 
 function updateHistoryEntry(index, ok, outputText) {
   const outputElem = document.createElement("div");
-  outputElem.innerHTML = outputText.replace(/\n/g, "<br>");
+  outputElem.innerHTML = outputText;
   outputElem.classList.add("output", ok ? "output-ok" : "output-error");
 
   const historyItem = repl.elemHistory.children[index];
   historyItem.appendChild(outputElem);
 
-  repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
+  // Scroll the page to the bottom so you can see the most recent output.
+  window.scrollTo(0, document.body.scrollHeight);
 }
