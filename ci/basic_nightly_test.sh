@@ -56,6 +56,11 @@ fi
 ./roc examples/platform-switching/rocLovesC.roc
 
 # test repl
-expect ../ci/repl_test.exp
+cd ../ci/repl_basic_test
+cargo build --release
+cp /target/release/repl_basic_test ../../roc_nightly
+cd ../../roc_nightly
+./repl_basic_test
+
 
 cd ..

@@ -40,7 +40,12 @@ jobs:
         run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc
 
       - name: test repl
-        run: cd roc_nightly && expect ../ci/repl_test.exp
+        run: |
+          cd ci/repl_basic_test
+          cargo build --release
+          cp /target/release/repl_basic_test ../../roc_nightly
+          cd ../../roc_nightly
+          ./repl_basic_test
 
 
         
