@@ -93,12 +93,7 @@ fn partial_record_definition() {
         incomplete(&mut input);
 
         input.push('}');
-        complete(
-            &input,
-            &mut state,
-            "{ field: \"field\" } : { field : Str }",
-            "successfulRecord",
-        );
+        complete(&input, &mut state, "{ field: \"field\" } : { field : Str }");
     }
 
     // Partially define a record incompletely
