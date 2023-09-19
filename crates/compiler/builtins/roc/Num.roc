@@ -514,12 +514,16 @@ F32 : Num (FloatingPoint Binary32)
 ##
 ## Here's a comparison of about how long [Dec] takes to perform a given operation compared to [F64],
 ## based on benchmarks on an [M1](https://en.wikipedia.org/wiki/Apple_M1) CPU:
-## * [add] 0.75x
-## * [sub] 0.75x
-## * [mul] 4x
-## * [div] 32x
-## * [sin] 3x
-## * [asin] 9x
+## * [add]  0.6x
+## * [sub]  0.6x
+## * [mul]  15x
+## * [div]  55x
+## * [sin]  3.9x
+## * [cos]  3.6x
+## * [tan]  2.3x
+## * [asin] 1.8x
+## * [acos] 1.7x
+## * [atan] 1.7x
 ##
 ## Keep in mind that arithmetic instructions are basically [the fastest thing a CPU does](http://norvig.com/21-days.html#answers),
 ## so (for example) a network request that takes 10 milliseconds to complete would go on this
