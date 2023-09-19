@@ -1,5 +1,4 @@
 on:
-  pull_request:
   workflow_dispatch:
 
 name: Test latest nightly release for macOS Apple Silicon

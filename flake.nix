@@ -124,7 +124,6 @@
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
-          expect # for testing the repl
         ]);
 
         aliases = ''
