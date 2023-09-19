@@ -2233,6 +2233,16 @@ fn build_dec_binop<'a, 'ctx>(
 
         NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),
         NumGt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_GREATER_THAN[IntWidth::I128]),
+        NumLte => call_bitcode_fn(
+            env,
+            &[lhs, rhs],
+            &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128],
+        ),
+        NumGte => call_bitcode_fn(
+            env,
+            &[lhs, rhs],
+            &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128],
+        ),
         _ => {
             unreachable!("Unrecognized dec binary operation: {:?}", op);
         }
