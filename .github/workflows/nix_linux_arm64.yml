@@ -17,9 +17,10 @@ jobs:
         timeout-minutes: 120
         steps:
             - uses: actions/checkout@v3
-                
-            - name: test building default.nix
-              run: nix-build 
+            
+            # error: bootstrap-tools.tar.xz.drv': No such file or directory    
+            #- name: test building default.nix
+            #  run: nix-build 
 
             - name: execute cli_run tests with --release
               run: nix develop -c cargo test --locked --release -p roc_cli
