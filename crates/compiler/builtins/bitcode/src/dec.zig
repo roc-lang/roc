@@ -4,7 +4,6 @@ const num_ = @import("num.zig");
 const utils = @import("utils.zig");
 
 const math = std.math;
-const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const RocStr = str.RocStr;
 const WithOverflow = utils.WithOverflow;
 const roc_panic = @import("panic.zig").panic_help;
@@ -30,22 +29,22 @@ pub const RocDec = extern struct {
     }
 
     pub fn fromF64(num: f64) ?RocDec {
-        var result: f64 = num * comptime @intToFloat(f64, one_point_zero_i128);
+        var result: f64 = num * comptime @as(f64, @floatFromInt(one_point_zero_i128));
 
-        if (result > comptime @intToFloat(f64, math.maxInt(i128))) {
+        if (result > comptime @as(f64, @floatFromInt(math.maxInt(i128)))) {
             return null;
         }
 
-        if (result < comptime @intToFloat(f64, math.minInt(i128))) {
+        if (result < comptime @as(f64, @floatFromInt(math.minInt(i128)))) {
             return null;
         }
 
-        var ret: RocDec = .{ .num = @floatToInt(i128, result) };
+        var ret: RocDec = .{ .num = @as(i128, @intFromFloat(result)) };
         return ret;
     }
 
     pub fn toF64(dec: RocDec) f64 {
-        return @intToFloat(f64, dec.num) / comptime @intToFloat(f64, one_point_zero_i128);
+        return @as(f64, @floatFromInt(dec.num)) / comptime @as(f64, @floatFromInt(one_point_zero_i128));
     }
 
     // TODO: If Str.toDec eventually supports more error types, return errors here.
@@ -92,7 +91,7 @@ pub const RocDec = extern struct {
 
             var after_str = roc_str_slice[pi + 1 .. length];
             var after_u64 = std.fmt.parseUnsigned(u64, after_str, 10) catch null;
-            after_val_i128 = if (after_u64) |f| @intCast(i128, f) * math.pow(i128, 10, diff_decimal_places) else null;
+            after_val_i128 = if (after_u64) |f| @as(i128, @intCast(f)) * math.pow(i128, 10, diff_decimal_places) else null;
         }
 
         var before_str = roc_str_slice[initial_index..before_str_length];
@@ -100,9 +99,10 @@ pub const RocDec = extern struct {
 
         var before_val_i128: ?i128 = null;
         if (before_val_not_adjusted) |before| {
-            var result: i128 = undefined;
-            var overflowed = @mulWithOverflow(i128, before, one_point_zero_i128, &result);
-            if (overflowed) {
+            const answer = @mulWithOverflow(before, one_point_zero_i128);
+            const result = answer[0];
+            const overflowed = answer[1];
+            if (overflowed == 1) {
                 // TODO: runtime exception for overflow!
                 return null;
             }
@@ -112,9 +112,10 @@ pub const RocDec = extern struct {
         const dec: RocDec = blk: {
             if (before_val_i128) |before| {
                 if (after_val_i128) |after| {
-                    var result: i128 = undefined;
-                    var overflowed = @addWithOverflow(i128, before, after, &result);
-                    if (overflowed) {
+                    var answer = @addWithOverflow(before, after);
+                    const result = answer[0];
+                    const overflowed = answer[1];
+                    if (overflowed == 1) {
                         // TODO: runtime exception for overflow!
                         return null;
                     }
@@ -241,10 +242,9 @@ pub const RocDec = extern struct {
     }
 
     pub fn addWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
-        var answer: i128 = undefined;
-        const overflowed = @addWithOverflow(i128, self.num, other.num, &answer);
+        const answer = @addWithOverflow(self.num, other.num);
 
-        return .{ .value = RocDec{ .num = answer }, .has_overflowed = overflowed };
+        return .{ .value = RocDec{ .num = answer[0] }, .has_overflowed = answer[1] == 1 };
     }
 
     pub fn add(self: RocDec, other: RocDec) RocDec {
@@ -273,10 +273,9 @@ pub const RocDec = extern struct {
     }
 
     pub fn subWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
-        var answer: i128 = undefined;
-        const overflowed = @subWithOverflow(i128, self.num, other.num, &answer);
+        const answer = @subWithOverflow(self.num, other.num);
 
-        return .{ .value = RocDec{ .num = answer }, .has_overflowed = overflowed };
+        return .{ .value = RocDec{ .num = answer[0] }, .has_overflowed = answer[1] == 1 };
     }
 
     pub fn sub(self: RocDec, other: RocDec) RocDec {
@@ -310,7 +309,7 @@ pub const RocDec = extern struct {
 
         const is_answer_negative = (self_i128 < 0) != (other_i128 < 0);
 
-        const self_u128 = @intCast(u128, math.absInt(self_i128) catch {
+        const self_u128 = @as(u128, @intCast(math.absInt(self_i128) catch {
             if (other_i128 == 0) {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (other_i128 == RocDec.one_point_zero.num) {
@@ -320,9 +319,9 @@ pub const RocDec = extern struct {
             } else {
                 return .{ .value = RocDec.max, .has_overflowed = true };
             }
-        });
+        }));
 
-        const other_u128 = @intCast(u128, math.absInt(other_i128) catch {
+        const other_u128 = @as(u128, @intCast(math.absInt(other_i128) catch {
             if (self_i128 == 0) {
                 return .{ .value = RocDec{ .num = 0 }, .has_overflowed = false };
             } else if (self_i128 == RocDec.one_point_zero.num) {
@@ -332,7 +331,7 @@ pub const RocDec = extern struct {
             } else {
                 return .{ .value = RocDec.max, .has_overflowed = true };
             }
-        });
+        }));
 
         const unsigned_answer: i128 = mul_and_decimalize(self_u128, other_u128);
 
@@ -401,7 +400,7 @@ pub const RocDec = extern struct {
                 @panic("TODO runtime exception for overflow when dividing!");
             }
         };
-        const numerator_u128 = @intCast(u128, numerator_abs_i128);
+        const numerator_u128 = @as(u128, @intCast(numerator_abs_i128));
 
         const denominator_abs_i128 = math.absInt(denominator_i128) catch {
             // Currently, if you try to do multiplication on i64::MIN, panic
@@ -414,14 +413,14 @@ pub const RocDec = extern struct {
                 @panic("TODO runtime exception for overflow when dividing!");
             }
         };
-        const denominator_u128 = @intCast(u128, denominator_abs_i128);
+        const denominator_u128 = @as(u128, @intCast(denominator_abs_i128));
 
         const numerator_u256: U256 = mul_u128(numerator_u128, math.pow(u128, 10, decimal_places));
         const answer = div_u256_by_u128(numerator_u256, denominator_u128);
 
         var unsigned_answer: i128 = undefined;
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
-            unsigned_answer = @intCast(i128, answer.lo);
+            unsigned_answer = @as(i128, @intCast(answer.lo));
         } else {
             @panic("TODO runtime exception for overflow when dividing!");
         }
@@ -442,18 +441,19 @@ pub const RocDec = extern struct {
         // This is dec/(b0+1), but as a multiplication.
         // So dec * (1/(b0+1)). This is way faster.
         const dec = self.num;
-        const tmp = @intCast(i128, num_.mul_u128(math.absCast(dec), 249757942369376157886101012127821356963).hi >> (190 - 128));
+        const tmp = @as(i128, @intCast(num_.mul_u128(math.absCast(dec), 249757942369376157886101012127821356963).hi >> (190 - 128)));
         const q0 = if (dec < 0) -tmp else tmp;
 
         const upper = q0 * b0;
-        var lower: i128 = undefined;
-        const overflow = @mulWithOverflow(i128, q0, b1, &lower);
+        const answer = @mulWithOverflow(q0, b1);
+        const lower = answer[0];
+        const overflowed = answer[1];
         // TODO: maybe write this out branchlessly.
         // Currently is is probably cmovs, but could be just math?
         const q0_sign: i128 =
             if (q0 > 0) 1 else -1;
-        const overflow_val: i128 = if (overflow) q0_sign << 64 else 0;
-        const full = upper + @intCast(i128, lower >> 64) + overflow_val;
+        const overflowed_val: i128 = if (overflowed == 1) q0_sign << 64 else 0;
+        const full = upper + @as(i128, @intCast(lower >> 64)) + overflowed_val;
 
         var out = dec - full;
         if (out < 0) {
@@ -524,9 +524,11 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
 
     // Add 1.
     // This can't overflow because the initial numbers are only 127bit due to removing the sign bit.
-    var overflowed = @addWithOverflow(u128, lhs_lo, 1, &lhs_lo);
+    var answer = @addWithOverflow(lhs_lo, 1);
+    lhs_lo = answer[0];
+    var overflowed = answer[1];
     lhs_hi = blk: {
-        if (overflowed) {
+        if (overflowed == 1) {
             break :blk lhs_hi + 1;
         } else {
             break :blk lhs_hi + 0;
@@ -558,76 +560,85 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     const k = lk.lo;
 
     // b = e + f + h
-    var e_plus_f: u128 = undefined;
-    overflowed = @addWithOverflow(u128, e, f, &e_plus_f);
+    answer = @addWithOverflow(e, f);
+    const e_plus_f = answer[0];
+    overflowed = answer[1];
     var b_carry1: u128 = undefined;
-    if (overflowed) {
+    if (overflowed == 1) {
         b_carry1 = 1;
     } else {
         b_carry1 = 0;
     }
 
-    var idk: u128 = undefined;
-    overflowed = @addWithOverflow(u128, e_plus_f, h, &idk);
+    answer = @addWithOverflow(e_plus_f, h);
+    overflowed = answer[1];
     var b_carry2: u128 = undefined;
-    if (overflowed) {
+    if (overflowed == 1) {
         b_carry2 = 1;
     } else {
         b_carry2 = 0;
     }
 
     // c = carry + g + j + k // it doesn't say +k but I think it should be?
-    var g_plus_j: u128 = undefined;
-    overflowed = @addWithOverflow(u128, g, j, &g_plus_j);
+    answer = @addWithOverflow(g, j);
+    const g_plus_j = answer[0];
+    overflowed = answer[1];
     var c_carry1: u128 = undefined;
-    if (overflowed) {
+    if (overflowed == 1) {
         c_carry1 = 1;
     } else {
         c_carry1 = 0;
     }
 
-    var g_plus_j_plus_k: u128 = undefined;
-    overflowed = @addWithOverflow(u128, g_plus_j, k, &g_plus_j_plus_k);
+    answer = @addWithOverflow(g_plus_j, k);
+    const g_plus_j_plus_k = answer[0];
+    overflowed = answer[1];
     var c_carry2: u128 = undefined;
-    if (overflowed) {
+    if (overflowed == 1) {
         c_carry2 = 1;
     } else {
         c_carry2 = 0;
     }
 
-    var c_without_bcarry2: u128 = undefined;
-    overflowed = @addWithOverflow(u128, g_plus_j_plus_k, b_carry1, &c_without_bcarry2);
+    answer = @addWithOverflow(g_plus_j_plus_k, b_carry1);
+    const c_without_bcarry2 = answer[0];
+    overflowed = answer[1];
     var c_carry3: u128 = undefined;
-    if (overflowed) {
+    if (overflowed == 1) {
         c_carry3 = 1;
     } else {
         c_carry3 = 0;
     }
 
-    var c: u128 = undefined;
-    overflowed = @addWithOverflow(u128, c_without_bcarry2, b_carry2, &c);
+    answer = @addWithOverflow(c_without_bcarry2, b_carry2);
+    const c = answer[0];
+    overflowed = answer[1];
     var c_carry4: u128 = undefined;
-    if (overflowed) {
+    if (overflowed == 1) {
         c_carry4 = 1;
     } else {
         c_carry4 = 0;
     }
 
     // d = carry + l
-    var d: u128 = undefined;
-    overflowed = @addWithOverflow(u128, l, c_carry1, &d);
-    overflowed = overflowed or @addWithOverflow(u128, d, c_carry2, &d);
-    overflowed = overflowed or @addWithOverflow(u128, d, c_carry3, &d);
-    overflowed = overflowed or @addWithOverflow(u128, d, c_carry4, &d);
+    answer = @addWithOverflow(l, c_carry1);
+    overflowed = answer[1];
+    answer = @addWithOverflow(answer[0], c_carry2);
+    overflowed = overflowed | answer[1];
+    answer = @addWithOverflow(answer[0], c_carry3);
+    overflowed = overflowed | answer[1];
+    answer = @addWithOverflow(answer[0], c_carry4);
+    overflowed = overflowed | answer[1];
+    const d = answer[0];
 
-    if (overflowed) {
+    if (overflowed == 1) {
         @panic("TODO runtime exception for overflow!");
     }
 
     // Final 512bit value is d, c, b, a
     // need to left shift 321 times
     // 315 - 256 is 59. So left shift d, c 59 times.
-    return @intCast(i128, c >> 59 | (d << (128 - 59)));
+    return @as(i128, @intCast(c >> 59 | (d << (128 - 59))));
 }
 
 // Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
@@ -678,7 +689,7 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
                 return numer;
             }
 
-            sr = @ctz(u128, denom);
+            sr = @ctz(denom);
 
             return .{
                 .hi = math.shr(u128, numer.hi, sr),
@@ -689,8 +700,8 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         // K X
         // ---
         // 0 K
-        var denom_leading_zeros = @clz(u128, denom);
-        var numer_hi_leading_zeros = @clz(u128, numer.hi);
+        var denom_leading_zeros = @clz(denom);
+        var numer_hi_leading_zeros = @clz(numer.hi);
         sr = 1 + N_UDWORD_BITS + denom_leading_zeros - numer_hi_leading_zeros;
         // 2 <= sr <= N_UTWORD_BITS - 1
         // q.all = n.all << (N_UTWORD_BITS - sr);
@@ -751,15 +762,15 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         // NOTE: Modified from `(d - r - 1) >> (N_UTWORD_BITS - 1)` to be an
         // **arithmetic** shift.
 
-        var lo: u128 = undefined;
-        var lo_overflowed: bool = undefined;
-        var hi: u128 = undefined;
+        var answer = @subWithOverflow(denom, r.lo);
+        var lo = answer[0];
+        var lo_overflowed = answer[1];
+        var hi = 0 -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed)))) -% r.hi;
 
-        lo_overflowed = @subWithOverflow(u128, denom, r.lo, &lo);
-        hi = 0 -% @intCast(u128, @bitCast(u1, lo_overflowed)) -% r.hi;
-
-        lo_overflowed = @subWithOverflow(u128, lo, 1, &lo);
-        hi = hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+        answer = @subWithOverflow(lo, 1);
+        lo = answer[0];
+        lo_overflowed = answer[1];
+        hi = hi -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed))));
 
         // NOTE: this U256 was originally created by:
         //
@@ -785,8 +796,10 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         carry = s.lo & 1;
 
         // var (lo, carry) = r.lo.overflowing_sub(denom & s.lo);
-        lo_overflowed = @subWithOverflow(u128, r.lo, (denom & s.lo), &lo);
-        hi = r.hi -% @intCast(u128, @bitCast(u1, lo_overflowed));
+        answer = @subWithOverflow(r.lo, (denom & s.lo));
+        lo = answer[0];
+        lo_overflowed = answer[1];
+        hi = r.hi -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed))));
 
         r = .{ .hi = hi, .lo = lo };
 
@@ -983,7 +996,7 @@ test "toStr: -0.45" {
 }
 
 test "toStr: 0.00045" {
-    var dec: RocDec = .{ .num = 000450000000000000 };
+    var dec: RocDec = .{ .num = 450000000000000 };
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "0.00045"[0..];
@@ -991,7 +1004,7 @@ test "toStr: 0.00045" {
 }
 
 test "toStr: -0.00045" {
-    var dec: RocDec = .{ .num = -000450000000000000 };
+    var dec: RocDec = .{ .num = -450000000000000 };
     var res_roc_str = dec.toStr();
 
     const res_slice: []const u8 = "-0.00045"[0..];
@@ -1180,7 +1193,7 @@ test "div: 500 / 1000" {
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
-    if (@call(.{ .modifier = always_inline }, RocDec.fromStr, .{arg})) |dec| {
+    if (@call(.always_inline, RocDec.fromStr, .{arg})) |dec| {
         return .{ .errorcode = 0, .value = dec.num };
     } else {
         return .{ .errorcode = 1, .value = 0 };
@@ -1188,11 +1201,11 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
 }
 
 pub fn toStr(arg: RocDec) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, RocDec.toStr, .{arg});
+    return @call(.always_inline, RocDec.toStr, .{arg});
 }
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
-    if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| {
+    if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
         @panic("TODO runtime exception failing convert f64 to RocDec");
@@ -1201,7 +1214,7 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
 
 pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     const arg_f64 = arg_f32;
-    if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg_f64})) |dec| {
+    if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
         return dec.num;
     } else {
         @panic("TODO runtime exception failing convert f64 to RocDec");
@@ -1209,20 +1222,19 @@ pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
 }
 
 pub fn toF64(arg: RocDec) callconv(.C) f64 {
-    return @call(.{ .modifier = always_inline }, RocDec.toF64, .{arg});
+    return @call(.always_inline, RocDec.toF64, .{arg});
 }
 
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(self: T) callconv(.C) i128 {
-            const this = @intCast(i128, self);
+            const this = @as(i128, @intCast(self));
 
-            var result: i128 = undefined;
-
-            if (@mulWithOverflow(i128, this, RocDec.one_point_zero_i128, &result)) {
+            const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
+            if (answer[1] == 1) {
                 @panic("TODO runtime exception failing convert integer to RocDec");
             } else {
-                return result;
+                return answer[0];
             }
         }
     }.func;
@@ -1230,23 +1242,23 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
 }
 
 pub fn fromU64C(arg: u64) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.fromU64, .{arg}).toI128();
+    return @call(.always_inline, RocDec.fromU64, .{arg}).toI128();
 }
 
 pub fn toI128(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.toI128, .{arg});
+    return @call(.always_inline, RocDec.toI128, .{arg});
 }
 
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
-    return @call(.{ .modifier = always_inline }, RocDec.eq, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
 }
 
 pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
-    return @call(.{ .modifier = always_inline }, RocDec.neq, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
 }
 
 pub fn negateC(arg: RocDec) callconv(.C) i128 {
-    return if (@call(.{ .modifier = always_inline }, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
+    return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
 }
 
 pub fn absC(arg: RocDec) callconv(.C) i128 {
@@ -1255,65 +1267,65 @@ pub fn absC(arg: RocDec) callconv(.C) i128 {
 }
 
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
-    return @call(.{ .modifier = always_inline }, RocDec.addWithOverflow, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
-    return @call(.{ .modifier = always_inline }, RocDec.subWithOverflow, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
-    return @call(.{ .modifier = always_inline }, RocDec.mulWithOverflow, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
+    return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
 }
 
 pub fn sinC(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.sin, .{arg}).num;
+    return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
 
 pub fn cosC(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.cos, .{arg}).num;
+    return @call(.always_inline, RocDec.cos, .{arg}).num;
 }
 
 pub fn tanC(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.tan, .{arg}).num;
+    return @call(.always_inline, RocDec.tan, .{arg}).num;
 }
 
 pub fn asinC(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.asin, .{arg}).num;
+    return @call(.always_inline, RocDec.asin, .{arg}).num;
 }
 
 pub fn acosC(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.acos, .{arg}).num;
+    return @call(.always_inline, RocDec.acos, .{arg}).num;
 }
 
 pub fn atanC(arg: RocDec) callconv(.C) i128 {
-    return @call(.{ .modifier = always_inline }, RocDec.atan, .{arg}).num;
+    return @call(.always_inline, RocDec.atan, .{arg}).num;
 }
 
 pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.add, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.add, .{ arg1, arg2 });
 }
 
 pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.addSaturated, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
 }
 
 pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.sub, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.sub, .{ arg1, arg2 });
 }
 
 pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.subSaturated, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
 }
 
 pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.mul, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.mul, .{ arg1, arg2 });
 }
 
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
-    return @call(.{ .modifier = always_inline }, RocDec.mulSaturated, .{ arg1, arg2 });
+    return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
 }

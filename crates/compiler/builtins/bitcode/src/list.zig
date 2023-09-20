@@ -6,17 +6,17 @@ const math = std.math;
 
 const expect = std.testing.expect;
 
-const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
-const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
+const EqFn = *const fn (?[*]u8, ?[*]u8) callconv(.C) bool;
+const CompareFn = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;
 
-const Inc = fn (?[*]u8) callconv(.C) void;
-const IncN = fn (?[*]u8, usize) callconv(.C) void;
-const Dec = fn (?[*]u8) callconv(.C) void;
-const HasTagId = fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
+const Inc = *const fn (?[*]u8) callconv(.C) void;
+const IncN = *const fn (?[*]u8, usize) callconv(.C) void;
+const Dec = *const fn (?[*]u8) callconv(.C) void;
+const HasTagId = *const fn (u16, ?[*]u8) callconv(.C) extern struct { matched: bool, data: ?[*]u8 };
 
 const SEAMLESS_SLICE_BIT: usize =
-    @bitCast(usize, @as(isize, std.math.minInt(isize)));
+    @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
 
 pub const RocList = extern struct {
     bytes: ?[*]u8,
@@ -38,14 +38,14 @@ pub const RocList = extern struct {
     }
 
     pub fn isSeamlessSlice(self: RocList) bool {
-        return @bitCast(isize, self.capacity_or_ref_ptr) < 0;
+        return @as(isize, @bitCast(self.capacity_or_ref_ptr)) < 0;
     }
 
     // This returns all ones if the list is a seamless slice.
     // Otherwise, it returns all zeros.
     // This is done without branching for optimization purposes.
     pub fn seamlessSliceMask(self: RocList) usize {
-        return @bitCast(usize, @bitCast(isize, self.capacity_or_ref_ptr) >> (@bitSizeOf(isize) - 1));
+        return @as(usize, @bitCast(@as(isize, @bitCast(self.capacity_or_ref_ptr)) >> (@bitSizeOf(isize) - 1)));
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -90,10 +90,10 @@ pub const RocList = extern struct {
 
         if (slice.len > 0) {
             const dest = list.bytes orelse unreachable;
-            const src = @ptrCast([*]const u8, slice.ptr);
+            const src = @as([*]const u8, @ptrCast(slice.ptr));
             const num_bytes = slice.len * @sizeOf(T);
 
-            @memcpy(dest, src, num_bytes);
+            @memcpy(dest[0..num_bytes], src[0..num_bytes]);
         }
 
         return list;
@@ -104,11 +104,11 @@ pub const RocList = extern struct {
     // For regular list, it just returns their bytes pointer.
     // For seamless slices, it returns the pointer stored in capacity_or_ref_ptr.
     pub fn getRefcountPtr(self: RocList) ?[*]u8 {
-        const list_ref_ptr = @ptrToInt(self.bytes);
+        const list_ref_ptr = @intFromPtr(self.bytes);
         const slice_ref_ptr = self.capacity_or_ref_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
         const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
-        return @intToPtr(?[*]u8, ref_ptr);
+        return @as(?[*]u8, @ptrFromInt(ref_ptr));
     }
 
     pub fn decref(self: RocList, alignment: u32) void {
@@ -117,7 +117,7 @@ pub const RocList = extern struct {
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
-        return @ptrCast(?[*]T, @alignCast(@alignOf(T), self.bytes));
+        return @as(?[*]T, @ptrCast(@alignCast(self.bytes)));
     }
 
     pub fn isUnique(self: RocList) bool {
@@ -130,7 +130,7 @@ pub const RocList = extern struct {
             return utils.REFCOUNT_ONE;
         }
 
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
+        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.bytes)));
         return (ptr - 1)[0];
     }
 
@@ -161,11 +161,11 @@ pub const RocList = extern struct {
         // unfortunately, we have to clone
         var new_list = RocList.allocate(alignment, self.length, element_width);
 
-        var old_bytes: [*]u8 = @ptrCast([*]u8, self.bytes);
-        var new_bytes: [*]u8 = @ptrCast([*]u8, new_list.bytes);
+        var old_bytes: [*]u8 = @as([*]u8, @ptrCast(self.bytes));
+        var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_list.bytes));
 
         const number_of_bytes = self.len() * element_width;
-        @memcpy(new_bytes, old_bytes, number_of_bytes);
+        @memcpy(new_bytes[0..number_of_bytes], old_bytes[0..number_of_bytes]);
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input list.
         self.decref(alignment);
@@ -238,7 +238,6 @@ pub const RocList = extern struct {
         element_width: usize,
     ) RocList {
         const old_length = self.length;
-        const delta_length = new_length - old_length;
 
         const result = RocList.allocate(alignment, new_length, element_width);
 
@@ -246,8 +245,8 @@ pub const RocList = extern struct {
         if (self.bytes) |source_ptr| {
             const dest_ptr = result.bytes orelse unreachable;
 
-            @memcpy(dest_ptr, source_ptr, old_length * element_width);
-            @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
+            @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
+            @memset(dest_ptr[(old_length * element_width)..(new_length * element_width)], 0);
         }
 
         self.decref(alignment);
@@ -256,11 +255,11 @@ pub const RocList = extern struct {
     }
 };
 
-const Caller0 = fn (?[*]u8, ?[*]u8) callconv(.C) void;
-const Caller1 = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-const Caller2 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-const Caller3 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
-const Caller4 = fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller0 = *const fn (?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller1 = *const fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller2 = *const fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller3 = *const fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
+const Caller4 = *const fn (?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) void;
 
 pub fn listMap(
     list: RocList,
@@ -316,7 +315,7 @@ pub fn listMap2(
     dec_a: Dec,
     dec_b: Dec,
 ) callconv(.C) RocList {
-    const output_length = std.math.min(list1.len(), list2.len());
+    const output_length = @min(list1.len(), list2.len());
 
     // if the lists don't have equal length, we must consume the remaining elements
     // In this case we consume by (recursively) decrementing the elements
@@ -366,8 +365,8 @@ pub fn listMap3(
     dec_b: Dec,
     dec_c: Dec,
 ) callconv(.C) RocList {
-    const smaller_length = std.math.min(list1.len(), list2.len());
-    const output_length = std.math.min(smaller_length, list3.len());
+    const smaller_length = @min(list1.len(), list2.len());
+    const output_length = @min(smaller_length, list3.len());
 
     decrementTail(list1, output_length, a_width, dec_a);
     decrementTail(list2, output_length, b_width, dec_b);
@@ -425,7 +424,7 @@ pub fn listMap4(
     dec_c: Dec,
     dec_d: Dec,
 ) callconv(.C) RocList {
-    const output_length = std.math.min(std.math.min(list1.len(), list2.len()), std.math.min(list3.len(), list4.len()));
+    const output_length = @min(@min(list1.len(), list2.len()), @min(list3.len(), list4.len()));
 
     decrementTail(list1, output_length, a_width, dec_a);
     decrementTail(list2, output_length, b_width, dec_b);
@@ -512,7 +511,7 @@ pub fn listReleaseExcessCapacity(
         if (list.bytes) |source_ptr| {
             const dest_ptr = output.bytes orelse unreachable;
 
-            @memcpy(dest_ptr, source_ptr, old_length * element_width);
+            @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
         }
         list.decref(alignment);
         return output;
@@ -528,9 +527,10 @@ pub fn listAppendUnsafe(
     var output = list;
     output.length += 1;
 
-    if (output.bytes) |target| {
+    if (output.bytes) |bytes| {
         if (element) |source| {
-            @memcpy(target + old_length * element_width, source, element_width);
+            const target = bytes + old_length * element_width;
+            @memcpy(target[0..element_width], source[0..element_width]);
         }
     }
 
@@ -556,12 +556,14 @@ pub fn listPrepend(list: RocList, alignment: u32, element: Opaque, element_width
             i -= 1;
 
             // move the ith element to the (i + 1)th position
-            @memcpy(target + (i + 1) * element_width, target + i * element_width, element_width);
+            const to = target + (i + 1) * element_width;
+            const from = target + i * element_width;
+            @memcpy(to[0..element_width], from[0..element_width]);
         }
 
         // finally copy in the new first element
         if (element) |source| {
-            @memcpy(target, source, element_width);
+            @memcpy(target[0..element_width], source[0..element_width]);
         }
     }
 
@@ -590,7 +592,7 @@ pub fn listSwap(
         }
     };
 
-    const source_ptr = @ptrCast([*]u8, newList.bytes);
+    const source_ptr = @as([*]u8, @ptrCast(newList.bytes));
     swapElements(source_ptr, element_width, index_1, index_2);
 
     return newList;
@@ -624,7 +626,7 @@ pub fn listSublist(
     }
 
     if (list.bytes) |source_ptr| {
-        const keep_len = std.math.min(len, size - start);
+        const keep_len = @min(len, size - start);
         const drop_start_len = start;
         const drop_end_len = size - (start + keep_len);
 
@@ -647,7 +649,7 @@ pub fn listSublist(
             output.length = keep_len;
             return output;
         } else {
-            const list_ref_ptr = (@ptrToInt(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
+            const list_ref_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
             const slice_ref_ptr = list.capacity_or_ref_ptr;
             const slice_mask = list.seamlessSliceMask();
             const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
@@ -704,7 +706,7 @@ pub fn listDropAt(
                 const copy_target = source_ptr + i * element_width;
                 const copy_source = copy_target + element_width;
 
-                @memcpy(copy_target, copy_source, element_width);
+                @memcpy(copy_target[0..element_width], copy_source[0..element_width]);
             }
 
             var new_list = list;
@@ -717,12 +719,12 @@ pub fn listDropAt(
         const target_ptr = output.bytes orelse unreachable;
 
         const head_size = drop_index * element_width;
-        @memcpy(target_ptr, source_ptr, head_size);
+        @memcpy(target_ptr[0..head_size], source_ptr[0..head_size]);
 
         const tail_target = target_ptr + drop_index * element_width;
         const tail_source = source_ptr + (drop_index + 1) * element_width;
         const tail_size = (size - drop_index - 1) * element_width;
-        @memcpy(tail_target, tail_source, tail_size);
+        @memcpy(tail_target[0..tail_size], tail_source[0..tail_size]);
 
         list.decref(alignment);
 
@@ -733,26 +735,26 @@ pub fn listDropAt(
 }
 
 fn partition(source_ptr: [*]u8, transform: Opaque, wrapper: CompareFn, element_width: usize, low: isize, high: isize) isize {
-    const pivot = source_ptr + (@intCast(usize, high) * element_width);
+    const pivot = source_ptr + (@as(usize, @intCast(high)) * element_width);
     var i = (low - 1); // Index of smaller element and indicates the right position of pivot found so far
     var j = low;
 
     while (j <= high - 1) : (j += 1) {
-        const current_elem = source_ptr + (@intCast(usize, j) * element_width);
+        const current_elem = source_ptr + (@as(usize, @intCast(j)) * element_width);
 
         const ordering = wrapper(transform, current_elem, pivot);
-        const order = @intToEnum(utils.Ordering, ordering);
+        const order = @as(utils.Ordering, @enumFromInt(ordering));
 
         switch (order) {
             utils.Ordering.LT => {
                 // the current element is smaller than the pivot; swap it
                 i += 1;
-                swapElements(source_ptr, element_width, @intCast(usize, i), @intCast(usize, j));
+                swapElements(source_ptr, element_width, @as(usize, @intCast(i)), @as(usize, @intCast(j)));
             },
             utils.Ordering.EQ, utils.Ordering.GT => {},
         }
     }
-    swapElements(source_ptr, element_width, @intCast(usize, i + 1), @intCast(usize, high));
+    swapElements(source_ptr, element_width, @as(usize, @intCast(i + 1)), @as(usize, @intCast(high)));
     return (i + 1);
 }
 
@@ -783,7 +785,7 @@ pub fn listSortWith(
 
     if (list.bytes) |source_ptr| {
         const low = 0;
-        const high: isize = @intCast(isize, list.len()) - 1;
+        const high: isize = @as(isize, @intCast(list.len())) - 1;
         quicksort(source_ptr, data, caller, element_width, low, high);
     }
 
@@ -793,9 +795,9 @@ pub fn listSortWith(
 // SWAP ELEMENTS
 
 inline fn swapHelp(width: usize, temporary: [*]u8, ptr1: [*]u8, ptr2: [*]u8) void {
-    @memcpy(temporary, ptr1, width);
-    @memcpy(ptr1, ptr2, width);
-    @memcpy(ptr2, temporary, width);
+    @memcpy(temporary[0..width], ptr1[0..width]);
+    @memcpy(ptr1[0..width], ptr2[0..width]);
+    @memcpy(ptr2[0..width], temporary[0..width]);
 }
 
 fn swap(width_initial: usize, p1: [*]u8, p2: [*]u8) void {
@@ -852,7 +854,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         // These must exist, otherwise, the lists would have been empty.
         const source_a = resized_list_a.bytes orelse unreachable;
         const source_b = list_b.bytes orelse unreachable;
-        @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
+        @memcpy(source_a[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
 
         // decrement list b.
         list_b.decref(alignment);
@@ -873,7 +875,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         const byte_count_a = list_a.len() * element_width;
         const byte_count_b = list_b.len() * element_width;
         mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
-        @memcpy(source_b, source_a, byte_count_a);
+        @memcpy(source_b[0..byte_count_a], source_a[0..byte_count_a]);
 
         // decrement list a.
         list_a.decref(alignment);
@@ -889,8 +891,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     const source_a = list_a.bytes orelse unreachable;
     const source_b = list_b.bytes orelse unreachable;
 
-    @memcpy(target, source_a, list_a.len() * element_width);
-    @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
+    @memcpy(target[0..(list_a.len() * element_width)], source_a[0..(list_a.len() * element_width)]);
+    @memcpy(target[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
 
     // decrement list a and b.
     list_a.decref(alignment);
@@ -940,13 +942,13 @@ inline fn listReplaceInPlaceHelp(
     out_element: ?[*]u8,
 ) RocList {
     // the element we will replace
-    var element_at_index = (list.bytes orelse undefined) + (index * element_width);
+    var element_at_index = (list.bytes orelse unreachable) + (index * element_width);
 
     // copy out the old element
-    @memcpy(out_element orelse undefined, element_at_index, element_width);
+    @memcpy((out_element orelse unreachable)[0..element_width], element_at_index[0..element_width]);
 
     // copy in the new element
-    @memcpy(element_at_index, element orelse undefined, element_width);
+    @memcpy(element_at_index[0..element_width], (element orelse unreachable)[0..element_width]);
 
     return list;
 }
@@ -971,9 +973,9 @@ pub fn listRefcountPtr(
 
 test "listConcat: non-unique with unique overlapping" {
     var nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..]);
-    var bytes: [*]u8 = @ptrCast([*]u8, nonUnique.bytes);
+    var bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
     const ptr_width = @sizeOf(usize);
-    const refcount_ptr = @ptrCast([*]isize, @alignCast(ptr_width, bytes) - ptr_width);
+    const refcount_ptr = @as([*]isize, @ptrCast(@as([*]align(ptr_width) u8, @alignCast(bytes)) - ptr_width));
     utils.increfRcPtrC(&refcount_ptr[0], 1);
     defer nonUnique.decref(@sizeOf(u8)); // listConcat will dec the other refcount
 

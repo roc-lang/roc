@@ -63,7 +63,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
     let dest_obj_path = get_lib_dir().join(object_file_name);
     let dest_obj = dest_obj_path.to_str().expect("Invalid dest object path");
 
-    let src_obj_path = bitcode_path.join(object_file_name);
+    let src_obj_path = bitcode_path.join("zig-out").join(object_file_name);
     let src_obj = src_obj_path.to_str().expect("Invalid src object path");
 
     println!("Compiling zig object `{zig_object}` to: {src_obj}");

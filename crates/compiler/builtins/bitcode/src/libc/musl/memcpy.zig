@@ -8,8 +8,8 @@ comptime {
         .x86_64 => {
             asm (std.fmt.comptimePrint(@embedFile("memcpy-x86_64.S"), .{ .function_prefix = function_prefix }));
         },
-        .i386 => {
-            asm (std.fmt.comptimePrint(@embedFile("memcpy-i386.S"), .{ .function_prefix = function_prefix }));
+        .x86 => {
+            asm (std.fmt.comptimePrint(@embedFile("memcpy-x86.S"), .{ .function_prefix = function_prefix }));
         },
         // TODO: add assembly implementations for other platforms.
         else => {},
@@ -18,7 +18,7 @@ comptime {
 
 pub const memcpy =
     switch (arch) {
-    .x86_64, .i386 => musl_memcpy,
+    .x86_64, .x86 => musl_memcpy,
     else => fallback_memcpy,
 };
 
@@ -30,18 +30,37 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
     var d = dest;
     var s = src;
     var n = len;
-    while (@ptrToInt(s) % 4 != 0 and n != 0) : (n -= 1) {
-        d[0] = s[0];
-        d += 1;
-        s += 1;
+    switch (@min(n, @intFromPtr(s) % 4)) {
+        1 => {
+            d[0] = s[0];
+            d += 1;
+            s += 1;
+            n -= 1;
+        },
+        2 => {
+            d[0] = s[0];
+            d[1] = s[1];
+            d += 2;
+            s += 2;
+            n -= 2;
+        },
+        3 => {
+            d[0] = s[0];
+            d[1] = s[1];
+            d[2] = s[2];
+            d += 3;
+            s += 3;
+            n -= 3;
+        },
+        else => {},
     }
 
-    if (@ptrToInt(d) % 4 == 0) {
-        var d4 = @alignCast(4, d);
-        var s4 = @alignCast(4, s);
+    if (@intFromPtr(d) % 4 == 0) {
+        var d4 = @as([*]align(4) u8, @alignCast(d));
+        var s4 = @as([*]align(4) const u8, @alignCast(s));
         while (n >= 16) : (n -= 16) {
-            var d_u32 = @ptrCast([*]u32, d4);
-            var s_u32 = @ptrCast([*]const u32, s4);
+            var d_u32 = @as([*]u32, @ptrCast(d4));
+            var s_u32 = @as([*]const u32, @ptrCast(s4));
             d_u32[0] = s_u32[0];
             d_u32[1] = s_u32[1];
             d_u32[2] = s_u32[2];
@@ -51,8 +70,8 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
             s4 += 16;
         }
         if (n & 8 != 0) {
-            var d_u32 = @ptrCast([*]u32, d4);
-            var s_u32 = @ptrCast([*]const u32, s4);
+            var d_u32 = @as([*]u32, @ptrCast(d4));
+            var s_u32 = @as([*]const u32, @ptrCast(s4));
             d_u32[0] = s_u32[0];
             d_u32[1] = s_u32[1];
 
@@ -60,8 +79,8 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
             s4 += 8;
         }
         if (n & 4 != 0) {
-            var d_u32 = @ptrCast([*]u32, d4);
-            var s_u32 = @ptrCast([*]const u32, s4);
+            var d_u32 = @as([*]u32, @ptrCast(d4));
+            var s_u32 = @as([*]const u32, @ptrCast(s4));
             d_u32[0] = s_u32[0];
 
             d4 += 4;
@@ -83,9 +102,9 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
         return dest;
     }
     if (n >= 32) {
-        switch (@ptrToInt(d) % 4) {
+        switch (@intFromPtr(d) % 4) {
             1 => {
-                var w = @ptrCast([*]const u32, @alignCast(4, s))[0];
+                var w = @as([*]const u32, @ptrCast(@alignCast(s)))[0];
                 d[0] = s[0];
                 d += 1;
                 s += 1;
@@ -97,8 +116,8 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
                 s += 1;
                 n -= 3;
                 while (n >= 17) : (n -= 16) {
-                    var d_u32 = @ptrCast([*]u32, @alignCast(4, d));
-                    var s_u32 = @ptrCast([*]const u32, @alignCast(4, s + 1));
+                    var d_u32 = @as([*]u32, @ptrCast(@alignCast(d)));
+                    var s_u32 = @as([*]const u32, @ptrCast(@alignCast(s + 1)));
                     var x = s_u32[0];
                     d_u32[0] = (w >> 24) | (x << 8);
                     w = s_u32[1];
@@ -113,7 +132,7 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
                 }
             },
             2 => {
-                var w = @ptrCast([*]const u32, @alignCast(4, s))[0];
+                var w = @as([*]const u32, @ptrCast(@alignCast(s)))[0];
                 d[0] = s[0];
                 d += 1;
                 s += 1;
@@ -122,8 +141,8 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
                 s += 1;
                 n -= 2;
                 while (n >= 18) : (n -= 16) {
-                    var d_u32 = @ptrCast([*]u32, @alignCast(4, d));
-                    var s_u32 = @ptrCast([*]const u32, @alignCast(4, s + 2));
+                    var d_u32 = @as([*]u32, @ptrCast(@alignCast(d)));
+                    var s_u32 = @as([*]const u32, @ptrCast(@alignCast(s + 2)));
                     var x = s_u32[0];
                     d_u32[0] = (w >> 16) | (x << 16);
                     w = s_u32[1];
@@ -138,14 +157,14 @@ pub fn fallback_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize
                 }
             },
             3 => {
-                var w = @ptrCast([*]const u32, @alignCast(4, s))[0];
+                var w = @as([*]const u32, @ptrCast(@alignCast(s)))[0];
                 d[0] = s[0];
                 d += 1;
                 s += 1;
                 n -= 1;
                 while (n >= 19) : (n -= 16) {
-                    var d_u32 = @ptrCast([*]u32, @alignCast(4, d));
-                    var s_u32 = @ptrCast([*]const u32, @alignCast(4, s + 3));
+                    var d_u32 = @as([*]u32, @ptrCast(@alignCast(d)));
+                    var s_u32 = @as([*]const u32, @ptrCast(@alignCast(s + 3)));
                     var x = s_u32[0];
                     d_u32[0] = (w >> 8) | (x << 24);
                     w = s_u32[1];

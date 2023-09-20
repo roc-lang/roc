@@ -44,7 +44,7 @@ pub fn __divti3(a: i128, b: i128) callconv(.C) i128 {
 }
 
 fn __divti3_windows_x86_64(a: v2u64, b: v2u64) callconv(.C) v2u64 {
-    return @bitCast(v2u64, div(@bitCast(i128, a), @bitCast(i128, b)));
+    return @as(v2u64, @bitCast(div(@as(i128, @bitCast(a)), @as(i128, @bitCast(b)))));
 }
 
 inline fn div(a: i128, b: i128) i128 {
@@ -54,9 +54,9 @@ inline fn div(a: i128, b: i128) i128 {
     const an = (a ^ s_a) -% s_a;
     const bn = (b ^ s_b) -% s_b;
 
-    const r = udivmod(u128, @bitCast(u128, an), @bitCast(u128, bn), null);
+    const r = udivmod(u128, @as(u128, @bitCast(an)), @as(u128, @bitCast(bn)), null);
     const s = s_a ^ s_b;
-    return (@bitCast(i128, r) ^ s) -% s;
+    return (@as(i128, @bitCast(r)) ^ s) -% s;
 }
 
 pub fn __udivti3(a: u128, b: u128) callconv(.C) u128 {
@@ -64,7 +64,7 @@ pub fn __udivti3(a: u128, b: u128) callconv(.C) u128 {
 }
 
 fn __udivti3_windows_x86_64(a: v2u64, b: v2u64) callconv(.C) v2u64 {
-    return @bitCast(v2u64, udivmod(u128, @bitCast(u128, a), @bitCast(u128, b), null));
+    return @as(v2u64, @bitCast(udivmod(u128, @as(u128, @bitCast(a)), @as(u128, @bitCast(b)), null)));
 }
 
 pub fn __umodti3(a: u128, b: u128) callconv(.C) u128 {
@@ -75,8 +75,8 @@ pub fn __umodti3(a: u128, b: u128) callconv(.C) u128 {
 
 fn __umodti3_windows_x86_64(a: v2u64, b: v2u64) callconv(.C) v2u64 {
     var r: u128 = undefined;
-    _ = udivmod(u128, @bitCast(u128, a), @bitCast(u128, b), &r);
-    return @bitCast(v2u64, r);
+    _ = udivmod(u128, @as(u128, @bitCast(a)), @as(u128, @bitCast(b)), &r);
+    return @as(v2u64, @bitCast(r));
 }
 
 pub fn __modti3(a: i128, b: i128) callconv(.C) i128 {
@@ -84,7 +84,7 @@ pub fn __modti3(a: i128, b: i128) callconv(.C) i128 {
 }
 
 fn __modti3_windows_x86_64(a: v2u64, b: v2u64) callconv(.C) v2u64 {
-    return @bitCast(v2u64, mod(@bitCast(i128, a), @bitCast(i128, b)));
+    return @as(v2u64, @bitCast(mod(@as(i128, @bitCast(a)), @as(i128, @bitCast(b)))));
 }
 
 inline fn mod(a: i128, b: i128) i128 {
@@ -95,8 +95,8 @@ inline fn mod(a: i128, b: i128) i128 {
     const bn = (b ^ s_b) -% s_b; // negate if s == -1
 
     var r: u128 = undefined;
-    _ = udivmod(u128, @bitCast(u128, an), @bitCast(u128, bn), &r);
-    return (@bitCast(i128, r) ^ s_a) -% s_a; // negate if s == -1
+    _ = udivmod(u128, @as(u128, @bitCast(an)), @as(u128, @bitCast(bn)), &r);
+    return (@as(i128, @bitCast(r)) ^ s_a) -% s_a; // negate if s == -1
 }
 
 pub fn __fixdfti(a: f64) callconv(.C) i128 {
@@ -104,7 +104,7 @@ pub fn __fixdfti(a: f64) callconv(.C) i128 {
 }
 
 fn __fixdfti_windows_x86_64(a: f64) callconv(.C) v2u64 {
-    return @bitCast(v2u64, floatToInt(i128, a));
+    return @as(v2u64, @bitCast(floatToInt(i128, a)));
 }
 
 pub fn __fixsfti(a: f32) callconv(.C) i128 {
@@ -112,7 +112,7 @@ pub fn __fixsfti(a: f32) callconv(.C) i128 {
 }
 
 fn __fixsfti_windows_x86_64(a: f32) callconv(.C) v2u64 {
-    return @bitCast(v2u64, floatToInt(i128, a));
+    return @as(v2u64, @bitCast(floatToInt(i128, a)));
 }
 
 pub fn __fixunsdfti(a: f64) callconv(.C) u128 {
@@ -120,7 +120,7 @@ pub fn __fixunsdfti(a: f64) callconv(.C) u128 {
 }
 
 fn __fixunsdfti_windows_x86_64(a: f64) callconv(.C) v2u64 {
-    return @bitCast(v2u64, floatToInt(u128, a));
+    return @as(v2u64, @bitCast(floatToInt(u128, a)));
 }
 
 pub fn __fixunssfti(a: f32) callconv(.C) u128 {
@@ -128,7 +128,7 @@ pub fn __fixunssfti(a: f32) callconv(.C) u128 {
 }
 
 fn __fixunssfti_windows_x86_64(a: f32) callconv(.C) v2u64 {
-    return @bitCast(v2u64, floatToInt(u128, a));
+    return @as(v2u64, @bitCast(floatToInt(u128, a)));
 }
 // mulo - multiplication overflow
 // * return a*%b.
@@ -164,7 +164,7 @@ inline fn muloXi4_genericFast(comptime ST: type, a: ST, b: ST, overflow: *c_int)
     //invariant: -2^{bitwidth(EST)} < res < 2^{bitwidth(EST)-1}
     if (res < min or max < res)
         overflow.* = 1;
-    return @truncate(ST, res);
+    return @as(ST, @truncate(res));
 }
 
 const native_endian = builtin.cpu.arch.endian();
@@ -183,8 +183,8 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
     const SignedDoubleInt = std.meta.Int(.signed, double_int_bits);
     const Log2SingleInt = std.math.Log2Int(SingleInt);
 
-    const n = @bitCast([2]SingleInt, a);
-    const d = @bitCast([2]SingleInt, b);
+    const n = @as([2]SingleInt, @bitCast(a));
+    const d = @as([2]SingleInt, @bitCast(b));
     var q: [2]SingleInt = undefined;
     var r: [2]SingleInt = undefined;
     var sr: c_uint = undefined;
@@ -226,7 +226,7 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
             if (maybe_rem) |rem| {
                 r[high] = n[high] % d[high];
                 r[low] = 0;
-                rem.* = @bitCast(DoubleInt, r);
+                rem.* = @as(DoubleInt, @bitCast(r));
             }
             return n[high] / d[high];
         }
@@ -238,14 +238,14 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
             if (maybe_rem) |rem| {
                 r[low] = n[low];
                 r[high] = n[high] & (d[high] - 1);
-                rem.* = @bitCast(DoubleInt, r);
+                rem.* = @as(DoubleInt, @bitCast(r));
             }
-            return n[high] >> @intCast(Log2SingleInt, @ctz(SingleInt, d[high]));
+            return n[high] >> @as(Log2SingleInt, @intCast(@ctz(d[high])));
         }
         // K K
         // ---
         // K 0
-        sr = @bitCast(c_uint, @as(c_int, @clz(SingleInt, d[high])) - @as(c_int, @clz(SingleInt, n[high])));
+        sr = @as(c_uint, @bitCast(@as(c_int, @clz(d[high])) - @as(c_int, @clz(n[high]))));
         // 0 <= sr <= single_int_bits - 2 or sr large
         if (sr > single_int_bits - 2) {
             if (maybe_rem) |rem| {
@@ -257,10 +257,10 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
         // 1 <= sr <= single_int_bits - 1
         // q.all = a << (double_int_bits - sr);
         q[low] = 0;
-        q[high] = n[low] << @intCast(Log2SingleInt, single_int_bits - sr);
+        q[high] = n[low] << @as(Log2SingleInt, @intCast(single_int_bits - sr));
         // r.all = a >> sr;
-        r[high] = n[high] >> @intCast(Log2SingleInt, sr);
-        r[low] = (n[high] << @intCast(Log2SingleInt, single_int_bits - sr)) | (n[low] >> @intCast(Log2SingleInt, sr));
+        r[high] = n[high] >> @as(Log2SingleInt, @intCast(sr));
+        r[low] = (n[high] << @as(Log2SingleInt, @intCast(single_int_bits - sr))) | (n[low] >> @as(Log2SingleInt, @intCast(sr)));
     } else {
         // d[low] != 0
         if (d[high] == 0) {
@@ -275,15 +275,15 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
                 if (d[low] == 1) {
                     return a;
                 }
-                sr = @ctz(SingleInt, d[low]);
-                q[high] = n[high] >> @intCast(Log2SingleInt, sr);
-                q[low] = (n[high] << @intCast(Log2SingleInt, single_int_bits - sr)) | (n[low] >> @intCast(Log2SingleInt, sr));
-                return @bitCast(DoubleInt, q);
+                sr = @ctz(d[low]);
+                q[high] = n[high] >> @as(Log2SingleInt, @intCast(sr));
+                q[low] = (n[high] << @as(Log2SingleInt, @intCast(single_int_bits - sr))) | (n[low] >> @as(Log2SingleInt, @intCast(sr)));
+                return @as(DoubleInt, @bitCast(q));
             }
             // K X
             // ---
             // 0 K
-            sr = 1 + single_int_bits + @as(c_uint, @clz(SingleInt, d[low])) - @as(c_uint, @clz(SingleInt, n[high]));
+            sr = 1 + single_int_bits + @as(c_uint, @clz(d[low])) - @as(c_uint, @clz(n[high]));
             // 2 <= sr <= double_int_bits - 1
             // q.all = a << (double_int_bits - sr);
             // r.all = a >> sr;
@@ -295,21 +295,21 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
             } else if (sr < single_int_bits) {
                 // 2 <= sr <= single_int_bits - 1
                 q[low] = 0;
-                q[high] = n[low] << @intCast(Log2SingleInt, single_int_bits - sr);
-                r[high] = n[high] >> @intCast(Log2SingleInt, sr);
-                r[low] = (n[high] << @intCast(Log2SingleInt, single_int_bits - sr)) | (n[low] >> @intCast(Log2SingleInt, sr));
+                q[high] = n[low] << @as(Log2SingleInt, @intCast(single_int_bits - sr));
+                r[high] = n[high] >> @as(Log2SingleInt, @intCast(sr));
+                r[low] = (n[high] << @as(Log2SingleInt, @intCast(single_int_bits - sr))) | (n[low] >> @as(Log2SingleInt, @intCast(sr)));
             } else {
                 // single_int_bits + 1 <= sr <= double_int_bits - 1
-                q[low] = n[low] << @intCast(Log2SingleInt, double_int_bits - sr);
-                q[high] = (n[high] << @intCast(Log2SingleInt, double_int_bits - sr)) | (n[low] >> @intCast(Log2SingleInt, sr - single_int_bits));
+                q[low] = n[low] << @as(Log2SingleInt, @intCast(double_int_bits - sr));
+                q[high] = (n[high] << @as(Log2SingleInt, @intCast(double_int_bits - sr))) | (n[low] >> @as(Log2SingleInt, @intCast(sr - single_int_bits)));
                 r[high] = 0;
-                r[low] = n[high] >> @intCast(Log2SingleInt, sr - single_int_bits);
+                r[low] = n[high] >> @as(Log2SingleInt, @intCast(sr - single_int_bits));
             }
         } else {
             // K X
             // ---
             // K K
-            sr = @bitCast(c_uint, @as(c_int, @clz(SingleInt, d[high])) - @as(c_int, @clz(SingleInt, n[high])));
+            sr = @as(c_uint, @bitCast(@as(c_int, @clz(d[high])) - @as(c_int, @clz(n[high]))));
             // 0 <= sr <= single_int_bits - 1 or sr large
             if (sr > single_int_bits - 1) {
                 if (maybe_rem) |rem| {
@@ -327,9 +327,9 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
                 r[high] = 0;
                 r[low] = n[high];
             } else {
-                r[high] = n[high] >> @intCast(Log2SingleInt, sr);
-                r[low] = (n[high] << @intCast(Log2SingleInt, single_int_bits - sr)) | (n[low] >> @intCast(Log2SingleInt, sr));
-                q[high] = n[low] << @intCast(Log2SingleInt, single_int_bits - sr);
+                r[high] = n[high] >> @as(Log2SingleInt, @intCast(sr));
+                r[low] = (n[high] << @as(Log2SingleInt, @intCast(single_int_bits - sr))) | (n[low] >> @as(Log2SingleInt, @intCast(sr)));
+                q[high] = n[low] << @as(Log2SingleInt, @intCast(single_int_bits - sr));
             }
         }
     }
@@ -352,13 +352,13 @@ pub fn udivmod(comptime DoubleInt: type, a: DoubleInt, b: DoubleInt, maybe_rem: 
         //     r.all -= b;
         //      carry = 1;
         // }
-        r_all = @bitCast(DoubleInt, r);
-        const s: SignedDoubleInt = @bitCast(SignedDoubleInt, b -% r_all -% 1) >> (double_int_bits - 1);
-        carry = @intCast(u32, s & 1);
-        r_all -= b & @bitCast(DoubleInt, s);
-        r = @bitCast([2]SingleInt, r_all);
+        r_all = @as(DoubleInt, @bitCast(r));
+        const s: SignedDoubleInt = @as(SignedDoubleInt, @bitCast(b -% r_all -% 1)) >> (double_int_bits - 1);
+        carry = @as(u32, @intCast(s & 1));
+        r_all -= b & @as(DoubleInt, @bitCast(s));
+        r = @as([2]SingleInt, @bitCast(r_all));
     }
-    const q_all = (@bitCast(DoubleInt, q) << 1) | carry;
+    const q_all = (@as(DoubleInt, @bitCast(q)) << 1) | carry;
     if (maybe_rem) |rem| {
         rem.* = r_all;
     }
@@ -383,9 +383,9 @@ pub inline fn floatToInt(comptime I: type, a: anytype) I {
     const sig_mask = (@as(rep_t, 1) << sig_bits) - 1;
 
     // Break a into sign, exponent, significand
-    const a_rep: rep_t = @bitCast(rep_t, a);
+    const a_rep: rep_t = @as(rep_t, @bitCast(a));
     const negative = (a_rep >> (float_bits - 1)) != 0;
-    const exponent = @intCast(i32, (a_rep << 1) >> (sig_bits + 1)) - exp_bias;
+    const exponent = @as(i32, @intCast((a_rep << 1) >> (sig_bits + 1))) - exp_bias;
     const significand: rep_t = (a_rep & sig_mask) | implicit_bit;
 
     // If the exponent is negative, the result rounds to zero.
@@ -395,9 +395,9 @@ pub inline fn floatToInt(comptime I: type, a: anytype) I {
     switch (@typeInfo(I).Int.signedness) {
         .unsigned => {
             if (negative) return 0;
-            if (@intCast(c_uint, exponent) >= @minimum(int_bits, max_exp)) return math.maxInt(I);
+            if (@as(c_uint, @intCast(exponent)) >= @min(int_bits, max_exp)) return math.maxInt(I);
         },
-        .signed => if (@intCast(c_uint, exponent) >= @minimum(int_bits - 1, max_exp)) {
+        .signed => if (@as(c_uint, @intCast(exponent)) >= @min(int_bits - 1, max_exp)) {
             return if (negative) math.minInt(I) else math.maxInt(I);
         },
     }
@@ -406,9 +406,9 @@ pub inline fn floatToInt(comptime I: type, a: anytype) I {
     // Otherwise, shift left.
     var result: I = undefined;
     if (exponent < fractional_bits) {
-        result = @intCast(I, significand >> @intCast(Log2Int(rep_t), fractional_bits - exponent));
+        result = @as(I, @intCast(significand >> @as(Log2Int(rep_t), @intCast(fractional_bits - exponent))));
     } else {
-        result = @intCast(I, significand) << @intCast(Log2Int(I), exponent - fractional_bits);
+        result = @as(I, @intCast(significand)) << @as(Log2Int(I), @intCast(exponent - fractional_bits));
     }
 
     if ((@typeInfo(I).Int.signedness == .signed) and negative)
@@ -448,13 +448,13 @@ inline fn lshrXi3(comptime T: type, a: T, b: i32) T {
 
     if (b >= word_t.bits) {
         output.s.high = 0;
-        output.s.low = input.s.high >> @intCast(S, b - word_t.bits);
+        output.s.low = input.s.high >> @as(S, @intCast(b - word_t.bits));
     } else if (b == 0) {
         return a;
     } else {
-        output.s.high = input.s.high >> @intCast(S, b);
-        output.s.low = input.s.high << @intCast(S, word_t.bits - b);
-        output.s.low |= input.s.low >> @intCast(S, b);
+        output.s.high = input.s.high >> @as(S, @intCast(b));
+        output.s.low = input.s.high << @as(S, @intCast(word_t.bits - b));
+        output.s.low |= input.s.low >> @as(S, @intCast(b));
     }
 
     return output.all;

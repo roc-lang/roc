@@ -9,15 +9,14 @@ comptime {
     // TODO: remove this workaround.
     // Our wasm llvm pipeline always links in memcpy.
     // As such, our impl will conflict.
-    if (builtin.is_test and builtin.os.tag == .windows) {
-        // We don't need memcpy on Windows for tests because the tests are built with -lc
-        // lld-link: error: duplicate symbol: memcpy
+    if (builtin.is_test) {
+        // We don't need memcpy for tests because the tests are built with -lc
     } else if (arch != .wasm32) {
         @export(memcpy, .{ .name = "memcpy", .linkage = .Strong });
     }
 }
 
-const Memcpy = fn (noalias [*]u8, noalias [*]const u8, len: usize) callconv(.C) [*]u8;
+const Memcpy = *const fn (noalias [*]u8, noalias [*]const u8, len: usize) callconv(.C) [*]u8;
 
 pub var memcpy_target: Memcpy = switch (arch) {
     .x86_64 => dispatch_memcpy,
