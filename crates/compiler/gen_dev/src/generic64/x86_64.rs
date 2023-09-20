@@ -563,7 +563,7 @@ where
     let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
 
     if size - copied >= 8 {
-        for _ in (0..(size - copied)).step_by(8) {
+        for _ in 0..(size - copied) / 8 {
             ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -572,7 +572,7 @@ where
     }
 
     if size - copied >= 4 {
-        for _ in (0..(size - copied)).step_by(4) {
+        for _ in 0..(size - copied) / 4 {
             ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -581,7 +581,7 @@ where
     }
 
     if size - copied >= 2 {
-        for _ in (0..(size - copied)).step_by(2) {
+        for _ in 0..(size - copied) / 2 {
             ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -590,7 +590,7 @@ where
     }
 
     if size - copied >= 1 {
-        for _ in (0..(size - copied)).step_by(1) {
+        for _ in 0..(size - copied) / 1 {
             ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
 
