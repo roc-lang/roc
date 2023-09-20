@@ -29,8 +29,8 @@
         pkgs = import nixpkgs { inherit system overlays; };
 
         # When updating the zig or llvm version, make sure they stay in sync.
-        zigPkg = pkgs.zig_0_9;
-        llvmPkgs = pkgs.llvmPackages_13;
+        zigPkg = pkgs.zig_0_11;
+        llvmPkgs = pkgs.llvmPackages_16;
         llvmVersion = builtins.splitVersion llvmPkgs.release_version;
         llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
 
@@ -118,7 +118,8 @@
           python3
           libiconv # for examples/gui
           libxkbcommon # for examples/gui
-          debugir # used in crates/compiler/build/src/program.rs
+          # debugir needs to be updated to llvm 15
+          # debugir # used in crates/compiler/build/src/program.rs
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
