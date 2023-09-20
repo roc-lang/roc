@@ -727,12 +727,14 @@ impl X64_64SystemVStoreArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                let stack_offset = self.tmp_stack_offset;
-
-                let size =
-                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
-
-                self.tmp_stack_offset += size as i32;
+                let stack_size = layout_interner.stack_size(in_layout);
+                if stack_size <= 8 {
+                    self.store_arg_64bit(buf, storage_manager, sym);
+                } else if stack_size <= 16 {
+                    self.store_arg_128bit(buf, storage_manager, sym);
+                } else {
+                    unreachable!("covered by earlier branch");
+                }
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let stack_offset = self.tmp_stack_offset;
@@ -771,6 +773,66 @@ impl X64_64SystemVStoreArgs {
 
                 self.tmp_stack_offset += 8;
             }
+        }
+    }
+
+    fn store_arg_64bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        type ASM = X86_64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                ASM::mov_reg64_base32(buf, *reg, offset);
+
+                self.general_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let reg = X86_64GeneralReg::RAX;
+
+                ASM::mov_reg64_base32(buf, reg, offset);
+                ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
+    }
+
+    fn store_arg_128bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        type ASM = X86_64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+            let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+            let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+            ASM::mov_reg64_base32(buf, reg1, offset);
+            ASM::mov_reg64_base32(buf, reg2, offset + 8);
+
+            self.general_i += 2;
+        } else {
+            // Copy to stack using return reg as buffer.
+            let reg = X86_64GeneralReg::RAX;
+
+            ASM::mov_reg64_base32(buf, reg, offset);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+            ASM::mov_reg64_base32(buf, reg, offset + 8);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+            self.tmp_stack_offset += 16;
         }
     }
 
@@ -980,6 +1042,8 @@ impl X64_64SystemVLoadArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        use Builtin::{Decimal, Int};
+
         let stack_size = layout_interner.stack_size(in_layout);
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
@@ -1001,15 +1065,28 @@ impl X64_64SystemVLoadArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                // for now, just also store this on the stack
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
+                if stack_size <= 8 {
+                    self.load_arg_general_64bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
+                } else if stack_size <= 16 {
+                    self.load_arg_general_128bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
+                } else {
+                    unreachable!("covered by an earlier branch")
+                }
             }
-            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
+            LayoutRepr::Builtin(Int(IntWidth::U128 | IntWidth::I128) | Decimal) => {
+                self.load_arg_general_128bit(buf, storage_manager, layout_interner, sym, in_layout);
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 // for now, just also store this on the stack
@@ -1039,11 +1116,41 @@ impl X64_64SystemVLoadArgs {
         }
     }
 
+    fn load_arg_general_64bit(
+        &mut self,
+        buf: &mut Vec<u8>,
+        storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
+        layout_interner: &mut STLayoutInterner<'_>,
+        sym: Symbol,
+        in_layout: InLayout<'_>,
+    ) {
+        type ASM = X86_64Assembler;
+
+        let reg1 = X86_64SystemV::GENERAL_PARAM_REGS.get(self.general_i);
+
+        match reg1 {
+            Some(reg1) => {
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
+
+                ASM::mov_base32_reg64(buf, offset, *reg1);
+
+                self.general_i += 2;
+            }
+            None => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, 8);
+                self.argument_offset += 8;
+            }
+        }
+    }
+
     fn load_arg_general_128bit(
         &mut self,
         buf: &mut Vec<u8>,
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
+        layout_interner: &mut STLayoutInterner<'_>,
         sym: Symbol,
+        in_layout: InLayout<'_>,
     ) {
         type ASM = X86_64Assembler;
 
@@ -1052,7 +1159,8 @@ impl X64_64SystemVLoadArgs {
 
         match (reg1, reg2) {
             (Some(reg1), Some(reg2)) => {
-                let offset = storage_manager.claim_stack_area_with_alignment(sym, 16, 16);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
 
                 ASM::mov_base32_reg64(buf, offset, *reg1);
                 ASM::mov_base32_reg64(buf, offset + 8, *reg2);
