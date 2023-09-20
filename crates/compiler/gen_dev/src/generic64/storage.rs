@@ -692,6 +692,7 @@ impl<
         if let LayoutRepr::Struct(field_layouts) = layout {
             let mut current_offset = base_offset;
             for (field, field_layout) in fields.iter().zip(field_layouts.iter()) {
+                let field_size = layout_interner.stack_size(*field_layout);
                 self.copy_symbol_to_stack_offset(
                     layout_interner,
                     buf,
@@ -699,7 +700,6 @@ impl<
                     field,
                     field_layout,
                 );
-                let field_size = layout_interner.stack_size(*field_layout);
                 current_offset += field_size as i32;
             }
         } else {

@@ -743,16 +743,15 @@ impl AArch64CallLoadArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        use Builtin::{Decimal, Int};
+
         let stack_size = layout_interner.stack_size(in_layout);
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
             pointer_layouts!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
-            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
+            LayoutRepr::Builtin(Int(IntWidth::U128 | IntWidth::I128) | Decimal) => {
+                self.load_arg_general_128bit(buf, storage_manager, layout_interner, sym, in_layout);
             }
             _ if stack_size == 0 => {
                 storage_manager.no_data(&sym);
@@ -796,9 +795,21 @@ impl AArch64CallLoadArgs {
             ),
             LayoutRepr::Struct { .. } => {
                 if stack_size <= 8 {
-                    self.load_arg_general_64bit(buf, storage_manager, sym);
+                    self.load_arg_general_64bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
                 } else if stack_size <= 16 {
-                    self.load_arg_general_128bit(buf, storage_manager, sym);
+                    self.load_arg_general_128bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
                 } else {
                     unreachable!("covered by an earlier branch")
                 }
@@ -835,7 +846,9 @@ impl AArch64CallLoadArgs {
         &mut self,
         buf: &mut Vec<u8>,
         storage_manager: &mut AArch64StorageManager<'_, '_>,
+        layout_interner: &mut STLayoutInterner<'_>,
         sym: Symbol,
+        in_layout: InLayout<'_>,
     ) {
         type ASM = AArch64Assembler;
 
@@ -843,7 +856,8 @@ impl AArch64CallLoadArgs {
 
         match reg1 {
             Some(reg1) => {
-                let offset = storage_manager.claim_stack_area_with_alignment(sym, 8, 8);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
 
                 ASM::mov_base32_reg64(buf, offset, *reg1);
 
@@ -860,7 +874,9 @@ impl AArch64CallLoadArgs {
         &mut self,
         buf: &mut Vec<u8>,
         storage_manager: &mut AArch64StorageManager<'_, '_>,
+        layout_interner: &mut STLayoutInterner<'_>,
         sym: Symbol,
+        in_layout: InLayout<'_>,
     ) {
         type ASM = AArch64Assembler;
 
@@ -869,7 +885,8 @@ impl AArch64CallLoadArgs {
 
         match (reg1, reg2) {
             (Some(reg1), Some(reg2)) => {
-                let offset = storage_manager.claim_stack_area_with_alignment(sym, 16, 16);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
 
                 ASM::mov_base32_reg64(buf, offset, *reg1);
                 ASM::mov_base32_reg64(buf, offset + 8, *reg2);
