@@ -142,7 +142,7 @@ pub(crate) fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 pub static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 pub static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 
-pub static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
+pub static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0";
 pub static LLVM_STACK_SAVE: &str = "llvm.stacksave";
 
 pub static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";

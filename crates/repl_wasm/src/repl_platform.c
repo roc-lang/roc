@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /*
     A bare-bones Roc "platform" for REPL code, providing heap allocation for builtins.

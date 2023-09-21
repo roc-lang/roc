@@ -5,7 +5,7 @@ use inkwell::{
 };
 use roc_mono::ir::ErasedField;
 
-use super::build::Env;
+use super::build::{BuilderExt, Env};
 
 pub fn opaque_ptr_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerType<'ctx> {
     env.context.i8_type().ptr_type(AddressSpace::default())
@@ -50,7 +50,7 @@ fn bitcast_to_opaque_ptr<'ctx>(
     value: PointerValue<'ctx>,
 ) -> PointerValue<'ctx> {
     env.builder
-        .build_bitcast(
+        .new_build_bitcast(
             value,
             env.context.i8_type().ptr_type(AddressSpace::default()),
             "to_opaque_ptr",
@@ -108,7 +108,7 @@ pub fn load<'ctx>(
 
     let value = env
         .builder
-        .build_bitcast(value, as_type, "bitcast_to_type")
+        .new_build_bitcast(value, as_type, "bitcast_to_type")
         .into_pointer_value();
 
     value

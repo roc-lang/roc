@@ -40,7 +40,9 @@ fn main() {
         "builtins-windows-x86_64.obj",
     );
 
-    generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
+    if !DEBUG {
+        generate_object_file(&bitcode_path, "wasm32-object", "builtins-wasm32.o");
+    }
 
     copy_zig_builtins_to_target_dir(&bitcode_path);
 
@@ -68,27 +70,25 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
 
     println!("Compiling zig object `{zig_object}` to: {src_obj}");
 
-    if !DEBUG {
-        let mut zig_cmd = zig();
+    let mut zig_cmd = zig();
 
-        zig_cmd
-            .current_dir(bitcode_path)
-            .args(["build", zig_object, "-Drelease=true"]);
+    zig_cmd
+        .current_dir(bitcode_path)
+        .args(["build", zig_object, "-Drelease=true"]);
 
-        run_command(zig_cmd, 0);
+    run_command(zig_cmd, 0);
 
-        println!("Moving zig object `{zig_object}` to: {dest_obj}");
+    println!("Moving zig object `{zig_object}` to: {dest_obj}");
 
-        // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
-        fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
-            internal_error!(
-                "Failed to copy object file {} to {}: {:?}",
-                src_obj,
-                dest_obj,
-                err
-            );
-        });
-    }
+    // we store this .o file in rust's `target` folder (for wasm we need to leave a copy here too)
+    fs::copy(src_obj, dest_obj).unwrap_or_else(|err| {
+        internal_error!(
+            "Failed to copy object file {} to {}: {:?}",
+            src_obj,
+            dest_obj,
+            err
+        );
+    });
 }
 
 pub fn get_lib_dir() -> PathBuf {

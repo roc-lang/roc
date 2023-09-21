@@ -1303,7 +1303,7 @@ impl<
         layout: InLayout<'_>,
     ) -> i32 {
         let (size, alignment) = layout_interner.stack_size_and_alignment(layout);
-        self.claim_stack_area_with_alignment(sym, size, Ord::min(alignment, 8))
+        self.claim_stack_area_with_alignment(sym, size, Ord::max(alignment, 8))
     }
 
     /// Claim space on the stack of a certain size and alignment.

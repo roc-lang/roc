@@ -428,30 +428,27 @@ impl<'ctx> RocUnion<'ctx> {
     ) {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
 
-        let data_buffer = env
-            .builder
-            .new_build_struct_gep(
-                self.struct_type(),
-                tag_alloca,
-                Self::TAG_DATA_INDEX,
-                "data_buffer",
-            )
-            .unwrap();
+        let data_buffer = env.builder.new_build_struct_gep(
+            self.struct_type(),
+            tag_alloca,
+            Self::TAG_DATA_INDEX,
+            "data_buffer",
+        );
 
         match data {
             // NOTE: the data may be smaller than the buffer, so there might be uninitialized
             // bytes in the buffer. We should never touch those, but e.g. valgrind might not
             // realize that. If that comes up, the solution is to just fill it with zeros
             RocStruct::ByValue(value) => {
-                let cast_pointer = env.builder.build_pointer_cast(
+                let cast_pointer = env.builder.new_build_pointer_cast(
                     data_buffer,
                     value.get_type().ptr_type(AddressSpace::default()),
                     "to_data_ptr",
                 );
-                env.builder.build_store(cast_pointer, value);
+                env.builder.new_build_store(cast_pointer, value);
             }
             RocStruct::ByReference(payload_data_ptr) => {
-                let cast_tag_pointer = env.builder.build_pointer_cast(
+                let cast_tag_pointer = env.builder.new_build_pointer_cast(
                     data_buffer,
                     payload_data_ptr.get_type(),
                     "to_data_ptr",
@@ -477,19 +474,16 @@ impl<'ctx> RocUnion<'ctx> {
                 TagType::I16 => env.context.i16_type(),
             };
 
-            let tag_id_ptr = env
-                .builder
-                .new_build_struct_gep(
-                    self.struct_type(),
-                    tag_alloca,
-                    Self::TAG_ID_INDEX,
-                    "tag_id_ptr",
-                )
-                .unwrap();
+            let tag_id_ptr = env.builder.new_build_struct_gep(
+                self.struct_type(),
+                tag_alloca,
+                Self::TAG_ID_INDEX,
+                "tag_id_ptr",
+            );
 
             let tag_id = tag_id_type.const_int(tag_id as u64, false);
 
-            env.builder.build_store(tag_id_ptr, tag_id);
+            env.builder.new_build_store(tag_id_ptr, tag_id);
         }
     }
 }

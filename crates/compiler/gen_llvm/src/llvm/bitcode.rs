@@ -62,7 +62,9 @@ fn call_bitcode_fn_help<'ctx>(
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {fn_name:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md"));
 
-    let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
+    let call = env
+        .builder
+        .new_build_call(fn_val, &arguments, "call_builtin");
 
     // Attributes that we propagate from the zig builtin parameters, to the arguments we give to the
     // call. It is undefined behavior in LLVM to have an attribute on a parameter, and then call
@@ -120,7 +122,7 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
 
             // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
             // be 16-byte aligned. Not doing so is UB and will immediately fail on CI
-            let cc_return_value_ptr = env.builder.build_alloca(cc_return_type, "return_value");
+            let cc_return_value_ptr = env.builder.new_build_alloca(cc_return_type, "return_value");
             cc_return_value_ptr
                 .as_instruction()
                 .unwrap()
@@ -249,7 +251,7 @@ fn build_transform_caller_help<'a, 'ctx>(
             basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout))
                 .ptr_type(AddressSpace::default());
 
-        let cast_ptr = env.builder.build_pointer_cast(
+        let cast_ptr = env.builder.new_build_pointer_cast(
             argument_ptr.into_pointer_value(),
             basic_type,
             "cast_ptr_to_tag_build_transform_caller_help",
@@ -280,9 +282,11 @@ fn build_transform_caller_help<'a, 'ctx>(
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
                     .ptr_type(AddressSpace::default());
 
-            let closure_cast =
-                env.builder
-                    .build_pointer_cast(closure_ptr, closure_type, "cast_opaque_closure");
+            let closure_cast = env.builder.new_build_pointer_cast(
+                closure_ptr,
+                closure_type,
+                "cast_opaque_closure",
+            );
 
             let closure_data = load_roc_value(
                 env,
@@ -316,7 +320,7 @@ fn build_transform_caller_help<'a, 'ctx>(
         result_u8_ptr,
         result,
     );
-    env.builder.build_return(None);
+    env.builder.new_build_return(None);
 
     env.builder.position_at_end(block);
     env.builder.set_current_debug_location(di_location);
@@ -421,9 +425,11 @@ fn build_rc_wrapper<'a, 'ctx>(
             let value_type =
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let value_ptr_type = value_type.ptr_type(AddressSpace::default());
-            let value_ptr =
-                env.builder
-                    .build_pointer_cast(generic_value_ptr, value_ptr_type, "load_opaque");
+            let value_ptr = env.builder.new_build_pointer_cast(
+                generic_value_ptr,
+                value_ptr_type,
+                "load_opaque",
+            );
 
             // even though this looks like a `load_roc_value`, that gives segfaults in practice.
             // I suspect it has something to do with the lifetime of the alloca that is created by
@@ -451,7 +457,7 @@ fn build_rc_wrapper<'a, 'ctx>(
                 }
             }
 
-            env.builder.build_return(None);
+            env.builder.new_build_return(None);
 
             function_value
         }
@@ -513,13 +519,13 @@ pub fn build_eq_wrapper<'a, 'ctx>(
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
                     .ptr_type(AddressSpace::default());
 
-            let value_cast1 = env
-                .builder
-                .build_pointer_cast(value_ptr1, value_type, "load_opaque");
+            let value_cast1 =
+                env.builder
+                    .new_build_pointer_cast(value_ptr1, value_type, "load_opaque");
 
-            let value_cast2 = env
-                .builder
-                .build_pointer_cast(value_ptr2, value_type, "load_opaque");
+            let value_cast2 =
+                env.builder
+                    .new_build_pointer_cast(value_ptr2, value_type, "load_opaque");
 
             // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             let value1 = load_roc_value(
@@ -547,7 +553,7 @@ pub fn build_eq_wrapper<'a, 'ctx>(
                 layout,
             );
 
-            env.builder.build_return(Some(&result));
+            env.builder.new_build_return(Some(&result));
 
             function_value
         }
@@ -618,11 +624,11 @@ pub fn build_compare_wrapper<'a, 'ctx>(
 
             let value_cast1 =
                 env.builder
-                    .build_pointer_cast(value_ptr1, value_ptr_type, "load_opaque");
+                    .new_build_pointer_cast(value_ptr1, value_ptr_type, "load_opaque");
 
             let value_cast2 =
                 env.builder
-                    .build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
+                    .new_build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
 
             let value1 = load_roc_value(
                 env,
@@ -659,7 +665,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
                     );
                     let closure_ptr_type = closure_type.ptr_type(AddressSpace::default());
 
-                    let closure_cast = env.builder.build_pointer_cast(
+                    let closure_cast = env.builder.new_build_pointer_cast(
                         closure_ptr,
                         closure_ptr_type,
                         "load_opaque",
@@ -675,7 +681,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
                 }
             };
 
-            let call = env.builder.build_call(
+            let call = env.builder.new_build_call(
                 roc_function,
                 arguments_cast,
                 "call_user_defined_compare_function",
@@ -686,7 +692,7 @@ pub fn build_compare_wrapper<'a, 'ctx>(
             // IMPORTANT! we call a user function, so it has the fast calling convention
             call.set_call_convention(FAST_CALL_CONV);
 
-            env.builder.build_return(Some(&result));
+            env.builder.new_build_return(Some(&result));
 
             function_value
         }
@@ -812,7 +818,7 @@ fn ptr_len_cap<'ctx>(
         .into_int_value();
 
     let upper_word = {
-        let shift = env.builder.build_right_shift(
+        let shift = env.builder.new_build_right_shift(
             ptr_and_len,
             env.context.i64_type().const_int(32, false),
             false,
@@ -820,16 +826,16 @@ fn ptr_len_cap<'ctx>(
         );
 
         env.builder
-            .build_int_cast(shift, env.context.i32_type(), "list_ptr_int")
+            .new_build_int_cast(shift, env.context.i32_type(), "list_ptr_int")
     };
 
-    let lower_word = env
-        .builder
-        .build_int_cast(ptr_and_len, env.context.i32_type(), "list_len");
+    let lower_word =
+        env.builder
+            .new_build_int_cast(ptr_and_len, env.context.i32_type(), "list_len");
 
     let len = upper_word;
 
-    let ptr = env.builder.build_int_to_ptr(
+    let ptr = env.builder.new_build_int_to_ptr(
         lower_word,
         env.context.i8_type().ptr_type(AddressSpace::default()),
         "list_ptr",
@@ -889,7 +895,7 @@ pub(crate) fn pass_list_to_zig_64bit<'ctx>(
     let list_type = super::convert::zig_list_type(env);
     let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
 
-    env.builder.build_store(list_alloca, list);
+    env.builder.new_build_store(list_alloca, list);
 
     list_alloca
 }
@@ -914,7 +920,7 @@ pub(crate) fn pass_list_or_string_to_zig_32bit<'ctx>(
 
     let ptr = env
         .builder
-        .build_ptr_to_int(ptr, env.context.i32_type(), "ptr_to_i32");
+        .new_build_ptr_to_int(ptr, env.context.i32_type(), "ptr_to_i32");
 
     let len = env
         .builder
@@ -931,15 +937,15 @@ pub(crate) fn pass_list_or_string_to_zig_32bit<'ctx>(
     let int_64_type = env.context.i64_type();
     let len = env
         .builder
-        .build_int_z_extend(len, int_64_type, "list_len_64");
+        .new_build_int_z_extend(len, int_64_type, "list_len_64");
     let ptr = env
         .builder
-        .build_int_z_extend(ptr, int_64_type, "list_ptr_64");
+        .new_build_int_z_extend(ptr, int_64_type, "list_ptr_64");
 
     let len_shift =
         env.builder
-            .build_left_shift(len, int_64_type.const_int(32, false), "list_len_shift");
-    let ptr_len = env.builder.build_or(len_shift, ptr, "list_ptr_len");
+            .new_build_left_shift(len, int_64_type.const_int(32, false), "list_len_shift");
+    let ptr_len = env.builder.new_build_or(len_shift, ptr, "list_ptr_len");
 
     (ptr_len, cap)
 }
