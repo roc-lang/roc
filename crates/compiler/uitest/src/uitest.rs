@@ -39,6 +39,10 @@ lazy_static! {
         .join("uitest")
         .join("tests");
 
+    /// # %run,skip
+    static ref RE_RUN_SETTING: Regex =
+        Regex::new(r#"# %(?P<setting>.*)"#).unwrap();
+
     /// # +set <setting>
     static ref RE_SETTING: Regex =
         Regex::new(r#"# \+set (?P<setting>.*?)=(?P<value>.*)"#).unwrap();
@@ -87,30 +91,41 @@ fn collect_uitest_files() -> io::Result<Vec<PathBuf>> {
     Ok(tests)
 }
 
-fn into_test(path: PathBuf) -> io::Result<Trial> {
+fn into_test(path: PathBuf) -> Result<Trial, Box<dyn Error>> {
     let name = path
         .strip_prefix(UITEST_PATH.as_path().parent().unwrap())
         .expect("collected path does not have uitest prefix")
         .display()
         .to_string();
 
-    let trial = Trial::test(name, move || run_test(path));
+    let data = std::fs::read_to_string(&path)?;
+    let test_case = TestCase::parse(&data)?;
+
+    let execution = test_case.execution;
+
+    let mut trial = Trial::test(name, move || run_test(path, test_case));
+    match execution {
+        Execution::Skip => {
+            trial = trial.with_ignored_flag(true);
+        }
+        Execution::Run => {}
+    }
     Ok(trial)
 }
 
-fn run_test(path: PathBuf) -> Result<(), Failed> {
-    let data = std::fs::read_to_string(&path)?;
+fn run_test(path: PathBuf, test_case: TestCase) -> Result<(), Failed> {
     let TestCase {
+        execution: _,
         compiler_settings,
         can_options,
         infer_options,
-        emit_options,
         mono_options,
+        emit_options,
         program,
-    } = TestCase::parse(&data)?;
+    } = test_case;
 
     let inferred_program = infer_queries(
-        program.test_module,
+        &program.test_module,
         program
             .other_modules
             .iter()
@@ -144,19 +159,26 @@ fn run_test(path: PathBuf) -> Result<(), Failed> {
 
 const EMIT_HEADER: &str = "# -emit:";
 
-struct Modules<'a> {
-    before_any: &'a str,
-    other_modules: VecMap<&'a str, &'a str>,
-    test_module: &'a str,
+struct Modules {
+    before_any: String,
+    other_modules: VecMap<String, String>,
+    test_module: String,
 }
 
-struct TestCase<'a> {
+struct TestCase {
+    execution: Execution,
     compiler_settings: CompilerSettings,
     can_options: CanOptions,
     infer_options: InferOptions,
     mono_options: MonoOptions,
     emit_options: EmitOptions,
-    program: Modules<'a>,
+    program: Modules,
+}
+
+#[derive(Clone, Copy)]
+enum Execution {
+    Run,
+    Skip,
 }
 
 struct CompilerSettings {
@@ -182,13 +204,14 @@ struct EmitOptions {
     mono: bool,
 }
 
-impl<'a> TestCase<'a> {
-    fn parse(mut data: &'a str) -> Result<Self, Failed> {
+impl TestCase {
+    fn parse(mut data: &str) -> Result<Self, Box<dyn Error>> {
         // Drop anything following `# -emit:` header lines; that's the output.
         if let Some(drop_at) = data.find(EMIT_HEADER) {
             data = data[..drop_at].trim_end();
         }
 
+        let execution = Self::parse_executions(data)?;
         let compiler_settings = Self::parse_compiler_settings(data)?;
         let can_options = Self::parse_can_options(data)?;
         let infer_options = Self::parse_infer_options(data)?;
@@ -198,6 +221,7 @@ impl<'a> TestCase<'a> {
         let program = Self::parse_modules(data);
 
         Ok(TestCase {
+            execution,
             compiler_settings,
             can_options,
             infer_options,
@@ -207,7 +231,7 @@ impl<'a> TestCase<'a> {
         })
     }
 
-    fn parse_modules(data: &'a str) -> Modules<'a> {
+    fn parse_modules(data: &str) -> Modules {
         let mut module_starts = RE_MODULE.captures_iter(data).peekable();
 
         let first_module_start = match module_starts.peek() {
@@ -216,7 +240,7 @@ impl<'a> TestCase<'a> {
                 return Modules {
                     before_any: Default::default(),
                     other_modules: Default::default(),
-                    test_module: data,
+                    test_module: data.to_owned(),
                 };
             }
             Some(p) => p.get(0).unwrap().start(),
@@ -225,7 +249,7 @@ impl<'a> TestCase<'a> {
         let before_any = data[..first_module_start].trim();
 
         let mut test_module = None;
-        let mut other_modules = VecMap::new();
+        let mut other_modules = VecMap::<String, String>::new();
 
         while let Some(module_start) = module_starts.next() {
             let module_name = module_start.name("name").unwrap().as_str();
@@ -242,19 +266,35 @@ impl<'a> TestCase<'a> {
             if module_name == "Test" {
                 test_module = Some(module);
             } else {
-                other_modules.insert(module_name, module);
+                other_modules.insert(module_name.to_owned(), module.to_owned());
             }
         }
 
         let test_module = test_module.expect("no Test module found");
         Modules {
-            before_any,
+            before_any: before_any.to_owned(),
             other_modules,
-            test_module,
+            test_module: test_module.to_owned(),
         }
     }
 
-    fn parse_compiler_settings(data: &str) -> Result<CompilerSettings, Failed> {
+    fn parse_executions(data: &str) -> Result<Execution, Box<dyn Error>> {
+        let mut execution = Execution::Run;
+
+        let found_settings = RE_RUN_SETTING.captures_iter(data);
+        for set in found_settings {
+            let setting = set.name("setting").unwrap().as_str();
+            match setting.trim() {
+                "run" => execution = Execution::Run,
+                "skip" => execution = Execution::Skip,
+                other => return Err(format!("unknown run setting: {other:?}").into()),
+            }
+        }
+
+        Ok(execution)
+    }
+
+    fn parse_compiler_settings(data: &str) -> Result<CompilerSettings, Box<dyn Error>> {
         let mut settings = CompilerSettings::default();
 
         let found_settings = RE_SETTING.captures_iter(data);
@@ -274,7 +314,7 @@ impl<'a> TestCase<'a> {
         Ok(settings)
     }
 
-    fn parse_can_options(data: &str) -> Result<CanOptions, Failed> {
+    fn parse_can_options(data: &str) -> Result<CanOptions, Box<dyn Error>> {
         let mut can_opts = CanOptions::default();
 
         let found_can_opts = RE_OPT_CAN.captures_iter(data);
@@ -289,7 +329,7 @@ impl<'a> TestCase<'a> {
         Ok(can_opts)
     }
 
-    fn parse_infer_options(data: &str) -> Result<InferOptions, Failed> {
+    fn parse_infer_options(data: &str) -> Result<InferOptions, Box<dyn Error>> {
         let mut infer_opts = InferOptions {
             no_promote: true,
             ..Default::default()
@@ -310,7 +350,7 @@ impl<'a> TestCase<'a> {
         Ok(infer_opts)
     }
 
-    fn parse_mono_options(data: &str) -> Result<MonoOptions, Failed> {
+    fn parse_mono_options(data: &str) -> Result<MonoOptions, Box<dyn Error>> {
         let mut mono_opts = MonoOptions::default();
 
         let found_infer_opts = RE_OPT_MONO.captures_iter(data);
@@ -325,7 +365,7 @@ impl<'a> TestCase<'a> {
         Ok(mono_opts)
     }
 
-    fn parse_emit_options(data: &str) -> Result<EmitOptions, Failed> {
+    fn parse_emit_options(data: &str) -> Result<EmitOptions, Box<dyn Error>> {
         let mut emit_opts = EmitOptions::default();
 
         let found_infer_opts = RE_EMIT.captures_iter(data);
@@ -364,7 +404,7 @@ fn check_for_changes(path: &Path) -> Result<(), Failed> {
 /// Assemble the output for a test, with queries elaborated in-line.
 fn assemble_query_output(
     writer: &mut impl io::Write,
-    program: Modules<'_>,
+    program: Modules,
     inferred_program: InferredProgram,
     compiler_settings: CompilerSettings,
     can_options: CanOptions,
@@ -396,7 +436,7 @@ fn assemble_query_output(
     sorted_queries.reverse();
 
     let mut reflow = Reflow::new_unindented(writer);
-    write_source_with_answers(&mut reflow, test_module, sorted_queries, 0)?;
+    write_source_with_answers(&mut reflow, &test_module, sorted_queries, 0)?;
 
     // Finish up with any remaining emit options we were asked to provide.
     let EmitOptions { can_decls, mono } = emit_options;
@@ -412,7 +452,7 @@ fn assemble_query_output(
         // that of a solved module.
         mono::write_compiled_ir(
             writer,
-            test_module,
+            &test_module,
             other_modules,
             mono_options,
             compiler_settings,

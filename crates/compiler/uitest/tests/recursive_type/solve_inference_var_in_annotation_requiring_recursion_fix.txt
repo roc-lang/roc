@@ -1,3 +1,4 @@
+# %skip
 app "test" provides [translateStatic] to "./platform"
 
 translateStatic : _ -> _

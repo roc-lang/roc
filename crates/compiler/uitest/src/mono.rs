@@ -18,10 +18,10 @@ pub(crate) struct MonoOptions {
     pub no_check: bool,
 }
 
-pub(crate) fn write_compiled_ir<'a>(
+pub(crate) fn write_compiled_ir(
     writer: &mut impl io::Write,
     test_module: &str,
-    dependencies: impl IntoIterator<Item = (&'a str, &'a str)>,
+    dependencies: impl IntoIterator<Item = (String, String)>,
     options: MonoOptions,
     compiler_settings: CompilerSettings,
     allow_can_errors: bool,
