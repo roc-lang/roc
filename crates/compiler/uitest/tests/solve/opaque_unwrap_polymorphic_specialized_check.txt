@@ -11,4 +11,4 @@ entry =
     v
 
 main = entry
-#      ^^^^^ Id Str -[[v(4)]]-> Bool
+#      ^^^^^ Id Str -[[v(4), v(4) w_a]]-> Bool

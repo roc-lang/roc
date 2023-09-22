@@ -280,6 +280,11 @@ pub(crate) enum AnnotationFor {
     Opaque,
 }
 
+pub(crate) struct WellKnownLambdaAnnotation {
+    pub(crate) name: Symbol,
+    pub(crate) captures: Vec<Type>,
+}
+
 pub(crate) fn canonicalize_well_known_lambda_annotation(
     env: &mut Env,
     scope: &mut Scope,
@@ -287,7 +292,7 @@ pub(crate) fn canonicalize_well_known_lambda_annotation(
     region: Region,
     var_store: &mut VarStore,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
-    well_known_lambda_name: Symbol,
+    well_known_lambda: WellKnownLambdaAnnotation,
 ) -> Annotation {
     canonicalize_annotation_help(
         env,
@@ -297,7 +302,7 @@ pub(crate) fn canonicalize_well_known_lambda_annotation(
         var_store,
         pending_abilities_in_scope,
         AnnotationFor::Value,
-        Some(well_known_lambda_name),
+        Some(well_known_lambda),
     )
 }
 
@@ -332,7 +337,7 @@ fn canonicalize_annotation_help(
     var_store: &mut VarStore,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     annotation_for: AnnotationFor,
-    well_known_lambda_name: Option<Symbol>,
+    well_known_lambda: Option<WellKnownLambdaAnnotation>,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
@@ -380,7 +385,7 @@ fn canonicalize_annotation_help(
         region,
         scope,
         var_store,
-        well_known_lambda_name,
+        well_known_lambda,
         &mut introduced_variables,
         &mut aliases,
         &mut references,
@@ -580,7 +585,7 @@ fn can_annotation_help(
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
-    _well_known_lambda_name: Option<Symbol>,
+    well_known_lambda: Option<WellKnownLambdaAnnotation>,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
@@ -621,17 +626,16 @@ fn can_annotation_help(
                 references,
             );
 
-            //TODO(bind-closure-tag)
-            //let closure = if let Some(well_known_lambda_name) = well_known_lambda_name {
-            //    Type::ClosureTag {
-            //        name: well_known_lambda_name,
-            //        captures: args.clone(),
-            //    }
-            //} else {
-            let lambda_set = var_store.fresh();
-            introduced_variables.insert_lambda_set(lambda_set);
-            let closure = Type::Variable(lambda_set);
-            //};
+            let closure = match well_known_lambda {
+                Some(WellKnownLambdaAnnotation { name, captures }) => {
+                    Type::ClosureTag { name, captures }
+                }
+                None => {
+                    let lambda_set = var_store.fresh();
+                    introduced_variables.insert_lambda_set(lambda_set);
+                    Type::Variable(lambda_set)
+                }
+            };
 
             Type::Function(args, Box::new(closure), Box::new(ret))
         }

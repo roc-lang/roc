@@ -1,0 +1,15 @@
+interface Test
+    exposes [createNode]
+    imports []
+
+createChildNode : U32, {} -> U32
+createChildNode = \diffState, {} -> createNode diffState
+#                                   ^^^^^^^^^^ U32 -[[createNode(0)]]-> U32
+#^^^^^^^^^^^^^^^{-1} U32, {} -[[createChildNode(1)]]-> U32
+
+createNode = \diffState ->
+    createChildNode diffState {}
+#   ^^^^^^^^^^^^^^^ U32, {} -[[createChildNode(1)]]-> U32
+
+expect
+    createNode 1 == 2
