@@ -19,6 +19,8 @@ use test_solve_helpers::{
 mod mono;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let _tracing_guards = roc_tracing::setup_tracing!();
+
     let args = Arguments::from_args();
 
     let test_files = collect_uitest_files()?;

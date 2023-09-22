@@ -1,6 +1,10 @@
 use std::cell::RefCell;
 
-use roc_can::{abilities::AbilitiesStore, constraint::TypeOrVar, expected::Expected};
+use roc_can::{
+    abilities::AbilitiesStore,
+    constraint::{variable_index_to_variable, TypeOrVar},
+    expected::Expected,
+};
 use roc_collections::soa::{Index, Slice};
 use roc_error_macros::internal_error;
 use roc_module::{ident::TagName, symbol::Symbol};
@@ -76,10 +80,7 @@ pub(crate) fn either_type_index_to_var(
             );
             var
         }
-        Err(var_index) => {
-            // we cheat, and  store the variable directly in the index
-            unsafe { Variable::from_index(var_index.index() as _) }
-        }
+        Err(var_index) => variable_index_to_variable(var_index),
     }
 }
 
@@ -343,16 +344,22 @@ pub(crate) fn type_to_var_help(
                 env.register_with_known_var(destination, rank, content)
             }
 
-            ClosureTag {
-                name,
-                ambient_function,
-            } => {
+            ClosureTag { name } => {
                 match env.function_kind {
                     FunctionKind::LambdaSet => {
                         let captures = types.get_type_arguments(typ_index);
                         let union_lambdas = create_union_lambda(
                             env, rank, arena, types, name, captures, &mut stack,
                         );
+
+                        let ambient_function = match ambient_function {
+                            AmbientFunctionPolicy::NoFunction => {
+                                debug_assert!(is_alias_lambda_set_arg);
+                                // To be filled in during delayed type alias instantiation
+                                roc_types::subs::Variable::NULL
+                            }
+                            AmbientFunctionPolicy::Function(var) => var,
+                        };
 
                         let content = Content::LambdaSet(subs::LambdaSet {
                             solved: union_lambdas,

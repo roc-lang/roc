@@ -25,6 +25,7 @@ roc_problem = { path = "../problem" }
 roc_reporting = { path = "../../reporting" }
 roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
+roc_tracing = { path = "../../tracing" }
 test_solve_helpers = { path = "../test_solve_helpers" }
 
 bumpalo.workspace = true

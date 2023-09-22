@@ -1365,7 +1365,7 @@ impl Variable {
     /// # Safety
     ///
     /// It is not guaranteed that the variable is in bounds.
-    pub unsafe fn from_index(v: u32) -> Self {
+    pub const unsafe fn from_index(v: u32) -> Self {
         Variable(v)
     }
 

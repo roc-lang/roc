@@ -15,6 +15,7 @@ roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
+roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
 
 arrayvec.workspace = true

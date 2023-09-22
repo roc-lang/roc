@@ -3,6 +3,7 @@ use crate::abilities::ImplKey;
 use crate::abilities::MemberVariables;
 use crate::abilities::PendingMemberType;
 use crate::annotation::canonicalize_annotation;
+use crate::annotation::canonicalize_well_known_lambda_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
 use crate::annotation::AnnotationFor;
@@ -2262,14 +2263,39 @@ fn canonicalize_pending_value_def<'a>(
         }
 
         TypedBody(_loc_pattern, loc_can_pattern, loc_ann, loc_expr) => {
-            let type_annotation = canonicalize_annotation(
-                env,
-                scope,
-                &loc_ann.value,
-                loc_ann.region,
-                var_store,
-                pending_abilities_in_scope,
-                AnnotationFor::Value,
+            let type_annotation = if let Some(WellKnownLambda {
+                defined_lambda_symbol,
+                arguments: _,
+                body: _,
+                is_ability: false,
+            }) =
+                find_well_known_lambda(&loc_can_pattern.value, &loc_expr.value)
+            {
+                canonicalize_well_known_lambda_annotation(
+                    env,
+                    scope,
+                    &loc_ann.value,
+                    loc_ann.region,
+                    var_store,
+                    pending_abilities_in_scope,
+                    defined_lambda_symbol,
+                )
+            } else {
+                canonicalize_annotation(
+                    env,
+                    scope,
+                    &loc_ann.value,
+                    loc_ann.region,
+                    var_store,
+                    pending_abilities_in_scope,
+                    AnnotationFor::Value,
+                )
+            };
+
+            roc_tracing::debug!(
+                ?type_annotation,
+                ?loc_can_pattern,
+                "value-def typed-body annotation"
             );
 
             // Record all the annotation's references in output.references.lookups
@@ -2318,6 +2344,40 @@ fn canonicalize_pending_value_def<'a>(
     output
 }
 
+struct WellKnownLambda<'a> {
+    defined_lambda_symbol: Symbol,
+    arguments: &'a [Loc<ast::Pattern<'a>>],
+    body: &'a Loc<ast::Expr<'a>>,
+    is_ability: bool,
+}
+
+fn find_well_known_lambda<'a>(
+    can_pattern: &Pattern,
+    expr: &'a ast::Expr<'a>,
+) -> Option<WellKnownLambda<'a>> {
+    let mut ast_value = expr;
+    while let ast::Expr::ParensAround(value) = ast_value {
+        ast_value = value;
+    }
+
+    match (can_pattern, expr) {
+        (
+            Pattern::Identifier(defined_symbol)
+            | Pattern::AbilityMemberSpecialization {
+                ident: defined_symbol,
+                ..
+            },
+            ast::Expr::Closure(arguments, body),
+        ) => Some(WellKnownLambda {
+            defined_lambda_symbol: *defined_symbol,
+            arguments,
+            body,
+            is_ability: matches!(can_pattern, Pattern::AbilityMemberSpecialization { .. }),
+        }),
+        _ => None,
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -2342,49 +2402,46 @@ fn canonicalize_pending_body<'a>(
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
     // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
-    let (loc_can_expr, def_references) = {
+    let loc_can_expr;
+    let def_references;
+    if let Some(WellKnownLambda {
+        defined_lambda_symbol,
+        arguments,
+        body,
+        is_ability: _,
+    }) = find_well_known_lambda(&loc_can_pattern.value, loc_value)
+    {
+        // bookkeeping for tail-call detection.
+        let outer_tailcallable = env.tailcallable_symbol;
+        env.tailcallable_symbol = Some(defined_lambda_symbol);
+
+        let (mut closure_data, can_output) = crate::expr::canonicalize_closure(
+            env,
+            var_store,
+            scope,
+            arguments,
+            body,
+            Some(defined_lambda_symbol),
+        );
+
+        // reset the tailcallable_symbol
+        env.tailcallable_symbol = outer_tailcallable;
+
+        // The closure is self tail recursive iff it tail calls itself (by defined name).
+        let is_recursive = match can_output.tail_call {
+            Some(tail_symbol) if tail_symbol == defined_lambda_symbol => Recursive::TailRecursive,
+            _ => Recursive::NotRecursive,
+        };
+
+        closure_data.recursive = is_recursive;
+        closure_data.name = defined_lambda_symbol;
+
+        loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
+
+        def_references = DefReferences::Function(can_output.references.clone());
+        output.union(can_output);
+    } else {
         match (&loc_can_pattern.value, &loc_value) {
-            (
-                Pattern::Identifier(defined_symbol)
-                | Pattern::AbilityMemberSpecialization {
-                    ident: defined_symbol,
-                    ..
-                },
-                ast::Expr::Closure(arguments, body),
-            ) => {
-                // bookkeeping for tail-call detection.
-                let outer_tailcallable = env.tailcallable_symbol;
-                env.tailcallable_symbol = Some(*defined_symbol);
-
-                let (mut closure_data, can_output) = crate::expr::canonicalize_closure(
-                    env,
-                    var_store,
-                    scope,
-                    arguments,
-                    body,
-                    Some(*defined_symbol),
-                );
-
-                // reset the tailcallable_symbol
-                env.tailcallable_symbol = outer_tailcallable;
-
-                // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
-                };
-
-                closure_data.recursive = is_recursive;
-                closure_data.name = *defined_symbol;
-
-                let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
-
-                let def_references = DefReferences::Function(can_output.references.clone());
-                output.union(can_output);
-
-                (loc_can_expr, def_references)
-            }
-
             // Turn f = .foo into f = \rcd -[f]-> rcd.foo
             (
                 Pattern::Identifier(defined_symbol)
@@ -2398,7 +2455,7 @@ fn canonicalize_pending_body<'a>(
                     Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
                     Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
                 };
-                let (loc_can_expr, can_output) = (
+                let (rcd_loc_can_expr, can_output) = (
                     Loc::at(
                         loc_expr.region,
                         RecordAccessor(StructAccessorData {
@@ -2413,20 +2470,19 @@ fn canonicalize_pending_body<'a>(
                     ),
                     Output::default(),
                 );
-                let def_references = DefReferences::Value(can_output.references.clone());
-                output.union(can_output);
+                loc_can_expr = rcd_loc_can_expr;
+                def_references = DefReferences::Value(can_output.references.clone());
 
-                (loc_can_expr, def_references)
+                output.union(can_output);
             }
 
             _ => {
-                let (loc_can_expr, can_output) =
+                let (other_loc_can_expr, can_output) =
                     canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
 
-                let def_references = DefReferences::Value(can_output.references.clone());
+                loc_can_expr = other_loc_can_expr;
+                def_references = DefReferences::Value(can_output.references.clone());
                 output.union(can_output);
-
-                (loc_can_expr, def_references)
             }
         }
     };

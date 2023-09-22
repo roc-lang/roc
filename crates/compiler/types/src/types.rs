@@ -379,7 +379,6 @@ pub enum TypeTag {
     /// Closure arguments are implicit
     ClosureTag {
         name: Symbol,
-        ambient_function: Variable,
     },
     // type extension is implicit
     // tag name is in the `single_tag_union_tag_names` map
@@ -740,6 +739,12 @@ impl Types {
         index
     }
 
+    pub fn variable(&mut self, variable: Variable) -> Index<TypeTag> {
+        let index = self.reserve_type_tag();
+        self.set_type_tag(index, TypeTag::Variable(variable), Slice::default());
+        index
+    }
+
     #[allow(clippy::wrong_self_convention)]
     fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
         match old {
@@ -881,17 +886,10 @@ impl Types {
                 let tag = TypeTag::Tuple(tuple_elems);
                 self.set_type_tag(index, tag, type_slice)
             }
-            Type::ClosureTag {
-                name,
-                captures,
-                ambient_function,
-            } => {
+            Type::ClosureTag { name, captures } => {
                 let type_slice = self.from_old_type_slice(captures.iter());
 
-                let tag = TypeTag::ClosureTag {
-                    name: *name,
-                    ambient_function: *ambient_function,
-                };
+                let tag = TypeTag::ClosureTag { name: *name };
                 self.set_type_tag(index, tag, type_slice)
             }
 
@@ -1101,22 +1099,12 @@ impl Types {
 
                     (Function(new_clos, new_ret), new_args)
                 }
-                ClosureTag {
-                    name,
-                    ambient_function,
-                } => {
+                ClosureTag { name } => {
                     let captures = self.get_type_arguments(typ);
 
                     let new_captures = defer_slice!(captures);
-                    let new_ambient_function = subst!(ambient_function);
 
-                    (
-                        ClosureTag {
-                            name,
-                            ambient_function: new_ambient_function,
-                        },
-                        new_captures,
-                    )
+                    (ClosureTag { name }, new_captures)
                 }
                 FunctionOrTagUnion(symbol, ext_openness) => {
                     let ext = self.get_type_arguments(typ);
@@ -1340,10 +1328,7 @@ mod debug_types {
                     .nest(2)
                 )
             }
-            TypeTag::ClosureTag {
-                name,
-                ambient_function,
-            } => {
+            TypeTag::ClosureTag { name } => {
                 let captures = types.get_type_arguments(tag);
                 f.text("[")
                     .append(
@@ -1354,7 +1339,6 @@ mod debug_types {
                             f.text(" "),
                         ),
                     )
-                    .append(text!(f, ", ^{ambient_function:?}"))
                     .append(f.text("]"))
             }
             TypeTag::FunctionOrTagUnion(_, _) => {
@@ -1663,7 +1647,6 @@ pub enum Type {
     ClosureTag {
         name: Symbol,
         captures: Vec<Type>,
-        ambient_function: Variable,
     },
     UnspecializedLambdaSet {
         unspecialized: Uls,
@@ -1735,14 +1718,9 @@ impl Clone for Type {
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
                 Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
             }
-            Self::ClosureTag {
-                name,
-                captures,
-                ambient_function,
-            } => Self::ClosureTag {
+            Self::ClosureTag { name, captures } => Self::ClosureTag {
                 name: *name,
                 captures: captures.clone(),
-                ambient_function: *ambient_function,
             },
             Self::UnspecializedLambdaSet { unspecialized } => Self::UnspecializedLambdaSet {
                 unspecialized: *unspecialized,
@@ -2093,11 +2071,7 @@ impl fmt::Debug for Type {
                     }
                 }
             }
-            Type::ClosureTag {
-                name,
-                captures,
-                ambient_function: _,
-            } => {
+            Type::ClosureTag { name, captures } => {
                 write!(f, "ClosureTag(")?;
 
                 write!(f, "{name:?}, ")?;
@@ -2188,11 +2162,7 @@ impl Type {
                     stack.push(closure);
                     stack.push(ret);
                 }
-                ClosureTag {
-                    name: _,
-                    captures,
-                    ambient_function: _,
-                } => stack.extend(captures),
+                ClosureTag { name: _, captures } => stack.extend(captures),
                 TagUnion(tags, ext) => {
                     for (_, args) in tags {
                         stack.extend(args.iter_mut());
@@ -2317,11 +2287,7 @@ impl Type {
                     stack.push(closure);
                     stack.push(ret);
                 }
-                ClosureTag {
-                    name: _,
-                    captures,
-                    ambient_function: _,
-                } => {
+                ClosureTag { name: _, captures } => {
                     stack.extend(captures);
                 }
                 TagUnion(tags, ext) => {
@@ -2617,11 +2583,9 @@ impl Type {
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
             }
             FunctionOrTagUnion(_, _, ext) => Self::contains_variable_ext(ext, rep_variable),
-            ClosureTag {
-                name: _,
-                captures,
-                ambient_function: _,
-            } => captures.iter().any(|t| t.contains_variable(rep_variable)),
+            ClosureTag { name: _, captures } => {
+                captures.iter().any(|t| t.contains_variable(rep_variable))
+            }
             UnspecializedLambdaSet {
                 unspecialized: Uls(v, _, _),
             } => *v == rep_variable,
@@ -3067,11 +3031,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(ext, accum);
             }
         }
-        ClosureTag {
-            name: _,
-            captures,
-            ambient_function: _,
-        } => {
+        ClosureTag { name: _, captures } => {
             for t in captures {
                 variables_help(t, accum);
             }
@@ -3201,11 +3161,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(ext, accum);
             }
         }
-        ClosureTag {
-            name: _,
-            captures,
-            ambient_function: _,
-        } => {
+        ClosureTag { name: _, captures } => {
             for t in captures {
                 variables_help_detailed(t, accum);
             }
@@ -4432,11 +4388,7 @@ fn instantiate_lambda_sets_as_unspecialized(
             Type::FunctionOrTagUnion(_, _, ext) => {
                 stack.extend(ext.iter_mut());
             }
-            Type::ClosureTag {
-                name: _,
-                captures,
-                ambient_function: _,
-            } => {
+            Type::ClosureTag { name: _, captures } => {
                 stack.extend(captures.iter_mut().rev());
             }
             Type::UnspecializedLambdaSet { .. } => {

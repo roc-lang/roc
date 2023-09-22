@@ -280,7 +280,27 @@ pub(crate) enum AnnotationFor {
     Opaque,
 }
 
-/// Canonicalizes a top-level type annotation.
+pub(crate) fn canonicalize_well_known_lambda_annotation(
+    env: &mut Env,
+    scope: &mut Scope,
+    annotation: &TypeAnnotation,
+    region: Region,
+    var_store: &mut VarStore,
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
+    well_known_lambda_name: Symbol,
+) -> Annotation {
+    canonicalize_annotation_help(
+        env,
+        scope,
+        annotation,
+        region,
+        var_store,
+        pending_abilities_in_scope,
+        AnnotationFor::Value,
+        Some(well_known_lambda_name),
+    )
+}
+
 pub(crate) fn canonicalize_annotation(
     env: &mut Env,
     scope: &mut Scope,
@@ -289,6 +309,30 @@ pub(crate) fn canonicalize_annotation(
     var_store: &mut VarStore,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     annotation_for: AnnotationFor,
+) -> Annotation {
+    canonicalize_annotation_help(
+        env,
+        scope,
+        annotation,
+        region,
+        var_store,
+        pending_abilities_in_scope,
+        annotation_for,
+        None,
+    )
+}
+
+/// Canonicalizes a top-level type annotation.
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_annotation_help(
+    env: &mut Env,
+    scope: &mut Scope,
+    annotation: &TypeAnnotation,
+    region: Region,
+    var_store: &mut VarStore,
+    pending_abilities_in_scope: &PendingAbilitiesInScope,
+    annotation_for: AnnotationFor,
+    well_known_lambda_name: Option<Symbol>,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
     let mut references = VecSet::default();
@@ -336,6 +380,7 @@ pub(crate) fn canonicalize_annotation(
         region,
         scope,
         var_store,
+        well_known_lambda_name,
         &mut introduced_variables,
         &mut aliases,
         &mut references,
@@ -535,6 +580,7 @@ fn can_annotation_help(
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
+    _well_known_lambda_name: Option<Symbol>,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
@@ -553,6 +599,7 @@ fn can_annotation_help(
                     arg.region,
                     scope,
                     var_store,
+                    None,
                     introduced_variables,
                     local_aliases,
                     references,
@@ -568,14 +615,23 @@ fn can_annotation_help(
                 return_type.region,
                 scope,
                 var_store,
+                None,
                 introduced_variables,
                 local_aliases,
                 references,
             );
 
+            //TODO(bind-closure-tag)
+            //let closure = if let Some(well_known_lambda_name) = well_known_lambda_name {
+            //    Type::ClosureTag {
+            //        name: well_known_lambda_name,
+            //        captures: args.clone(),
+            //    }
+            //} else {
             let lambda_set = var_store.fresh();
             introduced_variables.insert_lambda_set(lambda_set);
             let closure = Type::Variable(lambda_set);
+            //};
 
             Type::Function(args, Box::new(closure), Box::new(ret))
         }
@@ -616,6 +672,7 @@ fn can_annotation_help(
                     arg.region,
                     scope,
                     var_store,
+                    None,
                     introduced_variables,
                     local_aliases,
                     references,
@@ -737,6 +794,7 @@ fn can_annotation_help(
                 region,
                 scope,
                 var_store,
+                None,
                 introduced_variables,
                 local_aliases,
                 references,
@@ -1006,6 +1064,7 @@ fn can_annotation_help(
             region,
             scope,
             var_store,
+            None,
             introduced_variables,
             local_aliases,
             references,
@@ -1164,6 +1223,7 @@ fn can_extension_type(
                 loc_ann.region,
                 scope,
                 var_store,
+                None,
                 introduced_variables,
                 local_aliases,
                 references,
@@ -1361,6 +1421,7 @@ fn can_assigned_fields<'a>(
                         annotation.region,
                         scope,
                         var_store,
+                        None,
                         introduced_variables,
                         local_aliases,
                         references,
@@ -1379,6 +1440,7 @@ fn can_assigned_fields<'a>(
                         annotation.region,
                         scope,
                         var_store,
+                        None,
                         introduced_variables,
                         local_aliases,
                         references,
@@ -1460,6 +1522,7 @@ fn can_assigned_tuple_elems(
             loc_elem.region,
             scope,
             var_store,
+            None,
             introduced_variables,
             local_aliases,
             references,
@@ -1510,6 +1573,7 @@ fn can_tags<'a>(
                             arg.region,
                             scope,
                             var_store,
+                            None,
                             introduced_variables,
                             local_aliases,
                             references,

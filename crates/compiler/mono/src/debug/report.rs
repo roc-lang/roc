@@ -550,16 +550,16 @@ where
     let args = f.intersperse(
         arguments
             .iter()
-            .map(|a| interner.to_doc(*a, f, &mut Default::default(), Parens::InFunction)),
+            .map(|a| format!("{:?}", interner.dbg_deep(*a))),
         f.reflow(", "),
     );
     let fun = f.concat([
         f.concat([f.reflow("("), args, f.reflow(")")]),
         f.reflow(" -> "),
-        interner.to_doc_top(result, f),
+        f.text(format!("{:?}", interner.dbg_deep(result))),
     ]);
     let niche = (f.text("("))
-        .append(captures_niche.to_doc(f, interner, &mut Default::default()))
+        .append(format!("{:?}", captures_niche.dbg_deep(interner)))
         .append(f.text(")"));
     f.concat([fun, f.space(), niche])
 }

@@ -2288,6 +2288,7 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_serialize",
+ "roc_tracing",
  "roc_types",
  "static_assertions",
  "ven_pretty",
@@ -2395,6 +2396,7 @@ dependencies = [
  "roc_parse",
  "roc_problem",
  "roc_region",
+ "roc_tracing",
  "roc_types",
 ]
 
@@ -3010,6 +3012,7 @@ dependencies = [
  "roc_solve_problem",
  "roc_solve_schema",
  "roc_target",
+ "roc_tracing",
  "roc_types",
  "roc_unify",
  "tempfile",
@@ -4058,6 +4061,7 @@ dependencies = [
  "roc_reporting",
  "roc_solve",
  "roc_target",
+ "roc_tracing",
  "tempfile",
  "test_solve_helpers",
 ]

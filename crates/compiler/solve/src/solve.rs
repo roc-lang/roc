@@ -599,6 +599,8 @@ fn solve(
                         };
                         let expectation = &env.constraints.expectations[expectation_index.index()];
 
+                        roc_tracing::debug!(symbol=?symbol, actual=?env.subs.dbg(actual), "lookup");
+
                         let expected = either_type_index_to_var(
                             env,
                             rank,

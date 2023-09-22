@@ -16,6 +16,7 @@ roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_region = { path = "../region" }
 roc_serialize = { path = "../serialize" }
+roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
 
 ven_pretty = { path = "../../vendor/pretty" }

@@ -63,6 +63,28 @@ pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
 pub type TypeOrVar = EitherIndex<TypeTag, Variable>;
 
+pub const fn variable_to_type_or_var(variable: Variable) -> TypeOrVar {
+    // that's right, we use the variable's integer value as the index
+    // that way, we don't need to push anything onto a vector
+    let index: Index<Variable> = Index::new(variable.index());
+
+    EitherIndex::from_right(index)
+}
+
+pub const fn variable_index_to_variable(index: Index<Variable>) -> Variable {
+    // we cheat, and  store the variable directly in the index
+    unsafe { Variable::from_index(index.index() as _) }
+}
+
+// TODO: ideally we get rid of this, and replace Index<TypeTag> with TypeOrVar across the
+// board.
+pub fn type_or_var_to_type(types: &mut Types, typ: TypeOrVar) -> Index<TypeTag> {
+    match typ.split() {
+        Ok(typ) => typ,
+        Err(var) => types.variable(variable_index_to_variable(var)),
+    }
+}
+
 impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
@@ -197,11 +219,7 @@ impl Constraints {
 
     #[inline(always)]
     const fn push_type_variable(var: Variable) -> TypeOrVar {
-        // that's right, we use the variable's integer value as the index
-        // that way, we don't need to push anything onto a vector
-        let index: Index<Variable> = Index::new(var.index());
-
-        EitherIndex::from_right(index)
+        variable_to_type_or_var(var)
     }
 
     pub fn push_expected_type(&mut self, expected: Expected<TypeOrVar>) -> ExpectedTypeIndex {
