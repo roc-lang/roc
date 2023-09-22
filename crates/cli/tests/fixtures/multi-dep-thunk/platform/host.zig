@@ -11,6 +11,7 @@ const Allocator = mem.Allocator;
 
 extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
 
+const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*anyopaque;
 extern fn realloc(c_ptr: [*]align(@alignOf(u128)) u8, size: usize) callconv(.C) ?*anyopaque;
 extern fn free(c_ptr: [*]align(@alignOf(u128)) u8) callconv(.C) void;
@@ -25,12 +26,12 @@ export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
 export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     _ = old_size;
     _ = alignment;
-    return realloc(@alignCast(16, @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
-    free(@alignCast(16, @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
@@ -41,7 +42,7 @@ export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     const stderr = std.io.getStdErr().writer();
-    const msg = @ptrCast([*:0]const u8, c_ptr);
+    const msg = @as([*:0]const u8, @ptrCast(c_ptr));
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
 }
@@ -91,7 +92,7 @@ pub export fn main() i32 {
     roc__mainForHost_1_exposed_generic(&callresult);
 
     const nanos = timer.read();
-    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
+    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
     // stdout the result
     stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
@@ -104,5 +105,5 @@ pub export fn main() i32 {
 }
 
 fn to_seconds(tms: std.os.timespec) f64 {
-    return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
+    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }

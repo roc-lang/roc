@@ -32,7 +32,7 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
-    return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
@@ -41,14 +41,14 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
-    free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
 export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     const stderr = std.io.getStdErr().writer();
-    const msg = @ptrCast([*:0]const u8, c_ptr);
+    const msg = @as([*:0]const u8, @ptrCast(c_ptr));
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
 }
@@ -111,7 +111,7 @@ pub fn main() u8 {
     roc__mainForHost_1_exposed_generic(&callresult);
 
     const nanos = timer.read();
-    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
+    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
     // stdout the result
     stdout.print("{s}", .{callresult.asSlice()}) catch unreachable;
