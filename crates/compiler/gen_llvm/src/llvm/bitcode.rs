@@ -22,7 +22,7 @@ use roc_mono::layout::{
 };
 
 use super::build::{create_entry_block_alloca, BuilderExt};
-use super::convert::zig_list_type;
+use super::convert::{zig_list_type, zig_str_type};
 use super::struct_::struct_from_fields;
 
 pub fn call_bitcode_fn<'ctx>(
@@ -732,6 +732,26 @@ impl<'ctx> BitcodeReturnValue<'ctx> {
             BitcodeReturnValue::Basic => call_bitcode_fn(env, arguments, fn_name),
         }
     }
+    fn call_and_load_wasm<'a, 'env>(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        arguments: &[BasicValueEnum<'ctx>],
+        fn_name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        match self {
+            BitcodeReturnValue::List(result) => {
+                call_void_bitcode_fn(env, arguments, fn_name);
+                env.builder
+                    .new_build_load(zig_list_type(env), *result, "load_list")
+            }
+            BitcodeReturnValue::Str(result) => {
+                call_void_bitcode_fn(env, arguments, fn_name);
+                env.builder
+                    .new_build_load(zig_str_type(env), *result, "load_list")
+            }
+            BitcodeReturnValue::Basic => call_bitcode_fn(env, arguments, fn_name),
+        }
+    }
 }
 
 pub(crate) enum BitcodeReturns {
@@ -787,6 +807,16 @@ impl BitcodeReturns {
             }
             BitcodeReturns::Basic => BitcodeReturnValue::Basic,
         }
+    }
+
+    fn return_value_wasm<'a, 'ctx>(
+        &self,
+        env: &Env<'a, 'ctx, '_>,
+        arguments: &mut bumpalo::collections::Vec<'a, BasicValueEnum<'ctx>>,
+    ) -> BitcodeReturnValue<'ctx> {
+        // Wasm follows 64bit despite being 32bit.
+        // This wrapper is just for clarity at call sites.
+        self.return_value_64bit(env, arguments)
     }
 
     fn call_and_load_32bit<'ctx>(
@@ -900,6 +930,42 @@ pub(crate) fn pass_list_to_zig_64bit<'ctx>(
     list_alloca
 }
 
+pub(crate) fn pass_list_to_zig_wasm<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    list: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let list_type = super::convert::zig_list_type(env);
+    let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
+
+    env.builder.new_build_store(list_alloca, list);
+
+    list_alloca
+}
+
+pub(crate) fn pass_string_to_zig_wasm<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    string: BasicValueEnum<'ctx>,
+) -> PointerValue<'ctx> {
+    let parent = env
+        .builder
+        .get_insert_block()
+        .and_then(|b| b.get_parent())
+        .unwrap();
+
+    let string_type = super::convert::zig_str_type(env);
+    let string_alloca = create_entry_block_alloca(env, parent, string_type.into(), "string_alloca");
+
+    env.builder.new_build_store(string_alloca, string);
+
+    string_alloca
+}
+
 fn pass_string_to_zig_64bit<'ctx>(
     _env: &Env<'_, 'ctx, '_>,
     string: BasicValueEnum<'ctx>,
@@ -958,9 +1024,10 @@ pub(crate) fn call_str_bitcode_fn<'ctx>(
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
     use bumpalo::collections::Vec;
+    use roc_target::Architecture::*;
 
-    match env.target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => {
+    match env.target_info.architecture {
+        Aarch32 | X86_32 => {
             let mut arguments: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(other_arguments.len() + 2 * strings.len(), env.arena);
 
@@ -974,7 +1041,7 @@ pub(crate) fn call_str_bitcode_fn<'ctx>(
 
             returns.call_and_load_32bit(env, &arguments, fn_name)
         }
-        roc_target::PtrWidth::Bytes8 => {
+        X86_64 | Aarch64 => {
             let capacity = other_arguments.len() + strings.len() + returns.additional_arguments();
             let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
 
@@ -988,6 +1055,20 @@ pub(crate) fn call_str_bitcode_fn<'ctx>(
 
             return_value.call_and_load_64bit(env, &arguments, fn_name)
         }
+        Wasm32 => {
+            let capacity = other_arguments.len() + strings.len() + returns.additional_arguments();
+            let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
+
+            let return_value = returns.return_value_wasm(env, &mut arguments);
+
+            for string in strings {
+                arguments.push(pass_string_to_zig_wasm(env, *string).into());
+            }
+
+            arguments.extend(other_arguments);
+
+            return_value.call_and_load_wasm(env, &arguments, fn_name)
+        }
     }
 }
 
@@ -999,9 +1080,10 @@ pub(crate) fn call_list_bitcode_fn<'ctx>(
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
     use bumpalo::collections::Vec;
+    use roc_target::Architecture::*;
 
-    match env.target_info.ptr_width() {
-        roc_target::PtrWidth::Bytes4 => {
+    match env.target_info.architecture {
+        Aarch32 | X86_32 => {
             let mut arguments: Vec<BasicValueEnum> =
                 Vec::with_capacity_in(other_arguments.len() + 2 * lists.len(), env.arena);
 
@@ -1015,7 +1097,7 @@ pub(crate) fn call_list_bitcode_fn<'ctx>(
 
             returns.call_and_load_32bit(env, &arguments, fn_name)
         }
-        roc_target::PtrWidth::Bytes8 => {
+        X86_64 | Aarch64 => {
             let capacity = other_arguments.len() + lists.len() + returns.additional_arguments();
             let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
 
@@ -1028,6 +1110,20 @@ pub(crate) fn call_list_bitcode_fn<'ctx>(
             arguments.extend(other_arguments);
 
             return_value.call_and_load_64bit(env, &arguments, fn_name)
+        }
+        Wasm32 => {
+            let capacity = other_arguments.len() + lists.len() + returns.additional_arguments();
+            let mut arguments: Vec<BasicValueEnum> = Vec::with_capacity_in(capacity, env.arena);
+
+            let return_value = returns.return_value_wasm(env, &mut arguments);
+
+            for list in lists {
+                arguments.push(pass_list_to_zig_wasm(env, (*list).into()).into());
+            }
+
+            arguments.extend(other_arguments);
+
+            return_value.call_and_load_wasm(env, &arguments, fn_name)
         }
     }
 }

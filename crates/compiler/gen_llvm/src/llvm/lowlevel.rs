@@ -26,7 +26,7 @@ use crate::llvm::{
     bitcode::{
         call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
         call_str_bitcode_fn, call_void_bitcode_fn, pass_list_or_string_to_zig_32bit,
-        BitcodeReturns,
+        pass_string_to_zig_wasm, BitcodeReturns,
     },
     build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
@@ -220,8 +220,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 _ => unreachable!(),
             };
 
-            let result = match env.target_info.ptr_width() {
-                PtrWidth::Bytes4 => {
+            use roc_target::Architecture::*;
+            let result = match env.target_info.architecture {
+                Aarch32 | X86_32 => {
                     let zig_function = env.module.get_function(intrinsic).unwrap();
                     let zig_function_type = zig_function.get_type();
 
@@ -286,7 +287,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         }
                     }
                 }
-                PtrWidth::Bytes8 => {
+                Aarch64 | X86_64 => {
                     let (type_name, width) = {
                         match layout_interner.get_repr(number_layout) {
                             LayoutRepr::Builtin(Builtin::Int(int_width)) => {
@@ -331,6 +332,52 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     } else {
                         call_bitcode_fn(env, &[string], intrinsic)
                     }
+                }
+                Wasm32 => {
+                    let return_type_name = match layout_interner.get_repr(number_layout) {
+                        LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width.type_name(),
+                        LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width.type_name(),
+                        LayoutRepr::Builtin(Builtin::Decimal) => {
+                            // zig picks 128 for dec.RocDec
+                            "i128"
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let return_type = zig_num_parse_result_type(env, return_type_name);
+
+                    let zig_return_alloca =
+                        create_entry_block_alloca(env, parent, return_type.into(), "str_to_num");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            zig_return_alloca.into(),
+                            pass_string_to_zig_wasm(env, string).into(),
+                        ],
+                        intrinsic,
+                    );
+
+                    let roc_return_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .ptr_type(AddressSpace::default());
+
+                    let roc_return_alloca = env.builder.new_build_pointer_cast(
+                        zig_return_alloca,
+                        roc_return_type,
+                        "cast_to_roc",
+                    );
+
+                    load_roc_value(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                        roc_return_alloca,
+                        "str_to_num_result",
+                    )
                 }
             };
 
@@ -391,8 +438,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .builder
                 .new_build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
-            match env.target_info.ptr_width() {
-                PtrWidth::Bytes4 => {
+            use roc_target::Architecture::*;
+            match env.target_info.architecture {
+                Aarch32 | X86_32 => {
                     arguments!(list, start, count);
                     let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
 
@@ -409,7 +457,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_FROM_UTF8_RANGE,
                     );
                 }
-                PtrWidth::Bytes8 => {
+                Aarch64 | X86_64 | Wasm32 => {
                     arguments!(_list, start, count);
 
                     // we use the symbol here instead
@@ -516,9 +564,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let roc_return_type =
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
+            use roc_target::Architecture::*;
             use roc_target::OperatingSystem::*;
-            match env.target_info.operating_system {
-                Windows => {
+            match env.target_info {
+                TargetInfo {
+                    operating_system: Windows,
+                    ..
+                } => {
                     let result = env.builder.new_build_alloca(
                         BasicTypeEnum::try_from(roc_return_type).unwrap(),
                         "result",
@@ -539,7 +591,38 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     env.builder
                         .new_build_load(roc_return_type, cast_result, "load_result")
                 }
-                Unix => {
+                TargetInfo {
+                    architecture: Wasm32,
+                    ..
+                } => {
+                    let result = env.builder.new_build_alloca(
+                        BasicTypeEnum::try_from(roc_return_type).unwrap(),
+                        "result",
+                    );
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            result.into(),
+                            pass_string_to_zig_wasm(env, string).into(),
+                            index,
+                        ],
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    let cast_result = env.builder.new_build_pointer_cast(
+                        result,
+                        roc_return_type.ptr_type(AddressSpace::default()),
+                        "cast",
+                    );
+
+                    env.builder
+                        .new_build_load(roc_return_type, cast_result, "load_result")
+                }
+                TargetInfo {
+                    operating_system: Unix,
+                    ..
+                } => {
                     let result = call_str_bitcode_fn(
                         env,
                         &[string],
@@ -558,7 +641,10 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     env.builder
                         .new_build_load(roc_return_type, alloca, "to_roc_record")
                 }
-                Wasi => unimplemented!(),
+                TargetInfo {
+                    operating_system: Wasi,
+                    ..
+                } => unimplemented!(),
             }
         }
         StrCountUtf8Bytes => {
@@ -2046,6 +2132,16 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
                 bitcode::DEC_TO_STR,
             )
         }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_str_bitcode_fn(
+            env,
+            &[],
+            &[dec.into()],
+            BitcodeReturns::Str,
+            bitcode::DEC_TO_STR,
+        ),
         _ => call_str_bitcode_fn(
             env,
             &[],
@@ -2073,6 +2169,10 @@ fn dec_unary_op<'ctx>(
             let (low, high) = dec_split_into_words(env, dec);
             call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
         }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[dec.into()], fn_name),
         _ => call_bitcode_fn(env, &[dec_alloca(env, dec).into()], fn_name),
     }
 }
@@ -2108,6 +2208,16 @@ fn dec_binop_with_overflow<'ctx>(
                     rhs_low.into(),
                     rhs_high.into(),
                 ],
+                fn_name,
+            );
+        }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => {
+            call_void_bitcode_fn(
+                env,
+                &[return_alloca.into(), lhs.into(), rhs.into()],
                 fn_name,
             );
         }
@@ -2159,6 +2269,10 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
                 fn_name,
             )
         }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
         _ => call_bitcode_fn(
             env,
             &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
