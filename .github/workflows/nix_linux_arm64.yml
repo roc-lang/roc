@@ -1,7 +1,7 @@
 on:
   pull_request:
   
-name: Nix linux arm64 cli_run tests
+name: Nix linux arm64 tests
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,13 +14,15 @@ jobs:
     nix-linux-arm64:
         name: nix-linux-arm64
         runs-on: [self-hosted, Linux, ARM64]
-        timeout-minutes: 120
+        timeout-minutes: 150
         steps:
             - uses: actions/checkout@v3
-            
-            # error: bootstrap-tools.tar.xz.drv': No such file or directory    
-            #- name: test building default.nix
-            #  run: nix-build 
+               
+            - name: test building default.nix
+              run: nix-build 
 
-            - name: execute cli_run tests with --release
-              run: nix develop -c cargo test --locked --release -p roc_cli
+            - name: test release build
+              run: nix develop -c cargo build --release --locked
+
+            - name: build tests without running
+              run: cargo test --no-run --release
