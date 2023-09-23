@@ -646,6 +646,10 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
     fn fibonacci() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -1350,6 +1354,10 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
