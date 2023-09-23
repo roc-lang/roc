@@ -154,7 +154,7 @@
             ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
-            1; # to run the editor with NVIDIA's closed source drivers
+            1; # to run the GUI examples with NVIDIA's closed source drivers
           
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
