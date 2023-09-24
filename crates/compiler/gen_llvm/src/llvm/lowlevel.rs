@@ -1,7 +1,7 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, BasicTypeEnum, IntType},
+    types::{BasicType, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
         StructValue,
@@ -571,10 +571,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     operating_system: Windows,
                     ..
                 } => {
-                    let result = env.builder.new_build_alloca(
-                        BasicTypeEnum::try_from(roc_return_type).unwrap(),
-                        "result",
-                    );
+                    let result = env.builder.new_build_alloca(roc_return_type, "result");
 
                     call_void_bitcode_fn(
                         env,
@@ -595,10 +592,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     architecture: Wasm32,
                     ..
                 } => {
-                    let result = env.builder.new_build_alloca(
-                        BasicTypeEnum::try_from(roc_return_type).unwrap(),
-                        "result",
-                    );
+                    let result = env.builder.new_build_alloca(roc_return_type, "result");
 
                     call_void_bitcode_fn(
                         env,
@@ -2105,7 +2099,6 @@ fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValu
             env.builder.new_build_store(ptr, value);
             env.builder
                 .new_build_load(i64_type.array_type(2), alloca, "load as array")
-                .into()
         }
         Wasi => unimplemented!(),
     }
@@ -2145,7 +2138,7 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
         _ => call_str_bitcode_fn(
             env,
             &[],
-            &[dec_alloca(env, dec).into()],
+            &[dec_alloca(env, dec)],
             BitcodeReturns::Str,
             bitcode::DEC_TO_STR,
         ),
@@ -2173,7 +2166,7 @@ fn dec_unary_op<'ctx>(
             architecture: Wasm32,
             operating_system: Unix,
         } => call_bitcode_fn(env, &[dec.into()], fn_name),
-        _ => call_bitcode_fn(env, &[dec_alloca(env, dec).into()], fn_name),
+        _ => call_bitcode_fn(env, &[dec_alloca(env, dec)], fn_name),
     }
 }
 
@@ -2226,8 +2219,8 @@ fn dec_binop_with_overflow<'ctx>(
                 env,
                 &[
                     return_alloca.into(),
-                    dec_alloca(env, lhs).into(),
-                    dec_alloca(env, rhs).into(),
+                    dec_alloca(env, lhs),
+                    dec_alloca(env, rhs),
                 ],
                 fn_name,
             );
@@ -2273,11 +2266,7 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
             architecture: Wasm32,
             operating_system: Unix,
         } => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
-        _ => call_bitcode_fn(
-            env,
-            &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
-            fn_name,
-        ),
+        _ => call_bitcode_fn(env, &[dec_alloca(env, lhs), dec_alloca(env, rhs)], fn_name),
     }
 }
 

@@ -233,7 +233,7 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    fn peek_custom_section<'b>(
+    fn peek_custom_section(
         arena: &'a Bump,
         module_bytes: &[u8],
         immutable_cursor: usize,
