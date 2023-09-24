@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const Build = std.Build;
 const LazyPath = Build.LazyPath;
@@ -23,6 +24,7 @@ pub fn build(b: *Build) void {
     const host_target = b.standardTargetOptions(.{
         .default_target = CrossTarget{
             .cpu_model = .baseline,
+            .os_tag = builtin.os.tag,
         },
     });
     const linux32_target = makeLinux32Target();
