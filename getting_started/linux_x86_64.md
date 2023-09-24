@@ -10,11 +10,12 @@ which includes the Roc compiler and some helpful utilities.
 1. Untar the archive:
 
     ```sh
-    tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
+    tar -xf roc_nightly-linux_x86_64-latest.tar.gz
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+
     ```sh
     export PATH=$PATH:~/path/to/roc_nightly-linux_x86_64-<VERSION>
     ```
