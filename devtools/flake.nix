@@ -4,11 +4,11 @@
   inputs = {
     # change this path to the path of your roc folder
     roc.url = "path:/home/username/gitrepos/roc";
-    # to easily make configs for multiple architectures
-    flake-utils.url = "github:numtide/flake-utils";
   };
   outputs = { self, roc, flake-utils }:
-    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
+    let
+      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      flake-utils = roc.inputs.flake-utils;
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import roc.inputs.nixpkgs {
@@ -45,10 +45,12 @@
           inputsFrom = [ rocShell ];
 
           # env vars
-          LLVM_SYS_130_PREFIX = rocShell.LLVM_SYS_130_PREFIX;
           NIX_GLIBC_PATH = rocShell.NIX_GLIBC_PATH;
           LD_LIBRARY_PATH = rocShell.LD_LIBRARY_PATH;
           NIXPKGS_ALLOW_UNFREE = rocShell.NIXPKGS_ALLOW_UNFREE;
+
+          # to set the LLVM_SYS_<VERSION>_PREFIX
+          shellHook = rocShell.shellHook;
         };
       });
 }
