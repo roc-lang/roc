@@ -17,7 +17,6 @@ jobs:
     timeout-minutes: 90
     env:
       RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
-      ROC_ZIG: /home/small-ci-user/Downloads/zig-linux-x86_64-0.11.0/zig
     steps:
       - uses: actions/checkout@v3
 
@@ -27,8 +26,6 @@ jobs:
       - name: Update PATH to use zig 11
         run: |
           echo "PATH=/home/small-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
-
-      - run: echo $PATH
       
       - run: zig version
 

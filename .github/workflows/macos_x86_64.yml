@@ -9,6 +9,7 @@ concurrency:
 
 env:
   RUST_BACKTRACE: 1
+  LLVM_SYS_160_PREFIX: $(brew --prefix llvm)
 
 jobs:
   test-rust-macos-x86-64:
@@ -16,13 +17,14 @@ jobs:
     timeout-minutes: 90
     env:
       RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
-      ROC_ZIG: /Users/username1/Downloads/zig-macos-x86_64-0.11.0/zig
     steps:
       - uses: actions/checkout@v3
 
-      - run: |
-         zig version
-         $ROC_ZIG version
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+    
+      - run: zig version
 
       - name: test_gen llvm tests
         run: cargo nextest-gen-llvm --release --no-fail-fast --locked -E "package(test_gen) - test(gen_str::str_append_scalar)"

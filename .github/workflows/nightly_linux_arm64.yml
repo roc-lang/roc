@@ -10,15 +10,15 @@ jobs:
     name: build and package nightly release
     runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 90
-    env:
-      ROC_ZIG: /home/username/Downloads/zig-linux-aarch64-0.11.0/zig
 
     steps:
       - uses: actions/checkout@v3
 
-      - run: |
-         zig version
-         $ROC_ZIG version
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/home/username/Downloads/zig-linux-aarch64-0.11.0:$PATH" >> $GITHUB_ENV
+      
+      - run: zig version
 
       - name: create version.txt
         run: ./ci/write_version.sh
