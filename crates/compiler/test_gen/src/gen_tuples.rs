@@ -572,15 +572,14 @@ fn alignment_in_tuple() {
 fn tuple_length_polymorphism() {
     assert_evals_to!(
         indoc!(
-            r#"
-            a = (42, 43)
-            b = (1, 2, 44)
+            r"a = (42, 43)
+b = (1, 2, 44)
 
-            f : (I64, I64)a, (I64, I64)b -> I64
-            f = \(x1, x2), (x3, x4) -> x1 + x2 + x3 + x4
+f : (I64, I64)a, (I64, I64)b -> I64
+f = \(x1, x2), (x3, x4) -> x1 + x2 + x3 + x4
 
-            f a b
-            "#
+f a b
+"
         ),
         88,
         i64

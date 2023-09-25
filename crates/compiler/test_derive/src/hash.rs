@@ -149,14 +149,14 @@ fn derivable_tag_with_tag_ext() {
 #[test]
 fn empty_record() {
     derive_test(Hash, v!(EMPTY_RECORD), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for {}
         # hasher, {} -[[hash_{}(0)]]-> hasher where hasher implements Hasher
         # hasher, {} -[[hash_{}(0)]]-> hasher where hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_{}(0)]]
         #Derived.hash_{} = \#Derived.hasher, #Derived.rcd -> #Derived.hasher
-        "###
+        "
         )
     })
 }
@@ -164,14 +164,14 @@ fn empty_record() {
 #[test]
 fn zero_field_record() {
     derive_test(Hash, v!({}), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for {}
         # hasher, {} -[[hash_{}(0)]]-> hasher where hasher implements Hasher
         # hasher, {} -[[hash_{}(0)]]-> hasher where hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_{}(0)]]
         #Derived.hash_{} = \#Derived.hasher, #Derived.rcd -> #Derived.hasher
-        "###
+        "
         )
     })
 }
@@ -179,7 +179,7 @@ fn zero_field_record() {
 #[test]
 fn one_field_record() {
     derive_test(Hash, v!({ a: v!(U8), }), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for { a : U8 }
         # hasher, { a : a } -[[hash_{a}(0)]]-> hasher where a implements Hash, hasher implements Hasher
         # hasher, { a : a } -[[hash_{a}(0)]]-> hasher where a implements Hash, hasher implements Hasher
@@ -187,7 +187,7 @@ fn one_field_record() {
         #   @<1>: [[hash_{a}(0)]]
         #Derived.hash_{a} =
           \#Derived.hasher, #Derived.rcd -> hash #Derived.hasher #Derived.rcd.a
-        "###
+        "
         )
     })
 }
@@ -195,7 +195,7 @@ fn one_field_record() {
 #[test]
 fn two_field_record() {
     derive_test(Hash, v!({ a: v!(U8), b: v!(STR), }), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for { a : U8, b : Str }
         # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher where a implements Hash, a1 implements Hash, hasher implements Hasher
         # hasher, { a : a, b : a1 } -[[hash_{a,b}(0)]]-> hasher where a implements Hash, a1 implements Hash, hasher implements Hasher
@@ -204,7 +204,7 @@ fn two_field_record() {
         #Derived.hash_{a,b} =
           \#Derived.hasher, #Derived.rcd ->
             hash (hash #Derived.hasher #Derived.rcd.a) #Derived.rcd.b
-        "###
+        "
         )
     })
 }
@@ -212,7 +212,7 @@ fn two_field_record() {
 #[test]
 fn two_element_tuple() {
     derive_test(Hash, v!((v!(U8), v!(STR),)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for ( U8, Str )*
         # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher where a implements Hash, a1 implements Hash, hasher implements Hasher
         # hasher, ( a, a1 )* -[[hash_(arity:2)(0)]]-> hasher where a implements Hash, a1 implements Hash, hasher implements Hasher
@@ -221,7 +221,7 @@ fn two_element_tuple() {
         #Derived.hash_(arity:2) =
           \#Derived.hasher, #Derived.tup ->
             hash (hash #Derived.hasher #Derived.tup.0) #Derived.tup.1
-        "###
+        "
         )
     })
 }
@@ -229,14 +229,14 @@ fn two_element_tuple() {
 #[test]
 fn tag_one_label_no_payloads() {
     derive_test(Hash, v!([A]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [A]
         # hasher, [A] -[[hash_[A 0](0)]]-> hasher where hasher implements Hasher
         # hasher, [A] -[[hash_[A 0](0)]]-> hasher where hasher implements Hasher
         # Specialization lambda sets:
         #   @<1>: [[hash_[A 0](0)]]
         #Derived.hash_[A 0] = \#Derived.hasher, A -> #Derived.hasher
-        "###
+        "
         )
     })
 }
@@ -244,7 +244,7 @@ fn tag_one_label_no_payloads() {
 #[test]
 fn tag_one_label_newtype() {
     derive_test(Hash, v!([A v!(U8) v!(STR)]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [A U8 Str]
         # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher where a implements Hash, a1 implements Hash, hasher implements Hasher
         # hasher, [A a a1] -[[hash_[A 2](0)]]-> hasher where a implements Hash, a1 implements Hash, hasher implements Hasher
@@ -253,7 +253,7 @@ fn tag_one_label_newtype() {
         #Derived.hash_[A 2] =
           \#Derived.hasher, A #Derived.2 #Derived.3 ->
             hash (hash #Derived.hasher #Derived.2) #Derived.3
-        "###
+        "
         )
     })
 }
@@ -261,7 +261,7 @@ fn tag_one_label_newtype() {
 #[test]
 fn tag_two_labels() {
     derive_test(Hash, v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [A U8 Str U16, B Str]
         # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash, a3 implements Hash
         # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash, a3 implements Hash
@@ -275,7 +275,7 @@ fn tag_two_labels() {
                   (hash (hash (addU8 #Derived.hasher 0) #Derived.3) #Derived.4)
                   #Derived.5
               B #Derived.6 -> hash (addU8 #Derived.hasher 1) #Derived.6
-        "###
+        "
         )
     })
 }
@@ -283,7 +283,7 @@ fn tag_two_labels() {
 #[test]
 fn tag_two_labels_no_payloads() {
     derive_test(Hash, v!([A, B]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [A, B]
         # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a where a implements Hasher
         # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a where a implements Hasher
@@ -294,7 +294,7 @@ fn tag_two_labels_no_payloads() {
             when #Derived.union is
               A -> addU8 #Derived.hasher 0
               B -> addU8 #Derived.hasher 1
-        "###
+        "
         )
     })
 }
@@ -302,7 +302,7 @@ fn tag_two_labels_no_payloads() {
 #[test]
 fn recursive_tag_union() {
     derive_test(Hash, v!([Nil, Cons v!(U8) v!(^lst) ] as lst), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [Cons U8 $rec, Nil] as $rec
         # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash
         # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash
@@ -314,7 +314,7 @@ fn recursive_tag_union() {
               Cons #Derived.3 #Derived.4 ->
                 hash (hash (addU8 #Derived.hasher 0) #Derived.3) #Derived.4
               Nil -> addU8 #Derived.hasher 1
-        "###
+        "
         )
     })
 }

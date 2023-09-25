@@ -395,9 +395,8 @@ mod solve_expr {
     fn always_return_empty_record() {
         infer_eq(
             indoc!(
-                r#"
-                    \_ -> {}
-                "#
+                r"\_ -> {}
+"
             ),
             "* -> {}",
         );
@@ -407,9 +406,8 @@ mod solve_expr {
     fn two_arg_return_int() {
         infer_eq(
             indoc!(
-                r#"
-                    \_, _ -> 42
-                "#
+                r"\_, _ -> 42
+"
             ),
             "*, * -> Num *",
         );
@@ -461,11 +459,10 @@ mod solve_expr {
     fn def_1_arg_closure() {
         infer_eq(
             indoc!(
-                r#"
-                    fn = \_ -> {}
+                r"fn = \_ -> {}
 
-                    fn
-                "#
+fn
+"
             ),
             "* -> {}",
         );
@@ -516,9 +513,8 @@ mod solve_expr {
     fn applied_tag_function_list() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                [\x -> Bar x, Foo]
-                "#
+                r"[\x -> Bar x, Foo]
+"
             ),
             "List (a -> [Bar a, Foo a])",
         )
@@ -529,9 +525,8 @@ mod solve_expr {
     fn applied_tag_function_list_other_way() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                [Foo, \x -> Bar x]
-                "#
+                r"[Foo, \x -> Bar x]
+"
             ),
             "List (a -> [Bar a, Foo a])",
         )
@@ -542,17 +537,16 @@ mod solve_expr {
     fn applied_tag_function_record() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                foo0 = Foo
-                foo1 = Foo
-                foo2 = Foo
+                r"foo0 = Foo
+foo1 = Foo
+foo2 = Foo
 
-                {
-                    x: [foo0, Foo],
-                    y: [foo1, \x -> Foo x],
-                    z: [foo2, \x,y  -> Foo x y]
-                }
-                "#
+{
+    x: [foo0, Foo],
+    y: [foo1, \x -> Foo x],
+    z: [foo2, \x,y  -> Foo x y]
+}
+"
             ),
             "{ x : List [Foo], y : List (a -> [Foo a]), z : List (b, c -> [Foo b c]) }",
         )
@@ -578,11 +572,10 @@ mod solve_expr {
     fn def_2_arg_closure() {
         infer_eq(
             indoc!(
-                r#"
-                    func = \_, _ -> 42
+                r"func = \_, _ -> 42
 
-                    func
-                "#
+func
+"
             ),
             "*, * -> Num *",
         );
@@ -656,16 +649,15 @@ mod solve_expr {
     fn def_returning_closure() {
         infer_eq(
             indoc!(
-                r#"
-                    f = \z -> z
-                    g = \z -> z
+                r"f = \z -> z
+g = \z -> z
 
-                    (\x ->
-                        a = f x
-                        b = g x
-                        x
-                    )
-                "#
+(\x ->
+    a = f x
+    b = g x
+    x
+)
+"
             ),
             "a -> a",
         );
@@ -705,13 +697,12 @@ mod solve_expr {
     fn identity_infers_principal_type() {
         infer_eq(
             indoc!(
-                r#"
-                    identity = \x -> x
+                r"identity = \x -> x
 
-                    y = identity 5
+y = identity 5
 
-                    identity
-                "#
+identity
+"
             ),
             "a -> a",
         );
@@ -738,11 +729,10 @@ mod solve_expr {
     fn call_returns_list() {
         infer_eq(
             indoc!(
-                r#"
-                    enlist = \val -> [val]
+                r"enlist = \val -> [val]
 
-                    enlist 5
-                "#
+enlist 5
+"
             ),
             "List (Num *)",
         );
@@ -767,9 +757,8 @@ mod solve_expr {
     fn pizza_desugar() {
         infer_eq(
             indoc!(
-                r#"
-                    1 |> (\a -> a)
-                "#
+                r"1 |> (\a -> a)
+"
             ),
             "Num *",
         );
@@ -793,9 +782,8 @@ mod solve_expr {
     fn anonymous_identity() {
         infer_eq(
             indoc!(
-                r#"
-                    (\a -> a) 3.14
-                "#
+                r"(\a -> a) 3.14
+"
             ),
             "Frac *",
         );
@@ -805,9 +793,8 @@ mod solve_expr {
     fn identity_of_identity() {
         infer_eq(
             indoc!(
-                r#"
-                    (\val -> val) (\val -> val)
-                "#
+                r"(\val -> val) (\val -> val)
+"
             ),
             "a -> a",
         );
@@ -817,11 +804,10 @@ mod solve_expr {
     fn recursive_identity() {
         infer_eq(
             indoc!(
-                r#"
-                    identity = \val -> val
+                r"identity = \val -> val
 
-                    identity identity
-                "#
+identity identity
+"
             ),
             "a -> a",
         );
@@ -831,9 +817,8 @@ mod solve_expr {
     fn identity_function() {
         infer_eq(
             indoc!(
-                r#"
-                    \val -> val
-                "#
+                r"\val -> val
+"
             ),
             "a -> a",
         );
@@ -843,12 +828,11 @@ mod solve_expr {
     fn use_apply() {
         infer_eq(
             indoc!(
-                r#"
-                identity = \a -> a
-                apply = \f, x -> f x
+                r"identity = \a -> a
+apply = \f, x -> f x
 
-                apply identity 5
-                "#
+apply identity 5
+"
             ),
             "Num *",
         );
@@ -858,9 +842,8 @@ mod solve_expr {
     fn apply_function() {
         infer_eq(
             indoc!(
-                r#"
-                    \f, x -> f x
-                "#
+                r"\f, x -> f x
+"
             ),
             "(a -> b), a -> b",
         );
@@ -887,9 +870,8 @@ mod solve_expr {
     fn flip_function() {
         infer_eq(
             indoc!(
-                r#"
-                    \f -> (\a, b -> f b a)
-                "#
+                r"\f -> (\a, b -> f b a)
+"
             ),
             "(a, b -> c) -> (b, a -> c)",
         );
@@ -899,9 +881,8 @@ mod solve_expr {
     fn always_function() {
         infer_eq(
             indoc!(
-                r#"
-                    \val -> \_ -> val
-                "#
+                r"\val -> \_ -> val
+"
             ),
             "a -> (* -> a)",
         );
@@ -911,9 +892,8 @@ mod solve_expr {
     fn pass_a_function() {
         infer_eq(
             indoc!(
-                r#"
-                    \f -> f {}
-                "#
+                r"\f -> f {}
+"
             ),
             "({} -> a) -> a",
         );
@@ -1120,14 +1100,13 @@ mod solve_expr {
     fn record_with_bound_var() {
         infer_eq(
             indoc!(
-                r#"
-                    fn = \rec ->
-                        x = rec.x
+                r"fn = \rec ->
+    x = rec.x
 
-                        rec
+    rec
 
-                    fn
-                "#
+fn
+"
             ),
             "{ x : a }b -> { x : a }b",
         );
@@ -1137,12 +1116,11 @@ mod solve_expr {
     fn using_type_signature() {
         infer_eq(
             indoc!(
-                r#"
-                    bar : custom -> custom
-                    bar = \x -> x
+                r"bar : custom -> custom
+bar = \x -> x
 
-                    bar
-                "#
+bar
+"
             ),
             "custom -> custom",
         );
@@ -1199,15 +1177,14 @@ mod solve_expr {
     fn empty_record_pattern() {
         infer_eq(
             indoc!(
-                r#"
-                # technically, an empty record can be destructured
-                thunk = \{} -> 42
+                r"# technically, an empty record can be destructured
+thunk = \{} -> 42
 
-                xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
+xEmpty = if thunk {} == 42 then { x: {} } else { x: {} }
 
-                when xEmpty is
-                    { x: {} } -> {}
-                "#
+when xEmpty is
+    { x: {} } -> {}
+"
             ),
             "{}",
         );
@@ -1218,12 +1195,11 @@ mod solve_expr {
         // check that a closed record remains closed
         infer_eq(
             indoc!(
-                r#"
-                foo : { x : custom } -> custom
-                foo = \{ x } -> x
+                r"foo : { x : custom } -> custom
+foo = \{ x } -> x
 
-                foo
-            "#
+foo
+"
             ),
             "{ x : custom } -> custom",
         );
@@ -1259,9 +1235,8 @@ mod solve_expr {
     fn single_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"
-                    \Foo -> 42
-                "#
+                r"\Foo -> 42
+"
             ),
             "[Foo] -> Num *",
         );
@@ -1271,12 +1246,11 @@ mod solve_expr {
     fn two_tag_pattern() {
         infer_eq(
             indoc!(
-                r#"
-                    \x ->
-                        when x is
-                            True -> 1
-                            False -> 0
-                "#
+                r"\x ->
+    when x is
+        True -> 1
+        False -> 0
+"
             ),
             "[False, True] -> Num *",
         );
@@ -1298,13 +1272,12 @@ mod solve_expr {
     fn record_extraction() {
         infer_eq(
             indoc!(
-                r#"
-                    f = \x ->
-                        when x is
-                            { a, b: _ } -> a
+                r"f = \x ->
+    when x is
+        { a, b: _ } -> a
 
-                    f
-                "#
+f
+"
             ),
             "{ a : a, b : * }* -> a",
         );
@@ -1327,9 +1300,8 @@ mod solve_expr {
     fn tag_union_pattern_match() {
         infer_eq(
             indoc!(
-                r#"
-                    \Foo x -> Foo x
-                "#
+                r"\Foo x -> Foo x
+"
             ),
             "[Foo a] -> [Foo a]",
         );
@@ -2237,14 +2209,13 @@ mod solve_expr {
     fn num_identity() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    numIdentity : Num.Num a -> Num.Num a
-                    numIdentity = \x -> x
+                r"numIdentity : Num.Num a -> Num.Num a
+numIdentity = \x -> x
 
-                    y = numIdentity 3.14
+y = numIdentity 3.14
 
-                    { numIdentity, x : numIdentity 42, y }
-                "#
+{ numIdentity, x : numIdentity 42, y }
+"
             ),
             "{ numIdentity : Num a -> Num a, x : Num *, y : Frac * }",
         );
@@ -2273,14 +2244,13 @@ mod solve_expr {
     fn integer_sum() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    f = \n ->
-                        when n is
-                            0 -> 0
-                            _ -> f n
+                r"f = \n ->
+    when n is
+        0 -> 0
+        _ -> f n
 
-                    f
-                "#
+f
+"
             ),
             "Num * -> Num *",
         );
@@ -2290,13 +2260,12 @@ mod solve_expr {
     fn identity_map() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    map : (a -> b), [Identity a] -> [Identity b]
-                    map = \f, identity ->
-                        when identity is
-                            Identity v -> Identity (f v)
-                    map
-                "#
+                r"map : (a -> b), [Identity a] -> [Identity b]
+map = \f, identity ->
+    when identity is
+        Identity v -> Identity (f v)
+map
+"
             ),
             "(a -> b), [Identity a] -> [Identity b]",
         );
@@ -2306,14 +2275,13 @@ mod solve_expr {
     fn to_bit() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                   toBit = \bool ->
-                       when bool is
-                           True -> 1
-                           False -> 0
+                r"toBit = \bool ->
+    when bool is
+        True -> 1
+        False -> 0
 
-                   toBit
-                "#
+toBit
+"
             ),
             "[False, True] -> Num *",
         );
@@ -2342,14 +2310,13 @@ mod solve_expr {
     fn from_bit() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                   fromBit = \int ->
-                       when int is
-                           0 -> False
-                           _ -> True
+                r"fromBit = \int ->
+    when int is
+        0 -> False
+        _ -> True
 
-                   fromBit
-                "#
+fromBit
+"
             ),
             "Num * -> [False, True]",
         );
@@ -2359,15 +2326,14 @@ mod solve_expr {
     fn result_map_explicit() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    map : (a -> b), [Err e, Ok a] -> [Err e, Ok b]
-                    map = \f, result ->
-                        when result is
-                            Ok v -> Ok (f v)
-                            Err e -> Err e
+                r"map : (a -> b), [Err e, Ok a] -> [Err e, Ok b]
+map = \f, result ->
+    when result is
+        Ok v -> Ok (f v)
+        Err e -> Err e
 
-                    map
-                "#
+map
+"
             ),
             "(a -> b), [Err e, Ok a] -> [Err e, Ok b]",
         );
@@ -2377,17 +2343,16 @@ mod solve_expr {
     fn result_map_alias() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    Res e a : [Ok a, Err e]
+                r"Res e a : [Ok a, Err e]
 
-                    map : (a -> b), Res e a -> Res e b
-                    map = \f, result ->
-                        when result is
-                            Ok v -> Ok (f v)
-                            Err e -> Err e
+map : (a -> b), Res e a -> Res e b
+map = \f, result ->
+    when result is
+        Ok v -> Ok (f v)
+        Err e -> Err e
 
-                    map
-                       "#
+map
+   "
             ),
             "(a -> b), Res e a -> Res e b",
         );
@@ -2397,11 +2362,10 @@ mod solve_expr {
     fn record_from_load() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    foo = \{ x } -> x
+                r"foo = \{ x } -> x
 
-                    foo { x: 5 }
-                "#
+foo { x: 5 }
+"
             ),
             "Num *",
         );
@@ -2411,17 +2375,16 @@ mod solve_expr {
     fn defs_from_load() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    alwaysThreePointZero = \_ -> 3.0
+                r"alwaysThreePointZero = \_ -> 3.0
 
-                    answer = 42
+answer = 42
 
-                    identity = \a -> a
+identity = \a -> a
 
-                    threePointZero = identity (alwaysThreePointZero {})
+threePointZero = identity (alwaysThreePointZero {})
 
-                    threePointZero
-                "#
+threePointZero
+"
             ),
             "Frac *",
         );
@@ -2480,14 +2443,13 @@ mod solve_expr {
     fn identity_alias() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                Foo a : { foo : a }
+                r"Foo a : { foo : a }
 
-                id : Foo a -> Foo a
-                id = \x -> x
+id : Foo a -> Foo a
+id = \x -> x
 
-                id
-                "#
+id
+"
             ),
             "Foo a -> Foo a",
         );
@@ -2512,12 +2474,11 @@ mod solve_expr {
     fn linked_list_singleton() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    singleton : a -> [Cons a (ConsList a), Nil] as ConsList a
-                    singleton = \x -> Cons x Nil
+                r"singleton : a -> [Cons a (ConsList a), Nil] as ConsList a
+singleton = \x -> Cons x Nil
 
-                    singleton
-                       "#
+singleton
+   "
             ),
             "a -> ConsList a",
         );
@@ -2527,17 +2488,16 @@ mod solve_expr {
     fn peano_length() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    Peano : [S Peano, Z]
+                r"Peano : [S Peano, Z]
 
-                    length : Peano -> Num.Num (Num.Integer Num.Signed64)
-                    length = \peano ->
-                        when peano is
-                            Z -> 0
-                            S v -> length v
+length : Peano -> Num.Num (Num.Integer Num.Signed64)
+length = \peano ->
+    when peano is
+        Z -> 0
+        S v -> length v
 
-                    length
-                       "#
+length
+   "
             ),
             "Peano -> I64",
         );
@@ -2547,15 +2507,14 @@ mod solve_expr {
     fn peano_map() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    map : [S Peano, Z] as Peano -> Peano
-                    map = \peano ->
-                        when peano is
-                            Z -> Z
-                            S v -> S (map v)
+                r"map : [S Peano, Z] as Peano -> Peano
+map = \peano ->
+    when peano is
+        Z -> Z
+        S v -> S (map v)
 
-                    map
-                       "#
+map
+   "
             ),
             "Peano -> Peano",
         );
@@ -2565,18 +2524,17 @@ mod solve_expr {
     fn infer_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons x xs ->
-                                a = f x
-                                b = map f xs
+                r"map = \f, list ->
+    when list is
+        Nil -> Nil
+        Cons x xs ->
+            a = f x
+            b = map f xs
 
-                                Cons a b
+            Cons a b
 
-                    map
-                       "#
+map
+   "
             ),
             "(a -> b), [Cons a c, Nil] as c -> [Cons b d, Nil] as d",
         );
@@ -2586,18 +2544,17 @@ mod solve_expr {
     fn typecheck_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    ConsList a : [Cons a (ConsList a), Nil]
+                r"ConsList a : [Cons a (ConsList a), Nil]
 
-                    map : (a -> b), ConsList a -> ConsList b
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons x xs ->
-                                Cons (f x) (map f xs)
+map : (a -> b), ConsList a -> ConsList b
+map = \f, list ->
+    when list is
+        Nil -> Nil
+        Cons x xs ->
+            Cons (f x) (map f xs)
 
-                    map
-                       "#
+map
+   "
             ),
             "(a -> b), ConsList a -> ConsList b",
         );
@@ -2726,18 +2683,17 @@ mod solve_expr {
     fn rigid_in_letnonrec() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    ConsList a : [Cons a (ConsList a), Nil]
+                r"ConsList a : [Cons a (ConsList a), Nil]
 
-                    toEmpty : ConsList a -> ConsList a
-                    toEmpty = \_ ->
-                        result : ConsList a
-                        result = Nil
+toEmpty : ConsList a -> ConsList a
+toEmpty = \_ ->
+    result : ConsList a
+    result = Nil
 
-                        result
+    result
 
-                    toEmpty
-                "#
+toEmpty
+"
             ),
             "ConsList a -> ConsList a",
         );
@@ -2747,18 +2703,17 @@ mod solve_expr {
     fn rigid_in_letrec_ignored() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    ConsList a : [Cons a (ConsList a), Nil]
+                r"ConsList a : [Cons a (ConsList a), Nil]
 
-                    toEmpty : ConsList a -> ConsList a
-                    toEmpty = \_ ->
-                        result : ConsList _   # TODO to enable using `a` we need scoped variables
-                        result = Nil
+toEmpty : ConsList a -> ConsList a
+toEmpty = \_ ->
+    result : ConsList _   # TODO to enable using `a` we need scoped variables
+    result = Nil
 
-                        toEmpty result
+    toEmpty result
 
-                    toEmpty
-                "#
+toEmpty
+"
             ),
             "ConsList a -> ConsList a",
         );
@@ -2846,16 +2801,15 @@ mod solve_expr {
     fn peano_map_infer_nested() {
         infer_eq(
             indoc!(
-                r#"
-                    map = \peano ->
-                            when peano is
-                                Z -> Z
-                                S rest ->
-                                    map rest |> S
+                r"map = \peano ->
+        when peano is
+            Z -> Z
+            S rest ->
+                map rest |> S
 
 
-                    map
-                "#
+map
+"
             ),
             "[S a, Z] as a -> [S b, Z] as b",
         );
@@ -2897,18 +2851,17 @@ mod solve_expr {
     fn typecheck_record_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    ConsList q : [Cons { x: q, xs: ConsList q }, Nil]
+                r"ConsList q : [Cons { x: q, xs: ConsList q }, Nil]
 
-                    map : (a -> b), ConsList a -> ConsList b
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons { x,  xs } ->
-                                Cons { x: f x, xs : map f xs }
+map : (a -> b), ConsList a -> ConsList b
+map = \f, list ->
+    when list is
+        Nil -> Nil
+        Cons { x,  xs } ->
+            Cons { x: f x, xs : map f xs }
 
-                    map
-                "#
+map
+"
             ),
             "(a -> b), ConsList a -> ConsList b",
         );
@@ -2918,15 +2871,14 @@ mod solve_expr {
     fn infer_record_linked_list_map() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    map = \f, list ->
-                        when list is
-                            Nil -> Nil
-                            Cons { x,  xs } ->
-                                Cons { x: f x, xs : map f xs }
+                r"map = \f, list ->
+    when list is
+        Nil -> Nil
+        Cons { x,  xs } ->
+            Cons { x: f x, xs : map f xs }
 
-                    map
-                "#
+map
+"
             ),
             "(a -> b), [Cons { x : a, xs : c }*, Nil] as c -> [Cons { x : b, xs : d }, Nil] as d",
         );
@@ -2936,24 +2888,23 @@ mod solve_expr {
     fn typecheck_mutually_recursive_tag_union_2() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                    ListA a b : [Cons a (ListB b a), Nil]
-                    ListB a b : [Cons a (ListA b a), Nil]
+                r"ListA a b : [Cons a (ListB b a), Nil]
+ListB a b : [Cons a (ListA b a), Nil]
 
-                    ConsList q : [Cons q (ConsList q), Nil]
+ConsList q : [Cons q (ConsList q), Nil]
 
-                    toAs : (b -> a), ListA a b -> ConsList a
-                    toAs = \f, lista ->
-                        when lista is
-                            Nil -> Nil
-                            Cons a listb ->
-                                when listb is
-                                    Nil -> Nil
-                                    Cons b newLista ->
-                                        Cons a (Cons (f b) (toAs f newLista))
+toAs : (b -> a), ListA a b -> ConsList a
+toAs = \f, lista ->
+    when lista is
+        Nil -> Nil
+        Cons a listb ->
+            when listb is
+                Nil -> Nil
+                Cons b newLista ->
+                    Cons a (Cons (f b) (toAs f newLista))
 
-                    toAs
-                "#
+toAs
+"
             ),
             "(b -> a), ListA a b -> ConsList a",
         );
@@ -2982,18 +2933,17 @@ mod solve_expr {
     fn infer_mutually_recursive_tag_union() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                   toAs = \f, lista ->
-                        when lista is
-                            Nil -> Nil
-                            Cons a listb ->
-                                when listb is
-                                    Nil -> Nil
-                                    Cons b newLista ->
-                                        Cons a (Cons (f b) (toAs f newLista))
+                r"toAs = \f, lista ->
+     when lista is
+         Nil -> Nil
+         Cons a listb ->
+             when listb is
+                 Nil -> Nil
+                 Cons b newLista ->
+                     Cons a (Cons (f b) (toAs f newLista))
 
-                   toAs
-                "#
+toAs
+"
             ),
             "(a -> b), [Cons c [Cons a d, Nil], Nil] as d -> [Cons c [Cons b e], Nil] as e",
         );
@@ -3015,18 +2965,17 @@ mod solve_expr {
     fn type_more_general_than_signature() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
-                partition = \low, high, initialList ->
-                    when List.get initialList high is
-                        Ok _ ->
-                            Pair 0 []
+                r"partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+partition = \low, high, initialList ->
+    when List.get initialList high is
+        Ok _ ->
+            Pair 0 []
 
-                        Err _ ->
-                            Pair (low - 1) initialList
+        Err _ ->
+            Pair (low - 1) initialList
 
-                partition
-                            "#
+partition
+            "
             ),
             "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
         );
@@ -3036,45 +2985,44 @@ mod solve_expr {
     fn quicksort_partition() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-            swap : Nat, Nat, List a -> List a
-            swap = \i, j, list ->
-                when Pair (List.get list i) (List.get list j) is
-                    Pair (Ok atI) (Ok atJ) ->
-                        list
-                            |> List.set i atJ
-                            |> List.set j atI
+                r"swap : Nat, Nat, List a -> List a
+swap = \i, j, list ->
+    when Pair (List.get list i) (List.get list j) is
+        Pair (Ok atI) (Ok atJ) ->
+            list
+                |> List.set i atJ
+                |> List.set j atI
 
-                    _ ->
-                        list
+        _ ->
+            list
 
-            partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
-            partition = \low, high, initialList ->
-                when List.get initialList high is
-                    Ok pivot ->
-                        go = \i, j, list ->
-                            if j < high then
-                                when List.get list j is
-                                    Ok value ->
-                                        if value <= pivot then
-                                            go (i + 1) (j + 1) (swap (i + 1) j list)
-                                        else
-                                            go i (j + 1) list
-
-                                    Err _ ->
-                                        Pair i list
+partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+partition = \low, high, initialList ->
+    when List.get initialList high is
+        Ok pivot ->
+            go = \i, j, list ->
+                if j < high then
+                    when List.get list j is
+                        Ok value ->
+                            if value <= pivot then
+                                go (i + 1) (j + 1) (swap (i + 1) j list)
                             else
-                                Pair i list
+                                go i (j + 1) list
 
-                        when go (low - 1) low initialList is
-                            Pair newI newList ->
-                                Pair (newI + 1) (swap (newI + 1) high newList)
+                        Err _ ->
+                            Pair i list
+                else
+                    Pair i list
 
-                    Err _ ->
-                        Pair (low - 1) initialList
+            when go (low - 1) low initialList is
+                Pair newI newList ->
+                    Pair (newI + 1) (swap (newI + 1) high newList)
 
-            partition
-        "#
+        Err _ ->
+            Pair (low - 1) initialList
+
+partition
+"
             ),
             "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
         );
@@ -3084,16 +3032,15 @@ mod solve_expr {
     fn identity_list() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                idList : List a -> List a
-                idList = \list -> list
+                r"idList : List a -> List a
+idList = \list -> list
 
-                foo : List I64 -> List I64
-                foo = \initialList -> idList initialList
+foo : List I64 -> List I64
+foo = \initialList -> idList initialList
 
 
-                foo
-            "#
+foo
+"
             ),
             "List I64 -> List I64",
         );
@@ -3124,15 +3071,14 @@ mod solve_expr {
     fn use_rigid_twice() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                id1 : q -> q
-                id1 = \x -> x
+                r"id1 : q -> q
+id1 = \x -> x
 
-                id2 : q -> q
-                id2 = \x -> x
+id2 : q -> q
+id2 = \x -> x
 
-                { id1, id2 }
-                "#
+{ id1, id2 }
+"
             ),
             "{ id1 : q -> q, id2 : q1 -> q1 }",
         );
@@ -3406,18 +3352,17 @@ mod solve_expr {
     fn reconstruct_path() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
-                reconstructPath = \cameFrom, goal ->
-                    when Dict.get cameFrom goal is
-                        Err KeyNotFound ->
-                            []
+                r"reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
+reconstructPath = \cameFrom, goal ->
+    when Dict.get cameFrom goal is
+        Err KeyNotFound ->
+            []
 
-                        Ok next ->
-                            List.append (reconstructPath cameFrom next) goal
+        Ok next ->
+            List.append (reconstructPath cameFrom next) goal
 
-                reconstructPath
-                "#
+reconstructPath
+"
             ),
             "Dict position position, position -> List position where position implements Hash & Eq",
         );
@@ -3428,15 +3373,14 @@ mod solve_expr {
         // Related to a bug solved in 81fbab0b3fe4765bc6948727e603fc2d49590b1c
         infer_eq_without_problem(
             indoc!(
-                r#"
-                f = \r ->
-                    g = r.q
-                    h = r.p
+                r"f = \r ->
+    g = r.q
+    h = r.p
 
-                    42
+    42
 
-                f
-                "#
+f
+"
             ),
             "{ p : *, q : * }* -> Num *",
         );
@@ -3484,14 +3428,13 @@ mod solve_expr {
     fn when_with_or_pattern_and_guard() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                \x ->
-                    when x is
-                        2 | 3 -> 0
-                        a if a < 20 ->  1
-                        3 | 4 if Bool.false -> 2
-                        _ -> 3
-                "#
+                r"\x ->
+    when x is
+        2 | 3 -> 0
+        a if a < 20 ->  1
+        3 | 4 if Bool.false -> 2
+        _ -> 3
+"
             ),
             "Num * -> Num *",
         );
@@ -3503,42 +3446,41 @@ mod solve_expr {
         // Roc seems to do this correctly, tracking to make sure it stays that way
         infer_eq_without_problem(
             indoc!(
-                r#"
-                sort : ConsList cm -> ConsList cm
-                sort =
-                    \xs ->
-                        f : cm, cm -> Order
-                        f = \_, _ -> LT
+                r"sort : ConsList cm -> ConsList cm
+sort =
+    \xs ->
+        f : cm, cm -> Order
+        f = \_, _ -> LT
 
-                        sortWith f xs
+        sortWith f xs
 
-                sortBy : (x -> cmpl), ConsList x -> ConsList x
-                sortBy =
-                    \_, list ->
-                        cmp : x, x -> Order
-                        cmp = \_, _ -> LT
+sortBy : (x -> cmpl), ConsList x -> ConsList x
+sortBy =
+    \_, list ->
+        cmp : x, x -> Order
+        cmp = \_, _ -> LT
 
-                        sortWith cmp list
+        sortWith cmp list
 
-                always = \x, _ -> x
+always = \x, _ -> x
 
-                sortWith : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar
-                sortWith =
-                    \_, list ->
-                        f = \arg ->
-                            g arg
+sortWith : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar
+sortWith =
+    \_, list ->
+        f = \arg ->
+            g arg
 
-                        g = \bs ->
-                            when bs is
-                                bx -> f bx
+        g = \bs ->
+            when bs is
+                bx -> f bx
 
-                        always Nil (f list)
+        always Nil (f list)
 
-                Order : [LT, GT, EQ]
-                ConsList a : [Nil, Cons a (ConsList a)]
+Order : [LT, GT, EQ]
+ConsList a : [Nil, Cons a (ConsList a)]
 
-                { x: sortWith, y: sort, z: sortBy }
-                "#
+{ x: sortWith, y: sort, z: sortBy }
+"
             ),
             "{ x : (foobar, foobar -> Order), ConsList foobar -> ConsList foobar, y : ConsList cm -> ConsList cm, z : (x -> cmpl), ConsList x -> ConsList x }"
         );
@@ -3580,18 +3522,17 @@ mod solve_expr {
     fn rigids() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                f : List a -> List a
-                f = \input ->
-                    # let-polymorphism at work
-                    x : {} -> List b
-                    x = \{} -> []
+                r"f : List a -> List a
+f = \input ->
+    # let-polymorphism at work
+    x : {} -> List b
+    x = \{} -> []
 
-                    when List.get input 0 is
-                        Ok val -> List.append (x {}) val
-                        Err _ -> input
-                f
-                "#
+    when List.get input 0 is
+        Ok val -> List.append (x {}) val
+        Err _ -> input
+f
+"
             ),
             "List a -> List a",
         );
@@ -3609,12 +3550,11 @@ mod solve_expr {
         // should hit a debug_assert! in debug mode, and produce a type error in release mode
         infer_eq_without_problem(
             indoc!(
-                r#"
-                test : ({ foo : I64 }ext -> Bool), { foo : I64 } -> Bool
-                test = \fn, a -> fn a
+                r"test : ({ foo : I64 }ext -> Bool), { foo : I64 } -> Bool
+test = \fn, a -> fn a
 
-                test
-                "#
+test
+"
             ),
             "should fail",
         );
@@ -3688,9 +3628,8 @@ mod solve_expr {
     fn optional_field_function() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                \{ x, y ? 0 } -> x + y
-                "#
+                r"\{ x, y ? 0 } -> x + y
+"
             ),
             "{ x : Num a, y ? Num a }* -> Num a",
         );
@@ -3714,11 +3653,10 @@ mod solve_expr {
     fn optional_field_when() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                \r ->
-                    when r is
-                        { x, y ? 0 } -> x + y
-                "#
+                r"\r ->
+    when r is
+        { x, y ? 0 } -> x + y
+"
             ),
             "{ x : Num a, y ? Num a }* -> Num a",
         );
@@ -3728,13 +3666,12 @@ mod solve_expr {
     fn optional_field_let_with_signature() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                \rec ->
-                    { x, y } : { x : I64, y ? Bool }*
-                    { x, y ? Bool.false } = rec
+                r"\rec ->
+    { x, y } : { x : I64, y ? Bool }*
+    { x, y ? Bool.false } = rec
 
-                    { x, y }
-                "#
+    { x, y }
+"
             ),
             "{ x : I64, y ? Bool }* -> { x : I64, y : Bool }",
         );
@@ -3756,13 +3693,12 @@ mod solve_expr {
     fn list_walk_backwards_example() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                empty : List I64
-                empty =
-                    []
+                r"empty : List I64
+empty =
+    []
 
-                List.walkBackwards empty 0 (\a, b -> a + b)
-                "#
+List.walkBackwards empty 0 (\a, b -> a + b)
+"
             ),
             "I64",
         );
@@ -3877,13 +3813,12 @@ mod solve_expr {
         // such functions will be lifted to the top-level, and are thus globally available!
         infer_eq_without_problem(
             indoc!(
-                r#"
-                f = \x -> x + 1
+                r"f = \x -> x + 1
 
-                g = \y -> f y
+g = \y -> f y
 
-                g
-                "#
+g
+"
             ),
             "Num a -> Num a",
         );
@@ -4630,11 +4565,10 @@ mod solve_expr {
     fn inference_var_inside_arrow() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                id : _ -> _
-                id = \x -> x
-                id
-                "#
+                r"id : _ -> _
+id = \x -> x
+id
+"
             ),
             "a -> a",
         )
@@ -4663,11 +4597,10 @@ mod solve_expr {
     fn inference_var_inside_ctor_linked() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                swapRcd: {x: _, y: _} -> {x: _, y: _}
-                swapRcd = \{x, y} -> {x: y, y: x}
-                swapRcd
-                "#
+                r"swapRcd: {x: _, y: _} -> {x: _, y: _}
+swapRcd = \{x, y} -> {x: y, y: x}
+swapRcd
+"
             ),
             "{ x : a, y : b } -> { x : b, y : a }",
         )
@@ -4677,11 +4610,10 @@ mod solve_expr {
     fn inference_var_link_with_rigid() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                swapRcd: {x: tx, y: ty} -> {x: _, y: _}
-                swapRcd = \{x, y} -> {x: y, y: x}
-                swapRcd
-                "#
+                r"swapRcd: {x: tx, y: ty} -> {x: _, y: _}
+swapRcd = \{x, y} -> {x: y, y: x}
+swapRcd
+"
             ),
             "{ x : tx, y : ty } -> { x : ty, y : tx }",
         )
@@ -4710,15 +4642,14 @@ mod solve_expr {
         // See https://github.com/roc-lang/roc/issues/2053
         infer_eq_without_problem(
             indoc!(
-                r#"
-                pastelize: _ -> [Lavender, Peach]_
-                pastelize = \color ->
-                    when color is
-                        Blue -> Lavender
-                        Orange -> Peach
-                        col -> col
-                pastelize
-                "#
+                r"pastelize: _ -> [Lavender, Peach]_
+pastelize = \color ->
+    when color is
+        Blue -> Lavender
+        Orange -> Peach
+        col -> col
+pastelize
+"
             ),
             "[Blue, Lavender, Orange, Peach]a -> [Blue, Lavender, Orange, Peach]a",
         )
@@ -4743,14 +4674,13 @@ mod solve_expr {
     fn issue_2217() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
+                r"LinkedList elem : [Empty, Prepend (LinkedList elem) elem]
 
-                fromList : List elem -> LinkedList elem
-                fromList = \elems -> List.walk elems Empty Prepend
+fromList : List elem -> LinkedList elem
+fromList = \elems -> List.walk elems Empty Prepend
 
-                fromList
-                "#
+fromList
+"
             ),
             "List elem -> LinkedList elem",
         )
@@ -4760,12 +4690,11 @@ mod solve_expr {
     fn issue_2217_inlined() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                fromList : List elem -> [Empty, Prepend (LinkedList elem) elem] as LinkedList elem
-                fromList = \elems -> List.walk elems Empty Prepend
+                r"fromList : List elem -> [Empty, Prepend (LinkedList elem) elem] as LinkedList elem
+fromList = \elems -> List.walk elems Empty Prepend
 
-                fromList
-                "#
+fromList
+"
             ),
             "List elem -> LinkedList elem",
         )
@@ -4775,12 +4704,11 @@ mod solve_expr {
     fn infer_union_input_position1() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                       A -> X
-                       B -> Y
-                 "#
+                r"\tag ->
+    when tag is
+      A -> X
+      B -> Y
+"
             ),
             "[A, B] -> [X, Y]",
         )
@@ -4790,13 +4718,12 @@ mod solve_expr {
     fn infer_union_input_position2() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                       A -> X
-                       B -> Y
-                       _ -> Z
-                 "#
+                r"\tag ->
+    when tag is
+      A -> X
+      B -> Y
+      _ -> Z
+"
             ),
             "[A, B]* -> [X, Y, Z]",
         )
@@ -4806,12 +4733,11 @@ mod solve_expr {
     fn infer_union_input_position3() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                       A M -> X
-                       A N -> Y
-                 "#
+                r"\tag ->
+    when tag is
+      A M -> X
+      A N -> Y
+"
             ),
             "[A [M, N]] -> [X, Y]",
         )
@@ -4821,13 +4747,12 @@ mod solve_expr {
     fn infer_union_input_position4() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                       A M -> X
-                       A N -> Y
-                       A _ -> Z
-                 "#
+                r"\tag ->
+    when tag is
+      A M -> X
+      A N -> Y
+      A _ -> Z
+"
             ),
             "[A [M, N]*] -> [X, Y, Z]",
         )
@@ -4837,12 +4762,11 @@ mod solve_expr {
     fn infer_union_input_position5() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                       A (M J) -> X
-                       A (N K) -> X
-                 "#
+                r"\tag ->
+    when tag is
+      A (M J) -> X
+      A (N K) -> X
+"
             ),
             "[A [M [J], N [K]]] -> [X]",
         )
@@ -4852,13 +4776,12 @@ mod solve_expr {
     fn infer_union_input_position6() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                       A M -> X
-                       B   -> X
-                       A N -> X
-                 "#
+                r"\tag ->
+    when tag is
+      A M -> X
+      B   -> X
+      A N -> X
+"
             ),
             "[A [M, N], B] -> [X]",
         )
@@ -4868,12 +4791,11 @@ mod solve_expr {
     fn infer_union_input_position7() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \tag ->
-                     when tag is
-                         A -> X
-                         t -> t
-                 "#
+                r"\tag ->
+    when tag is
+        A -> X
+        t -> t
+"
             ),
             "[A, X]a -> [A, X]a",
         )
@@ -4883,13 +4805,12 @@ mod solve_expr {
     fn infer_union_input_position8() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \opt ->
-                     when opt is
-                         Some ({tag: A}) -> 1
-                         Some ({tag: B}) -> 1
-                         None -> 0
-                 "#
+                r"\opt ->
+    when opt is
+        Some ({tag: A}) -> 1
+        Some ({tag: B}) -> 1
+        None -> 0
+"
             ),
             "[None, Some { tag : [A, B] }*] -> Num *",
         )
@@ -4917,12 +4838,11 @@ mod solve_expr {
     fn infer_union_input_position10() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \r ->
-                     when r is
-                         { x: Blue, y ? 3 } -> y
-                         { x: Red, y ? 5 } -> y
-                 "#
+                r"\r ->
+    when r is
+        { x: Blue, y ? 3 } -> y
+        { x: Red, y ? 5 } -> y
+"
             ),
             "{ x : [Blue, Red], y ? Num a }* -> Num a",
         )
@@ -4933,9 +4853,8 @@ mod solve_expr {
     fn infer_union_argument_position() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \UserId id -> id + 1
-                 "#
+                r"\UserId id -> id + 1
+"
             ),
             "[UserId (Num a)] -> Num a",
         )
@@ -4945,11 +4864,10 @@ mod solve_expr {
     fn infer_union_def_position() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                 \email ->
-                    Email str = email
-                    Str.isEmpty str
-                 "#
+                r"\email ->
+   Email str = email
+   Str.isEmpty str
+"
             ),
             "[Email Str] -> Bool",
         )
@@ -5007,129 +4925,128 @@ mod solve_expr {
     fn numeric_literal_suffixes_in_pattern() {
         infer_eq_without_problem(
             indoc!(
-                r#"
-                {
-                    u8:   (\n ->
-                            when n is
-                              123u8 -> n
-                              _ -> n),
-                    u16:  (\n ->
-                            when n is
-                              123u16 -> n
-                              _ -> n),
-                    u32:  (\n ->
-                            when n is
-                              123u32 -> n
-                              _ -> n),
-                    u64:  (\n ->
-                            when n is
-                              123u64 -> n
-                              _ -> n),
-                    u128: (\n ->
-                            when n is
-                              123u128 -> n
-                              _ -> n),
+                r"{
+    u8:   (\n ->
+            when n is
+              123u8 -> n
+              _ -> n),
+    u16:  (\n ->
+            when n is
+              123u16 -> n
+              _ -> n),
+    u32:  (\n ->
+            when n is
+              123u32 -> n
+              _ -> n),
+    u64:  (\n ->
+            when n is
+              123u64 -> n
+              _ -> n),
+    u128: (\n ->
+            when n is
+              123u128 -> n
+              _ -> n),
 
-                    i8:   (\n ->
-                            when n is
-                              123i8 -> n
-                              _ -> n),
-                    i16:  (\n ->
-                            when n is
-                              123i16 -> n
-                              _ -> n),
-                    i32:  (\n ->
-                            when n is
-                              123i32 -> n
-                              _ -> n),
-                    i64:  (\n ->
-                            when n is
-                              123i64 -> n
-                              _ -> n),
-                    i128: (\n ->
-                            when n is
-                              123i128 -> n
-                              _ -> n),
+    i8:   (\n ->
+            when n is
+              123i8 -> n
+              _ -> n),
+    i16:  (\n ->
+            when n is
+              123i16 -> n
+              _ -> n),
+    i32:  (\n ->
+            when n is
+              123i32 -> n
+              _ -> n),
+    i64:  (\n ->
+            when n is
+              123i64 -> n
+              _ -> n),
+    i128: (\n ->
+            when n is
+              123i128 -> n
+              _ -> n),
 
-                    nat:  (\n ->
-                            when n is
-                              123nat -> n
-                              _ -> n),
+    nat:  (\n ->
+            when n is
+              123nat -> n
+              _ -> n),
 
-                    bu8:   (\n ->
-                            when n is
-                              0b11u8 -> n
-                              _ -> n),
-                    bu16:  (\n ->
-                            when n is
-                              0b11u16 -> n
-                              _ -> n),
-                    bu32:  (\n ->
-                            when n is
-                              0b11u32 -> n
-                              _ -> n),
-                    bu64:  (\n ->
-                            when n is
-                              0b11u64 -> n
-                              _ -> n),
-                    bu128: (\n ->
-                            when n is
-                              0b11u128 -> n
-                              _ -> n),
+    bu8:   (\n ->
+            when n is
+              0b11u8 -> n
+              _ -> n),
+    bu16:  (\n ->
+            when n is
+              0b11u16 -> n
+              _ -> n),
+    bu32:  (\n ->
+            when n is
+              0b11u32 -> n
+              _ -> n),
+    bu64:  (\n ->
+            when n is
+              0b11u64 -> n
+              _ -> n),
+    bu128: (\n ->
+            when n is
+              0b11u128 -> n
+              _ -> n),
 
-                    bi8:   (\n ->
-                            when n is
-                              0b11i8 -> n
-                              _ -> n),
-                    bi16:  (\n ->
-                            when n is
-                              0b11i16 -> n
-                              _ -> n),
-                    bi32:  (\n ->
-                            when n is
-                              0b11i32 -> n
-                              _ -> n),
-                    bi64:  (\n ->
-                            when n is
-                              0b11i64 -> n
-                              _ -> n),
-                    bi128: (\n ->
-                            when n is
-                              0b11i128 -> n
-                              _ -> n),
+    bi8:   (\n ->
+            when n is
+              0b11i8 -> n
+              _ -> n),
+    bi16:  (\n ->
+            when n is
+              0b11i16 -> n
+              _ -> n),
+    bi32:  (\n ->
+            when n is
+              0b11i32 -> n
+              _ -> n),
+    bi64:  (\n ->
+            when n is
+              0b11i64 -> n
+              _ -> n),
+    bi128: (\n ->
+            when n is
+              0b11i128 -> n
+              _ -> n),
 
-                    bnat:  (\n ->
-                            when n is
-                              0b11nat -> n
-                              _ -> n),
+    bnat:  (\n ->
+            when n is
+              0b11nat -> n
+              _ -> n),
 
-                    dec:  (\n ->
-                            when n is
-                              123.0dec -> n
-                              _ -> n),
-                    f32:  (\n ->
-                            when n is
-                              123.0f32 -> n
-                              _ -> n),
-                    f64:  (\n ->
-                            when n is
-                              123.0f64 -> n
-                              _ -> n),
+    dec:  (\n ->
+            when n is
+              123.0dec -> n
+              _ -> n),
+    f32:  (\n ->
+            when n is
+              123.0f32 -> n
+              _ -> n),
+    f64:  (\n ->
+            when n is
+              123.0f64 -> n
+              _ -> n),
 
-                    fdec: (\n ->
-                            when n is
-                              123dec -> n
-                              _ -> n),
-                    ff32: (\n ->
-                            when n is
-                              123f32 -> n
-                              _ -> n),
-                    ff64: (\n ->
-                            when n is
-                              123f64 -> n
-                              _ -> n),
-                }
-                "#
+    fdec: (\n ->
+            when n is
+              123dec -> n
+              _ -> n),
+    ff32: (\n ->
+            when n is
+              123f32 -> n
+              _ -> n),
+    ff64: (\n ->
+            when n is
+              123f64 -> n
+              _ -> n),
+}
+"
             ),
             r#"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }"#,
         )

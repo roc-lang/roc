@@ -70,7 +70,7 @@ impl MakeSpecializationsDependents {
             "already added successors for module '{module_id:?}'"
         );
 
-        entry.succ.extend(succ.into_iter());
+        entry.succ.extend(succ);
 
         // The module for derives implicitly depends on every other module
         entry.succ.insert(ModuleId::DERIVED_GEN);

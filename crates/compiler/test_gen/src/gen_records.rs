@@ -426,19 +426,18 @@ fn optional_field_when_use_default() {
 fn optional_field_when_use_default_nested() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f = \r ->
-                    when r is
-                        { x: Blue, y ? 3 } -> y
-                        { x: Red, y ? 5 } -> y
+            r"f = \r ->
+    when r is
+        { x: Blue, y ? 3 } -> y
+        { x: Red, y ? 5 } -> y
 
-                a = f { x: Blue, y: 7 }
-                b = f { x: Blue }
-                c = f { x: Red, y: 11 }
-                d = f { x: Red }
+a = f { x: Blue, y: 7 }
+b = f { x: Blue }
+c = f { x: Red, y: 11 }
+d = f { x: Red }
 
-                a * b * c * d
-                "#
+a * b * c * d
+"
         ),
         3 * 5 * 7 * 11,
         i64
@@ -471,13 +470,12 @@ fn optional_field_destructure_module() {
 fn optional_field_destructure_expr() {
     assert_evals_to!(
         indoc!(
-            r#"
-                fn = \r ->
-                    { x ? 10, y } = r
-                    x + y
+            r"fn = \r ->
+    { x ? 10, y } = r
+    x + y
 
-                fn { x: 4, y: 9 }
-                "#
+fn { x: 4, y: 9 }
+"
         ),
         13,
         i64
@@ -531,13 +529,12 @@ fn optional_field_let_no_use_default() {
 fn optional_field_let_no_use_default_nested() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f = \r ->
-                    { x ? 10, y } = r
-                    x + y
+            r"f = \r ->
+    { x ? 10, y } = r
+    x + y
 
-                f { y: 9, x: 4 }
-                "#
+f { y: 9, x: 4 }
+"
         ),
         13,
         i64
@@ -549,12 +546,11 @@ fn optional_field_let_no_use_default_nested() {
 fn optional_field_function_use_default() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f = \{ x ? 10, y } -> x + y
+            r"f = \{ x ? 10, y } -> x + y
 
 
-                f { y: 9 }
-                "#
+f { y: 9 }
+"
         ),
         19,
         i64
@@ -585,12 +581,11 @@ fn optional_field_function_no_use_default() {
 fn optional_field_function_no_use_default_nested() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f = \{ x ? 10, y } -> x + y
+            r"f = \{ x ? 10, y } -> x + y
 
 
-                f { x: 4, y: 9 }
-                "#
+f { x: 4, y: 9 }
+"
         ),
         13,
         i64
@@ -907,14 +902,13 @@ fn alignment_in_record() {
 fn blue_and_present() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f = \r ->
-                    when r is
-                        { x: Blue, y ? 3 } -> y
-                        { x: Red, y ? 5 } -> y
+            r"f = \r ->
+    when r is
+        { x: Blue, y ? 3 } -> y
+        { x: Red, y ? 5 } -> y
 
-                f { x: Blue, y: 7 }
-                "#
+f { x: Blue, y: 7 }
+"
         ),
         7,
         i64
@@ -926,14 +920,13 @@ fn blue_and_present() {
 fn blue_and_absent() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f = \r ->
-                    when r is
-                        { x: Blue, y ? 3 } -> y
-                        { x: Red, y ? 5 } -> y
+            r"f = \r ->
+    when r is
+        { x: Blue, y ? 3 } -> y
+        { x: Red, y ? 5 } -> y
 
-                f { x: Blue }
-                "#
+f { x: Blue }
+"
         ),
         3,
         i64
@@ -970,15 +963,14 @@ fn update_the_only_field() {
 fn both_have_unique_fields() {
     assert_evals_to!(
         indoc!(
-            r#"
-            a = { x: 42, y: 43 }
-            b = { x: 42, z: 44 }
+            r"a = { x: 42, y: 43 }
+b = { x: 42, z: 44 }
 
-            f : { x : I64 }a, { x : I64 }b -> I64
-            f = \{ x: x1}, { x: x2 } -> x1 + x2
+f : { x : I64 }a, { x : I64 }b -> I64
+f = \{ x: x1}, { x: x2 } -> x1 + x2
 
-            f a b
-            "#
+f a b
+"
         ),
         84,
         i64

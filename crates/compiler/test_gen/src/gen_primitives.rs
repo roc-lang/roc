@@ -213,18 +213,17 @@ fn gen_when_one_branch() {
 fn gen_large_when_int() {
     assert_evals_to!(
         indoc!(
-            r#"
-                foo = \num ->
-                    when num is
-                        0 -> 200
-                        -3 -> 111 # TODO adding more negative numbers reproduces parsing bugs here
-                        3 -> 789
-                        1 -> 123
-                        2 -> 456
-                        _ -> 1000
+            r"foo = \num ->
+    when num is
+        0 -> 200
+        -3 -> 111 # TODO adding more negative numbers reproduces parsing bugs here
+        3 -> 789
+        1 -> 123
+        2 -> 456
+        _ -> 1000
 
-                foo -3
-            "#
+foo -3
+"
         ),
         111,
         i64
@@ -236,18 +235,17 @@ fn gen_large_when_int() {
 fn gen_large_when_float() {
     assert_evals_to!(
         indoc!(
-            r#"
-                foo = \num ->
-                    when num is
-                        0.5f64 -> 200.1
-                        -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
-                        3.6 -> 789.5
-                        1.7 -> 123.3
-                        2.8 -> 456.4
-                        _ -> 1000.6f64
+            r"foo = \num ->
+    when num is
+        0.5f64 -> 200.1
+        -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
+        3.6 -> 789.5
+        1.7 -> 123.3
+        2.8 -> 456.4
+        _ -> 1000.6f64
 
-                foo -3.6
-            "#
+foo -3.6
+"
         ),
         111.2,
         f64
@@ -275,11 +273,10 @@ fn or_pattern() {
 fn apply_identity() {
     assert_evals_to!(
         indoc!(
-            r#"
-                identity = \a -> a
+            r"identity = \a -> a
 
-                identity 5
-            "#
+identity 5
+"
         ),
         5,
         i64
@@ -291,12 +288,11 @@ fn apply_identity() {
 fn apply_unnamed_identity() {
     assert_evals_to!(
         indoc!(
-            r#"
-            wrapper = \{} ->
-                (\a -> a) 5
+            r"wrapper = \{} ->
+    (\a -> a) 5
 
-            wrapper {}
-            "#
+wrapper {}
+"
         ),
         5,
         i64
@@ -308,16 +304,15 @@ fn apply_unnamed_identity() {
 fn return_unnamed_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
-            wrapper = \{} ->
-                alwaysFloatIdentity : Int * -> (Frac a -> Frac a)
-                alwaysFloatIdentity = \_ ->
-                    (\a -> a)
+            r"wrapper = \{} ->
+    alwaysFloatIdentity : Int * -> (Frac a -> Frac a)
+    alwaysFloatIdentity = \_ ->
+        (\a -> a)
 
-                (alwaysFloatIdentity 2) 1.23f64
+    (alwaysFloatIdentity 2) 1.23f64
 
-            wrapper {}
-            "#
+wrapper {}
+"
         ),
         1.23,
         f64
@@ -329,15 +324,14 @@ fn return_unnamed_fn() {
 fn gen_when_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
-                limitedNegate = \num ->
-                    when num is
-                        1 -> -1
-                        -1 -> 1
-                        _ -> num
+            r"limitedNegate = \num ->
+    when num is
+        1 -> -1
+        -1 -> 1
+        _ -> num
 
-                limitedNegate 1
-            "#
+limitedNegate 1
+"
         ),
         -1,
         i64
@@ -496,17 +490,16 @@ fn gen_multiple_defs() {
 fn factorial() {
     assert_evals_to!(
         indoc!(
-            r#"
-            factorial = \n, accum ->
-                when n is
-                    0 ->
-                        accum
+            r"factorial = \n, accum ->
+    when n is
+        0 ->
+            accum
 
-                    _ ->
-                        factorial (n - 1) (n * accum)
+        _ ->
+            factorial (n - 1) (n * accum)
 
-            factorial 10 1
-            "#
+factorial 10 1
+"
         ),
         3628800,
         i64
@@ -2022,11 +2015,10 @@ fn hof_conditional() {
     // exposed issue with the if condition being just a symbol
     assert_evals_to!(
         indoc!(
-            r#"
-                passTrue = \f -> f Bool.true
+            r"passTrue = \f -> f Bool.true
 
-                passTrue (\trueVal -> if trueVal then Bool.false else Bool.true)
-            "#
+passTrue (\trueVal -> if trueVal then Bool.false else Bool.true)
+"
         ),
         0,
         u8
@@ -2517,11 +2509,10 @@ fn backpassing_result() {
 fn function_malformed_pattern() {
     assert_evals_to!(
         indoc!(
-            r#"
-                x = 3
+            r"x = 3
 
-                (\x -> x) 42
-            "#
+(\x -> x) 42
+"
         ),
         3,
         i64
@@ -2534,12 +2525,11 @@ fn function_malformed_pattern() {
 fn call_invalid_layout() {
     assert_evals_to!(
         indoc!(
-            r#"
-                f : I64 -> I64
-                f = \x -> x
+            r"f : I64 -> I64
+f = \x -> x
 
-                f {}
-            "#
+f {}
+"
         ),
         3,
         i64,
@@ -3261,12 +3251,11 @@ fn polymophic_expression_captured_inside_closure() {
 fn issue_2322() {
     assert_evals_to!(
         indoc!(
-            r#"
-            double = \x -> x * 2
-            doubleBind = \x -> (\_ -> double x)
-            doubleThree = doubleBind 3
-            doubleThree {}
-            "#
+            r"double = \x -> x * 2
+doubleBind = \x -> (\_ -> double x)
+doubleThree = doubleBind 3
+doubleThree {}
+"
         ),
         6,
         i64
@@ -3472,16 +3461,15 @@ fn issue_2894() {
 fn polymorphic_def_used_in_closure() {
     assert_evals_to!(
         indoc!(
-            r#"
-            a : I64 -> _
-            a = \g ->
-                f = { r: g, h: 32 }
+            r"a : I64 -> _
+a = \g ->
+    f = { r: g, h: 32 }
 
-                h1 : U64
-                h1 = (\{} -> f.h) {}
-                h1
-            a 1
-            "#
+    h1 : U64
+    h1 = (\{} -> f.h) {}
+    h1
+a 1
+"
         ),
         32,
         u64
@@ -3493,13 +3481,12 @@ fn polymorphic_def_used_in_closure() {
 fn polymorphic_lambda_set_usage() {
     assert_evals_to!(
         indoc!(
-            r#"
-            id1 = \x -> x
-            id2 = \y -> y
-            id = if Bool.true then id1 else id2
+            r"id1 = \x -> x
+id2 = \y -> y
+id = if Bool.true then id1 else id2
 
-            id 9u8
-            "#
+id 9u8
+"
         ),
         9,
         u8
@@ -3511,15 +3498,14 @@ fn polymorphic_lambda_set_usage() {
 fn polymorphic_lambda_set_multiple_specializations() {
     assert_evals_to!(
         indoc!(
-            r#"
-            id1 = \x -> x
-            id2 = \y -> y
-            id = \z ->
-                f = if Bool.true then id1 else id2
-                f z
+            r"id1 = \x -> x
+id2 = \y -> y
+id = \z ->
+    f = if Bool.true then id1 else id2
+    f z
 
-            (id 9u8) + Num.toU8 (id 16u16)
-            "#
+(id 9u8) + Num.toU8 (id 16u16)
+"
         ),
         25,
         u8
@@ -3580,14 +3566,13 @@ fn mutual_recursion_top_level_defs() {
 fn polymorphic_lambda_captures_polymorphic_value() {
     assert_evals_to!(
         indoc!(
-            r#"
-            x = 2
+            r"x = 2
 
-            f1 = \_ -> x
+f1 = \_ -> x
 
-            f = if Bool.true then f1 else f1
-            f {}
-            "#
+f = if Bool.true then f1 else f1
+f {}
+"
         ),
         2,
         u64
@@ -3599,23 +3584,22 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 fn lambda_capture_niche_u64_vs_u8_capture() {
     assert_evals_to!(
         indoc!(
-            r#"
-            capture : _ -> ({} -> Str)
-            capture = \val ->
-                \{} ->
-                    Num.toStr val
+            r"capture : _ -> ({} -> Str)
+capture = \val ->
+    \{} ->
+        Num.toStr val
 
-            x : Bool
-            x = Bool.true
+x : Bool
+x = Bool.true
 
-            fun =
-                if x then
-                    capture 123u64
-                else
-                    capture 18u8
+fun =
+    if x then
+        capture 123u64
+    else
+        capture 18u8
 
-            fun {}
-            "#
+fun {}
+"
         ),
         RocStr::from("123"),
         RocStr
@@ -3727,14 +3711,13 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 fn recursive_call_capturing_function() {
     assert_evals_to!(
         indoc!(
-            r#"
-            a = \b ->
-                c = \d ->
-                    if d == 7 then d else c (d + b)
-                c 1
+            r"a = \b ->
+    c = \d ->
+        if d == 7 then d else c (d + b)
+    c 1
 
-            a 6
-            "#
+a 6
+"
         ),
         7,
         i64
@@ -3746,13 +3729,12 @@ fn recursive_call_capturing_function() {
 fn shared_pattern_variable_in_when_branches() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f = \t ->
-                when t is
-                    A x | B x -> x
+            r"f = \t ->
+    when t is
+        A x | B x -> x
 
-            {a: f (A 15u8), b: (B 31u8)}
-            "#
+{a: f (A 15u8), b: (B 31u8)}
+"
         ),
         (15u8, 31u8),
         (u8, u8)
@@ -3764,12 +3746,11 @@ fn shared_pattern_variable_in_when_branches() {
 fn symbol_not_bound_in_all_patterns_runs_when_no_bound_symbol_used() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f = \t -> when t is
-                        A x | B y -> 31u8
+            r"f = \t -> when t is
+            A x | B y -> 31u8
 
-            {a: f (A 15u8), b: f (B 15u8)}
-            "#
+{a: f (A 15u8), b: f (B 15u8)}
+"
         ),
         (31u8, 31u8),
         (u8, u8),
@@ -4337,17 +4318,16 @@ fn pattern_as_of_symbol() {
 fn function_specialization_information_in_lambda_set_thunk() {
     assert_evals_to!(
         indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+            r#"app "test" provides [main] to "./platform"
 
-            andThen = \{} ->
-                x = 10u8
-                \newFn -> Num.add (newFn {}) x
+andThen = \{} ->
+    x = 10u8
+    \newFn -> Num.add (newFn {}) x
 
-            between = andThen {}
+between = andThen {}
 
-            main = between \{} -> between \{} -> 10u8
-            "###
+main = between \{} -> between \{} -> 10u8
+"#
         ),
         30,
         u8
@@ -4359,19 +4339,18 @@ fn function_specialization_information_in_lambda_set_thunk() {
 fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
     assert_evals_to!(
         indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+            r#"app "test" provides [main] to "./platform"
 
-            andThen = \{} ->
-                x = 10u8
-                \newFn -> Num.add (newFn {}) x
+andThen = \{} ->
+    x = 10u8
+    \newFn -> Num.add (newFn {}) x
 
-            between1 = andThen {}
+between1 = andThen {}
 
-            between2 = andThen {}
+between2 = andThen {}
 
-            main = between1 \{} -> between2 \{} -> 10u8
-            "###
+main = between1 \{} -> between2 \{} -> 10u8
+"#
         ),
         30,
         u8
@@ -4464,34 +4443,33 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
 fn reset_recursive_type_wraps_in_named_type() {
     assert_evals_to!(
         indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+            r#"app "test" provides [main] to "./platform"
 
-            main : Str
-            main =
-              newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
-              printLinkedList newList Num.toStr
+main : Str
+main =
+  newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+  printLinkedList newList Num.toStr
 
-            LinkedList a : [Cons a (LinkedList a), Nil]
+LinkedList a : [Cons a (LinkedList a), Nil]
 
-            mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
-            mapLinkedList = \linkedList, f -> when linkedList is
-              Nil -> Nil
-              Cons x xs ->
-                s = if Bool.true then "true" else "false"
-                expect s == "true"
+mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
+mapLinkedList = \linkedList, f -> when linkedList is
+  Nil -> Nil
+  Cons x xs ->
+    s = if Bool.true then "true" else "false"
+    expect s == "true"
 
-                Cons (f x) (mapLinkedList xs f)
+    Cons (f x) (mapLinkedList xs f)
 
-            printLinkedList : LinkedList a, (a -> Str) -> Str
-            printLinkedList = \linkedList, f ->
-              when linkedList is
-                Nil -> "Nil"
-                Cons x xs ->
-                  strX = f x
-                  strXs = printLinkedList xs f
-                  "Cons \(strX) (\(strXs))"
-            "###
+printLinkedList : LinkedList a, (a -> Str) -> Str
+printLinkedList = \linkedList, f ->
+  when linkedList is
+    Nil -> "Nil"
+    Cons x xs ->
+      strX = f x
+      strXs = printLinkedList xs f
+      "Cons \(strX) (\(strXs))"
+"#
         ),
         RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
         RocStr

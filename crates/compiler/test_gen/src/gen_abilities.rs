@@ -1458,56 +1458,55 @@ mod hash {
     use indoc::indoc;
 
     const TEST_HASHER: &str = indoc!(
-        r#"
-        THasher := List U8 implements [Hasher {
-            addBytes: tAddBytes,
-            addU8: tAddU8,
-            addU16: tAddU16,
-            addU32: tAddU32,
-            addU64: tAddU64,
-            addU128: tAddU128,
-            complete: tComplete,
-        }]
+        r"THasher := List U8 implements [Hasher {
+    addBytes: tAddBytes,
+    addU8: tAddU8,
+    addU16: tAddU16,
+    addU32: tAddU32,
+    addU64: tAddU64,
+    addU128: tAddU128,
+    complete: tComplete,
+}]
 
-        # ignores endian-ness
-        byteAt = \n, shift ->
-            Num.bitwiseAnd (Num.shiftRightBy n (shift * 8)) 0xFF
-            |> Num.toU8
+# ignores endian-ness
+byteAt = \n, shift ->
+    Num.bitwiseAnd (Num.shiftRightBy n (shift * 8)) 0xFF
+    |> Num.toU8
 
-        do8 = \total, n ->
-            total
-            |> List.append (byteAt n 0)
+do8 = \total, n ->
+    total
+    |> List.append (byteAt n 0)
 
-        do16 = \total, n ->
-            total
-            |> do8 (n |> Num.toU8)
-            |> do8 (Num.shiftRightBy n 8 |> Num.toU8)
+do16 = \total, n ->
+    total
+    |> do8 (n |> Num.toU8)
+    |> do8 (Num.shiftRightBy n 8 |> Num.toU8)
 
-        do32 = \total, n ->
-            total
-            |> do16 (n |> Num.toU16)
-            |> do16 (Num.shiftRightBy n 16 |> Num.toU16)
+do32 = \total, n ->
+    total
+    |> do16 (n |> Num.toU16)
+    |> do16 (Num.shiftRightBy n 16 |> Num.toU16)
 
-        do64 = \total, n ->
-            total
-            |> do32 (n |> Num.toU32)
-            |> do32 (Num.shiftRightBy n 32 |> Num.toU32)
+do64 = \total, n ->
+    total
+    |> do32 (n |> Num.toU32)
+    |> do32 (Num.shiftRightBy n 32 |> Num.toU32)
 
-        do128 = \total, n ->
-            total
-            |> do64 (n |> Num.toU64)
-            |> do64 (Num.shiftRightBy n 64 |> Num.toU64)
+do128 = \total, n ->
+    total
+    |> do64 (n |> Num.toU64)
+    |> do64 (Num.shiftRightBy n 64 |> Num.toU64)
 
-        tAddBytes = \@THasher total, bytes -> @THasher (List.concat total bytes)
-        tAddU8 = \@THasher total, n -> @THasher (do8 total n)
-        tAddU16 = \@THasher total, n -> @THasher (do16 total n)
-        tAddU32 = \@THasher total, n -> @THasher (do32 total n)
-        tAddU64 = \@THasher total, n -> @THasher (do64 total n)
-        tAddU128 = \@THasher total, n -> @THasher (do128 total n)
-        tComplete = \@THasher _ -> Num.maxU64
+tAddBytes = \@THasher total, bytes -> @THasher (List.concat total bytes)
+tAddU8 = \@THasher total, n -> @THasher (do8 total n)
+tAddU16 = \@THasher total, n -> @THasher (do16 total n)
+tAddU32 = \@THasher total, n -> @THasher (do32 total n)
+tAddU64 = \@THasher total, n -> @THasher (do64 total n)
+tAddU128 = \@THasher total, n -> @THasher (do128 total n)
+tComplete = \@THasher _ -> Num.maxU64
 
-        tRead = \@THasher bytes -> bytes
-        "#
+tRead = \@THasher bytes -> bytes
+"
     );
 
     fn build_test(input: &str) -> String {
@@ -2152,28 +2151,27 @@ fn issue_4772_weakened_monomorphic_destructure() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
-                r###"
-                app "test"
-                        imports [TotallyNotJson]
-                        provides [main] to "./platform"
+                r#"app "test"
+        imports [TotallyNotJson]
+        provides [main] to "./platform"
 
-                getNumber =
-                    { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
-                            
-                    when result is 
-                        Ok val -> 
-                            when Str.toI64 val is 
-                                Ok number ->
-                                    Ok {val : number, input : rest}
-                                Err InvalidNumStr ->
-                                    Err (ParsingFailure "not a number")
+getNumber =
+    { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
+            
+    when result is 
+        Ok val -> 
+            when Str.toI64 val is 
+                Ok number ->
+                    Ok {val : number, input : rest}
+                Err InvalidNumStr ->
+                    Err (ParsingFailure "not a number")
 
-                        Err _ -> 
-                            Err (ParsingFailure "not a number")
+        Err _ -> 
+            Err (ParsingFailure "not a number")
 
-                main = 
-                    getNumber |> Result.map .val |> Result.withDefault 0
-                "###
+main = 
+    getNumber |> Result.map .val |> Result.withDefault 0
+"#
             ),
             1234i64,
             i64

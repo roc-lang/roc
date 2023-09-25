@@ -104,7 +104,7 @@ fn derivable_record_with_record_ext() {
 #[test]
 fn list() {
     derive_test(Decoder, v!(Symbol::LIST_LIST v!(STR)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for List Str
         # Decoder (List val) fmt where fmt implements DecoderFormatting, val implements Decoding
         # List U8, fmt -[[custom(3)]]-> { rest : List U8, result : [Err [TooShort], Ok (List val)] } where fmt implements DecoderFormatting, val implements Decoding
@@ -114,7 +114,7 @@ fn list() {
           custom
             \#Derived.bytes, #Derived.fmt ->
               decodeWith #Derived.bytes (list decoder) #Derived.fmt
-        "###
+        "
         )
     })
 }
@@ -122,7 +122,7 @@ fn list() {
 #[test]
 fn record_2_fields() {
     derive_test(Decoder, v!({first: v!(STR), second: v!(STR),}), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r#"
         # derived for { first : Str, second : Str }
         # Decoder { first : val, second : val1 } fmt where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
         # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok { first : val, second : val1 }] } where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
@@ -171,7 +171,7 @@ fn record_2_fields() {
                           _ -> Err TooShort
                       _ -> Err TooShort)
                 #Derived.fmt3
-        "###
+        "#
         )
     })
 }
@@ -179,7 +179,7 @@ fn record_2_fields() {
 #[test]
 fn tuple_2_fields() {
     derive_test(Decoder, v!((v!(STR), v!(U8),)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for ( Str, U8 )*
         # Decoder ( val, val1 )* fmt where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
         # List U8, fmt -[[custom(22)]]-> { rest : List U8, result : [Err [TooShort], Ok ( val, val1 )a] } where fmt implements DecoderFormatting, val implements Decoding, val1 implements Decoding
@@ -227,7 +227,7 @@ fn tuple_2_fields() {
                           _ -> Err TooShort
                       _ -> Err TooShort)
                 #Derived.fmt3
-        "###
+        "
         )
     })
 }

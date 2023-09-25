@@ -376,11 +376,10 @@ fn character_literal() {
 fn character_literal_back_slash() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    x = '\\'
+            r"x = '\\'
 
-                    x
-                "#
+x
+"
         ),
         92,
         i64
@@ -391,11 +390,10 @@ fn character_literal_back_slash() {
 fn character_literal_single_quote() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    x = '\''
+            r"x = '\''
 
-                    x
-                "#
+x
+"
         ),
         39,
         i64
@@ -406,11 +404,10 @@ fn character_literal_single_quote() {
 fn character_literal_new_line() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    x = '\n'
+            r"x = '\n'
 
-                    x
-                "#
+x
+"
         ),
         10,
         i64
@@ -594,19 +591,18 @@ fn abs_min_int_overflow() {
 fn gen_if_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    limitedNegate = \num ->
-                        x =
-                            if num == 1 then
-                                -1
-                            else if num == -1 then
-                                1
-                            else
-                                num
-                        x
+            r"limitedNegate = \num ->
+    x =
+        if num == 1 then
+            -1
+        else if num == -1 then
+            1
+        else
+            num
+    x
 
-                    limitedNegate 1
-                "#
+limitedNegate 1
+"
         ),
         -1,
         i64
@@ -681,11 +677,10 @@ fn gen_add_f64() {
 fn gen_wrap_add_nums() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    add2 = \num1, num2 -> num1 + num2
+            r"add2 = \num1, num2 -> num1 + num2
 
-                    add2 4 5
-                "#
+add2 4 5
+"
         ),
         9,
         i64
@@ -890,13 +885,12 @@ fn gen_dec_neq() {
 fn gen_wrap_int_neq() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    wrappedNotEq : a, a -> Bool where a implements Eq
-                    wrappedNotEq = \num1, num2 ->
-                        num1 != num2
+            r"wrappedNotEq : a, a -> Bool where a implements Eq
+wrappedNotEq = \num1, num2 ->
+    num1 != num2
 
-                    wrappedNotEq 2 3
-                "#
+wrappedNotEq 2 3
+"
         ),
         true,
         bool
@@ -1505,14 +1499,13 @@ fn gen_order_of_arithmetic_ops_complex_float() {
 fn if_guard_bind_variable_false() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    when 10 is
-                        x if x == 5 -> 0
-                        _ -> 42
+            r"wrapper = \{} ->
+    when 10 is
+        x if x == 5 -> 0
+        _ -> 42
 
-                wrapper {}
-                "#
+wrapper {}
+"
         ),
         42,
         i64
@@ -1524,14 +1517,13 @@ fn if_guard_bind_variable_false() {
 fn if_guard_bind_variable_true() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    when 10 is
-                        x if x == 10 -> 42
-                        _ -> 0
+            r"wrapper = \{} ->
+    when 10 is
+        x if x == 10 -> 42
+        _ -> 0
 
-                wrapper {}
-                "#
+wrapper {}
+"
         ),
         42,
         i64
@@ -1543,14 +1535,13 @@ fn if_guard_bind_variable_true() {
 fn tail_call_elimination() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    sum = \n, accum ->
-                        when n is
-                            0 -> accum
-                            _ -> sum (n - 1) (n + accum)
+            r"sum = \n, accum ->
+    when n is
+        0 -> accum
+        _ -> sum (n - 1) (n + accum)
 
-                    sum 1_000_000 0
-                "#
+sum 1_000_000 0
+"
         ),
         500000500000,
         i64
@@ -1598,11 +1589,10 @@ fn neg_min_int_overflow() {
 fn gen_wrap_int_neg() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    wrappedNeg = \num -> -num
+            r"wrappedNeg = \num -> -num
 
-                    wrappedNeg 3
-                "#
+wrappedNeg 3
+"
         ),
         -3,
         i64
@@ -1614,12 +1604,11 @@ fn gen_wrap_int_neg() {
 fn gen_basic_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
-                    always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
-                    always42 = \_ -> 42
+            r"always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
+always42 = \_ -> 42
 
-                    always42 5
-                "#
+always42 5
+"
         ),
         42,
         i64
@@ -3461,14 +3450,13 @@ fn mul_saturated() {
 fn monomorphized_ints() {
     assert_evals_to!(
         indoc!(
-            r#"
-            x = 100
+            r"x = 100
 
-            f : U8, U32 -> Nat
-            f = \_, _ -> 18
+f : U8, U32 -> Nat
+f = \_, _ -> 18
 
-            f x x
-            "#
+f x x
+"
         ),
         18,
         usize
@@ -3480,14 +3468,13 @@ fn monomorphized_ints() {
 fn monomorphized_floats() {
     assert_evals_to!(
         indoc!(
-            r#"
-            x = 100.0
+            r"x = 100.0
 
-            f : F32, F64 -> Nat
-            f = \_, _ -> 18
+f : F32, F64 -> Nat
+f = \_, _ -> 18
 
-            f x x
-            "#
+f x x
+"
         ),
         18,
         usize
@@ -3499,19 +3486,18 @@ fn monomorphized_floats() {
 fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f : U8 -> Nat
-            f = \_ -> 9
-            x =
-                n = 100
-                f n
+            r"f : U8 -> Nat
+f = \_ -> 9
+x =
+    n = 100
+    f n
 
-            y =
-                n = 100
-                f n
+y =
+    n = 100
+    f n
 
-            x + y
-            "#
+x + y
+"
         ),
         18,
         usize

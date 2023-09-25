@@ -566,10 +566,7 @@ impl<T> Copy for SubsIndex<T> {}
 
 impl<T> Clone for SubsIndex<T> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 
@@ -577,11 +574,7 @@ impl<T> Copy for SubsSlice<T> {}
 
 impl<T> Clone for SubsSlice<T> {
     fn clone(&self) -> Self {
-        Self {
-            start: self.start,
-            length: self.length,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 

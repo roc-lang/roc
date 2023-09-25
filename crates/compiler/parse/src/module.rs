@@ -1,3 +1,5 @@
+// https://github.com/rust-lang/rust-clippy/issues/1553
+#![allow(clippy::redundant_closure_call)]
 use crate::ast::{Collection, Defs, Header, Module, Spaced, Spaces};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{

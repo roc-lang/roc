@@ -830,13 +830,12 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         (
             "Main",
             indoc!(
-                r#"
-                    interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                r"interface Main exposes [twenty, readAge] imports [Age.{ Age }]
 
-                    twenty = @Age 20
+twenty = @Age 20
 
-                    readAge = \@Age n -> n
-                    "#
+readAge = \@Age n -> n
+"
             ),
         ),
     ];
@@ -846,44 +845,43 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+            r"── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
 
-                The unwrapped opaque type Age referenced here:
+The unwrapped opaque type Age referenced here:
 
-                3│  twenty = @Age 20
-                             ^^^^
+3│  twenty = @Age 20
+             ^^^^
 
-                is imported from another module:
+is imported from another module:
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                            ^^^
+1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                                                            ^^^
 
-                Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
 
-                The unwrapped opaque type Age referenced here:
+The unwrapped opaque type Age referenced here:
 
-                5│  readAge = \@Age n -> n
-                               ^^^^
+5│  readAge = \@Age n -> n
+               ^^^^
 
-                is imported from another module:
+is imported from another module:
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                            ^^^
+1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                                                            ^^^
 
-                Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
+── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
 
-                Nothing from Age is used in this module.
+Nothing from Age is used in this module.
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                      ^^^^^^^^^^^
+1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                                                      ^^^^^^^^^^^
 
-                Since Age isn't used, you don't need to import it.
-                "#
+Since Age isn't used, you don't need to import it.
+"
         ),
         "\n{}",
         err

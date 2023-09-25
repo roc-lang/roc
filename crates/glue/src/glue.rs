@@ -3351,6 +3351,7 @@ impl Clone for U4 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
+    #[allow(clippy::incorrect_clone_impl_on_copy_type)] // TODO Is clippy actually correct here?
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
@@ -3689,6 +3690,7 @@ impl Clone for U3 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
+    #[allow(clippy::incorrect_clone_impl_on_copy_type)] // TODO Is clippy actually correct here?
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
@@ -4027,6 +4029,7 @@ impl Clone for U1 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
+    #[allow(clippy::incorrect_clone_impl_on_copy_type)] // TODO Is clippy actually correct here?
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {

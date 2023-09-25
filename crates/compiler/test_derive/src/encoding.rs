@@ -186,7 +186,7 @@ fn derivable_tag_with_tag_ext() {
 #[test]
 fn empty_record() {
     derive_test(ToEncoder, v!(EMPTY_RECORD), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for {}
         # {} -[[toEncoder_{}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
         # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) where fmt implements EncoderFormatting
@@ -198,7 +198,7 @@ fn empty_record() {
             custom
               \#Derived.bytes, #Derived.fmt ->
                 appendWith #Derived.bytes (record []) #Derived.fmt
-        "###
+        "
         )
     })
 }
@@ -206,7 +206,7 @@ fn empty_record() {
 #[test]
 fn zero_field_record() {
     derive_test(ToEncoder, v!({}), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for {}
         # {} -[[toEncoder_{}(0)]]-> Encoder fmt where fmt implements EncoderFormatting
         # {} -[[toEncoder_{}(0)]]-> (List U8, fmt -[[custom(2) {}]]-> List U8) where fmt implements EncoderFormatting
@@ -218,7 +218,7 @@ fn zero_field_record() {
             custom
               \#Derived.bytes, #Derived.fmt ->
                 appendWith #Derived.bytes (record []) #Derived.fmt
-        "###
+        "
         )
     })
 }
@@ -226,7 +226,7 @@ fn zero_field_record() {
 #[test]
 fn one_field_record() {
     derive_test(ToEncoder, v!({ a: v!(U8), }), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r#"
         # derived for { a : U8 }
         # { a : val } -[[toEncoder_{a}(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding
         # { a : val } -[[toEncoder_{a}(0)]]-> (List U8, fmt -[[custom(2) { a : val }]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding
@@ -241,7 +241,7 @@ fn one_field_record() {
                   #Derived.bytes
                   (record [{ value: toEncoder #Derived.rcd.a, key: "a" }])
                   #Derived.fmt
-        "###
+        "#
         )
     })
 }
@@ -249,7 +249,7 @@ fn one_field_record() {
 #[test]
 fn two_field_record() {
     derive_test(ToEncoder, v!({ a: v!(U8), b: v!(STR), }), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r#"
         # derived for { a : U8, b : Str }
         # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # { a : val, b : val1 } -[[toEncoder_{a,b}(0)]]-> (List U8, fmt -[[custom(2) { a : val, b : val1 }]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
@@ -268,7 +268,7 @@ fn two_field_record() {
                       { value: toEncoder #Derived.rcd.b, key: "b" },
                     ])
                   #Derived.fmt
-        "###
+        "#
         )
     })
 }
@@ -276,7 +276,7 @@ fn two_field_record() {
 #[test]
 fn two_field_tuple() {
     derive_test(ToEncoder, v!((v!(U8), v!(STR),)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for ( U8, Str )*
         # ( val, val1 )* -[[toEncoder_(arity:2)(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # ( val, val1 )a -[[toEncoder_(arity:2)(0)]]-> (List U8, fmt -[[custom(2) ( val, val1 )a]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
@@ -291,7 +291,7 @@ fn two_field_tuple() {
                   #Derived.bytes
                   (tuple [toEncoder #Derived.tup.0, toEncoder #Derived.tup.1])
                   #Derived.fmt
-        "###
+        "
         )
     })
 }
@@ -312,7 +312,7 @@ fn empty_tag_union() {
 #[test]
 fn tag_one_label_zero_args() {
     derive_test(ToEncoder, v!([A]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r#"
         # derived for [A]
         # [A] -[[toEncoder_[A 0](0)]]-> Encoder fmt where fmt implements EncoderFormatting
         # [A] -[[toEncoder_[A 0](0)]]-> (List U8, fmt -[[custom(2) [A]]]-> List U8) where fmt implements EncoderFormatting
@@ -328,7 +328,7 @@ fn tag_one_label_zero_args() {
                   (when #Derived.tag is
                     A -> tag "A" [])
                   #Derived.fmt
-        "###
+        "#
         )
     })
 }
@@ -336,7 +336,7 @@ fn tag_one_label_zero_args() {
 #[test]
 fn tag_one_label_two_args() {
     derive_test(ToEncoder, v!([A v!(U8) v!(STR)]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r#"
         # derived for [A U8 Str]
         # [A val val1] -[[toEncoder_[A 2](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
         # [A val val1] -[[toEncoder_[A 2](0)]]-> (List U8, fmt -[[custom(4) [A val val1]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
@@ -353,7 +353,7 @@ fn tag_one_label_two_args() {
                     A #Derived.2 #Derived.3 ->
                       tag "A" [toEncoder #Derived.2, toEncoder #Derived.3])
                   #Derived.fmt
-        "###
+        "#
         )
     })
 }
@@ -364,7 +364,7 @@ fn tag_two_labels() {
         ToEncoder,
         v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),
         |golden| {
-            assert_snapshot!(golden, @r###"
+            assert_snapshot!(golden, @r#"
             # derived for [A U8 Str U16, B Str]
             # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
             # [A val val1 val1, B val1] -[[toEncoder_[A 3,B 1](0)]]-> (List U8, fmt -[[custom(6) [A val val1 val1, B val1]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
@@ -388,7 +388,7 @@ fn tag_two_labels() {
                             ]
                         B #Derived.5 -> tag "B" [toEncoder #Derived.5])
                       #Derived.fmt
-            "###
+            "#
             )
         },
     )
@@ -400,7 +400,7 @@ fn recursive_tag_union() {
         ToEncoder,
         v!([Nil, Cons v!(U8) v!(^lst) ] as lst),
         |golden| {
-            assert_snapshot!(golden, @r###"
+            assert_snapshot!(golden, @r#"
             # derived for [Cons U8 $rec, Nil] as $rec
             # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
             # [Cons val val1, Nil] -[[toEncoder_[Cons 2,Nil 0](0)]]-> (List U8, fmt -[[custom(4) [Cons val val1, Nil]]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding, val1 implements Encoding
@@ -418,7 +418,7 @@ fn recursive_tag_union() {
                           tag "Cons" [toEncoder #Derived.2, toEncoder #Derived.3]
                         Nil -> tag "Nil" [])
                       #Derived.fmt
-            "###
+            "#
             )
         },
     )
@@ -427,7 +427,7 @@ fn recursive_tag_union() {
 #[test]
 fn list() {
     derive_test(ToEncoder, v!(Symbol::LIST_LIST v!(STR)), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for List Str
         # List val -[[toEncoder_list(0)]]-> Encoder fmt where fmt implements EncoderFormatting, val implements Encoding
         # List val -[[toEncoder_list(0)]]-> (List U8, fmt -[[custom(4) (List val)]]-> List U8) where fmt implements EncoderFormatting, val implements Encoding
@@ -442,7 +442,7 @@ fn list() {
                   #Derived.bytes
                   (list #Derived.lst \#Derived.elem -> toEncoder #Derived.elem)
                   #Derived.fmt
-        "###
+        "
         )
     })
 }

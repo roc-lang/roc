@@ -504,17 +504,16 @@ fn tree_rebalance() {
 #[test]
 fn lowlevel_list_calls() {
     valgrind_test(indoc!(
-        r#"
-        (
-            a = List.map [1,1,1,1,1] (\x -> x + 0)
-            b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
-            c = List.map3 a b [1,1,1,1,1] (\x, y, z -> x + y + z)
-            d = List.map4 a b c [1,1,1,1,1] (\x, y, z, w -> x + y + z + w)
-            e = List.sortWith d (\x, y -> Num.compare x y)
+        r"(
+    a = List.map [1,1,1,1,1] (\x -> x + 0)
+    b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
+    c = List.map3 a b [1,1,1,1,1] (\x, y, z -> x + y + z)
+    d = List.map4 a b c [1,1,1,1,1] (\x, y, z, w -> x + y + z + w)
+    e = List.sortWith d (\x, y -> Num.compare x y)
 
-            Num.toStr (List.len e)
-        )
-        "#
+    Num.toStr (List.len e)
+)
+"
     ));
 }
 

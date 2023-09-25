@@ -965,22 +965,20 @@ mod test {
     fn issue_i4389() {
         run_expect_test(
             indoc!(
-                r#"
-                interface Test exposes [] imports []
+                r"interface Test exposes [] imports []
 
-                expect
-                    totalCount = \{} -> 1u8
-                    totalCount {} == 96u8
-                "#
+expect
+    totalCount = \{} -> 1u8
+    totalCount {} == 96u8
+"
             ),
             indoc!(
-                r#"
-                This expectation failed:
+                r"This expectation failed:
 
-                3│>  expect
-                4│>      totalCount = \{} -> 1u8
-                5│>      totalCount {} == 96u8
-                "#
+3│>  expect
+4│>      totalCount = \{} -> 1u8
+5│>      totalCount {} == 96u8
+"
             ),
         );
     }
@@ -1220,18 +1218,17 @@ mod test {
     fn match_on_opaque_number_type() {
         run_expect_test(
             indoc!(
-                r#"
-                interface Test exposes [] imports []
+                r"interface Test exposes [] imports []
 
-                hexToByte : U8, U8 -> U8
-                hexToByte = \upper, lower ->
-                    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
+hexToByte : U8, U8 -> U8
+hexToByte = \upper, lower ->
+    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
 
-                expect
-                    actual = hexToByte 7 4
-                    expected = 't'
-                    actual == expected
-                "#
+expect
+    actual = hexToByte 7 4
+    expected = 't'
+    actual == expected
+"
             ),
             indoc!(
                 r#"

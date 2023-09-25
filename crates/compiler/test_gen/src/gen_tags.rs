@@ -157,21 +157,20 @@ fn basic_enum() {
 fn even_odd() {
     assert_evals_to!(
         indoc!(
-            r#"
-                even = \n ->
-                    when n is
-                        0 -> Bool.true
-                        1 -> Bool.false
-                        _ -> odd (n - 1)
+            r"even = \n ->
+    when n is
+        0 -> Bool.true
+        1 -> Bool.false
+        _ -> odd (n - 1)
 
-                odd = \n ->
-                    when n is
-                        0 -> Bool.false
-                        1 -> Bool.true
-                        _ -> even (n - 1)
+odd = \n ->
+    when n is
+        0 -> Bool.false
+        1 -> Bool.true
+        _ -> even (n - 1)
 
-                odd 5 && even 42
-                "#
+odd 5 && even 42
+"
         ),
         true,
         bool
@@ -369,17 +368,16 @@ fn maybe_is_just_not_nested() {
 fn maybe_is_just_nested() {
     assert_evals_to!(
         indoc!(
-            r#"
-                Maybe a : [Just a, Nothing]
+            r"Maybe a : [Just a, Nothing]
 
-                isJust : Maybe a -> Bool
-                isJust = \list ->
-                    when list is
-                        Nothing -> Bool.false
-                        Just _ -> Bool.true
+isJust : Maybe a -> Bool
+isJust = \list ->
+    when list is
+        Nothing -> Bool.false
+        Just _ -> Bool.true
 
-                isJust (Just 42)
-                "#
+isJust (Just 42)
+"
         ),
         true,
         bool
@@ -444,16 +442,15 @@ fn when_on_single_value_tag() {
 fn if_guard_multiple() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f = \n ->
-                when Identity n 0 is
-                        Identity x _ if x == 0 -> x + 0
-                        Identity x _ if x == 1 -> x + 0
-                        Identity x _ if x == 2 -> x + 0
-                        Identity x _ -> x - x
+            r"f = \n ->
+    when Identity n 0 is
+            Identity x _ if x == 0 -> x + 0
+            Identity x _ if x == 1 -> x + 0
+            Identity x _ if x == 2 -> x + 0
+            Identity x _ -> x - x
 
-            { a: f 0, b: f 1, c: f 2, d: f 4 }
-                "#
+{ a: f 0, b: f 1, c: f 2, d: f 4 }
+    "
         ),
         [0, 1, 2, 0],
         [i64; 4]
@@ -526,14 +523,13 @@ fn if_guard_constructor_chain() {
 fn if_guard_pattern_false() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    when 2 is
-                        2 if Bool.false -> 0
-                        _ -> 42
+            r"wrapper = \{} ->
+    when 2 is
+        2 if Bool.false -> 0
+        _ -> 42
 
-                wrapper {}
-                "#
+wrapper {}
+"
         ),
         42,
         i64
@@ -545,14 +541,13 @@ fn if_guard_pattern_false() {
 fn if_guard_switch() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    when 2 is
-                        2 | 3 if Bool.false -> 0
-                        _ -> 42
+            r"wrapper = \{} ->
+    when 2 is
+        2 | 3 if Bool.false -> 0
+        _ -> 42
 
-                wrapper {}
-                "#
+wrapper {}
+"
         ),
         42,
         i64
@@ -564,14 +559,13 @@ fn if_guard_switch() {
 fn if_guard_pattern_true() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    when 2 is
-                        2 if Bool.true -> 42
-                        _ -> 0
+            r"wrapper = \{} ->
+    when 2 is
+        2 if Bool.true -> 42
+        _ -> 0
 
-                wrapper {}
-                "#
+wrapper {}
+"
         ),
         42,
         i64
@@ -583,14 +577,13 @@ fn if_guard_pattern_true() {
 fn if_guard_exhaustiveness() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    when 2 is
-                        _ if Bool.false -> 0
-                        _ -> 42
+            r"wrapper = \{} ->
+    when 2 is
+        _ if Bool.false -> 0
+        _ -> 42
 
-                wrapper {}
-                "#
+wrapper {}
+"
         ),
         42,
         i64
@@ -624,14 +617,13 @@ fn when_on_enum() {
 fn pattern_matching_unit() {
     assert_evals_to!(
         indoc!(
-            r#"
-                Unit : [Unit]
+            r"Unit : [Unit]
 
-                f : Unit -> I64
-                f = \Unit -> 42
+f : Unit -> I64
+f = \Unit -> 42
 
-                f Unit
-                "#
+f Unit
+"
         ),
         42,
         i64
@@ -655,12 +647,11 @@ fn pattern_matching_unit() {
 
     assert_evals_to!(
         indoc!(
-            r#"
-                f : {} -> I64
-                f = \{} -> 42
+            r"f : {} -> I64
+f = \{} -> 42
 
-                f {}
-                "#
+f {}
+"
         ),
         42,
         i64
@@ -757,21 +748,20 @@ fn join_point_if() {
 fn join_point_when() {
     assert_evals_to!(
         indoc!(
-            r#"
-            wrapper = \{} ->
-                x : [Red, White, Blue]
-                x = Blue
+            r"wrapper = \{} ->
+    x : [Red, White, Blue]
+    x = Blue
 
-                y =
-                    when x is
-                        Red -> 1
-                        White -> 2
-                        Blue -> 3.1f64
+    y =
+        when x is
+            Red -> 1
+            White -> 2
+            Blue -> 3.1f64
 
-                y
+    y
 
-            wrapper {}
-            "#
+wrapper {}
+"
         ),
         3.1,
         f64
@@ -783,18 +773,17 @@ fn join_point_when() {
 fn join_point_with_cond_expr() {
     assert_evals_to!(
         indoc!(
-            r#"
-                wrapper = \{} ->
-                    y =
-                        when 1 + 2 is
-                            3 -> 3
-                            1 -> 1
-                            _ -> 0
+            r"wrapper = \{} ->
+    y =
+        when 1 + 2 is
+            3 -> 3
+            1 -> 1
+            _ -> 0
 
-                    y
+    y
 
-                wrapper {}
-            "#
+wrapper {}
+"
         ),
         3,
         i64
@@ -1171,12 +1160,11 @@ fn recursive_tag_union_into_flat_tag_union() {
 fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
-            r#"
-            b = \{} -> Bar
-            f : [Foo, Bar], [Bar, Baz] -> U8
-            f = \_, _ -> 18
-            f (b {}) (b {})
-            "#
+            r"b = \{} -> Bar
+f : [Foo, Bar], [Bar, Baz] -> U8
+f = \_, _ -> 18
+f (b {}) (b {})
+"
         ),
         18,
         u8
@@ -1481,11 +1469,10 @@ fn polymorphic_tag() {
 fn issue_2725_alias_polymorphic_lambda() {
     assert_evals_to!(
         indoc!(
-            r#"
-            wrap = \value -> Tag value
-            wrapIt = wrap
-            wrapIt 42
-            "#
+            r"wrap = \value -> Tag value
+wrapIt = wrap
+wrapIt 42
+"
         ),
         42, // Tag is a newtype, it gets unwrapped
         i64
@@ -1711,15 +1698,14 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
 fn issue_3560_nested_tag_constructor_is_newtype() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f : _ -> u8
-            f = \t ->
-                when t is
-                    Wrapper (Payload it) -> it
-                    Wrapper (AlternatePayload it) -> it
+            r"f : _ -> u8
+f = \t ->
+    when t is
+        Wrapper (Payload it) -> it
+        Wrapper (AlternatePayload it) -> it
 
-            {a: f (Wrapper (Payload 15u8)), b: f(Wrapper (AlternatePayload 31u8))}
-            "#
+{a: f (Wrapper (Payload 15u8)), b: f(Wrapper (AlternatePayload 31u8))}
+"
         ),
         (15, 31),
         (u8, u8)
@@ -1731,15 +1717,14 @@ fn issue_3560_nested_tag_constructor_is_newtype() {
 fn issue_3560_nested_tag_constructor_is_record_newtype() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f : _ -> u8
-            f = \t ->
-                when t is
-                    {wrapper: (Payload it)} -> it
-                    {wrapper: (AlternatePayload it)} -> it
+            r"f : _ -> u8
+f = \t ->
+    when t is
+        {wrapper: (Payload it)} -> it
+        {wrapper: (AlternatePayload it)} -> it
 
-            {a: f {wrapper: (Payload 15u8)}, b: f {wrapper: (AlternatePayload 31u8)}}
-            "#
+{a: f {wrapper: (Payload 15u8)}, b: f {wrapper: (AlternatePayload 31u8)}}
+"
         ),
         (15, 31),
         (u8, u8)
@@ -1785,16 +1770,15 @@ fn alignment_i128() {
 fn error_type_in_tag_union_payload() {
     assert_evals_to!(
         indoc!(
-            r#"
-            f : ([] -> Bool) -> Bool
-            f = \fun ->
-              if Bool.true then
-                fun 42
-              else
-                Bool.false
+            r"f : ([] -> Bool) -> Bool
+f = \fun ->
+  if Bool.true then
+    fun 42
+  else
+    Bool.false
 
-            f (\x -> x)
-            "#
+f (\x -> x)
+"
         ),
         0,
         u8,
@@ -2177,21 +2161,20 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
-                r###"
-                app "test" provides [main] to "./platform"
+                r#"app "test" provides [main] to "./platform"
 
-                Concept : [
-                    AtomicConcept,
-                    ExistentialRestriction { role : Str, concept : Concept }
-                ]
+Concept : [
+    AtomicConcept,
+    ExistentialRestriction { role : Str, concept : Concept }
+]
 
-                bottom : Concept
-                bottom = AtomicConcept
+bottom : Concept
+bottom = AtomicConcept
 
-                main =
-                    when Dict.single bottom 0 is
-                        _ -> Bool.true
-                "###
+main =
+    when Dict.single bottom 0 is
+        _ -> Bool.true
+"#
             ),
             true,
             bool
@@ -2204,26 +2187,25 @@ fn issue_5162_recast_nested_nullable_unwrapped_layout() {
 fn nullable_wrapped_eq_issue_5434() {
     assert_evals_to!(
         indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+            r#"app "test" provides [main] to "./platform"
 
-            Value : [
-                A,
-                B I64,
-                C,
-                D (List [T Str Value]),
-            ]
+Value : [
+    A,
+    B I64,
+    C,
+    D (List [T Str Value]),
+]
 
-            main =
-                x : Value
-                x = B 32
-                y : Value
-                y = B 0
-                if x == y then
-                    Bool.true
-                else
-                    Bool.false
-            "###
+main =
+    x : Value
+    x = B 32
+    y : Value
+    y = B 0
+    if x == y then
+        Bool.true
+    else
+        Bool.false
+"#
         ),
         false,
         bool
@@ -2235,36 +2217,35 @@ fn nullable_wrapped_eq_issue_5434() {
 fn recursive_tag_id_in_allocation_basic() {
     assert_evals_to!(
         indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+            r#"app "test" provides [main] to "./platform"
 
-            Value : [
-                A Value,
-                B I64,
-                C I64,
-                D I64,
-                E I64,
-                F I64,
-                G I64,
-                H I64,
-                I I64,
-            ]
+Value : [
+    A Value,
+    B I64,
+    C I64,
+    D I64,
+    E I64,
+    F I64,
+    G I64,
+    H I64,
+    I I64,
+]
 
-            x : Value
-            x = H 42
+x : Value
+x = H 42
 
-            main =
-                when x is
-                    A _ -> "A"
-                    B _ -> "B"
-                    C _ -> "C"
-                    D _ -> "D"
-                    E _ -> "E"
-                    F _ -> "F"
-                    G _ -> "G"
-                    H _ -> "H"
-                    I _ -> "I"
-            "###
+main =
+    when x is
+        A _ -> "A"
+        B _ -> "B"
+        C _ -> "C"
+        D _ -> "D"
+        E _ -> "E"
+        F _ -> "F"
+        G _ -> "G"
+        H _ -> "H"
+        I _ -> "I"
+"#
         ),
         RocStr::from("H"),
         RocStr
@@ -2276,29 +2257,28 @@ fn recursive_tag_id_in_allocation_basic() {
 fn recursive_tag_id_in_allocation_eq() {
     assert_evals_to!(
         indoc!(
-            r###"
-            app "test" provides [main] to "./platform"
+            r#"app "test" provides [main] to "./platform"
 
-            Value : [
-                A Value,
-                B I64,
-                C I64,
-                D I64,
-                E I64,
-                F I64,
-                G I64,
-                H I64,
-                I I64,
-            ]
+Value : [
+    A Value,
+    B I64,
+    C I64,
+    D I64,
+    E I64,
+    F I64,
+    G I64,
+    H I64,
+    I I64,
+]
 
-            x : Value
-            x = G 42
+x : Value
+x = G 42
 
-            y : Value
-            y = H 42
+y : Value
+y = H 42
 
-            main = (x == x) && (x != y) && (y == y)
-            "###
+main = (x == x) && (x != y) && (y == y)
+"#
         ),
         true,
         bool

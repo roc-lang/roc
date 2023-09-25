@@ -1,3 +1,5 @@
+// https://github.com/rust-lang/rust-clippy/issues/1553
+#![allow(clippy::redundant_closure_call)]
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::{
     pointer_layouts, single_register_floats, single_register_int_builtins,

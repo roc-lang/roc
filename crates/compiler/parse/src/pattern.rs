@@ -1,3 +1,5 @@
+// https://github.com/rust-lang/rust-clippy/issues/1553
+#![allow(clippy::redundant_closure_call)]
 use crate::ast::{Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};

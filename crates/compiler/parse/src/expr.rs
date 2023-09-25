@@ -1,3 +1,5 @@
+// https://github.com/rust-lang/rust-clippy/issues/1553
+#![allow(clippy::redundant_closure_call)]
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
     ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef,

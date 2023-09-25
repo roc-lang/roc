@@ -891,7 +891,8 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
         macro_rules! descend_var {
             ($var:expr) => {{
-                help(env, visited, $var)
+                let ret_var = help(env, visited, $var);
+                ret_var
             }};
         }
 

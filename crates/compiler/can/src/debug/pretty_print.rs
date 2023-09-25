@@ -1,5 +1,8 @@
 //! Pretty-prints the canonical AST back to check our work - do things look reasonable?
 
+// https://github.com/rust-lang/rust-clippy/issues/1553
+#![allow(clippy::redundant_closure_call)]
+
 use crate::def::Def;
 use crate::expr::Expr::{self, *};
 use crate::expr::{

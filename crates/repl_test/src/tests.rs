@@ -900,7 +900,7 @@ fn issue_2300() {
 #[test]
 fn function_in_list() {
     expect_success(
-        r#"[\x -> x + 1, \s -> s * 2]"#,
+        r"[\x -> x + 1, \s -> s * 2]",
         r#"[<function>, <function>] : List (Num a -> Num a)"#,
     )
 }
@@ -909,7 +909,7 @@ fn function_in_list() {
 #[test]
 fn function_in_record() {
     expect_success(
-        r#"{ n: 1, adder: \x -> x + 1 }"#,
+        r"{ n: 1, adder: \x -> x + 1 }",
         r#"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }"#,
     )
 }
@@ -918,7 +918,7 @@ fn function_in_record() {
 #[test]
 fn function_in_unwrapped_record() {
     expect_success(
-        r#"{ adder: \x -> x + 1 }"#,
+        r"{ adder: \x -> x + 1 }",
         r#"{ adder: <function> } : { adder : Num a -> Num a }"#,
     )
 }
@@ -927,7 +927,7 @@ fn function_in_unwrapped_record() {
 #[test]
 fn function_in_tag() {
     expect_success(
-        r#"Adder (\x -> x + 1)"#,
+        r"Adder (\x -> x + 1)",
         r#"Adder <function> : [Adder (Num a -> Num a)]"#,
     )
 }
@@ -984,32 +984,30 @@ fn parse_problem() {
 fn issue_2343_complete_mono_with_shadowed_vars() {
     expect_failure(
         indoc!(
-            r#"
-                b = False
-                f = \b ->
-                    when b is
-                        True -> 5
-                        False -> 15
-                f b
-                "#
+            r"b = False
+f = \b ->
+    when b is
+        True -> 5
+        False -> 15
+f b
+"
         ),
         indoc!(
-            r#"
-                ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
+            r"── DUPLICATE NAME ──────────────────────────────────────────────────────────────
 
-                The b name is first defined here:
+The b name is first defined here:
 
-                4│      b = False
-                        ^
+4│      b = False
+        ^
 
-                But then it's defined a second time here:
+But then it's defined a second time here:
 
-                5│      f = \b ->
-                             ^
+5│      f = \b ->
+             ^
 
-                Since these variables have the same name, it's easy to use the wrong
-                one by accident. Give one of them a new name.
-                "#
+Since these variables have the same name, it's easy to use the wrong
+one by accident. Give one of them a new name.
+"
         ),
     );
 }
@@ -1048,10 +1046,9 @@ fn tag_with_type_behind_alias() {
 fn issue_2588_record_with_function_and_nonfunction() {
     expect_success(
         indoc!(
-            r#"
-            x = 1
-            f = \n -> n * 2
-            { y: f x, f }"#
+            r"x = 1
+f = \n -> n * 2
+{ y: f x, f }"
         ),
         r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
     )
@@ -1087,12 +1084,11 @@ fn opaque_apply_polymorphic() {
 fn opaque_pattern_and_call() {
     expect_success(
         indoc!(
-            r#"
-            F t u := [Package t u]
+            r"F t u := [Package t u]
 
-            f = \@F (Package A {}) -> @F (Package {} A)
+f = \@F (Package A {}) -> @F (Package {} A)
 
-            f (@F (Package A {}))"#
+f (@F (Package A {}))"
         ),
         r#"@F (Package {} A) : F {} [A]"#,
     )
@@ -1165,11 +1161,10 @@ fn issue_2582_specialize_result_value() {
 fn issue_2818() {
     expect_success(
         indoc!(
-            r#"
-            f : {} -> List Str
-            f = \_ ->
-              x = []
-              x"#
+            r"f : {} -> List Str
+f = \_ ->
+  x = []
+  x"
         ),
         r"<function> : {} -> List Str",
     )
@@ -1260,16 +1255,14 @@ fn record_of_poly_function_and_string() {
 fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
-            r#"
-            Result.try (Err 42) (\x -> Err (x+1))"#
+            r"Result.try (Err 42) (\x -> Err (x+1))"
         ),
         r#"Err 42 : Result b (Num *)"#,
     );
 
     expect_success(
         indoc!(
-            r#"
-            Result.try (Ok 42) (\x -> Ok (x+1))"#
+            r"Result.try (Ok 42) (\x -> Ok (x+1))"
         ),
         r#"Ok 43 : Result (Num *) err"#,
     );
