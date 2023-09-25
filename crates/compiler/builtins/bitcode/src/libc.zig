@@ -24,13 +24,18 @@ pub var memcpy_target: Memcpy = switch (arch) {
 };
 
 pub fn memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.C) [*]u8 {
-    switch (arch) {
-        // x86_64 has a special optimized memcpy that can use avx2.
-        .x86_64 => {
-            return memcpy_target(dest, src, len);
-        },
-        else => {
+    switch (builtin.os.tag) {
+        .windows => {
             return musl.memcpy(dest, src, len);
+        },
+        else => switch (arch) {
+            // x86_64 has a special optimized memcpy that can use avx2.
+            .x86_64 => {
+                return memcpy_target(dest, src, len);
+            },
+            else => {
+                return musl.memcpy(dest, src, len);
+            },
         },
     }
 }

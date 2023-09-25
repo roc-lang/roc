@@ -17,9 +17,12 @@ comptime {
 }
 
 pub const memcpy =
-    switch (arch) {
-    .x86_64, .x86 => musl_memcpy,
-    else => fallback_memcpy,
+    switch (builtin.os.tag) {
+    .windows => fallback_memcpy,
+    else => switch (arch) {
+        .x86_64, .x86 => musl_memcpy,
+        else => fallback_memcpy,
+    },
 };
 
 pub extern fn musl_memcpy(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.C) [*]u8;
