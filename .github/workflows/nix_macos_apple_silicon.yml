@@ -18,6 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - run: zig version
+
       - name: check formatting with rustfmt
         run: nix develop -c cargo fmt --all -- --check
 

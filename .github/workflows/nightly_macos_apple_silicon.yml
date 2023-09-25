@@ -10,10 +10,15 @@ jobs:
     name: Rust tests, build and package nightly release
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
+    env:
+      ROC_ZIG: /Users/m1ci/Downloads/zig-macos-aarch64-0.11.0/zig
     steps:
       - uses: actions/checkout@v3
-      - name: zig version
-        run: zig version
+
+      - run: |
+         zig version
+         $ROC_ZIG version
+
       - name: llvm version
         run: llc --version | grep LLVM
 

@@ -10,8 +10,14 @@ jobs:
     name: build, test, package and upload nightly release
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 120
+    env:
+      ROC_ZIG: /Users/username1/Downloads/zig-macos-x86_64-0.11.0/zig
     steps:
       - uses: actions/checkout@v3
+
+      - run: |
+         zig version
+         $ROC_ZIG version
           
       - name: write version to file
         run: ./ci/write_version.sh

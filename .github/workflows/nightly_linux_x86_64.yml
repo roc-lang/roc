@@ -10,8 +10,15 @@ jobs:
     name: build and package nightly release
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
+    env:
+      ROC_ZIG: /home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0/zig
+    
     steps:
       - uses: actions/checkout@v3
+
+      - run: |
+         zig version
+         $ROC_ZIG version
 
       - name: create version.txt
         run: ./ci/write_version.sh
