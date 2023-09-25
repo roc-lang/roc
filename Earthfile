@@ -16,19 +16,19 @@ install-zig-llvm:
     ARG ZIG_ARCH
     FROM +install-other-libs
     # zig
-    RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-$ZIG_ARCH-0.9.1.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-$ZIG_ARCH-0.9.1.tar.xz
-    RUN ln -s /earthbuild/zig-linux-$ZIG_ARCH-0.9.1/zig /bin/zig
+    RUN wget -c https://ziglang.org/download/0.11.0/zig-linux-$ZIG_ARCH-0.11.0.tar.xz --no-check-certificate
+    RUN tar -xf zig-linux-$ZIG_ARCH-0.11.0.tar.xz
+    RUN ln -s /earthbuild/zig-linux-$ZIG_ARCH-0.11.0/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
     RUN chmod +x llvm.sh
-    RUN ./llvm.sh 13
-    RUN ln -s /usr/bin/clang-13 /usr/bin/clang
+    RUN ./llvm.sh 16
+    RUN ln -s /usr/bin/clang-16 /usr/bin/clang
     # use lld as linker
-    RUN ln -s /usr/bin/lld-13 /usr/bin/ld.lld
+    RUN ln -s /usr/bin/lld-16 /usr/bin/ld.lld
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack

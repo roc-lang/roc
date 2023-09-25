@@ -12,7 +12,12 @@ let
   actualRustVersion = pkgs.rustc;
   rustVersionsMatch = pkgs.lib.strings.hasSuffix desiredRustVersion actualRustVersion;
 
-  llvmPkgs = pkgs.llvmPackages_13;
+  # When updating the zig or llvm version, make sure they stay in sync.
+  # Also update in flake.nix (TODO: maybe we can use nix code to sync this)
+  zigPkg = pkgs.zig_0_11;
+  llvmPkgs = pkgs.llvmPackages_16;
+  llvmVersion = builtins.splitVersion llvmPkgs.release_version;
+  llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
   # nix does not store libs in /usr/lib or /lib
   glibcPath =
     if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
@@ -48,7 +53,9 @@ in
       };
     };
 
-    LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+    shellHook = ''
+      export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
+    '';
 
     # required for zig
     XDG_CACHE_HOME =
@@ -70,7 +77,7 @@ in
       llvmPkgs.clang
       llvmPkgs.llvm.dev
       llvmPkgs.bintools-unwrapped # contains lld      
-      zig_0_9
+      zigPkg
     ]);
 
     buildInputs = (with pkgs;

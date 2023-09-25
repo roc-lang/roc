@@ -29,6 +29,7 @@
         pkgs = import nixpkgs { inherit system overlays; };
 
         # When updating the zig or llvm version, make sure they stay in sync.
+        # Also update in default.nix (TODO: maybe we can use nix code to sync this)
         zigPkg = pkgs.zig_0_11;
         llvmPkgs = pkgs.llvmPackages_16;
         llvmVersion = builtins.splitVersion llvmPkgs.release_version;
