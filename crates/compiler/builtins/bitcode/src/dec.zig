@@ -235,6 +235,11 @@ pub const RocDec = extern struct {
         return if (negated) |n| .{ .num = n } else null;
     }
 
+    pub fn abs(self: RocDec) !RocDec {
+        const absolute = try math.absInt(self.num);
+        return RocDec{ .num = absolute };
+    }
+
     pub fn addWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
         var answer: i128 = undefined;
         const overflowed = @addWithOverflow(i128, self.num, other.num, &answer);
@@ -1242,6 +1247,11 @@ pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
 
 pub fn negateC(arg: RocDec) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
+}
+
+pub fn absC(arg: RocDec) callconv(.C) i128 {
+    var result = @call(.{ .modifier = always_inline }, RocDec.abs, .{arg}) catch @panic("TODO overflow for calling absolute value on RocDec");
+    return result.num;
 }
 
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {

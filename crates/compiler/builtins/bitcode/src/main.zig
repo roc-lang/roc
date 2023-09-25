@@ -18,40 +18,37 @@ const STR = "str";
 const dec = @import("dec.zig");
 
 comptime {
-    exportDecFn(dec.fromStr, "from_str");
-    exportDecFn(dec.toStr, "to_str");
-    exportDecFn(dec.fromU64C, "from_u64");
-    exportDecFn(dec.toI128, "to_i128");
-    exportDecFn(dec.toF64, "to_f64");
-    exportDecFn(dec.eqC, "eq");
-    exportDecFn(dec.neqC, "neq");
-    exportDecFn(dec.negateC, "negate");
-    exportDecFn(dec.divC, "div");
-    exportDecFn(dec.sinC, "sin");
-    exportDecFn(dec.cosC, "cos");
-    exportDecFn(dec.tanC, "tan");
-    exportDecFn(dec.asinC, "asin");
+    exportDecFn(dec.absC, "abs");
     exportDecFn(dec.acosC, "acos");
-    exportDecFn(dec.atanC, "atan");
-
     exportDecFn(dec.addC, "add_with_overflow");
     exportDecFn(dec.addOrPanicC, "add_or_panic");
     exportDecFn(dec.addSaturatedC, "add_saturated");
-
-    exportDecFn(dec.subC, "sub_with_overflow");
-    exportDecFn(dec.subOrPanicC, "sub_or_panic");
-    exportDecFn(dec.subSaturatedC, "sub_saturated");
-
+    exportDecFn(dec.asinC, "asin");
+    exportDecFn(dec.atanC, "atan");
+    exportDecFn(dec.cosC, "cos");
+    exportDecFn(dec.divC, "div");
+    exportDecFn(dec.eqC, "eq");
+    exportDecFn(dec.fromF32C, "from_float.f32");
+    exportDecFn(dec.fromF64C, "from_float.f64");
+    exportDecFn(dec.fromStr, "from_str");
+    exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
+    exportDecFn(dec.negateC, "negate");
+    exportDecFn(dec.neqC, "neq");
+    exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.subC, "sub_with_overflow");
+    exportDecFn(dec.subOrPanicC, "sub_or_panic");
+    exportDecFn(dec.subSaturatedC, "sub_saturated");
+    exportDecFn(dec.tanC, "tan");
+    exportDecFn(dec.toF64, "to_f64");
+    exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.toStr, "to_str");
 
     inline for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
     }
-
-    exportDecFn(dec.fromF32C, "from_float.f32");
-    exportDecFn(dec.fromF64C, "from_float.f64");
 }
 
 // List Module
