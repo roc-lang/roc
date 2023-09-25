@@ -25,7 +25,7 @@ jobs:
 
       - name: download and install zig
         run: |
-          curl.exe -f --output "C:\zig-windows-x86_64-0.11.0.zip" --url https://ziglang.org/download/0.11.0/zig-windows-x86-0.11.0.zip
+          curl.exe -f --output "C:\zig-windows-x86_64-0.11.0.zip" --url https://ziglang.org/download/0.11.0/zig-windows-x86_64-0.11.0.zip
           cd C:\
           7z x zig-windows-x86_64-0.11.0.zip
           Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.11.0\"
