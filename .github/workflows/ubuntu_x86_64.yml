@@ -24,9 +24,10 @@ jobs:
       - name: Check for duplicate AUTHORS
         run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
 
-      - run: |
-          zig version
-          $ROC_ZIG version
+      # make sure we use zig 11
+      - run: echo /home/small-ci-user/Downloads/zig-linux-x86_64-0.11.0/ >> GITHUB_PATH
+      
+      - run: zig version
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
