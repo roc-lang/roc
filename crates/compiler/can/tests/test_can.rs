@@ -280,12 +280,11 @@ mod test_can {
     #[test]
     fn correct_annotated_body() {
         let src = indoc!(
-            r#"
-                f : Num.Int * -> Num.Int *
-                f = \ a -> a
+            r"f : Num.Int * -> Num.Int *
+f = \ a -> a
 
-                f
-            "#
+f
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -296,12 +295,11 @@ mod test_can {
     #[test]
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
-            r#"
-                f : Num.Int * -> Num.Int * # comment
-                f = \ a -> a
+            r"f : Num.Int * -> Num.Int * # comment
+f = \ a -> a
 
-                f
-            "#
+f
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -312,12 +310,11 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body() {
         let src = indoc!(
-            r#"
-                f : Num.Int * -> Num.Int *
-                g = \ a -> a
+            r"f : Num.Int * -> Num.Int *
+g = \ a -> a
 
-                g
-            "#
+g
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -340,12 +337,11 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
-                f : Num.Int * -> Num.Int * # comment
-                g = \ a -> a
+            r"f : Num.Int * -> Num.Int * # comment
+g = \ a -> a
 
-                g
-            "#
+g
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -368,13 +364,12 @@ mod test_can {
     #[test]
     fn separated_annotated_body() {
         let src = indoc!(
-            r#"
-                f : Num.Int * -> Num.Int *
+            r"f : Num.Int * -> Num.Int *
 
-                f = \ a -> a
+f = \ a -> a
 
-                f 42
-            "#
+f 42
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -389,13 +384,12 @@ mod test_can {
     #[test]
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
-                f : Num.Int * -> Num.Int *
-                # comment
-                f = \ a -> a
+            r"f : Num.Int * -> Num.Int *
+# comment
+f = \ a -> a
 
-                f 42
-            "#
+f 42
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -911,32 +905,31 @@ mod test_can {
     #[test]
     fn recognize_tail_calls() {
         let src = indoc!(
-            r#"
-                g = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> g (x - 1)
+            r"g = \x ->
+    when x is
+        0 -> 0
+        _ -> g (x - 1)
 
-                # use parens to force the ordering!
-                (
-                    h = \x ->
-                        when x is
-                            0 -> 0
-                            _ -> g (x - 1)
+# use parens to force the ordering!
+(
+    h = \x ->
+        when x is
+            0 -> 0
+            _ -> g (x - 1)
 
-                    (
-                        p = \x ->
-                            when x is
-                                0 -> 0
-                                1 -> g (x - 1)
-                                _ -> p (x - 1)
+    (
+        p = \x ->
+            when x is
+                0 -> 0
+                1 -> g (x - 1)
+                _ -> p (x - 1)
 
 
-                        # variables must be (indirectly) referenced in the body for analysis to work
-                        { x: p, y: h }
-                    )
-                )
-            "#
+        # variables must be (indirectly) referenced in the body for analysis to work
+        { x: p, y: h }
+    )
+)
+"
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1012,14 +1005,13 @@ mod test_can {
     #[test]
     fn when_tail_call() {
         let src = indoc!(
-            r#"
-                g = \x ->
-                    when x is
-                        0 -> 0
-                        _ -> g (x + 1)
+            r"g = \x ->
+    when x is
+        0 -> 0
+        _ -> g (x + 1)
 
-                g 0
-            "#
+g 0
+"
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1034,11 +1026,10 @@ mod test_can {
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
-            r#"
-                f = \x -> f x
+            r"f = \x -> f x
 
-                f 0
-            "#
+f 0
+"
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1055,13 +1046,12 @@ mod test_can {
     #[test]
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
-            r#"
-            q = \x ->
-                    when q x is
-                        _ -> 0
+            r"q = \x ->
+        when q x is
+            _ -> 0
 
-            q 0
-        "#
+q 0
+"
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1076,19 +1066,18 @@ mod test_can {
     #[test]
     fn good_mutual_recursion() {
         let src = indoc!(
-            r#"
-                q = \x ->
-                        when x is
-                            0 -> 0
-                            _ -> p (x - 1)
+            r"q = \x ->
+        when x is
+            0 -> 0
+            _ -> p (x - 1)
 
-                p = \x ->
-                        when x is
-                            0 -> 0
-                            _ -> q (x - 1)
+p = \x ->
+        when x is
+            0 -> 0
+            _ -> q (x - 1)
 
-                q p
-            "#
+q p
+"
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1107,11 +1096,10 @@ mod test_can {
     #[test]
     fn valid_self_recursion() {
         let src = indoc!(
-            r#"
-                boom = \_ -> boom {}
+            r"boom = \_ -> boom {}
 
-                boom
-            "#
+boom
+"
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1216,14 +1204,13 @@ mod test_can {
     #[test]
     fn optional_field_not_unused() {
         let src = indoc!(
-            r#"
-                fallbackZ = 3
+            r"fallbackZ = 3
 
-                fn = \{ x, y, z ? fallbackZ } ->
-                    { x, y, z }
+fn = \{ x, y, z ? fallbackZ } ->
+    { x, y, z }
 
-                fn { x: 0, y: 1 }
-            "#
+fn { x: 0, y: 1 }
+"
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);

@@ -272,11 +272,10 @@ mod test_parse {
 
         let arena = Bump::new();
         let src = indoc!(
-            r#"
-                foo = \list ->
-                    isTest = \_ -> 5
-                    List.map list isTest
-            "#
+            r"foo = \list ->
+    isTest = \_ -> 5
+    List.map list isTest
+"
         );
         let actual = module_defs()
             .parse(&arena, State::new(src.as_bytes()), 0)
@@ -295,12 +294,11 @@ mod test_parse {
 
         // highlights a problem with the else branch demanding a newline after its expression
         let src = indoc!(
-            r#"
-            main =
-                v = \y -> if x then y else z
+            r"main =
+    v = \y -> if x then y else z
 
-                1
-            "#
+    1
+"
         );
 
         let state = State::new(src.as_bytes());

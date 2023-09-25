@@ -971,12 +971,11 @@ mod test_fmt {
     #[test]
     fn func_def() {
         expr_formats_same(indoc!(
-            r#"
-                f = \x, y ->
-                    x
+            r"f = \x, y ->
+    x
 
-                f 4
-            "#
+f 4
+"
         ));
     }
 
@@ -1191,27 +1190,24 @@ mod test_fmt {
     #[test]
     fn multi_arg_closure() {
         expr_formats_same(indoc!(
-            r#"
-            \a, b, c -> a b c
-            "#
+            r"\a, b, c -> a b c
+"
         ));
     }
 
     #[test]
     fn destructure_tag_closure() {
         expr_formats_same(indoc!(
-            r#"
-            \Foo a -> Foo a
-            "#
+            r"\Foo a -> Foo a
+"
         ));
     }
 
     #[test]
     fn destructure_nested_tag_closure() {
         expr_formats_same(indoc!(
-            r#"
-            \Foo (Bar a) -> Foo (Bar a)
-            "#
+            r"\Foo (Bar a) -> Foo (Bar a)
+"
         ));
     }
 
@@ -1388,29 +1384,27 @@ mod test_fmt {
 
         expr_formats_to(
             indoc!(
-                r#"
-                f = \x ->
-                    # 1st
+                r"f = \x ->
+    # 1st
 
 
 
 
-                    # 2nd
-                    x
+    # 2nd
+    x
 
-                f 4
-                "#
+f 4
+"
             ),
             indoc!(
-                r#"
-                f = \x ->
-                    # 1st
+                r"f = \x ->
+    # 1st
 
-                    # 2nd
-                    x
+    # 2nd
+    x
 
-                f 4
-                "#
+f 4
+"
             ),
         );
     }
@@ -1475,64 +1469,59 @@ mod test_fmt {
     #[test]
     fn lambda_returns_record() {
         expr_formats_same(indoc!(
-            r#"
-                toRecord = \_ -> {
-                    x: 1,
-                    y: 2,
-                    z: 3,
-                }
+            r"toRecord = \_ -> {
+    x: 1,
+    y: 2,
+    z: 3,
+}
 
-                toRecord
-            "#
+toRecord
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-                    func = \_ ->
-                        { x: 1, y: 2, z: 3 }
+            r"func = \_ ->
+    { x: 1, y: 2, z: 3 }
 
-                    func
-                "#
+func
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-                toRecord = \_ ->
-                    val = 0
+            r"toRecord = \_ ->
+    val = 0
 
-                    {
-                        x: 1,
-                        y: 2,
-                        z: 3,
-                    }
+    {
+        x: 1,
+        y: 2,
+        z: 3,
+    }
 
-                toRecord
-            "#
+toRecord
+"
         ));
 
         expr_formats_to(
             indoc!(
-                r#"
-                    toRecord = \_ ->
-                        {
-                            x: 1,
-                            y: 2,
-                            z: 3,
-                        }
+                r"toRecord = \_ ->
+    {
+        x: 1,
+        y: 2,
+        z: 3,
+    }
 
-                    toRecord
-                "#
+toRecord
+"
             ),
             indoc!(
-                r#"
-                    toRecord = \_ -> {
-                        x: 1,
-                        y: 2,
-                        z: 3,
-                    }
+                r"toRecord = \_ -> {
+    x: 1,
+    y: 2,
+    z: 3,
+}
 
-                    toRecord
-                "#
+toRecord
+"
             ),
         );
     }
@@ -1540,64 +1529,59 @@ mod test_fmt {
     #[test]
     fn lambda_returns_list() {
         expr_formats_same(indoc!(
-            r#"
-                toList = \_ -> [
-                    1,
-                    2,
-                    3,
-                ]
+            r"toList = \_ -> [
+    1,
+    2,
+    3,
+]
 
-                toList
-            "#
+toList
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-                    func = \_ ->
-                        [1, 2, 3]
+            r"func = \_ ->
+    [1, 2, 3]
 
-                    func
-                "#
+func
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-                toList = \_ ->
-                    val = 0
+            r"toList = \_ ->
+    val = 0
 
-                    [
-                        1,
-                        2,
-                        3,
-                    ]
+    [
+        1,
+        2,
+        3,
+    ]
 
-                toList
-            "#
+toList
+"
         ));
 
         expr_formats_to(
             indoc!(
-                r#"
-                    toList = \_ ->
-                        [
-                            1,
-                            2,
-                            3,
-                        ]
+                r"toList = \_ ->
+    [
+        1,
+        2,
+        3,
+    ]
 
-                    toList
-                "#
+toList
+"
             ),
             indoc!(
-                r#"
-                    toList = \_ -> [
-                        1,
-                        2,
-                        3,
-                    ]
+                r"toList = \_ -> [
+    1,
+    2,
+    3,
+]
 
-                    toList
-                "#
+toList
+"
             ),
         );
     }
@@ -2547,75 +2531,67 @@ mod test_fmt {
     #[test]
     fn def_closure() {
         expr_formats_same(indoc!(
-            r#"
-            identity = \a -> a
+            r"identity = \a -> a
 
-            identity 42
-            "#
+identity 42
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-            identity = \a ->
-                a
+            r"identity = \a ->
+    a
 
-            identity 44
-            "#
+identity 44
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-            identity = \a -> a
+            r"identity = \a -> a
 
-            # Hello
-            identity 40
-            "#
+# Hello
+identity 40
+"
         ));
 
         expr_formats_to(
             indoc!(
-                r#"
-                    identity = \a
-                        -> a
+                r"identity = \a
+    -> a
 
-                    identity 41
-                "#
+identity 41
+"
             ),
             indoc!(
-                r#"
-                    identity = \a -> a
+                r"identity = \a -> a
 
-                    identity 41
-                "#
+identity 41
+"
             ),
         );
 
         expr_formats_to(
             indoc!(
-                r#"
-                    identity = \a
-                        ->
-                            a + b
+                r"identity = \a
+    ->
+        a + b
 
-                    identity 4010
-                "#
+identity 4010
+"
             ),
             indoc!(
-                r#"
-                    identity = \a ->
-                        a + b
+                r"identity = \a ->
+    a + b
 
-                    identity 4010
-                "#
+identity 4010
+"
             ),
         );
 
         expr_formats_same(indoc!(
-            r#"
-            identity = \a, b -> a
+            r"identity = \a, b -> a
 
-            identity 43
-            "#
+identity 43
+"
         ));
 
         // expr_formats_same(indoc!(
@@ -2632,30 +2608,28 @@ mod test_fmt {
         // ));
 
         expr_formats_same(indoc!(
-            r#"
-            identity = \a,
-                b,
-                # it's c!!
-                c
-                -> a
+            r"identity = \a,
+    b,
+    # it's c!!
+    c
+    -> a
 
-            identity 43
-            "#
+identity 43
+"
         ));
     }
 
     #[test]
     fn closure_multiline_pattern() {
         expr_formats_same(indoc!(
-            r#"
-            identity = \a,
-                b,
-                # it's c!!
-                c
-                -> a
+            r"identity = \a,
+    b,
+    # it's c!!
+    c
+    -> a
 
-            identity 43
-            "#
+identity 43
+"
         ));
     }
 
@@ -3012,18 +2986,16 @@ mod test_fmt {
 
         expr_formats_to(
             indoc!(
-                r#"
-                    f = \a, b -> {  }
+                r"f = \a, b -> {  }
 
-                    f
-                "#
+f
+"
             ),
             indoc!(
-                r#"
-                    f = \a, b -> {}
+                r"f = \a, b -> {}
 
-                    f
-                "#
+f
+"
             ),
         );
 
@@ -3247,29 +3219,27 @@ mod test_fmt {
     fn multi_line_if_condition_with_spaces() {
         expr_formats_to(
             indoc!(
-                r#"
-                if
+                r"if
 
 
-                    willBoil home water
+    willBoil home water
 
 
-                then
-                    \_ -> leave
+then
+    \_ -> leave
 
-                else
-                    identity
-                "#
+else
+    identity
+"
             ),
             indoc!(
-                r#"
-                if
-                    willBoil home water
-                then
-                    \_ -> leave
-                else
-                    identity
-                "#
+                r"if
+    willBoil home water
+then
+    \_ -> leave
+else
+    identity
+"
             ),
         );
     }
@@ -3616,19 +3586,18 @@ mod test_fmt {
     #[test]
     fn def_when() {
         expr_formats_same(indoc!(
-            r#"
-            myLongFunctionName = \x ->
-                when b is
-                    1 | 2 ->
-                        when c is
-                            6 | 7 ->
-                                8
+            r"myLongFunctionName = \x ->
+    when b is
+        1 | 2 ->
+            when c is
+                6 | 7 ->
+                    8
 
-                    3 | 4 ->
-                        5
+        3 | 4 ->
+            5
 
-            123
-        "#
+123
+"
         ));
     }
 
@@ -3641,33 +3610,31 @@ mod test_fmt {
             // we want to make sure the `when` is at the beginning of the line, inserting
             // a newline if necessary.
             indoc!(
-                r#"
-                myLongFunctionName = \x -> when b is
-                    1 | 2 ->
-                        when c is
-                            6 | 7 ->
-                                8
+                r"myLongFunctionName = \x -> when b is
+    1 | 2 ->
+        when c is
+            6 | 7 ->
+                8
 
-                    3 | 4 ->
-                        5
+    3 | 4 ->
+        5
 
-                123
-            "#
+123
+"
             ),
             indoc!(
-                r#"
-                myLongFunctionName = \x ->
-                    when b is
-                        1 | 2 ->
-                            when c is
-                                6 | 7 ->
-                                    8
+                r"myLongFunctionName = \x ->
+    when b is
+        1 | 2 ->
+            when c is
+                6 | 7 ->
+                    8
 
-                        3 | 4 ->
-                            5
+        3 | 4 ->
+            5
 
-                123
-            "#
+123
+"
             ),
         );
     }
@@ -4029,16 +3996,15 @@ mod test_fmt {
     #[test]
     fn def_returning_closure() {
         expr_formats_same(indoc!(
-            r#"
-            f = \x -> x
-            g = \x -> x
+            r"f = \x -> x
+g = \x -> x
 
-            \x ->
-                a = f x
-                b = f x
+\x ->
+    a = f x
+    b = f x
 
-                x
-            "#
+    x
+"
         ));
     }
 
@@ -4048,25 +4014,23 @@ mod test_fmt {
         // which of course is not the same tree (and nor does it parse)
         expr_formats_to(
             indoc!(
-                r#"
-                \x ->
-                    m = 2
+                r"\x ->
+    m = 2
 
 
-                    m1 = insert m n powerOf10
+    m1 = insert m n powerOf10
 
-                    42
-                "#
+    42
+"
             ),
             indoc!(
-                r#"
-                \x ->
-                    m = 2
+                r"\x ->
+    m = 2
 
-                    m1 = insert m n powerOf10
+    m1 = insert m n powerOf10
 
-                    42
-                "#
+    42
+"
             ),
         );
     }
@@ -4646,37 +4610,34 @@ mod test_fmt {
     #[test]
     fn apply_lambda() {
         expr_formats_same(indoc!(
-            r#"
-            List.map
-                xs
-                (\i ->
-                    i + length)
-            "#
+            r"List.map
+    xs
+    (\i ->
+        i + length)
+"
         ));
     }
 
     #[test]
     fn pipline_apply_lambda_1() {
         expr_formats_same(indoc!(
-            r#"
-            shout
-            |> List.map
-                xs
-                (\i -> i)
-            "#
+            r"shout
+|> List.map
+    xs
+    (\i -> i)
+"
         ));
     }
 
     #[test]
     fn pipline_apply_lambda_2() {
         expr_formats_same(indoc!(
-            r#"
-            shout
-            |> List.map
-                xs
-                (\i -> i)
-            |> List.join
-            "#
+            r"shout
+|> List.map
+    xs
+    (\i -> i)
+|> List.join
+"
         ));
     }
 
@@ -4698,57 +4659,54 @@ mod test_fmt {
     #[test]
     fn pipeline_apply_lambda_multiline() {
         expr_formats_same(indoc!(
-            r#"
-                example = \model ->
-                    model
-                    |> withModel
-                        (\result ->
-                            when result is
-                                Err _ ->
-                                    Err {}
+            r"example = \model ->
+    model
+    |> withModel
+        (\result ->
+            when result is
+                Err _ ->
+                    Err {}
 
-                                Ok val ->
-                                    Ok {}
-                        )
+                Ok val ->
+                    Ok {}
+        )
 
-                example
-            "#
+example
+"
         ));
 
         expr_formats_to(
             indoc!(
-                r#"
-                    example = \model ->
-                        model
-                            |> withModel
-                                (\result ->
-                                        when result is
-                                            Err _ ->
-                                                Err {}
+                r"example = \model ->
+    model
+        |> withModel
+            (\result ->
+                    when result is
+                        Err _ ->
+                            Err {}
 
-                                            Ok val ->
-                                                Ok {}
-                                )
+                        Ok val ->
+                            Ok {}
+            )
 
-                    example
-                "#
+example
+"
             ),
             indoc!(
-                r#"
-                    example = \model ->
-                        model
-                        |> withModel
-                            (\result ->
-                                when result is
-                                    Err _ ->
-                                        Err {}
+                r"example = \model ->
+    model
+    |> withModel
+        (\result ->
+            when result is
+                Err _ ->
+                    Err {}
 
-                                    Ok val ->
-                                        Ok {}
-                            )
+                Ok val ->
+                    Ok {}
+        )
 
-                    example
-                "#
+example
+"
             ),
         );
     }
@@ -4756,12 +4714,11 @@ mod test_fmt {
     #[test]
     fn func_call_trailing_multiline_lambda() {
         expr_formats_same(indoc!(
-            r#"
-                list = List.map [1, 2, 3] \x ->
-                    x + 1
+            r"list = List.map [1, 2, 3] \x ->
+    x + 1
 
-                list
-            "#
+list
+"
         ));
     }
 
@@ -4959,14 +4916,13 @@ mod test_fmt {
     #[test]
     fn list_alias() {
         expr_formats_same(indoc!(
-            r#"
-            ConsList a : [Cons a (ConsList a), Nil]
+            r"ConsList a : [Cons a (ConsList a), Nil]
 
-            f : ConsList a -> ConsList a
-            f = \_ -> Nil
+f : ConsList a -> ConsList a
+f = \_ -> Nil
 
-            f
-            "#
+f
+"
         ));
     }
 
@@ -5133,12 +5089,11 @@ mod test_fmt {
     #[test]
     fn tag_union() {
         expr_formats_same(indoc!(
-            r#"
-            f : [True, False] -> [True, False]
-            f = \x -> x
+            r"f : [True, False] -> [True, False]
+f = \x -> x
 
-            a
-            "#
+a
+"
         ));
     }
 
@@ -5167,18 +5122,17 @@ mod test_fmt {
     #[test]
     fn recursive_tag_union() {
         expr_formats_same(indoc!(
-            r#"
-            f : [Cons a (ConsList a), Nil] as ConsList a -> [Just a, Nothing]
-            f = \list ->
-                when list is
-                    Nil ->
-                        Nothing
+            r"f : [Cons a (ConsList a), Nil] as ConsList a -> [Just a, Nothing]
+f = \list ->
+    when list is
+        Nil ->
+            Nothing
 
-                    Cons first _ ->
-                        Just first
+        Cons first _ ->
+            Just first
 
-            f
-            "#
+f
+"
         ));
     }
 
@@ -5245,26 +5199,24 @@ mod test_fmt {
     #[test]
     fn backpassing_simple() {
         expr_formats_same(indoc!(
-            r#"
-                getChar = \ctx ->
-                    x <- Task.await (getCharScope scope)
-                    42
+            r"getChar = \ctx ->
+    x <- Task.await (getCharScope scope)
+    42
 
-                42
-            "#
+42
+"
         ));
     }
 
     #[test]
     fn backpassing_apply_tag() {
         expr_formats_same(indoc!(
-            r#"
-                getChar = \ctx ->
-                    (T val newScope) <- Task.await (getCharScope scope)
-                    42
+            r"getChar = \ctx ->
+    (T val newScope) <- Task.await (getCharScope scope)
+    42
 
-                42
-            "#
+42
+"
         ));
     }
 
@@ -5338,14 +5290,13 @@ mod test_fmt {
     #[test]
     fn backpassing_body_on_newline() {
         expr_formats_same(indoc!(
-            r#"
-                getChar = \ctx ->
-                    x <-
-                        Task.await (getCharScope scope)
-                    42
+            r"getChar = \ctx ->
+    x <-
+        Task.await (getCharScope scope)
+    42
 
-                42
-            "#
+42
+"
         ));
     }
 
@@ -5362,16 +5313,15 @@ mod test_fmt {
         ));
 
         expr_formats_same(indoc!(
-            r#"
-            foo :
-                (Str -> Bool),
-                Str
-                -> Bool
-            foo = \bar, baz ->
-                42
+            r"foo :
+    (Str -> Bool),
+    Str
+    -> Bool
+foo = \bar, baz ->
+    42
 
-            42
-            "#
+42
+"
         ));
 
         expr_formats_same(indoc!(
@@ -5384,25 +5334,23 @@ mod test_fmt {
         ));
 
         expr_formats_same(indoc!(
-            r#"
-                foo :
-                    (Str -> Bool), Str -> Bool
-                foo = \bar, baz ->
-                    42
+            r"foo :
+    (Str -> Bool), Str -> Bool
+foo = \bar, baz ->
+    42
 
-                42
-                "#
+42
+"
         ));
 
         expr_formats_same(indoc!(
-            r#"
-                foo :
-                    (Str -> Bool), Str -> Bool # comment
-                foo = \bar, baz ->
-                    42
+            r"foo :
+    (Str -> Bool), Str -> Bool # comment
+foo = \bar, baz ->
+    42
 
-                42
-                "#
+42
+"
         ));
     }
 
@@ -5794,21 +5742,19 @@ mod test_fmt {
         ));
 
         expr_formats_same(indoc!(
-            r#"
-            '\n'
-            "#
+            r"'\n'
+"
         ));
     }
 
     #[test]
     fn format_char_pattern() {
         expr_formats_same(indoc!(
-            r#"
-            when x is
-                ' ' -> x
-                '\n' -> x
-                '\t' -> x
-            "#
+            r"when x is
+    ' ' -> x
+    '\n' -> x
+    '\t' -> x
+"
         ));
     }
 
