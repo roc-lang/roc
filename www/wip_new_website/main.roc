@@ -42,6 +42,7 @@ view = \page, htmlContent ->
             meta [name "description", content (getDescription page)] [],
             meta [name "viewport", content "width=device-width"] [],
             link [rel "stylesheet", href "/wip/site.css"] [],
+            link [rel "stylesheet", href "/repl/repl.css"] [],
             link [rel "icon", href "/favicon.svg"] [],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.

@@ -1,3 +1,6 @@
+import * as roc_repl_wasm from "./roc_repl_wasm.js";
+import { getMockWasiImports } from "./wasi.js";
+
 // The only way we can provide values to wasm_bindgen's generated code is to set globals
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
@@ -8,9 +11,6 @@ console.error = function displayErrorInHistoryPanel(string) {
   const html = `<div class="panic">${string}</div>`;
   updateHistoryEntry(repl.inputHistoryIndex, false, html);
 };
-
-import * as roc_repl_wasm from "./roc_repl_wasm.js";
-import { getMockWasiImports } from "./wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state

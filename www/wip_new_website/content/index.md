@@ -47,6 +47,15 @@ You can get a quick taste of Roc in this WebAssembly Read-Eval-Print Loop (REPL)
 
 <input placeholder="Try writing 0.1 + 0.2 and pressing Enter" style="width:600px">
 
+<code class="history">
+<div id="help-text"></div>
+<div id="history-text"><div id="loading-message">Loading Roc compiler as a WebAssembly module…please wait!</div></div>
+</code>
+<section id="source-input-wrapper">
+<textarea rows="5" autofocus id="source-input"
+placeholder="You can enter Roc code here after the compiler is loaded!" disabled></textarea>
+</section>
+
 Roc code can compile to WebAssembly, so this REPL runs completely in your browser. No network connection required!
 
 ## Use cases
@@ -104,4 +113,4 @@ If you'd like to learn more about Roc check out one of these videos:
 *   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
 *   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language)
 
-<script src="repl.js"></script>
+<script src="/repl/repl.js"></script>
