@@ -5,5 +5,11 @@ platform "cli"
     imports [Task.{ Task }]
     provides [mainForHost]
 
-mainForHost : Task {} []
-mainForHost = main
+mainForHost : Task (List U8) []
+mainForHost = 
+    main 
+    |> Task.map responseToBytes
+
+responseToBytes : Response -> List U8
+responseToBytes = \{ status, headers, body } ->
+    crash "kaboom!"
