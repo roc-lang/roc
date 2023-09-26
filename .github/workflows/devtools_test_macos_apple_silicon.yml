@@ -15,19 +15,19 @@ jobs:
         steps:
             - uses: actions/checkout@v3
 
-            # - name: Only run all steps if flake.lock or flake.nix changed
-            #   id: checklock
-            #   run: |
-            #     if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'flake'; then
-            #       echo "A flake file was changed. Testing devtools nix files..."
-            #       echo "::set-output name=changed::true"
-            #     else
-            #       echo "No flake file was changed. No need to run tests."
-            #       echo "::set-output name=changed::false"
-            #     fi
+            - name: Only run all steps if flake.lock or flake.nix changed
+              id: checklock
+              run: |
+                if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'flake'; then
+                  echo "A flake file was changed. Testing devtools nix files..."
+                  echo "::set-output name=changed::true"
+                else
+                  echo "No flake file was changed. No need to run tests."
+                  echo "::set-output name=changed::false"
+                fi
 
             - name: test devtools/flake.nix
-              # if: steps.checklock.outputs.changed == 'true'
+              if: steps.checklock.outputs.changed == 'true'
               id: devtools_test_step
               run: |
                 sed -i '' "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
