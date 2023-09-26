@@ -30,7 +30,7 @@ jobs:
               # if: steps.checklock.outputs.changed == 'true'
               id: devtools_test_step
               run: |
-                sed -i "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
+                sed -i '' "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
                 cat devtools/flake.nix
                 mkdir -p ../temp
                 cp devtools/flake.nix ../temp
@@ -38,7 +38,7 @@ jobs:
                 cd ../temp
                 git init
                 git add flake.nix flake.lock
-                nix develop
+                nix develop --show-trace
 
             - name: Print tip on fail
               if: steps.devtools_test_step.outcome == 'failure'
