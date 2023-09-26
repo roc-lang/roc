@@ -9,6 +9,7 @@
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
       flake-utils = roc.inputs.flake-utils;
+      isAarch64Darwin = stdenv.hostPlatform.system == "aarch64-darwin";
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import roc.inputs.nixpkgs {
@@ -21,20 +22,17 @@
         devShell = pkgs.mkShell {
           packages = let
             devInputs = with pkgs; 
-              let
-                isAarch64Darwin = stdenv.hostPlatform.system == "aarch64-darwin";
-              in
               [ less bashInteractive ]
               ++ (if isAarch64Darwin then [] else [ gdb ]);
 
             vscodeWithExtensions = pkgs.vscode-with-extensions.override {
-              vscodeExtensions = with pkgs.vscode-extensions; [
+              vscodeExtensions = with pkgs.vscode-extensions;
+              [
                 matklad.rust-analyzer
                 # eamodio.gitlens
                 bbenoist.nix
-                vadimcn.vscode-lldb
                 tamasfe.even-better-toml
-              ]
+              ]   ++ (if isAarch64Darwin then [] else [ vadimcn.vscode-lldb ])
                   ++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
                      {
                         name = "roc-lang-support";
