@@ -17,9 +17,7 @@ jobs:
     env:
       RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
     steps:
-      - uses: actions/checkout@v2
-        with:
-          clean: "true"
+      - uses: actions/checkout@v3
 
       - name: test_gen llvm tests
         run: cargo nextest-gen-llvm --release --no-fail-fast --locked -E "package(test_gen) - test(gen_str::str_append_scalar)"

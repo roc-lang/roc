@@ -19,7 +19,7 @@ jobs:
 
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 

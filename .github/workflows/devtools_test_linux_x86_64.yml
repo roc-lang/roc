@@ -1,0 +1,58 @@
+on:
+    pull_request:
+  
+name: devtools nix files test - linux
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    devtools-test-linux:
+        name: devtools-test-linux
+        runs-on: [ubuntu-20.04]
+        timeout-minutes: 120
+        steps:
+            - uses: actions/checkout@v3
+
+            - name: Only run all steps if flake.lock or flake.nix changed
+              id: checklock
+              run: |
+                if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'flake'; then
+                  echo "A flake file was changed. Testing devtools nix files..."
+                  echo "flake_changed=true" >> $GITHUB_ENV
+                else
+                  echo "No flake file was changed. No need to run tests."
+                  echo "flake_changed=false" >> $GITHUB_ENV
+                fi
+            
+
+            - uses: cachix/install-nix-action@v23
+              if: env.flake_changed == 'true'
+              with:
+                nix_path: nixpkgs=channel:nixos-unstable
+
+            - name: test devtools/flake.nix
+              if: env.flake_changed == 'true'
+              id: devtools_test_step
+              run: |
+                sed -i "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
+                cat devtools/flake.nix
+                mkdir -p ../temp
+                cp devtools/flake.nix ../temp
+                cp devtools/flake.lock ../temp
+                cd ../temp
+                git init
+                git add flake.nix flake.lock
+                nix develop
+
+            - name: Print tip on fail
+              if: steps.devtools_test_step.outcome == 'failure'
+              run: |
+                echo "The devtools test failed, this can likely be fixed by"
+                echo "locally deleting devtools/flake.lock and following the"
+                echo "instructions in devtools/README.md. This will create a"
+                echo "new flake.lock you should use to replace the old devtools/flake.lock"
+
+
+  
