@@ -47,7 +47,7 @@ in
       lockFile = ./Cargo.lock;
       outputHashes = {
         "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
-        "inkwell-0.1.0" = "sha256-1kpvY3naS33B99nuu5ZYhb7mdddAyG+DkbUl/RG1Ptg=";
+        "inkwell-0.2.0" = "sha256-VhTapYGonoSQ4hnDoLl4AAgj0BppAhPNA+UPuAJSuAU=";
         "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
         "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
       };
