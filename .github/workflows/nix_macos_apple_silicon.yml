@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+  pull_request:
 
 name: Nix apple silicon cargo test
 
