@@ -26,6 +26,20 @@ jobs:
       - name: Clean up nix store
         run: nix-store --gc
 
+  clean-nix-store-rpi-1:
+    runs-on: [self-hosted, pi-4-8GB-aarch64]
+    timeout-minutes: 120
+    steps:
+      - name: Clean up nix store
+        run: nix-store --gc
+
+  clean-nix-store-rpi-2:
+    runs-on: [self-hosted, rpiGreen]
+    timeout-minutes: 120
+    steps:
+      - name: Clean up nix store
+        run: nix-store --gc
+
   clean-nix-store-mac-mini-x86-64:
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 120

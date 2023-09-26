@@ -1,0 +1,26 @@
+on:
+    pull_request:
+    
+name: test cargo build on linux arm64 inside nix
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    RUST_BACKTRACE: 1
+
+jobs:
+    nix-linux-arm64-cargo:
+        name: nix-linux-arm64
+        runs-on: [self-hosted, Linux, ARM64]
+        timeout-minutes: 150
+        steps:
+            - uses: actions/checkout@v3
+
+            - name: test release build
+              run: nix develop -c cargo build --release --locked
+
+            # TODO  
+            #- name: build tests without running
+            #  run: cargo test --no-run --release
