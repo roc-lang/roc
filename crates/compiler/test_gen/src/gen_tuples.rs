@@ -319,7 +319,7 @@ fn bool_tuple4_literal() {
 // Not supported by wasm because of the size of the tuple:
 // FromWasm32Memory is only implemented for tuples of up to 4 elements
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn i64_tuple9_literal() {
     assert_evals_to!(
         indoc!(
