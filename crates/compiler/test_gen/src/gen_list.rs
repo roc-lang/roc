@@ -3014,7 +3014,7 @@ fn list_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn list_all_empty_with_unknown_element_type() {
     assert_evals_to!("List.all [] (\\_ -> Bool.true)", true, bool);
 }

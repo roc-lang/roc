@@ -4460,7 +4460,7 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn reset_recursive_type_wraps_in_named_type() {
     assert_evals_to!(
         indoc!(
