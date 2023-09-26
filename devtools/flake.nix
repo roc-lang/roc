@@ -9,13 +9,14 @@
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
       flake-utils = roc.inputs.flake-utils;
-      isAarch64Darwin = stdenv.hostPlatform.system == "aarch64-darwin";
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import roc.inputs.nixpkgs {
           inherit system;
           config.allowUnfree = true;
         };
+        
+        isAarch64Darwin = pkgs.stdenv.hostPlatform.system == "aarch64-darwin";
 
         rocShell = roc.devShell.${system};
       in {
