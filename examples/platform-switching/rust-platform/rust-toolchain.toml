@@ -1,5 +1,5 @@
 [toolchain]
-channel = "1.70.0"
+channel = "1.71.1"
 
 profile = "default"
 

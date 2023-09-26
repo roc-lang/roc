@@ -1,6 +1,6 @@
 
 VERSION 0.6
-FROM rust:1.70.0-slim-buster # make sure to update rust-toolchain.toml too so that everything uses the same rust version
+FROM rust:1.71.1-slim-buster # make sure to update rust-toolchain.toml too so that everything uses the same rust version
 WORKDIR /earthbuild
 
 prep-debian:

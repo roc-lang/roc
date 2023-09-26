@@ -9,38 +9,47 @@
     let
       supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
       flake-utils = roc.inputs.flake-utils;
-    in flake-utils.lib.eachSystem supportedSystems (system:
+    in
+    flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import roc.inputs.nixpkgs {
           inherit system;
           config.allowUnfree = true;
         };
 
+        isAarch64Darwin = pkgs.stdenv.hostPlatform.system == "aarch64-darwin";
+
         rocShell = roc.devShell.${system};
-      in {
+      in
+      {
         devShell = pkgs.mkShell {
-          packages = let
-            devInputs = (with pkgs; [ less gdb bashInteractive]);
-            vscodeWithExtensions = pkgs.vscode-with-extensions.override {
-              vscodeExtensions = with pkgs.vscode-extensions; [
-                matklad.rust-analyzer
-                # eamodio.gitlens
-                bbenoist.nix
-                vadimcn.vscode-lldb
-                tamasfe.even-better-toml
-              ]
+          packages =
+            let
+              devInputs = with pkgs;
+                [ less bashInteractive ]
+                ++ (if isAarch64Darwin then [ ] else [ gdb ]);
+
+              vscodeWithExtensions = pkgs.vscode-with-extensions.override {
+                vscodeExtensions = with pkgs.vscode-extensions;
+                  [
+                    matklad.rust-analyzer
+                    # eamodio.gitlens
+                    bbenoist.nix
+                    tamasfe.even-better-toml
+                  ] ++ (if isAarch64Darwin then [ ] else [ vadimcn.vscode-lldb ])
                   ++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
-                     {
-                        name = "roc-lang-support";
-                        publisher = "benjamin-thomas";
-                        version = "0.0.4";
-                        # keep this sha for the first run, nix will tell you the correct one to change it to
-                        sha256 = "sha256-USZiXdvYa8hxj62cy6hdiS5c2tIDIQxSyux684lyAEY=";
-                      }
-                    ]
-                  ;
-            };
-          in [ vscodeWithExtensions devInputs ];
+                    {
+                      name = "roc-lang-support";
+                      publisher = "benjamin-thomas";
+                      version = "0.0.4";
+                      # keep this sha for the first run, nix will tell you the correct one to change it to
+                      sha256 = "sha256-USZiXdvYa8hxj62cy6hdiS5c2tIDIQxSyux684lyAEY=";
+                    }
+                  ]
+                ;
+              };
+            in
+            [ vscodeWithExtensions devInputs ];
 
           inputsFrom = [ rocShell ];
 
@@ -51,6 +60,8 @@
 
           # to set the LLVM_SYS_<VERSION>_PREFIX
           shellHook = rocShell.shellHook;
+
+          formatter = pkgs.nixpkgs-fmt;
         };
       });
 }

@@ -1558,7 +1558,7 @@ fn tail_call_elimination() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-dev"))]
+#[cfg(feature = "gen-dev")]
 fn int_negate_dev() {
     // TODO
     // dev backend yet to have `Num.maxI64` or `Num.minI64`.
@@ -2317,7 +2317,7 @@ fn min_f32() {
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm"), not(feature = "gen-llvm-wasm")))]
+#[cfg(all(feature = "gen-llvm", not(feature = "gen-llvm-wasm")))]
 fn to_nat_truncate_wraps() {
     let input = "Num.toNat 10_000_000_000_000_000_000_000i128";
     assert_evals_to!(input, 1864712049423024128, u64)
@@ -3885,7 +3885,7 @@ fn num_abs_diff_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn num_abs_diff_large_bits() {
     assert_evals_to!(r#"Num.absDiff 0u128 0u128"#, 0, u128);
     assert_evals_to!(r#"Num.absDiff 1u128 2u128"#, 1, u128);
@@ -3918,7 +3918,7 @@ fn num_abs_int_min_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 #[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
 fn num_abs_large_bits_min_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.minI128 0"#, 0, i128);
