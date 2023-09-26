@@ -1,7 +1,7 @@
 on:
     pull_request:
 
-name: Test the devtools nix files
+name: devtools nix files test - macos
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,14 +20,14 @@ jobs:
               run: |
                 if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'flake'; then
                   echo "A flake file was changed. Testing devtools nix files..."
-                  echo "::set-output name=changed::true"
+                  echo "flake_changed=true" >> $GITHUB_ENV
                 else
                   echo "No flake file was changed. No need to run tests."
-                  echo "::set-output name=changed::false"
+                  echo "flake_changed=false" >> $GITHUB_ENV
                 fi
 
             - name: test devtools/flake.nix
-              if: steps.checklock.outputs.changed == 'true'
+              if: env.flake_changed == 'true'
               id: devtools_test_step
               run: |
                 sed -i '' "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
@@ -41,7 +41,7 @@ jobs:
                 nix develop --show-trace
 
             - name: Print tip on fail
-              if: steps.devtools_test_step.outcome == 'failure'
+              if: env.flake_changed == 'true'
               run: |
                 echo "The devtools test failed, this can likely be fixed by"
                 echo "locally deleting devtools/flake.lock and following the"
