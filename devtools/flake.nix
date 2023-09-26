@@ -20,7 +20,13 @@
       in {
         devShell = pkgs.mkShell {
           packages = let
-            devInputs = (with pkgs; [ less gdb bashInteractive]);
+            devInputs = with pkgs; 
+              let
+                isAarch64Darwin = stdenv.hostPlatform.system == "aarch64-darwin";
+              in
+              [ less bashInteractive ]
+              ++ (if isAarch64Darwin then [] else [ gdb ]);
+
             vscodeWithExtensions = pkgs.vscode-with-extensions.override {
               vscodeExtensions = with pkgs.vscode-extensions; [
                 matklad.rust-analyzer
