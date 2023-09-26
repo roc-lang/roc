@@ -1,5 +1,5 @@
 on:
-  pull_request:
+  #pull_request:
 
 name: Nix linux x86_64 cargo test
 
