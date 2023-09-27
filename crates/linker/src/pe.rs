@@ -1669,7 +1669,7 @@ mod test {
                 "app.zig",
                 "-target",
                 "x86_64-windows-gnu",
-                "--strip",
+                "-fstrip",
                 "-rdynamic",
                 "-OReleaseFast",
             ])
@@ -1707,7 +1707,7 @@ mod test {
             "-target",
             "x86_64-windows-gnu",
             "-rdynamic",
-            "--strip",
+            "-fstrip",
             "-rdynamic",
             "-OReleaseFast",
         ]);
@@ -1929,7 +1929,7 @@ mod test {
             "-target",
             "x86_64-windows-gnu",
             "-rdynamic",
-            "--strip",
+            "-fstrip",
             "-OReleaseFast",
         ]);
 

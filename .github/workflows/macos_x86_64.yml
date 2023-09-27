@@ -1,5 +1,5 @@
 on:
-  pull_request:
+  #pull_request:
 
 name: Macos x86-64 rust tests
 
@@ -21,10 +21,6 @@ jobs:
 
       - name: set LLVM_SYS_160_PREFIX
         run: echo "LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)" >> $GITHUB_ENV
-
-      - run: echo $LLVM_SYS_160_PREFIX
-
-      - run: ls $LLVM_SYS_160_PREFIX
 
       - name: Update PATH to use zig 11
         run: |
