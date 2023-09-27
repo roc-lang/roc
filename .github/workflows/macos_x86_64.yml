@@ -9,7 +9,6 @@ concurrency:
 
 env:
   RUST_BACKTRACE: 1
-  LLVM_SYS_160_PREFIX: $(brew --prefix llvm)
 
 jobs:
   test-rust-macos-x86-64:
@@ -19,6 +18,9 @@ jobs:
       RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
     steps:
       - uses: actions/checkout@v3
+
+      - name: set LLVM_SYS_160_PREFIX
+        run: echo "LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)" >> $GITHUB_ENV
 
       - run: echo $LLVM_SYS_160_PREFIX
 
