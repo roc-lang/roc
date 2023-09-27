@@ -1,5 +1,5 @@
 on:
-    pull_request:
+    #pull_request:
 
 name: devtools nix files test - macos
 

@@ -1,5 +1,5 @@
 on:
-    pull_request:
+    #pull_request:
     
 name: test cargo build on linux arm64 inside nix
 
