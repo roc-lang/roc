@@ -1262,7 +1262,7 @@ pub fn negateC(arg: RocDec) callconv(.C) i128 {
 }
 
 pub fn absC(arg: RocDec) callconv(.C) i128 {
-    const result = @call(.{ .modifier = always_inline }, RocDec.abs, .{arg}) catch @panic("TODO overflow for calling absolute value on RocDec");
+    const result = @call(.always_inline, RocDec.abs, .{arg}) catch @panic("TODO overflow for calling absolute value on RocDec");
     return result.num;
 }
 
