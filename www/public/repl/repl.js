@@ -32,7 +32,7 @@ const repl = {
   app: null,
 
   // Temporary storage for values passing back and forth between JS and Wasm
-  result: { addr: 0, buffer: new ArrayBuffer() },
+  result_addr: { addr: 0, buffer: new ArrayBuffer() },
 };
 
 // Initialise
@@ -165,40 +165,35 @@ async function processInputQueue() {
 // Callbacks to JS from Rust
 // ----------------------------------------------------------------------------
 
-// Create an executable Wasm instance from an array of bytes
-// (Browser validates the module and does the final compilation.)
+// Load Wasm code into the browser's virtual machine, so we can run it later.
+// This operation is async, so we call it before entering any code shared
+// with the command-line REPL, which is sync.
 async function js_create_app(wasm_module_bytes) {
-  const wasiLinkObject = {}; // gives the WASI functions a reference to the app so they can write to its memory
-  const importObj = getMockWasiImports(wasiLinkObject);
-  const { instance } = await WebAssembly.instantiate(
-    wasm_module_bytes,
-    importObj
-  );
-  wasiLinkObject.instance = instance;
+  const { instance } = await WebAssembly.instantiate(wasm_module_bytes);
+  // Keep the instance alive so we can run it later from shared REPL code
   repl.app = instance;
 }
 
-// Call the main function of the app, via the test wrapper
-// Cache the result and return the size of the app's memory
+// Call the `main` function of the user app, via the `wrapper` function.
 function js_run_app() {
   const { wrapper, memory } = repl.app.exports;
-  const addr = wrapper();
-  const { buffer } = memory;
-  repl.result = { addr, buffer };
+
+  // Run the user code, and remember the result address
+  // We'll pass it to Rust in the next callback
+  repl.result_addr = wrapper();
 
   // Tell Rust how much space to reserve for its copy of the app's memory buffer.
-  // This is not predictable, since the app can resize its own memory via malloc.
-  return buffer.byteLength;
+  // We couldn't know that size until we actually ran the app.
+  return memory.buffer.byteLength;
 }
 
-// After the Rust app has allocated space for the app's memory buffer,
-// it calls this function and we copy it, and return the result too
+// After Rust has allocated space for the app's memory buffer,
+// we copy it, and return the result address too
 function js_get_result_and_memory(buffer_alloc_addr) {
-  const { addr, buffer } = repl.result;
-  const appMemory = new Uint8Array(buffer);
+  const appMemory = new Uint8Array(repl.app.exports.memory.buffer);
   const compilerMemory = new Uint8Array(repl.compiler.memory.buffer);
   compilerMemory.set(appMemory, buffer_alloc_addr);
-  return addr;
+  return repl.result_addr;
 }
 
 // ----------------------------------------------------------------------------
