@@ -542,7 +542,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element_width: usize       i32
                 //  update_mode: UpdateMode    i32
@@ -564,7 +564,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(
                     bitcode::LIST_RELEASE_EXCESS_CAPACITY,
-                    6,
+                    5,
                     false,
                 );
             }
