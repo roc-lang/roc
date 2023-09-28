@@ -226,7 +226,7 @@ pub fn decrefCheckNullC(
 }
 
 pub fn decrefDataPtrC(
-    bytes_or_null: ?[*]isize,
+    bytes_or_null: ?[*]u8,
     alignment: u32,
 ) callconv(.C) void {
     var bytes = bytes_or_null orelse return;
@@ -242,7 +242,7 @@ pub fn decrefDataPtrC(
 }
 
 pub fn increfDataPtrC(
-    bytes_or_null: ?[*]isize,
+    bytes_or_null: ?[*]u8,
     inc_amount: isize,
 ) callconv(.C) void {
     var bytes = bytes_or_null orelse return;
@@ -257,7 +257,7 @@ pub fn increfDataPtrC(
 }
 
 pub fn freeDataPtrC(
-    bytes_or_null: ?[*]isize,
+    bytes_or_null: ?[*]u8,
     alignment: u32,
 ) callconv(.C) void {
     var bytes = bytes_or_null orelse return;
