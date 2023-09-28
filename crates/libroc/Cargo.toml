@@ -1,0 +1,31 @@
+[package]
+name = "libroc"
+description = "A C library exposing Roc compiler features, primarily intended for use in editor plugins"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+# Only in-browser targets need no_std; they won't get threads anyway,
+# and not using std reduces build size.
+default = ["std"]
+std = []
+
+[dependencies]
+ven_pretty = { path = "../vendor/pretty" }
+
+bumpalo.workspace = true
+mimalloc.workspace = true
+strum.workspace = true
+target-lexicon.workspace = true
+
+[dev-dependencies]
+indoc.workspace = true
+pretty_assertions.workspace = true
+serial_test.workspace = true

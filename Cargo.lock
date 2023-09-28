@@ -1429,6 +1429,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "libroc"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "mimalloc",
+ "pretty_assertions",
+ "serial_test",
+ "strum",
+ "target-lexicon",
+ "ven_pretty",
+]
+
+[[package]]
 name = "libtest-mimic"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
