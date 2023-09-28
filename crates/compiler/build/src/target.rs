@@ -140,11 +140,7 @@ pub fn arch_str(target: &Triple) -> &'static str {
     }
 }
 
-pub fn target_machine(
-    target: &Triple,
-    opt: OptimizationLevel,
-    reloc: RelocMode,
-) -> Option<TargetMachine> {
+pub fn target_machine(target: &Triple, opt: OptimizationLevel) -> Option<TargetMachine> {
     let arch = arch_str(target);
 
     init_arch(target);
@@ -168,7 +164,7 @@ pub fn target_machine(
         "generic",
         "",
         opt,
-        reloc,
+        RelocMode::PIC, // We always need PIC
         code_model,
     )
 }

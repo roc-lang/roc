@@ -1273,7 +1273,7 @@ pub fn llvm_module_to_dylib(
     opt_level: OptLevel,
 ) -> Result<Library, Error> {
     use crate::target::{self, convert_opt_level};
-    use inkwell::targets::{FileType, RelocMode};
+    use inkwell::targets::FileType;
 
     let dir = tempfile::tempdir().unwrap();
     let filename = PathBuf::from("Test.roc");
@@ -1283,9 +1283,7 @@ pub fn llvm_module_to_dylib(
     app_o_file.set_file_name("app.o");
 
     // Emit the .o file using position-independent code (PIC) - needed for dylibs
-    let reloc = RelocMode::PIC;
-    let target_machine =
-        target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
+    let target_machine = target::target_machine(target, convert_opt_level(opt_level)).unwrap();
 
     target_machine
         .write_to_file(module, FileType::Object, &app_o_file)

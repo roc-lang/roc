@@ -472,7 +472,7 @@ fn llvm_module_to_wasm_file(
             "",
             "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
             inkwell::OptimizationLevel::None,
-            inkwell::targets::RelocMode::Default,
+            inkwell::targets::RelocMode::PIC,
             inkwell::targets::CodeModel::Default,
         )
         .unwrap();
