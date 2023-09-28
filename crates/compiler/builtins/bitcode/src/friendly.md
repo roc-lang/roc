@@ -4,7 +4,7 @@ Roc is intended to be a user-friendly language with a friendly community.
 
 ## User-friendly language
 
-- Concise syntax, e.g. just `=` for declarations, no parentheses or commas needed when calling functions
+- Concise syntax, e.g. just `=` for declarations, no parentheses or commas needed when calling functions (maybe don't focus on conciseness though)
 - anonymous structural literals for records, tuples, and tag unions, all of which have Eq, Hash, and Ord inferred automatically
 - String interpolation
 - `Dec` by default
