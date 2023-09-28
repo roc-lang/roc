@@ -74,7 +74,8 @@ li {
 
 #loading-message {
   text-align: center;
-  height: 96px; /* approximately match height after loading and printing help message */
+  /* approximately match height after loading and printing help message */
+  height: 96px;
 }
 
 .history-item {
@@ -144,7 +145,7 @@ li {
 
 
 /* Mobile-friendly screen width */
-@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+@media only screen and (max-width: 767px) {
   h1 {
     font-size: 24px !important;
     margin: 0;
