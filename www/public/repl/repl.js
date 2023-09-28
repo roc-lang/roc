@@ -10,7 +10,6 @@ console.error = function displayErrorInHistoryPanel(string) {
 };
 
 import * as roc_repl_wasm from "./roc_repl_wasm.js";
-import { getMockWasiImports } from "./wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
