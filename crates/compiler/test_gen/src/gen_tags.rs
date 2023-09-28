@@ -1306,11 +1306,12 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
 
             Single a : [A, B, C]a
             Compound a : Single [D, E, F]a
+            Padding : { a: U64, b: U64, c: U64 }
 
-            single : {} -> Result Str (Single *)
+            single : {} -> Result Padding (Single *)
             single = \{} -> Err C
 
-            compound : {} -> Result Str (Compound *)
+            compound : {} -> Result Padding (Compound *)
             compound = \{} ->
                 when single {} is
                     Ok s -> Ok s
@@ -1320,8 +1321,10 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped() {
             "#
         ),
         (0, 2), // Err, C
-        ([u8; std::mem::size_of::<RocStr>()], u8),
-        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<RocStr>()], u8)| (wrap_tag, err_tag[0])
+        ([u8; std::mem::size_of::<(u64, u64, u64)>()], u8),
+        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<(u64, u64, u64)>()], u8)| (
+            wrap_tag, err_tag[0]
+        )
     )
 }
 
@@ -1335,12 +1338,13 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
 
             Single a : [A, B, C]a
             Compound a : Single [D, E, F]a
+            Padding : { a: U64, b: U64, c: U64 }
 
             main =
-                single : {} -> Result Str (Single *)
+                single : {} -> Result Padding (Single *)
                 single = \{} -> Err C
 
-                compound : {} -> Result Str (Compound *)
+                compound : {} -> Result Padding (Compound *)
                 compound = \{} ->
                     when single {} is
                         Ok s -> Ok s
@@ -1350,8 +1354,10 @@ fn issue_2365_monomorphize_tag_with_non_empty_ext_var_wrapped_nested() {
             "#
         ),
         (0, 2), // Err, C
-        ([u8; std::mem::size_of::<RocStr>()], u8),
-        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<RocStr>()], u8)| (wrap_tag, err_tag[0])
+        ([u8; std::mem::size_of::<(u64, u64, u64)>()], u8),
+        |(err_tag, wrap_tag): ([u8; std::mem::size_of::<(u64, u64, u64)>()], u8)| (
+            wrap_tag, err_tag[0]
+        )
     )
 }
 
