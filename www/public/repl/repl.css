@@ -73,7 +73,8 @@ li {
 }
 
 #loading-message {
-  margin: 40% 10%;
+  text-align: center;
+  height: 96px; /* approximately match height after loading and printing help message */
 }
 
 .history-item {
