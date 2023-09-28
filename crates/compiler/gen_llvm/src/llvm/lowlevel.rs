@@ -2168,12 +2168,13 @@ fn build_dec_unary_op<'a, 'ctx>(
     use roc_module::low_level::LowLevel::*;
 
     match op {
-        NumSin => dec_unary_op(env, bitcode::DEC_SIN, arg),
-        NumCos => dec_unary_op(env, bitcode::DEC_COS, arg),
-        NumTan => dec_unary_op(env, bitcode::DEC_TAN, arg),
-        NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
+        NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
         NumAcos => dec_unary_op(env, bitcode::DEC_ACOS, arg),
+        NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
         NumAtan => dec_unary_op(env, bitcode::DEC_ATAN, arg),
+        NumCos => dec_unary_op(env, bitcode::DEC_COS, arg),
+        NumSin => dec_unary_op(env, bitcode::DEC_SIN, arg),
+        NumTan => dec_unary_op(env, bitcode::DEC_TAN, arg),
 
         _ => {
             unreachable!("Unrecognized dec unary operation: {:?}", op);
