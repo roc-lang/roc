@@ -267,8 +267,9 @@ pub fn freeDataPtrC(
     const masked_ptr = ptr & ~tag_mask;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
+    const offset = @max(1, @divFloor(alignment, @sizeOf(usize)));
 
-    return freeRcPtrC(isizes - 1, alignment);
+    return freeRcPtrC(isizes - offset, alignment);
 }
 
 pub fn freeRcPtrC(

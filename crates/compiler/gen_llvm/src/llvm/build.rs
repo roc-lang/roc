@@ -3464,7 +3464,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 Free(symbol) => {
                     // unconditionally deallocate the symbol
                     let (value, layout) = scope.load_symbol_and_layout(symbol);
-                    let alignment = layout_interner.alignment_bytes(layout);
+                    let alignment = layout_interner.allocation_alignment_bytes(layout);
 
                     debug_assert!(value.is_pointer_value());
                     let value = value.into_pointer_value();
