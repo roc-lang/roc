@@ -918,10 +918,15 @@ fn link_linux(
                     eprintln!("You may need to install libgcc\n");
                 }
                 if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
-                    eprintln!("Couldn't find the glibc development files!");
-                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
-                    eprintln!("You may need to install the glibc development package");
-                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
+                    eprintln!("Couldn't find the libc development files!");
+                    eprintln!("We need the files crti.o, crtn.o, and Scrt1.o");
+                    eprintln!();
+                    eprintln!("On Ubuntu/Debian execute:");
+                    eprintln!("\tsudo apt install libc-dev\n");
+                    eprintln!("On ArchLinux/Manjaro execute:");
+                    eprintln!("\tsudo pacman -S glibc\n");
+                    eprintln!("On Fedora execute:");
+                    eprintln!("\tsudo dnf install glibc-devel\n");
                 }
 
                 let dirs = lib_dirs

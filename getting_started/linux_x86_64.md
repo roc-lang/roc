@@ -22,6 +22,25 @@ which includes the Roc compiler and some helpful utilities.
 
 1. Check everything worked by executing `roc version`
 
+1. Install libc development files and ld (binutils) if you'd like to use the repl (`roc repl`):
+   - On Ubuntu/Debian:
+
+    ```sh
+    sudo apt install libc-dev binutils
+    ```
+
+   - On ArchLinux/Manjaro:
+
+   ```sh
+   sudo pacman -S glibc binutils
+   ```
+
+   - on Fedora:
+
+   ```sh
+   sudo dnf install glibc-devel binutils
+   ```
+
 ## How to install Roc platform dependencies
 
 This step is not necessary if you only want to use the [basic-cli platform](https://github.com/roc-lang/basic-cli), like in the tutorial.
