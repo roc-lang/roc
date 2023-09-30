@@ -1,0 +1,48 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-18,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-5 Identifier(
+                    "where",
+                ),
+                @8-18 Record(
+                    [
+                        @9-17 RequiredValue(
+                            @9-14 "where",
+                            [],
+                            @16-17 Num(
+                                "1",
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    },
+    @19-30 SpaceBefore(
+        RecordAccess(
+            Var {
+                module_name: "",
+                ident: "where",
+            },
+            "where",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

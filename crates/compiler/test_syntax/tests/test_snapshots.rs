@@ -247,6 +247,7 @@ mod test_snapshots {
         fail/when_over_indented_int.expr,
         fail/when_over_indented_underscore.expr,
         fail/wild_case_arrow.expr,
+        fail/where_type_variable.expr,
         malformed/bad_opaque_ref.expr,
         malformed/malformed_ident_due_to_underscore.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
@@ -490,6 +491,7 @@ mod test_snapshots {
         pass/where_clause_on_newline.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
+        pass/where_ident.expr,
         // END SNAPSHOTS (for automatic test detection via `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test`)
     }
 
