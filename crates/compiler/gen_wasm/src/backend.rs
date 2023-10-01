@@ -99,6 +99,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             )
         });
 
+        // Relocate calls from host to app
+        // This will change function indices in the host, so we need to do it before get_host_function_lookup
+        module.link_host_to_app_calls(env.arena, host_to_app_map);
+
         let host_lookup = module.get_host_function_lookup(env.arena);
 
         if module.names.function_names.is_empty() {
@@ -109,7 +113,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             )
         }
 
-        module.link_host_to_app_calls(env.arena, host_to_app_map);
         let import_fn_count = module.import.function_count();
         let host_function_count = import_fn_count
             + module.code.dead_import_dummy_count as usize
