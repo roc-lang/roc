@@ -657,6 +657,9 @@ impl<'a> WasmModule<'a> {
                     _ => None,
                 });
 
+        // There are names available in the import section too, so let's use them!
+        // We don't know how the host was compiled, so we might as well just grab all the info we can get.
+        // If we end up with duplicate entries, that's OK. The backend will use the first matching entry.
         let import_fns = self
             .import
             .imports
