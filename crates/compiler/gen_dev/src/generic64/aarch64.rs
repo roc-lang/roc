@@ -793,7 +793,7 @@ impl AArch64CallLoadArgs {
                 sym,
                 lambda_set.runtime_representation(),
             ),
-            LayoutRepr::Struct { .. } => {
+            LayoutRepr::Struct { .. } | LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 if stack_size <= 8 {
                     self.load_arg_general_64bit(
                         buf,
@@ -813,11 +813,6 @@ impl AArch64CallLoadArgs {
                 } else {
                     unreachable!("covered by an earlier branch")
                 }
-            }
-            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                // for now, just also store this on the stack
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
             }
             _ => {
                 todo!(
@@ -979,7 +974,7 @@ impl AArch64CallStoreArgs {
                 sym,
                 lambda_set.runtime_representation(),
             ),
-            LayoutRepr::Struct { .. } => {
+            LayoutRepr::Struct { .. } | LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let stack_size = layout_interner.stack_size(in_layout);
                 if stack_size <= 8 {
                     self.store_arg_64bit(buf, storage_manager, sym);
@@ -988,19 +983,6 @@ impl AArch64CallStoreArgs {
                 } else {
                     unreachable!("covered by earlier branch");
                 }
-            }
-            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                let stack_offset = self.tmp_stack_offset;
-
-                let size = copy_symbol_to_stack_offset::<CC>(
-                    buf,
-                    storage_manager,
-                    sym,
-                    tmp_reg,
-                    stack_offset,
-                );
-
-                self.tmp_stack_offset += size as i32;
             }
             _ => {
                 todo!(
