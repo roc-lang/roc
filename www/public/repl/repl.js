@@ -30,8 +30,9 @@ const repl = {
   compiler: null,
   app: null,
 
-  // Temporary storage for values passing back and forth between JS and Wasm
-  result_addr: { addr: 0, buffer: new ArrayBuffer() },
+  // Temporary storage for the address of the result of running the user's code.
+  // Used while control flow returns to Rust to allocate space to copy the app's memory buffer.
+  result_addr: 0,
 };
 
 // Initialise
