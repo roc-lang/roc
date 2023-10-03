@@ -137,7 +137,7 @@ quote = "1.0.23"
 rand = "0.8.5"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
-reqwest = { version = "0.11.14", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
+reqwest = { version = "0.11.20", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
