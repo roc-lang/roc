@@ -766,7 +766,7 @@ impl AArch64CallLoadArgs {
                             in_layout,
                         );
 
-                        let tmp_reg = AArch64GeneralReg::XR;
+                        let tmp_reg = AArch64GeneralReg::X15;
 
                         super::x86_64::copy_to_base_offset::<_, _, AArch64Assembler>(
                             buf,
