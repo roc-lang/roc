@@ -766,7 +766,8 @@ impl AArch64CallLoadArgs {
                             in_layout,
                         );
 
-                        let tmp_reg = AArch64GeneralReg::XR;
+                        let tmp_sym = Symbol::DEV_TMP;
+                        let tmp_reg =  storage_manager.claim_general_reg(buf, &tmp_sym);
 
                         super::x86_64::copy_to_base_offset::<_, _, AArch64Assembler>(
                             buf,
@@ -776,6 +777,8 @@ impl AArch64CallLoadArgs {
                             tmp_reg,
                             0,
                         );
+
+                        storage_manager.free_symbol(&tmp_sym);
 
                         self.general_i += 1;
                     }
