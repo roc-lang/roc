@@ -914,7 +914,6 @@ struct AArch64CallStoreArgs {
 
 impl AArch64CallStoreArgs {
     const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_PARAM_REGS;
-    const GENERAL_RETURN_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_RETURN_REGS;
 
     const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_PARAM_REGS;
     const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_RETURN_REGS;
