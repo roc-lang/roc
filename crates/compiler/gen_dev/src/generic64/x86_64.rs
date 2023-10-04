@@ -590,7 +590,7 @@ where
     }
 
     if size - copied >= 1 {
-        for _ in 0..(size - copied) / 1 {
+        for _ in 0..(size - copied) {
             ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
 
