@@ -19,8 +19,6 @@ jobs:
       FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v3
-        with:
-          clean: "true"
 
       - run: cargo install typos-cli --version 1.0.11
 

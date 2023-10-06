@@ -77,8 +77,8 @@ roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Stmt, 13 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 12 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 5 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
@@ -2190,6 +2190,16 @@ impl<'a> Expr<'a> {
             arguments: std::slice::from_ref(symbol),
         })
     }
+
+    pub(crate) fn ptr_store(arguments: &'a [Symbol]) -> Expr<'a> {
+        Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrStore,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments,
+        })
+    }
 }
 
 impl<'a> Stmt<'a> {
@@ -3644,11 +3654,24 @@ fn specialize_proc_help<'a>(
 
                                 let symbol = get_specialized_name(**symbol);
 
+                                let fresh_symbol =
+                                    env.named_unique_symbol(&format!("{:?}_closure", symbol));
+
                                 specialized_body = Stmt::Let(
-                                    symbol,
+                                    fresh_symbol,
                                     expr,
                                     layout,
                                     env.arena.alloc(specialized_body),
+                                );
+
+                                // the same symbol may be used where
+                                // - the closure is created
+                                // - the closure is consumed
+                                substitute_in_exprs(
+                                    env.arena,
+                                    &mut specialized_body,
+                                    symbol,
+                                    fresh_symbol,
                                 );
                             }
                         }

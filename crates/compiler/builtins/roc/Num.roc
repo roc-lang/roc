@@ -348,8 +348,8 @@ Int range : Num (Integer range)
 ##
 ## Roc fractions come in two flavors: fixed-point base-10 and floating-point base-2.
 ##
-## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], 0.1 + 0.2 returns 0.3.
-## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125.
+## * [Dec] is a 128-bit [fixed-point](https://en.wikipedia.org/wiki/Fixed-point_arithmetic) base-10 number. It's a great default choice, especially when precision is important - for example when representing currency. With [Dec], `0.1 + 0.2` returns `0.3`. [Dec] has 18 decimal places of precision and a range from `-170_141_183_460_469_231_731.687303715884105728` to `170_141_183_460_469_231_731.687303715884105727`.
+## * [F64] and [F32] are [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) base-2 numbers. They sacrifice precision for lower memory usage and improved performance on some operations. This makes them a good fit for representing graphical coordinates. With [F64], `0.1 + 0.2` returns `0.30000000000000004`.
 ##
 ## If you don't specify a type, Roc will default to using [Dec] because it's
 ## the least error-prone overall. For example, suppose you write this:
@@ -464,14 +464,14 @@ FloatingPoint range := range
 F64 : Num (FloatingPoint Binary64)
 F32 : Num (FloatingPoint Binary32)
 
-## A decimal number.
+## A [decimal](https://en.wikipedia.org/wiki/Decimal) number.
 ##
-## [Dec] is the best default choice for representing base-10 decimal numbers
-## like currency, because it is base-10 under the hood. In contrast,
-## [F64] and [F32] are base-2 under the hood, which can lead to decimal
+## [Dec] is a more precise way to represent decimal numbers (like currency) than [F32] and [F64]
+## are, because [Dec] is represented in memory as base-10. In contrast, [F64] and [F32]
+## are [base-2](https://en.wikipedia.org/wiki/Binary_number) in memory, which can lead to decimal
 ## precision loss even when doing addition and subtraction. For example, when
-## using [F64], running 0.1 + 0.2 returns 0.3000000000000000444089209850062616169452667236328125,
-## whereas when using [Dec], 0.1 + 0.2 returns 0.3.
+## using [F64], `0.1 + 0.2` returns 0.30000000000000004,
+## whereas when using [Dec], `0.1 + 0.2` returns 0.3.
 ##
 ## Under the hood, a [Dec] is an [I128], and operations on it perform
 ## [base-10 fixed-point arithmetic](https://en.wikipedia.org/wiki/Fixed-point_arithmetic)
@@ -481,21 +481,54 @@ F32 : Num (FloatingPoint Binary32)
 ## quintillion, along with 18 decimal places. (To be precise, it can store
 ## numbers between `-170_141_183_460_469_231_731.687303715884105728`
 ## and `170_141_183_460_469_231_731.687303715884105727`.) Why 18
-## decimal places? It's the highest number of decimal places where you can still
-## convert any [U64] to a [Dec] without losing information.
+## decimal places? It's the highest number of decimal places where you can
+## still convert any [U64] to a [Dec] without losing information.
 ##
 ## There are some use cases where [F64] and [F32] can be better choices than [Dec]
-## despite their precision issues. For example, in graphical applications they
-## can be a better choice for representing coordinates because they take up
+## despite their issues with base-10 numbers. For example, in graphical applications
+## they can be a better choice for representing coordinates because they take up
 ## less memory, certain relevant calculations run faster (see performance
-## details, below), and decimal precision loss isn't as big a concern when
+## details, below), and base-10 generally isn't as big a concern when
 ## dealing with screen coordinates as it is when dealing with currency.
+##
+## Another scenario where [F64] can be a better choice than [Dec] is when representing
+## extremely small numbers. The smallest positive [F64] that can be represented without precision
+## loss is 2^(−1074), which is about 5 * 10^(-324). Here is that number next to the smallest
+## [Dec] that can be represented:
+##
+## * Smallest [F64]: 0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005
+## * Smallest [Dec]: 0.000000000000000001
+##
+## This is because [floating-point](https://en.wikipedia.org/wiki/Floating-point_arithmetic) numbers
+## like [F64] can gain more digits of precision after the `.` when they aren't using as many digits
+## before the `.` - and this applies the most if the digit before `.` is `0`. So whereas [Dec] always
+## has 18 digits after the `.`, the number of digits after the `.` that [F32] can [F64] can represent
+## without precision loss depends on what comes before it.
 ##
 ## ## Performance Details
 ##
-## [Dec] typically takes slightly less time than [F64] to perform addition and
-## subtraction, but 10-20 times longer to perform multiplication and division.
-## [sqrt] and trigonometry are massively slower with [Dec] than with [F64].
+## CPUs have dedicated instructions for many [F32] and [F64] operations, but none for [Dec].
+## Internally, [Dec] is represented as a 128-bit integer and uses multiple instructions to
+## perform fractional operations. This gives [F32] and [F64] performance advantages
+## for many operations.
+##
+## Here's a comparison of about how long [Dec] takes to perform a given operation compared to [F64],
+## based on benchmarks on an [M1](https://en.wikipedia.org/wiki/Apple_M1) CPU:
+## * [add]  0.6x
+## * [sub]  0.6x
+## * [mul]  15x
+## * [div]  55x
+## * [sin]  3.9x
+## * [cos]  3.6x
+## * [tan]  2.3x
+## * [asin] 1.8x
+## * [acos] 1.7x
+## * [atan] 1.7x
+##
+## Keep in mind that arithmetic instructions are basically [the fastest thing a CPU does](http://norvig.com/21-days.html#answers),
+## so (for example) a network request that takes 10 milliseconds to complete would go on this
+## list as about 10000000x. So these performance differences might be more or less noticeable than
+## the base-10 representation differences depending on the use case.
 Dec : Num (FloatingPoint Decimal)
 
 ## Euler's number (e)
@@ -825,11 +858,7 @@ max = \a, b ->
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
-
 tan : Frac a -> Frac a
-tan = \x ->
-    # `tan` is not available as an intrinsic in LLVM
-    Num.div (Num.sin x) (Num.cos x)
 
 asin : Frac a -> Frac a
 acos : Frac a -> Frac a

@@ -1,5 +1,5 @@
 //! Provides Rust representations of Roc data structures.
-#![cfg_attr(not(feature = "std"), no_std)]
+// #![cfg_attr(not(feature = "std"), no_std)]
 #![crate_type = "lib"]
 
 use arrayvec::ArrayString;
@@ -227,9 +227,18 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
+
+impl Debug for RocDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RocDec")
+            .field(&self.0)
+            .field(&self.to_str())
+            .finish()
+    }
+}
 
 impl RocDec {
     pub const MIN: Self = Self(i128::MIN.to_ne_bytes());
@@ -363,13 +372,11 @@ impl RocDec {
         // get their leading zeros placed in bytes for us. i.e. `string = b"0012340000000000000"`
         write!(string, "{:019}", self.as_i128()).unwrap();
 
-        let is_negative = self.as_i128() < 0;
-        let decimal_location = string.len() - Self::DECIMAL_PLACES + (is_negative as usize);
-
+        let decimal_location = string.len() - Self::DECIMAL_PLACES;
         // skip trailing zeros
         let last_nonzero_byte = string.trim_end_matches('0').len();
 
-        if last_nonzero_byte < decimal_location {
+        if last_nonzero_byte <= decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
             string.truncate(decimal_location);
@@ -398,6 +405,12 @@ impl RocDec {
 
     pub fn to_str(&self) -> RocStr {
         RocStr::from(self.to_str_helper(&mut ArrayString::new()))
+    }
+}
+
+impl From<i32> for RocDec {
+    fn from(value: i32) -> Self {
+        RocDec::from_ne_bytes((RocDec::ONE_POINT_ZERO * value as i128).to_ne_bytes())
     }
 }
 

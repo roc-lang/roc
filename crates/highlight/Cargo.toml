@@ -1,6 +1,6 @@
 [package]
 name = "roc_highlight"
-description = "For syntax highlighting, starts with a string and returns our markup nodes."
+description = "For syntax highlighting, starts with a string and returns HTML."
 
 authors.workspace = true
 edition.workspace = true

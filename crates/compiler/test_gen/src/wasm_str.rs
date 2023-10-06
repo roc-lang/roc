@@ -265,7 +265,7 @@ fn str_concat_big_to_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn small_str_literal() {
     assert_evals_to!(
         "\"01234567890\"",
@@ -275,7 +275,7 @@ fn small_str_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn small_str_zeroed_literal() {
     // Verifies that we zero out unused bytes in the string.
     // This is important so that string equality tests don't randomly

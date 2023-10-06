@@ -808,7 +808,7 @@ fn encode_derived_list_of_lists_of_strings() {
 
 #[test]
 #[cfg(not(debug_assertions))]
-#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
         indoc!(
@@ -882,7 +882,7 @@ fn encode_derived_tuple_of_tuples() {
 
 #[test]
 #[cfg(not(debug_assertions))]
-#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_generic_record_with_different_field_types() {
     assert_evals_to!(
         indoc!(
@@ -908,7 +908,7 @@ fn encode_derived_generic_record_with_different_field_types() {
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_generic_tag_with_different_field_types() {
     assert_evals_to!(
         indoc!(
@@ -1057,13 +1057,13 @@ mod decode_immediate {
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use indoc::indoc;
 
-    #[cfg(all(test, any(feature = "gen-llvm")))]
+    #[cfg(all(test, feature = "gen-llvm"))]
     use roc_std::RocStr;
 
     use crate::helpers::with_larger_debug_stack;
 
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(feature = "gen-llvm")]
     fn string() {
         with_larger_debug_stack(|| {
             assert_evals_to!(
@@ -1084,7 +1084,7 @@ mod decode_immediate {
     }
 
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(feature = "gen-llvm")]
     fn ranged_number() {
         assert_evals_to!(
             indoc!(
@@ -1106,7 +1106,7 @@ mod decode_immediate {
     }
 
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(feature = "gen-llvm")]
     fn bool() {
         assert_evals_to!(
             indoc!(
@@ -1127,7 +1127,7 @@ mod decode_immediate {
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
-            #[cfg(any(feature = "gen-llvm"))]
+            #[cfg(feature = "gen-llvm")]
             fn $typ() {
                 assert_evals_to!(
                     &format!(indoc!(
@@ -1206,7 +1206,7 @@ fn decode_list_of_strings() {
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_then_decode_list_of_strings() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
@@ -1227,7 +1227,7 @@ fn encode_then_decode_list_of_strings() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 #[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_then_decode_list_of_lists_of_strings() {
     with_larger_debug_stack(|| {

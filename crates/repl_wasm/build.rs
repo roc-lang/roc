@@ -6,12 +6,6 @@ use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 const PLATFORM_FILENAME: &str = "repl_platform";
 
-#[cfg(not(windows))]
-const OBJECT_EXTENSION: &str = "o";
-
-#[cfg(windows)]
-const OBJECT_EXTENSION: &str = "obj";
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     let source_path = format!("src/{PLATFORM_FILENAME}.c");
@@ -26,7 +20,7 @@ fn main() {
 
     let mut pre_linked_binary_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     pre_linked_binary_path.extend(["pre_linked_binary"]);
-    pre_linked_binary_path.set_extension(OBJECT_EXTENSION);
+    pre_linked_binary_path.set_extension("wasm");
 
     let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
         .expect("failed to write host builtins object to tempfile");
@@ -65,7 +59,7 @@ fn zig_executable() -> String {
 
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
     let mut platform_obj = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
-    platform_obj.set_extension(OBJECT_EXTENSION);
+    platform_obj.set_extension("wasm");
 
     Command::new(zig_executable())
         .args([

@@ -2,7 +2,7 @@ platform "effects"
     requires {} { main : Effect.Effect {} }
     exposes []
     packages {}
-    imports [pf.Effect]
+    imports [Effect]
     provides [mainForHost]
 
 mainForHost : Effect.Effect {}

@@ -1327,6 +1327,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         | NumNeg
         | NumSin
         | NumCos
+        | NumTan
         | NumSqrtUnchecked
         | NumLogUnchecked
         | NumRound

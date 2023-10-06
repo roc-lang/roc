@@ -9,7 +9,10 @@ comptime {
     // TODO: remove this workaround.
     // Our wasm llvm pipeline always links in memcpy.
     // As such, our impl will conflict.
-    if (arch != .wasm32) {
+    if (builtin.is_test and builtin.os.tag == .windows) {
+        // We don't need memcpy on Windows for tests because the tests are built with -lc
+        // lld-link: error: duplicate symbol: memcpy
+    } else if (arch != .wasm32) {
         @export(memcpy, .{ .name = "memcpy", .linkage = .Strong });
     }
 }

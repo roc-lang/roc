@@ -196,44 +196,44 @@ procedure List.96 (List.450, List.451, List.452):
     ret List.610;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.295 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.295;
+    let Num.294 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.294;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.304 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.304;
+    let Num.303 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.303;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.307 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.307;
+    let Num.306 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.306;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.328 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.328;
+    let Num.327 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.327;
 
 procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.313 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
-    ret Num.313;
+    let Num.312 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
+    ret Num.312;
 
 procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.319 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
-    ret Num.319;
+    let Num.318 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.318;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.329 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.329;
+    let Num.328 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.328;
 
 procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.292 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.291 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.293 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.292 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.325 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.325;
+    let Num.324 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.324;
 
 procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
     let Str.298 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;

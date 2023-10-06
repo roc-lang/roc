@@ -14,5 +14,5 @@ comptime {
     }
 }
 
-pub extern fn __folly_memcpy_prefetchw(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.C) [*]u8;
-pub extern fn __folly_memcpy_prefetcht0(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.C) [*]u8;
+pub extern fn __folly_memcpy_prefetchw(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.SysV) [*]u8;
+pub extern fn __folly_memcpy_prefetcht0(noalias dest: [*]u8, noalias src: [*]const u8, len: usize) callconv(.SysV) [*]u8;

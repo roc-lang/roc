@@ -2195,6 +2195,25 @@ fn update<'a>(
                         exposes_ids,
                         ..
                     } => {
+                        let undefined_shorthands: Vec<_> = header
+                            .package_qualified_imported_modules
+                            .iter()
+                            .filter(|pqim| match pqim {
+                                PackageQualified::Unqualified(_) => false,
+                                PackageQualified::Qualified(shorthand, _) => {
+                                    !(header.packages.contains_key(shorthand)
+                                        || shorthand == &config_shorthand)
+                                }
+                            })
+                            .collect();
+
+                        // shorthands must be defined by the module!
+                        assert!(
+                            undefined_shorthands.is_empty(),
+                            "{undefined_shorthands:?} not in {:?} ",
+                            &header.packages
+                        );
+
                         work.extend(state.dependencies.notify_package(config_shorthand));
 
                         let is_prebuilt = if header.is_root_module {

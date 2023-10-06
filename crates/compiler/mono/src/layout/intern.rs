@@ -1485,7 +1485,7 @@ pub mod dbg_deep {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self.1 {
                 Builtin::Int(w) => f.debug_tuple("Int").field(&w).finish(),
-                Builtin::Float(w) => f.debug_tuple("Float").field(&w).finish(),
+                Builtin::Float(w) => f.debug_tuple("Frac").field(&w).finish(),
                 Builtin::Bool => f.debug_tuple("Bool").finish(),
                 Builtin::Decimal => f.debug_tuple("Decimal").finish(),
                 Builtin::Str => f.debug_tuple("Str").finish(),
@@ -1664,7 +1664,7 @@ pub mod dbg_stable {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self.1 {
                 Builtin::Int(w) => f.debug_tuple("Int").field(&w).finish(),
-                Builtin::Float(w) => f.debug_tuple("Float").field(&w).finish(),
+                Builtin::Float(w) => f.debug_tuple("Frac").field(&w).finish(),
                 Builtin::Bool => f.debug_tuple("Bool").finish(),
                 Builtin::Decimal => f.debug_tuple("Decimal").finish(),
                 Builtin::Str => f.debug_tuple("Str").finish(),

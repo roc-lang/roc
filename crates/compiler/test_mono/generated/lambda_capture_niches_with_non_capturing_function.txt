@@ -3,22 +3,22 @@ procedure Test.1 (Test.5):
     ret Test.15;
 
 procedure Test.1 (Test.5):
-    let Test.23 : [C , C {}, C U64] = TagId(2) Test.5;
-    ret Test.23;
+    let Test.24 : [C , C {}, C U64] = TagId(2) Test.5;
+    ret Test.24;
 
 procedure Test.2 (Test.8):
-    let Test.20 : Str = "";
-    ret Test.20;
+    let Test.21 : Str = "";
+    ret Test.21;
 
 procedure Test.6 (Test.16, #Attr.12):
-    let Test.5 : U64 = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-    let Test.26 : Str = "";
-    ret Test.26;
-
-procedure Test.6 (Test.16, #Attr.12):
-    let Test.5 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.19 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     let Test.18 : Str = "";
     ret Test.18;
+
+procedure Test.6 (Test.16, #Attr.12):
+    let Test.28 : U64 = UnionAtIndex (Id 2) (Index 0) #Attr.12;
+    let Test.27 : Str = "";
+    ret Test.27;
 
 procedure Test.0 ():
     let Test.3 : U8 = 0u8;
@@ -46,11 +46,11 @@ procedure Test.0 ():
             jump Test.12 Test.13;
     
         case 1:
-            let Test.19 : [C , C {}, C U64] = TagId(0) ;
-            jump Test.12 Test.19;
+            let Test.20 : [C , C {}, C U64] = TagId(0) ;
+            jump Test.12 Test.20;
     
         default:
-            let Test.22 : U64 = 1i64;
-            let Test.21 : [C , C {}, C U64] = CallByName Test.1 Test.22;
-            jump Test.12 Test.21;
+            let Test.23 : U64 = 1i64;
+            let Test.22 : [C , C {}, C U64] = CallByName Test.1 Test.23;
+            jump Test.12 Test.22;
     

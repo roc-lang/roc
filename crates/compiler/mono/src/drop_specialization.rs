@@ -1571,6 +1571,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumNeg
         | NumSin
         | NumCos
+        | NumTan
         | NumSqrtUnchecked
         | NumLogUnchecked
         | NumRound

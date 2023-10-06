@@ -41,7 +41,6 @@ pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
 pub const CMD_DEV: &str = "dev";
 pub const CMD_REPL: &str = "repl";
-pub const CMD_EDIT: &str = "edit";
 pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
@@ -142,7 +141,8 @@ pub fn build_app() -> Command {
 
     let build_target_values_parser =
         PossibleValuesParser::new(Target::iter().map(Into::<&'static str>::into));
-    let app = Command::new("roc")
+
+    Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
         .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .args_conflicts_with_subcommands(true)
@@ -332,23 +332,7 @@ pub fn build_app() -> Command {
         .arg(flag_linker)
         .arg(flag_prebuilt)
         .arg(roc_file_to_run)
-        .arg(args_for_app.trailing_var_arg(true));
-
-    if cfg!(feature = "editor") {
-        app.subcommand(
-            Command::new(CMD_EDIT)
-                .about("Launch the Roc editor (Work In Progress)")
-                .arg(
-                    Arg::new(DIRECTORY_OR_FILES)
-                        .num_args(0..)
-                        .required(false)
-                        .value_parser(value_parser!(OsString))
-                        .help("(optional) The directory or files to open on launch"),
-                ),
-        )
-    } else {
-        app
-    }
+        .arg(args_for_app.trailing_var_arg(true))
 }
 
 #[derive(Debug, PartialEq, Eq)]

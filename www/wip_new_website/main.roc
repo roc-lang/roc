@@ -2,7 +2,7 @@ app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta },
-        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset },
+        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color },
     ]
     provides [transformFileContent] to pf
 
@@ -43,6 +43,9 @@ view = \page, htmlContent ->
             meta [name "viewport", content "width=device-width"] [],
             link [rel "stylesheet", href "/wip/site.css"] [],
             link [rel "icon", href "/favicon.svg"] [],
+            # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
+            # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
+            link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"] [],
         ],
         body [] [
             viewNavbar,

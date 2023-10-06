@@ -279,7 +279,7 @@ mod test_roc_std {
     fn roc_dec_fmt() {
         assert_eq!(
             format!("{}", RocDec::MIN),
-            "-1701411834604692317316.87303715884105728"
+            "-170141183460469231731.687303715884105728"
         );
 
         let half = RocDec::from_str("0.5").unwrap();
@@ -293,6 +293,13 @@ mod test_roc_std {
 
         let example = RocDec::from_str("1_000.5678").unwrap();
         assert_eq!(format!("{example}"), "1000.5678");
+
+        let sample_negative = "-1.234";
+        let example = RocDec::from_str(sample_negative).unwrap();
+        assert_eq!(format!("{example}"), sample_negative);
+
+        let example = RocDec::from_str("1000.000").unwrap();
+        assert_eq!(format!("{example}"), "1000");
     }
 
     #[test]

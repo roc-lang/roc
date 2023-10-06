@@ -1,5 +1,4 @@
 on:
-  #pull_request:
   workflow_dispatch:
 
 name: Test latest nightly releases for macOS and Linux x86_64
@@ -21,7 +20,9 @@ jobs:
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
-        run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+        run:  | 
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+
 
       - name: get the latest release archive for macos (x86_64)
         if: startsWith(matrix.os, 'macos')

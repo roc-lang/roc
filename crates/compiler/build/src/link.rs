@@ -531,7 +531,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2023-04-15", "cargo"]);
+            cmd.args(["run", "nightly-2023-05-28", "cargo"]);
 
             cmd
         } else {
@@ -548,7 +548,7 @@ pub fn rebuild_host(
             let rust_flags = if cfg!(windows) {
                 "-Z export-executable-symbols"
             } else {
-                "-C link-dead-code"
+                "-C link-args=-rdynamic"
             };
             cargo_cmd.env("RUSTFLAGS", rust_flags);
             cargo_cmd.args(["--bin", "host"]);

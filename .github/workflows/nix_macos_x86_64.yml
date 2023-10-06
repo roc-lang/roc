@@ -16,9 +16,7 @@ jobs:
     runs-on: [macos-12]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v2
-        with:
-          clean: "true"
+      - uses: actions/checkout@v3
 
       - uses: cachix/install-nix-action@v22
 

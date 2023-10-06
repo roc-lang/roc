@@ -330,55 +330,6 @@ pub const RocStr = extern struct {
         return self.len() == 0;
     }
 
-    // If a string happens to be null-terminated already, then we can pass its
-    // bytes directly to functions (e.g. for opening files) that require
-    // null-terminated strings. Otherwise, we need to allocate and copy a new
-    // null-terminated string, which has a much higher performance cost!
-    fn isNullTerminated(self: RocStr) bool {
-        const length = self.len();
-        const longest_small_str = @sizeOf(RocStr) - 1;
-
-        // NOTE: We want to compare length here, *NOT* check for isSmallStr!
-        // This is because we explicitly want the empty string to be handled in
-        // this branch, even though the empty string is not a small string.
-        //
-        // (The other branch dereferences the bytes pointer, which is not safe
-        // to do for the empty string.)
-        if (length <= longest_small_str) {
-            // If we're a small string, then usually the next byte after the
-            // end of the string will be zero. (Small strings set all their
-            // unused bytes to 0, so that comparison for equality can be fast.)
-            //
-            // However, empty strings are *not* null terminated, so if this is
-            // empty, it should return false.
-            //
-            // Also, if we are exactly a maximum-length small string,
-            // then the next byte is off the end of the struct;
-            // in that case, we are also not null-terminated!
-            return length != 0 and length != longest_small_str;
-        } else if (self.isSeamlessSlice()) {
-            // Seamless slices can not use the character past the end even if it is null.
-            return false;
-        } else {
-            // This is a big string, and it's not empty, so we can safely
-            // dereference the pointer.
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-            const capacity_or_refcount: isize = (ptr - 1)[0];
-
-            // If capacity_or_refcount is positive, then it's a capacity value.
-            //
-            // If we have excess capacity, then we can safely read the next
-            // byte after the end of the string. Maybe it happens to be zero!
-            if (capacity_or_refcount > @intCast(isize, length)) {
-                return self.str_bytes[length] == 0;
-            } else {
-                // This string was refcounted or immortal; we can't safely read
-                // the next byte, so assume the string is not null-terminated.
-                return false;
-            }
-        }
-    }
-
     pub fn isUnique(self: RocStr) bool {
         // small strings can be copied
         if (self.isSmallStr()) {
