@@ -11,6 +11,7 @@ pub mod annotation;
 pub mod builtins;
 pub mod constraint;
 pub mod copy;
+pub mod decls;
 pub mod def;
 mod derive;
 pub mod effect_module;
