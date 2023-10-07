@@ -4,6 +4,7 @@ const math = std.math;
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
 const WithOverflow = @import("utils.zig").WithOverflow;
+const Ordering = @import("utils.zig").Ordering;
 const roc_panic = @import("panic.zig").panic_help;
 
 pub fn NumParseResult(comptime T: type) type {
@@ -162,6 +163,15 @@ pub fn exportCos(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(input: T) callconv(.C) T {
             return math.cos(input);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportTan(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: T) callconv(.C) T {
+            return math.tan(input);
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -556,6 +566,58 @@ pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.C) u128 {
     } else {
         return self >> @intCast(u7, other);
     }
+}
+
+pub fn compareI128(self: i128, other: i128) callconv(.C) Ordering {
+    if (self == other) {
+        return Ordering.EQ;
+    } else if (self < other) {
+        return Ordering.LT;
+    } else {
+        return Ordering.GT;
+    }
+}
+
+pub fn compareU128(self: u128, other: u128) callconv(.C) Ordering {
+    if (self == other) {
+        return Ordering.EQ;
+    } else if (self < other) {
+        return Ordering.LT;
+    } else {
+        return Ordering.GT;
+    }
+}
+
+pub fn lessThanI128(self: i128, other: i128) callconv(.C) bool {
+    return self < other;
+}
+
+pub fn lessThanOrEqualI128(self: i128, other: i128) callconv(.C) bool {
+    return self <= other;
+}
+
+pub fn greaterThanI128(self: i128, other: i128) callconv(.C) bool {
+    return self > other;
+}
+
+pub fn greaterThanOrEqualI128(self: i128, other: i128) callconv(.C) bool {
+    return self >= other;
+}
+
+pub fn lessThanU128(self: u128, other: u128) callconv(.C) bool {
+    return self < other;
+}
+
+pub fn lessThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
+    return self <= other;
+}
+
+pub fn greaterThanU128(self: u128, other: u128) callconv(.C) bool {
+    return self > other;
+}
+
+pub fn greaterThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
+    return self >= other;
 }
 
 pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {

@@ -3,26 +3,26 @@ procedure Test.1 (Test.5):
     ret Test.16;
 
 procedure Test.1 (Test.5):
-    let Test.28 : [C {}, C U64, C Str] = TagId(1) Test.5;
-    ret Test.28;
+    let Test.30 : [C {}, C U64, C Str] = TagId(1) Test.5;
+    ret Test.30;
 
 procedure Test.2 (Test.7):
-    let Test.22 : [C {}, C U64, C Str] = TagId(2) Test.7;
-    ret Test.22;
+    let Test.23 : [C {}, C U64, C Str] = TagId(2) Test.7;
+    ret Test.23;
 
 procedure Test.6 (Test.17, #Attr.12):
-    let Test.5 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.31 : Str = "";
-    ret Test.31;
-
-procedure Test.6 (Test.17, #Attr.12):
-    let Test.5 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let Test.20 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
     let Test.19 : Str = "";
     ret Test.19;
 
-procedure Test.8 (Test.23, #Attr.12):
-    let Test.7 : Str = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-    ret Test.7;
+procedure Test.6 (Test.17, #Attr.12):
+    let Test.34 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.33 : Str = "";
+    ret Test.33;
+
+procedure Test.8 (Test.24, #Attr.12):
+    let Test.27 : Str = UnionAtIndex (Id 2) (Index 0) #Attr.12;
+    ret Test.27;
 
 procedure Test.0 ():
     let Test.3 : U8 = 0u8;
@@ -50,12 +50,12 @@ procedure Test.0 ():
             jump Test.13 Test.14;
     
         case 1:
-            let Test.21 : Str = "foo";
-            let Test.20 : [C {}, C U64, C Str] = CallByName Test.2 Test.21;
-            jump Test.13 Test.20;
+            let Test.22 : Str = "foo";
+            let Test.21 : [C {}, C U64, C Str] = CallByName Test.2 Test.22;
+            jump Test.13 Test.21;
     
         default:
-            let Test.27 : U64 = 1i64;
-            let Test.26 : [C {}, C U64, C Str] = CallByName Test.1 Test.27;
-            jump Test.13 Test.26;
+            let Test.29 : U64 = 1i64;
+            let Test.28 : [C {}, C U64, C Str] = CallByName Test.1 Test.29;
+            jump Test.13 Test.28;
     

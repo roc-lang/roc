@@ -23,6 +23,9 @@ const LAYOUT_UNIT: InLayout = Layout::UNIT;
 const ARG_1: Symbol = Symbol::ARG_1;
 const ARG_2: Symbol = Symbol::ARG_2;
 const ARG_3: Symbol = Symbol::ARG_3;
+const ARG_4: Symbol = Symbol::ARG_4;
+const ARG_5: Symbol = Symbol::ARG_5;
+const ARG_6: Symbol = Symbol::ARG_6;
 
 /// "Infinite" reference count, for static values
 /// Ref counts are encoded as negative numbers where isize::MIN represents 1
@@ -657,7 +660,7 @@ impl<'a> CallerProc<'a> {
         Self::create_symbol(home, ident_ids, &debug_name)
     }
 
-    pub fn new(
+    pub fn new_list_map(
         arena: &'a Bump,
         home: ModuleId,
         ident_ids: &mut IdentIds,
@@ -665,6 +668,17 @@ impl<'a> CallerProc<'a> {
         passed_function: &PassedFunction<'a>,
         capture_layout: Option<InLayout<'a>>,
     ) -> Self {
+        assert!(passed_function.argument_layouts.len() <= 4);
+        const ARG_SYMBOLS: &[Symbol] = &[ARG_1, ARG_2, ARG_3, ARG_4, ARG_5, ARG_6];
+
+        let argument_layouts = match capture_layout {
+            None => passed_function.argument_layouts,
+            Some(_) => &passed_function.argument_layouts[1..],
+        };
+
+        let capture_symbol = ARG_SYMBOLS[0];
+        let return_symbol = ARG_SYMBOLS[1 + argument_layouts.len()];
+
         let mut ctx = Context {
             new_linker_data: Vec::new_in(arena),
             recursive_union: None,
@@ -677,14 +691,21 @@ impl<'a> CallerProc<'a> {
             layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(Layout::UNIT))
         };
 
-        let ptr_argument_layout = layout_interner
-            .insert_direct_no_semantic(LayoutRepr::Ptr(passed_function.argument_layouts[0]));
+        let it = argument_layouts
+            .iter()
+            .map(|l| layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(*l)));
+        let ptr_argument_layouts = Vec::from_iter_in(it, arena);
 
         let ptr_return_layout = layout_interner
             .insert_direct_no_semantic(LayoutRepr::Ptr(passed_function.return_layout));
 
+        let mut arguments = Vec::with_capacity_in(1 + ptr_argument_layouts.len() + 1, arena);
+        arguments.push(ptr_capture_layout);
+        arguments.extend(ptr_argument_layouts.iter().copied());
+        arguments.push(ptr_return_layout);
+
         let proc_layout = ProcLayout {
-            arguments: arena.alloc([ptr_capture_layout, ptr_argument_layout, ptr_return_layout]),
+            arguments: arguments.into_bump_slice(),
             result: Layout::UNIT,
             niche: Niche::NONE,
         };
@@ -694,14 +715,23 @@ impl<'a> CallerProc<'a> {
 
         ctx.new_linker_data.push((proc_symbol, proc_layout));
 
-        let load_capture = Expr::ptr_load(arena.alloc(Symbol::ARG_1));
-        let load_argument = Expr::ptr_load(arena.alloc(Symbol::ARG_2));
+        let load_capture = Expr::ptr_load(arena.alloc(capture_symbol));
 
         let loaded_capture = Self::create_symbol(home, ident_ids, "loaded_capture");
-        let loaded_argument = Self::create_symbol(home, ident_ids, "loaded_argument");
         let call_result = Self::create_symbol(home, ident_ids, "call_result");
         let unit_symbol = Self::create_symbol(home, ident_ids, "unit_symbol");
         let ignored = Self::create_symbol(home, ident_ids, "ignored");
+
+        let loaded_arguments = Vec::from_iter_in(
+            (0..argument_layouts.len())
+                .map(|i| Self::create_symbol(home, ident_ids, &format!("loaded_argument_{i}"))),
+            arena,
+        );
+
+        let mut arguments = loaded_arguments.clone();
+        if capture_layout.is_some() {
+            arguments.push(loaded_capture);
+        }
 
         let call = Expr::Call(Call {
             call_type: CallType::ByName {
@@ -710,11 +740,7 @@ impl<'a> CallerProc<'a> {
                 arg_layouts: passed_function.argument_layouts,
                 specialization_id: passed_function.specialization_id,
             },
-            arguments: if capture_layout.is_some() {
-                arena.alloc([loaded_argument, loaded_capture])
-            } else {
-                arena.alloc([loaded_argument])
-            },
+            arguments: arguments.into_bump_slice(),
         });
 
         let ptr_write = Expr::Call(Call {
@@ -722,30 +748,42 @@ impl<'a> CallerProc<'a> {
                 op: LowLevel::PtrStore,
                 update_mode: UpdateModeId::BACKEND_DUMMY,
             },
-            arguments: arena.alloc([Symbol::ARG_3, call_result]),
+            arguments: arena.alloc([return_symbol, call_result]),
         });
 
         let mut body = Stmt::Let(
-            loaded_argument,
-            load_argument,
-            passed_function.argument_layouts[0],
+            call_result,
+            call,
+            passed_function.return_layout,
             arena.alloc(Stmt::Let(
-                call_result,
-                call,
-                passed_function.return_layout,
+                ignored,
+                ptr_write,
+                ptr_return_layout,
                 arena.alloc(Stmt::Let(
-                    ignored,
-                    ptr_write,
-                    ptr_return_layout,
-                    arena.alloc(Stmt::Let(
-                        unit_symbol,
-                        Expr::Struct(&[]),
-                        Layout::UNIT,
-                        arena.alloc(Stmt::Ret(unit_symbol)),
-                    )),
+                    unit_symbol,
+                    Expr::Struct(&[]),
+                    Layout::UNIT,
+                    arena.alloc(Stmt::Ret(unit_symbol)),
                 )),
             )),
         );
+
+        let it = loaded_arguments
+            .iter()
+            .zip(ARG_SYMBOLS.iter().skip(1))
+            .zip(argument_layouts.iter())
+            .rev();
+
+        for ((loaded_argument, load_argument), argument_layout) in it {
+            let load_argument = Expr::ptr_load(arena.alloc(load_argument));
+
+            body = Stmt::Let(
+                *loaded_argument,
+                load_argument,
+                *argument_layout,
+                arena.alloc(body),
+            );
+        }
 
         if let Some(capture_layout) = capture_layout {
             body = Stmt::Let(
@@ -756,17 +794,18 @@ impl<'a> CallerProc<'a> {
             );
         }
 
-        let args: &'a [(InLayout<'a>, Symbol)] = {
-            arena.alloc([
-                (ptr_capture_layout, ARG_1),
-                (ptr_argument_layout, ARG_2),
-                (ptr_return_layout, ARG_3),
-            ])
-        };
+        let mut arg_symbols = ARG_SYMBOLS.iter();
+        let mut args = Vec::with_capacity_in(1 + ptr_argument_layouts.len() + 1, arena);
+
+        args.push((ptr_capture_layout, *arg_symbols.next().unwrap()));
+        for l in &ptr_argument_layouts {
+            args.push((*l, *arg_symbols.next().unwrap()));
+        }
+        args.push((ptr_return_layout, *arg_symbols.next().unwrap()));
 
         let proc = Proc {
             name: LambdaName::no_niche(proc_symbol),
-            args,
+            args: args.into_bump_slice(),
             body,
             closure_data_layout: None,
             ret_layout: Layout::UNIT,
@@ -775,19 +814,150 @@ impl<'a> CallerProc<'a> {
         };
 
         if false {
-            let allocator = ven_pretty::BoxAllocator;
-            let doc = proc
-                .to_doc::<_, (), _>(
-                    &allocator,
-                    layout_interner,
-                    true,
-                    crate::ir::Parens::NotNeeded,
-                )
-                .1
-                .pretty(80)
-                .to_string();
+            home.register_debug_idents(ident_ids);
+            println!("{}", proc.to_pretty(layout_interner, 200, true));
+        }
 
-            println!("{doc}");
+        Self {
+            proc_symbol,
+            proc_layout,
+            proc,
+        }
+    }
+
+    pub fn new_compare(
+        arena: &'a Bump,
+        home: ModuleId,
+        ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
+        passed_function: &PassedFunction<'a>,
+        capture_layout: Option<InLayout<'a>>,
+    ) -> Self {
+        const ARG_SYMBOLS: &[Symbol] = &[ARG_1, ARG_2, ARG_3];
+
+        let argument_layouts = match capture_layout {
+            None => passed_function.argument_layouts,
+            Some(_) => &passed_function.argument_layouts[1..],
+        };
+
+        let capture_symbol = ARG_SYMBOLS[0];
+
+        let mut ctx = Context {
+            new_linker_data: Vec::new_in(arena),
+            recursive_union: None,
+            op: HelperOp::Eq,
+        };
+
+        let ptr_capture_layout = if let Some(capture_layout) = capture_layout {
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(capture_layout))
+        } else {
+            layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(Layout::UNIT))
+        };
+
+        let it = argument_layouts
+            .iter()
+            .map(|l| layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(*l)));
+        let ptr_argument_layouts = Vec::from_iter_in(it, arena);
+
+        let mut arguments = Vec::with_capacity_in(1 + ptr_argument_layouts.len(), arena);
+        arguments.push(ptr_capture_layout);
+        arguments.extend(ptr_argument_layouts.iter().copied());
+
+        let proc_layout = ProcLayout {
+            arguments: arguments.into_bump_slice(),
+            result: Layout::UNIT,
+            niche: Niche::NONE,
+        };
+
+        let proc_symbol = Self::create_caller_proc_symbol(
+            home,
+            ident_ids,
+            "compare",
+            passed_function.name.name(),
+        );
+
+        ctx.new_linker_data.push((proc_symbol, proc_layout));
+
+        let load_capture = Expr::ptr_load(arena.alloc(capture_symbol));
+
+        let loaded_capture = Self::create_symbol(home, ident_ids, "loaded_capture");
+        let call_result = Self::create_symbol(home, ident_ids, "call_result");
+
+        let loaded_arguments = Vec::from_iter_in(
+            (0..argument_layouts.len())
+                .map(|i| Self::create_symbol(home, ident_ids, &format!("loaded_argument_{i}"))),
+            arena,
+        );
+
+        let mut arguments = loaded_arguments.clone();
+        if capture_layout.is_some() {
+            arguments.push(loaded_capture);
+        }
+
+        let call = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: passed_function.name,
+                ret_layout: passed_function.return_layout,
+                arg_layouts: passed_function.argument_layouts,
+                specialization_id: passed_function.specialization_id,
+            },
+            arguments: arguments.into_bump_slice(),
+        });
+
+        let mut body = Stmt::Let(
+            call_result,
+            call,
+            passed_function.return_layout,
+            arena.alloc(Stmt::Ret(call_result)),
+        );
+
+        let it = loaded_arguments
+            .iter()
+            .zip(ARG_SYMBOLS.iter().skip(1))
+            .zip(argument_layouts.iter())
+            .rev();
+
+        for ((loaded_argument, load_argument), argument_layout) in it {
+            let load_argument = Expr::ptr_load(arena.alloc(load_argument));
+
+            body = Stmt::Let(
+                *loaded_argument,
+                load_argument,
+                *argument_layout,
+                arena.alloc(body),
+            );
+        }
+
+        if let Some(capture_layout) = capture_layout {
+            body = Stmt::Let(
+                loaded_capture,
+                load_capture,
+                capture_layout,
+                arena.alloc(body),
+            );
+        }
+
+        let mut arg_symbols = ARG_SYMBOLS.iter();
+        let mut args = Vec::with_capacity_in(1 + ptr_argument_layouts.len(), arena);
+
+        args.push((ptr_capture_layout, *arg_symbols.next().unwrap()));
+        for l in &ptr_argument_layouts {
+            args.push((*l, *arg_symbols.next().unwrap()));
+        }
+
+        let proc = Proc {
+            name: LambdaName::no_niche(proc_symbol),
+            args: args.into_bump_slice(),
+            body,
+            closure_data_layout: None,
+            ret_layout: Layout::BOOL,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            is_erased: false,
+        };
+
+        if false {
+            home.register_debug_idents(ident_ids);
+            println!("{}", proc.to_pretty(layout_interner, 200, true));
         }
 
         Self {
@@ -1036,6 +1206,220 @@ fn test_helper_body<'a>(
                         env.arena,
                         is_longjmp_symbol,
                         output_layout,
+                        if_zero_stmt,
+                        if_nonzero_stmt,
+                    ),
+                )),
+            )),
+        )),
+    ))
+}
+
+pub fn repl_helper<'a>(
+    env: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    layout_interner: &mut STLayoutInterner<'a>,
+    main_proc: &Proc<'a>,
+) -> Proc<'a> {
+    let name = LambdaName::no_niche(env.create_symbol(ident_ids, "test_main"));
+
+    // NOTE: main_proc's arguments are ignored here. There can be arguments if the input on the
+    // repl is a lambda, but then we don't read the output of the evaluation anyway (and just print
+    // the function type)
+
+    //    tag: u64,
+    //    error_msg: *mut RocStr,
+    //    value: MaybeUninit<T>,
+    let fields = [Layout::U64, Layout::U64, main_proc.ret_layout];
+    let repr = LayoutRepr::Struct(env.arena.alloc(fields));
+    let output_layout = layout_interner.insert_direct_no_semantic(repr);
+
+    let argument_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Ptr(output_layout));
+    let argument_symbol = env.create_symbol(ident_ids, "output");
+    let argument = (argument_layout, argument_symbol);
+
+    let args = &env.arena.alloc([argument])[..];
+
+    let body = repl_helper_body(
+        env,
+        ident_ids,
+        layout_interner,
+        main_proc,
+        argument_symbol,
+        output_layout,
+    );
+
+    Proc {
+        name,
+        args,
+        body,
+        closure_data_layout: None,
+        ret_layout: Layout::UNIT,
+        is_self_recursive: main_proc.is_self_recursive,
+        is_erased: false,
+    }
+}
+
+fn repl_helper_body<'a>(
+    env: &CodeGenHelp<'a>,
+    ident_ids: &mut IdentIds,
+    layout_interner: &mut STLayoutInterner<'a>,
+    main_proc: &Proc<'a>,
+    output_symbol: Symbol,
+    output_layout: InLayout<'a>,
+) -> Stmt<'a> {
+    // let buffer = SetLongJmpBuffer
+    let buffer_symbol = env.create_symbol(ident_ids, "buffer");
+    let buffer_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::SetLongJmpBuffer,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: &[],
+    });
+    let buffer_stmt = |next| Stmt::Let(buffer_symbol, buffer_expr, Layout::U64, next);
+
+    let field_layouts = env.arena.alloc([Layout::U64, Layout::U64]);
+    let ret_layout = layout_interner.insert_direct_no_semantic(LayoutRepr::Struct(field_layouts));
+
+    let setjmp_symbol = env.create_symbol(ident_ids, "setjmp");
+    let setjmp_expr = Expr::Call(Call {
+        call_type: CallType::LowLevel {
+            op: LowLevel::SetJmp,
+            update_mode: UpdateModeId::BACKEND_DUMMY,
+        },
+        arguments: env.arena.alloc([buffer_symbol]),
+    });
+    let setjmp_stmt = |next| Stmt::Let(setjmp_symbol, setjmp_expr, ret_layout, next);
+
+    let is_longjmp_symbol = env.create_symbol(ident_ids, "is_longjmp");
+    let is_longjmp_expr = Expr::StructAtIndex {
+        index: 0,
+        field_layouts,
+        structure: setjmp_symbol,
+    };
+    let is_longjmp_stmt = |next| Stmt::Let(is_longjmp_symbol, is_longjmp_expr, Layout::U64, next);
+
+    let tag_symbol = env.create_symbol(ident_ids, "tag");
+    let tag_expr = Expr::StructAtIndex {
+        index: 1,
+        field_layouts,
+        structure: setjmp_symbol,
+    };
+    let tag_stmt = |next| Stmt::Let(tag_symbol, tag_expr, Layout::U64, next);
+
+    // normal path, no panics
+    let if_zero_stmt = {
+        let it = main_proc.args.iter().map(|(a, _)| *a);
+        let arg_layouts = Vec::from_iter_in(it, env.arena).into_bump_slice();
+
+        let result_symbol = env.create_symbol(ident_ids, "result");
+        let result_expr = Expr::Call(Call {
+            call_type: CallType::ByName {
+                name: main_proc.name,
+                ret_layout: main_proc.ret_layout,
+                arg_layouts,
+                specialization_id: CallSpecId::BACKEND_DUMMY,
+            },
+            arguments: &[],
+        });
+        let result = |next| Stmt::Let(result_symbol, result_expr, main_proc.ret_layout, next);
+
+        let ok_tag_symbol = env.create_symbol(ident_ids, "ok_tag");
+        let ok_tag_expr = Expr::Literal(Literal::Int((0i128).to_ne_bytes()));
+        let ok_tag = |next| Stmt::Let(ok_tag_symbol, ok_tag_expr, Layout::U64, next);
+
+        let msg_ptr_symbol = env.create_symbol(ident_ids, "msg_ptr");
+        let msg_ptr_expr = Expr::Literal(Literal::Int((0i128).to_ne_bytes()));
+        let msg_ptr = |next| Stmt::Let(msg_ptr_symbol, msg_ptr_expr, Layout::U64, next);
+
+        // construct the record
+        let result_symbol1 = env.create_symbol(ident_ids, "output_ok");
+        let fields = [ok_tag_symbol, msg_ptr_symbol, result_symbol];
+        let result_expr = Expr::Struct(env.arena.alloc(fields));
+        let output = |next| Stmt::Let(result_symbol1, result_expr, output_layout, next);
+
+        let unit_symbol = env.create_symbol(ident_ids, "unit");
+        let unit_expr = Expr::ptr_store(env.arena.alloc([output_symbol, result_symbol1]));
+        let unit = |next| Stmt::Let(unit_symbol, unit_expr, Layout::UNIT, next);
+
+        let arena = env.arena;
+        result(arena.alloc(
+            //
+            ok_tag(arena.alloc(
+                //
+                msg_ptr(arena.alloc(
+                    //
+                    output(arena.alloc(
+                        //
+                        unit(arena.alloc(
+                            //
+                            Stmt::Ret(unit_symbol),
+                        )),
+                    )),
+                )),
+            )),
+        ))
+    };
+
+    // a longjmp/panic occurred
+    let if_nonzero_stmt = {
+        let alloca_symbol = env.create_symbol(ident_ids, "alloca");
+        let alloca_expr = Expr::Alloca {
+            element_layout: main_proc.ret_layout,
+            initializer: None,
+        };
+        let alloca = |next| Stmt::Let(alloca_symbol, alloca_expr, Layout::U64, next);
+
+        let load_symbol = env.create_symbol(ident_ids, "load");
+        let load_expr = Expr::Call(Call {
+            call_type: CallType::LowLevel {
+                op: LowLevel::PtrLoad,
+                update_mode: UpdateModeId::BACKEND_DUMMY,
+            },
+            arguments: env.arena.alloc([alloca_symbol]),
+        });
+        let load = |next| Stmt::Let(load_symbol, load_expr, main_proc.ret_layout, next);
+
+        // construct the record
+        let result_symbol1 = env.create_symbol(ident_ids, "output_err");
+        // is_longjmp_symbol is a pointer to the error message
+        let fields = [tag_symbol, is_longjmp_symbol, load_symbol];
+        let output_expr = Expr::Struct(env.arena.alloc(fields));
+        let output = |next| Stmt::Let(result_symbol1, output_expr, output_layout, next);
+
+        let unit_symbol = env.create_symbol(ident_ids, "unit");
+        let unit_expr = Expr::ptr_store(env.arena.alloc([output_symbol, result_symbol1]));
+        let unit = |next| Stmt::Let(unit_symbol, unit_expr, Layout::UNIT, next);
+
+        let arena = env.arena;
+        arena.alloc(alloca(arena.alloc(
+            //
+            load(arena.alloc(
+                //
+                output(arena.alloc(
+                    //
+                    unit(arena.alloc(
+                        //
+                        Stmt::Ret(unit_symbol),
+                    )),
+                )),
+            )),
+        )))
+    };
+
+    buffer_stmt(env.arena.alloc(
+        //
+        setjmp_stmt(env.arena.alloc(
+            //
+            is_longjmp_stmt(env.arena.alloc(
+                //
+                tag_stmt(env.arena.alloc(
+                    //
+                    switch_if_zero_else(
+                        env.arena,
+                        is_longjmp_symbol,
+                        Layout::UNIT,
                         if_zero_stmt,
                         if_nonzero_stmt,
                     ),

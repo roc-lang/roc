@@ -3,11 +3,8 @@ members = [
   "crates/compiler/*",
   "crates/vendor/*",
   "crates/glue",
-  "crates/editor",
-  "crates/ast",
   "crates/cli",
   "crates/cli_utils",
-  "crates/code_markup",
   "crates/highlight",
   "crates/error_macros",
   "crates/reporting",
@@ -15,6 +12,7 @@ members = [
   "crates/repl_cli",
   "crates/repl_eval",
   "crates/repl_test",
+  "crates/repl_ui",
   "crates/repl_wasm",
   "crates/repl_expect",
   "crates/roc_std",
@@ -32,6 +30,7 @@ members = [
 
 exclude = [
   "ci/benchmarks/bench-runner",
+  "ci/repl_basic_test",
   # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
   "crates/cli_testing_examples",
   "examples",
@@ -138,7 +137,7 @@ quote = "1.0.23"
 rand = "0.8.5"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
-reqwest = { version = "0.11.14", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
+reqwest = { version = "0.11.20", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }

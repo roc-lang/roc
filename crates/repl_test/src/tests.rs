@@ -32,12 +32,12 @@ fn literal_0x42() {
 
 #[test]
 fn literal_0point0() {
-    expect_success("0.0", "0 : Float *");
+    expect_success("0.0", "0 : Frac *");
 }
 
 #[test]
 fn literal_4point2() {
-    expect_success("4.2", "4.2 : Float *");
+    expect_success("4.2", "4.2 : Frac *");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn int_addition() {
 
 #[test]
 fn float_addition() {
-    expect_success("1.1 + 2", "3.1 : Float *");
+    expect_success("1.1 + 2", "3.1 : Frac *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -185,7 +185,7 @@ fn tag_in_record() {
 #[test]
 fn single_element_tag_union() {
     expect_success("True 1", "True 1 : [True (Num *)]");
-    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]");
+    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Frac *)]");
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn tag_with_arguments() {
 
     expect_success(
         "if 1 == 1 then True 3 else False 3.14",
-        "True 3 : [False (Float *), True (Num *)]",
+        "True 3 : [False (Frac *), True (Num *)]",
     )
 }
 
@@ -296,7 +296,7 @@ fn literal_int_list() {
 
 #[test]
 fn literal_float_list() {
-    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Float *)");
+    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Frac *)");
 }
 
 #[test]
@@ -332,7 +332,7 @@ fn nested_int_list() {
 fn nested_float_list() {
     expect_success(
         r#"[[[4, 3, 2], [1, 0.0]], [[]], []]"#,
-        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Float *)))"#,
+        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Frac *)))"#,
     );
 }
 
@@ -411,7 +411,7 @@ fn num_mul_checked() {
 fn list_concat() {
     expect_success(
         "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
-        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Float *)",
+        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Frac *)",
     );
 }
 
@@ -425,10 +425,20 @@ fn list_contains() {
 
 #[cfg(not(feature = "wasm"))]
 #[test]
-fn list_sum() {
+fn list_sum_empty() {
     expect_success("List.sum []", "0 : Num a");
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn list_sum_num() {
     expect_success("List.sum [1, 2, 3]", "6 : Num *");
-    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Float *");
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn list_sum_frac() {
+    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Frac *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -471,7 +481,7 @@ fn basic_1_field_i64_record() {
 fn basic_1_field_f64_record() {
     // Even though this gets unwrapped at runtime, the repl should still
     // report it as a record
-    expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Float * }");
+    expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Frac * }");
 }
 
 #[test]
@@ -490,7 +500,7 @@ fn nested_1_field_f64_record() {
     // report it as a record
     expect_success(
         "{ foo: { bar: { baz: 4.2 } } }",
-        "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Float * } } }",
+        "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Frac * } } }",
     );
 }
 
@@ -506,7 +516,7 @@ fn basic_2_field_i64_record() {
 fn basic_2_field_f64_record() {
     expect_success(
         "{ foo: 4.1, bar: 2.3 }",
-        "{ bar: 2.3, foo: 4.1 } : { bar : Float *, foo : Float * }",
+        "{ bar: 2.3, foo: 4.1 } : { bar : Frac *, foo : Frac * }",
     );
 }
 
@@ -514,7 +524,7 @@ fn basic_2_field_f64_record() {
 fn basic_2_field_mixed_record() {
     expect_success(
         "{ foo: 4.1, bar: 2 }",
-        "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float * }",
+        "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Frac * }",
     );
 }
 
@@ -522,7 +532,7 @@ fn basic_2_field_mixed_record() {
 fn basic_3_field_record() {
     expect_success(
         "{ foo: 4.1, bar: 2, baz: 0x5 }",
-        "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int *, foo : Float * }",
+        "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int *, foo : Frac * }",
     );
 }
 
@@ -537,7 +547,7 @@ fn list_of_1_field_records() {
 fn list_of_2_field_records() {
     expect_success(
         "[{ foo: 4.1, bar: 2 }]",
-        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Float * }",
+        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Frac * }",
     );
 }
 
@@ -578,11 +588,7 @@ fn multiline_string_non_wasm() {
     );
 
     assert_multiline_str_eq!("", out.stderr.as_str());
-
-    // Don't consider the auto variable name ("# val1") at the end.
-    // The state.rs tests do that!
-    assert_multiline_str_eq!(expected, out.stdout.replace("# val1", "").trim());
-
+    assert_multiline_str_eq!(expected, out.stdout.trim());
     assert!(out.status.success());
 }
 
@@ -608,7 +614,7 @@ fn multiline_string_wasm() {
 fn list_of_3_field_records() {
     expect_success(
         "[{ foo: 4.1, bar: 2, baz: 0x3 }]",
-        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Float * }",
+        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Frac * }",
     );
 }
 
@@ -677,16 +683,28 @@ fn type_problem() {
 }
 
 #[test]
-fn issue_2149() {
+fn issue_2149_i8_ok() {
     expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
+}
+
+#[test]
+fn issue_2149_i8_err() {
     expect_success(
         r#"Str.toI8 "128""#,
         "Err InvalidNumStr : Result I8 [InvalidNumStr]",
     );
+}
+
+#[test]
+fn issue_2149_i16_ok() {
     expect_success(
         r#"Str.toI16 "32767""#,
         "Ok 32767 : Result I16 [InvalidNumStr]",
     );
+}
+
+#[test]
+fn issue_2149_i16_err() {
     expect_success(
         r#"Str.toI16 "32768""#,
         "Err InvalidNumStr : Result I16 [InvalidNumStr]",
@@ -1385,18 +1403,12 @@ fn interpolation_with_nested_interpolation() {
                 <https://www.roc-lang.org/tutorial#string-interpolation>
 
 
-                Enter an expression to evaluate, or a definition (like x = 1) to use in future expressions.
-
-                Unless there was a compile-time error, expressions get automatically named so you can refer to them later.
-                For example, if you see # val1 after an output, you can now refer to that expression as val1 in future expressions.
-
-                Tips:
+                Enter an expression to evaluate, or a definition (like x = 1) to use later.
 
                   - ctrl-v + ctrl-j makes a newline
-
-                  - :q to quit
-
-                  - :help"#
+                  - :q quits
+                  - :help shows this text again
+            "#
         ),
         // TODO figure out why the tests prints the repl help text at the end, but only after syntax errors or something?
         // In the actual repl this doesn't happen, only in the test.

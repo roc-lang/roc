@@ -17,18 +17,9 @@ const v2u64 = @Vector(2, u64);
 
 // Export it as weak incase it is already linked in by something else.
 comptime {
-    @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
-    @export(__lshrti3, .{ .name = "__lshrti3", .linkage = .Weak });
-    if (want_windows_v2u64_abi) {
-        @export(__divti3_windows_x86_64, .{ .name = "__divti3", .linkage = .Weak });
-        @export(__modti3_windows_x86_64, .{ .name = "__modti3", .linkage = .Weak });
-        @export(__umodti3_windows_x86_64, .{ .name = "__umodti3", .linkage = .Weak });
-        @export(__udivti3_windows_x86_64, .{ .name = "__udivti3", .linkage = .Weak });
-        @export(__fixdfti_windows_x86_64, .{ .name = "__fixdfti", .linkage = .Weak });
-        @export(__fixsfti_windows_x86_64, .{ .name = "__fixsfti", .linkage = .Weak });
-        @export(__fixunsdfti_windows_x86_64, .{ .name = "__fixunsdfti", .linkage = .Weak });
-        @export(__fixunssfti_windows_x86_64, .{ .name = "__fixunssfti", .linkage = .Weak });
-    } else {
+    if (!want_windows_v2u64_abi) {
+        @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+        @export(__lshrti3, .{ .name = "__lshrti3", .linkage = .Weak });
         @export(__divti3, .{ .name = "__divti3", .linkage = .Weak });
         @export(__modti3, .{ .name = "__modti3", .linkage = .Weak });
         @export(__umodti3, .{ .name = "__umodti3", .linkage = .Weak });

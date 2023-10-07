@@ -30,6 +30,6 @@ macro_rules! console_log {
 /// The browser only has an async API to generate a Wasm module from bytes
 /// wasm_bindgen manages the interaction between Rust Futures and JS Promises
 #[wasm_bindgen]
-pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
+pub async fn entrypoint_from_js(src: String) -> String {
     crate::repl::entrypoint_from_js(src).await
 }

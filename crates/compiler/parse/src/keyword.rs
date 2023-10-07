@@ -14,6 +14,4 @@ pub const CRASH: &str = "crash";
 pub const IMPLEMENTS: &str = "implements";
 pub const WHERE: &str = "where";
 
-pub const KEYWORDS: [&str; 11] = [
-    IF, THEN, ELSE, WHEN, AS, IS, DBG, EXPECT, EXPECT_FX, CRASH, WHERE,
-];
+pub const KEYWORDS: [&str; 10] = [IF, THEN, ELSE, WHEN, AS, IS, DBG, EXPECT, EXPECT_FX, CRASH];

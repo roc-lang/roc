@@ -28,6 +28,7 @@ use roc_mono::list_element_layout;
 mod generic64;
 mod object_builder;
 pub use object_builder::build_module;
+use roc_target::TargetInfo;
 mod run_roc;
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +37,8 @@ pub enum AssemblyBackendMode {
     Binary,
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     Test,
+    /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
+    Repl,
 }
 
 impl AssemblyBackendMode {
@@ -43,6 +46,15 @@ impl AssemblyBackendMode {
         match self {
             AssemblyBackendMode::Binary => false,
             AssemblyBackendMode::Test => true,
+            AssemblyBackendMode::Repl => true,
+        }
+    }
+
+    fn generate_roc_panic(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+            AssemblyBackendMode::Repl => true,
         }
     }
 }
@@ -292,6 +304,7 @@ trait Backend<'a> {
     fn interns_mut(&mut self) -> &mut Interns;
     fn interner(&self) -> &STLayoutInterner<'a>;
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation>;
+    fn target_info(&self) -> TargetInfo;
 
     fn interner_mut(&mut self) -> &mut STLayoutInterner<'a> {
         self.module_interns_helpers_mut().1
@@ -1005,6 +1018,12 @@ trait Backend<'a> {
             ),
             LowLevel::NumMul => self.build_num_mul(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumMulWrap => self.build_num_mul_wrap(sym, &args[0], &args[1], ret_layout),
+            LowLevel::NumMulSaturated => {
+                self.build_num_mul_saturated(*sym, args[0], args[1], *ret_layout);
+            }
+            LowLevel::NumMulChecked => {
+                self.build_num_mul_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumDivTruncUnchecked | LowLevel::NumDivFrac => {
                 debug_assert_eq!(
                     2,
@@ -1022,6 +1041,9 @@ trait Backend<'a> {
                 self.build_num_div(sym, &args[0], &args[1], ret_layout)
             }
 
+            LowLevel::NumDivCeilUnchecked => {
+                self.build_num_div_ceil(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumRemUnchecked => self.build_num_rem(sym, &args[0], &args[1], ret_layout),
             LowLevel::NumNeg => {
                 debug_assert_eq!(
@@ -1248,7 +1270,7 @@ trait Backend<'a> {
                 );
 
                 debug_assert!(
-                    matches!(*ret_layout, Layout::F32 | Layout::F64),
+                    matches!(*ret_layout, Layout::F32 | Layout::F64 | Layout::DEC),
                     "NumToFrac: expected to have return layout of type Float"
                 );
                 self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout)
@@ -1617,12 +1639,18 @@ trait Backend<'a> {
                 self.build_ptr_cast(sym, &args[0])
             }
             LowLevel::PtrStore => {
+                let args0 = args[0];
+                let args1 = args[1];
+
                 let element_layout = match self.interner().get_repr(arg_layouts[0]) {
                     LayoutRepr::Ptr(inner) => inner,
-                    _ => unreachable!("cannot write to {:?}", self.interner().dbg(*ret_layout)),
+                    _ => unreachable!(
+                        "cannot write to {:?} in *{args0:?} = {args1:?}",
+                        self.interner().dbg(arg_layouts[0])
+                    ),
                 };
 
-                self.build_ptr_store(*sym, args[0], args[1], element_layout);
+                self.build_ptr_store(*sym, args0, args1, element_layout);
             }
             LowLevel::PtrLoad => {
                 self.build_ptr_load(*sym, args[0], *ret_layout);
@@ -2047,8 +2075,33 @@ trait Backend<'a> {
         layout: &InLayout<'a>,
     );
 
+    fn build_num_mul_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    );
+
+    fn build_num_mul_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
+    );
+
     /// build_num_mul stores `src1 / src2` into dst.
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    fn build_num_div_ceil(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    );
 
     /// build_num_mul stores `src1 % src2` into dst.
     fn build_num_rem(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);

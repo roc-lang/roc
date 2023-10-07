@@ -101,6 +101,7 @@ enum FirstOrder {
     NumNeg,
     NumSin,
     NumCos,
+    NumTan,
     NumSqrtUnchecked,
     NumLogUnchecked,
     NumRound,

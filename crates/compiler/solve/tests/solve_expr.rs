@@ -91,7 +91,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Float *");
+        infer_eq("0.5", "Frac *");
     }
 
     #[test]
@@ -797,7 +797,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float *",
+            "Frac *",
         );
     }
 
@@ -1061,7 +1061,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float * }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Frac * }");
     }
 
     #[test]
@@ -1086,7 +1086,7 @@ mod solve_expr {
 
     #[test]
     fn tuple_literal_ty() {
-        infer_eq("(5, 3.14 )", "( Num *, Float * )*");
+        infer_eq("(5, 3.14 )", "( Num *, Frac * )*");
     }
 
     #[test]
@@ -2246,7 +2246,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num *, y : Float * }",
+            "{ numIdentity : Num a -> Num a, x : Num *, y : Frac * }",
         );
     }
 
@@ -2423,7 +2423,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "Float *",
+            "Frac *",
         );
     }
 
@@ -3158,7 +3158,7 @@ mod solve_expr {
                 Num.toFrac
                 "#
             ),
-            "Num * -> Float a",
+            "Num * -> Frac a",
         );
     }
 
@@ -3170,7 +3170,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "Float a, Float a -> Float a",
+            "Frac a, Frac a -> Frac a",
         );
     }
 
@@ -3182,7 +3182,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "Float * -> Int a",
+            "Frac * -> Int a",
         );
     }
 
@@ -3194,7 +3194,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "Float * -> Int a",
+            "Frac * -> Int a",
         );
     }
 
@@ -3206,7 +3206,7 @@ mod solve_expr {
                 Num.div
                 "#
             ),
-            "Float a, Float a -> Float a",
+            "Frac a, Frac a -> Frac a",
         )
     }
 
@@ -3218,7 +3218,7 @@ mod solve_expr {
                 Num.divChecked
                 "#
             ),
-            "Float a, Float a -> Result (Float a) [DivByZero]",
+            "Frac a, Frac a -> Result (Frac a) [DivByZero]",
         )
     }
 
@@ -3278,7 +3278,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "Float a -> Float a",
+            "Frac a -> Frac a",
         );
     }
 
@@ -3663,7 +3663,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num *, y : Float *, z : Int * }",
+            "{ x : Num *, y : Frac *, z : Int * }",
         );
     }
 
@@ -3680,7 +3680,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : c1 } }",
+            "{ a : { x : Num *, y : Frac *, z : c }, b : { blah : Str, x : Num *, y : Frac *, z : c1 } }",
         );
     }
 

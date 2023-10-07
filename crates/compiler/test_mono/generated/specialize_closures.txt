@@ -3,12 +3,12 @@ procedure Bool.2 ():
     ret Bool.24;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.293 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.292 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.292 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.291 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Test.1 (Test.2, Test.3):
     let Test.15 : U8 = GetTagId Test.2;
@@ -23,15 +23,15 @@ procedure Test.1 (Test.2, Test.3):
     
 
 procedure Test.7 (Test.9, #Attr.12):
-    let Test.4 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.21 : I64 = CallByName Num.19 Test.9 Test.4;
-    ret Test.21;
+    let Test.24 : I64 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let Test.23 : I64 = CallByName Num.19 Test.9 Test.24;
+    ret Test.23;
 
 procedure Test.8 (Test.10, #Attr.12):
-    let Test.6 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
-    let Test.5 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    if Test.6 then
-        let Test.19 : I64 = CallByName Num.21 Test.10 Test.5;
+    let Test.21 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+    let Test.20 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    if Test.21 then
+        let Test.19 : I64 = CallByName Num.21 Test.10 Test.20;
         ret Test.19;
     else
         ret Test.10;
@@ -45,8 +45,8 @@ procedure Test.0 ():
         let Test.11 : I64 = CallByName Test.1 Test.12 Test.13;
         ret Test.11;
     in
-    let Test.20 : Int1 = CallByName Bool.2;
-    if Test.20 then
+    let Test.22 : Int1 = CallByName Bool.2;
+    if Test.22 then
         let Test.16 : [C I64, C I64 Int1] = TagId(0) Test.4;
         jump Test.17 Test.16;
     else

@@ -1,6 +1,6 @@
 procedure Test.0 ():
-    let Test.4 : I64 = 2i64;
-    let Test.5 : Float64 = 3.14f64;
-    let Test.3 : {I64, Float64} = Struct {Test.4, Test.5};
-    let Test.1 : I64 = StructAtIndex 0 Test.3;
+    let Test.4 : Decimal = 3.14dec;
+    let Test.5 : I64 = 2i64;
+    let Test.3 : {Decimal, I64} = Struct {Test.4, Test.5};
+    let Test.1 : I64 = StructAtIndex 1 Test.3;
     ret Test.1;

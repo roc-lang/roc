@@ -65,14 +65,16 @@ a:hover {
 }
 
 .pkg-and-logo {
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
+  /* necessary for text-overflow: ellipsis to work in descendants */
   display: flex;
   align-items: center;
   height: 100%;
   background-color: var(--top-bar-bg);
 }
 
-.pkg-and-logo a, .pkg-and-logo a:visited {
+.pkg-and-logo a,
+.pkg-and-logo a:visited {
   color: var(--top-bar-fg);
 }
 
@@ -82,14 +84,17 @@ a:hover {
 }
 
 .main-container {
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
+  /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
 .search-button {
-  flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
+  flex-shrink: 0;
+  /* always shrink the package name before these; they have a relatively constrained length */
   padding: 12px 18px;
   margin-right: 42px;
-  display: none; /* only show this in the mobile view */
+  display: none;
+  /* only show this in the mobile view */
 }
 
 .version {
@@ -159,7 +164,8 @@ main {
   font-family: var(--font-sans);
   font-size: 24px;
   height: 100%;
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
+  /* necessary for text-overflow: ellipsis to work in descendants */
 }
 
 .top-header-triangle {
@@ -174,8 +180,8 @@ main {
 }
 
 p {
-    overflow-wrap: break-word;
-    margin: 24px 0;
+  overflow-wrap: break-word;
+  margin: 24px 0;
 }
 
 footer {
@@ -233,7 +239,8 @@ footer p {
   margin-bottom: 48px;
 }
 
-.module-name a, .module-name a:visited {
+.module-name a,
+.module-name a:visited {
   color: inherit;
 }
 
@@ -251,7 +258,8 @@ footer p {
   text-overflow: ellipsis;
 }
 
-a, a:visited {
+a,
+a:visited {
   color: var(--link-color);
 }
 
@@ -316,19 +324,20 @@ pre {
   height: 0;
 }
 
-#module-search, #module-search:focus {
+#module-search,
+#module-search:focus {
   opacity: 1;
   padding: 12px 16px;
   height: 48px;
 }
 
 /* Show the "Search" label link when the text input has a placeholder */
-#module-search:placeholder-shown + #search-link {
+#module-search:placeholder-shown+#search-link {
   display: flex;
 }
 
 /* Hide the "Search" label link when the text input has focus */
-#module-search:focus + #search-link {
+#module-search:focus+#search-link {
   display: none;
 }
 
@@ -390,7 +399,8 @@ pre {
 
 @media only screen and (max-device-width: 480px) {
   .search-button {
-    display: block; /* This is only visible in mobile. */
+    display: block;
+    /* This is only visible in mobile. */
   }
 
   .top-header {

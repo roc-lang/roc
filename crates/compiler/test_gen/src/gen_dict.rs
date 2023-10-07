@@ -134,7 +134,7 @@ fn dict_nonempty_get() {
                     Err _ -> def
 
             empty
-                |> Dict.insert 42 1.23
+                |> Dict.insert 42 1.23f64
                 |> Dict.get 42
                 |> withDefault 0
             "#
@@ -152,7 +152,7 @@ fn dict_nonempty_get() {
                     Err _ -> def
 
             Dict.empty {}
-                |> Dict.insert 42 1.23
+                |> Dict.insert 42 1.23f64
                 |> Dict.get 43
                 |> withDefault 0
             "#

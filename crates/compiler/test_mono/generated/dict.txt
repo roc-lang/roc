@@ -1,28 +1,28 @@
-procedure Dict.1 (Dict.556):
-    let Dict.565 : List {[], []} = Array [];
-    let Dict.572 : U64 = 0i64;
-    let Dict.573 : U64 = 8i64;
-    let Dict.566 : List U64 = CallByName List.11 Dict.572 Dict.573;
-    let Dict.569 : I8 = CallByName Dict.39;
-    let Dict.570 : U64 = 8i64;
-    let Dict.567 : List I8 = CallByName List.11 Dict.569 Dict.570;
-    let Dict.568 : U64 = 0i64;
-    let Dict.564 : {List {[], []}, List U64, List I8, U64} = Struct {Dict.565, Dict.566, Dict.567, Dict.568};
-    ret Dict.564;
+procedure Dict.1 (Dict.554):
+    let Dict.563 : List {[], []} = Array [];
+    let Dict.570 : U64 = 0i64;
+    let Dict.571 : U64 = 8i64;
+    let Dict.564 : List U64 = CallByName List.11 Dict.570 Dict.571;
+    let Dict.567 : I8 = CallByName Dict.39;
+    let Dict.568 : U64 = 8i64;
+    let Dict.565 : List I8 = CallByName List.11 Dict.567 Dict.568;
+    let Dict.566 : U64 = 0i64;
+    let Dict.562 : {List {[], []}, List U64, List I8, U64} = Struct {Dict.563, Dict.564, Dict.565, Dict.566};
+    ret Dict.562;
 
 procedure Dict.39 ():
-    let Dict.571 : I8 = -128i64;
-    ret Dict.571;
+    let Dict.569 : I8 = -128i64;
+    ret Dict.569;
 
-procedure Dict.4 (Dict.562):
-    let Dict.100 : U64 = StructAtIndex 3 Dict.562;
-    let #Derived_gen.8 : List {[], []} = StructAtIndex 0 Dict.562;
+procedure Dict.4 (Dict.560):
+    let Dict.101 : U64 = StructAtIndex 3 Dict.560;
+    let #Derived_gen.8 : List {[], []} = StructAtIndex 0 Dict.560;
     dec #Derived_gen.8;
-    let #Derived_gen.7 : List U64 = StructAtIndex 1 Dict.562;
+    let #Derived_gen.7 : List U64 = StructAtIndex 1 Dict.560;
     dec #Derived_gen.7;
-    let #Derived_gen.6 : List I8 = StructAtIndex 2 Dict.562;
+    let #Derived_gen.6 : List I8 = StructAtIndex 2 Dict.560;
     dec #Derived_gen.6;
-    ret Dict.100;
+    ret Dict.101;
 
 procedure List.11 (List.124, List.125):
     let List.536 : List I8 = CallByName List.68 List.125;
@@ -79,12 +79,12 @@ procedure List.84 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5):
     jump List.549 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.295 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.295;
+    let Num.294 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.294;
 
 procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.293 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.292 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Test.0 ():
     let Test.3 : {} = Struct {};

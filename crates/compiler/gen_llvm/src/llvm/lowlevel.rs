@@ -1,7 +1,7 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, IntType},
+    types::{BasicType, BasicTypeEnum, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
         PointerValue, StructValue,
@@ -287,19 +287,37 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     }
                 }
                 PtrWidth::Bytes8 => {
-                    let cc_return_by_pointer = match layout_interner.get_repr(number_layout) {
-                        LayoutRepr::Builtin(Builtin::Int(int_width)) => {
-                            (int_width.stack_size() as usize > env.target_info.ptr_size())
-                                .then_some(int_width.type_name())
+                    let (type_name, width) = {
+                        match layout_interner.get_repr(number_layout) {
+                            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                                (int_width.type_name(), int_width.stack_size())
+                            }
+                            LayoutRepr::Builtin(Builtin::Decimal) => {
+                                // zig picks 128 for dec.RocDec
+                                ("i128", 16)
+                            }
+                            LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                                (float_width.type_name(), float_width.stack_size())
+                            }
+                            _ => {
+                                unreachable!("other layout types are non-numeric")
+                            }
                         }
-                        LayoutRepr::Builtin(Builtin::Decimal) => {
-                            // zig picks 128 for dec.RocDec
-                            Some("i128")
-                        }
-                        _ => None,
                     };
 
-                    if let Some(type_name) = cc_return_by_pointer {
+                    use roc_target::OperatingSystem::*;
+                    let cc_return_by_pointer = match env.target_info.operating_system {
+                        Windows => {
+                            // there is just one return register on Windows
+                            (width + 1) as usize > env.target_info.ptr_size()
+                        }
+                        _ => {
+                            // on other systems we have two return registers
+                            (width + 1) as usize > 2 * env.target_info.ptr_size()
+                        }
+                    };
+
+                    if cc_return_by_pointer {
                         let bitcode_return_type = zig_num_parse_result_type(env, type_name);
 
                         call_bitcode_fn_fixing_for_convention(
@@ -349,7 +367,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrFromFloat => {
-            // Str.fromFloat : Float * -> Str
+            // Str.fromFloat : Frac * -> Str
             debug_assert_eq!(args.len(), 1);
 
             let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
@@ -495,12 +513,18 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    let return_type = env.context.struct_type(
-                        &[env.ptr_int().into(), env.context.i32_type().into()],
-                        false,
-                    );
+                    let zig_return_type = env
+                        .module
+                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                        .unwrap()
+                        .get_type()
+                        .get_param_types()[0]
+                        .into_pointer_type()
+                        .get_element_type();
 
-                    let result = env.builder.build_alloca(return_type, "result");
+                    let result = env
+                        .builder
+                        .build_alloca(BasicTypeEnum::try_from(zig_return_type).unwrap(), "result");
 
                     call_void_bitcode_fn(
                         env,
@@ -508,19 +532,19 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    let return_type = basic_type_from_layout(
+                    let roc_return_type = basic_type_from_layout(
                         env,
                         layout_interner,
                         layout_interner.get_repr(layout),
                     );
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::default()),
+                        roc_return_type.ptr_type(AddressSpace::default()),
                         "cast",
                     );
 
                     env.builder
-                        .new_build_load(return_type, cast_result, "load_result")
+                        .new_build_load(roc_return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
@@ -911,6 +935,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         | NumLogUnchecked
         | NumSin
         | NumCos
+        | NumTan
         | NumCeiling
         | NumFloor
         | NumToFrac
@@ -952,6 +977,10 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             op,
                             float_width,
                         ),
+                        Decimal => {
+                            build_dec_unary_op(env, layout_interner, parent, arg, layout, op)
+                        }
+
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
                         }
@@ -1084,6 +1113,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 "lt_or_gt",
                             )
                         }
+                        Decimal => {
+                            //
+                            call_bitcode_fn(
+                                env,
+                                &[lhs_arg, rhs_arg],
+                                &bitcode::NUM_COMPARE[IntWidth::I128],
+                            )
+                        }
 
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
@@ -1122,6 +1159,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             build_int_binop(
                 env,
+                layout_interner,
                 parent,
                 int_width,
                 lhs_arg.into_int_value(),
@@ -1151,6 +1189,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
             build_int_binop(
                 env,
+                layout_interner,
                 parent,
                 int_width,
                 lhs_arg.into_int_value(),
@@ -1221,7 +1260,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         I128OfDec => {
             arguments!(dec);
-            dec_to_i128(env, dec)
+            dec_unary_op(env, bitcode::DEC_TO_I128, dec)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1397,6 +1436,7 @@ fn intwidth_from_layout(layout: InLayout) -> IntWidth {
 
 fn build_int_binop<'ctx>(
     env: &Env<'_, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'_>,
     parent: FunctionValue<'ctx>,
     int_width: IntWidth,
     lhs: IntValue<'ctx>,
@@ -1420,10 +1460,23 @@ fn build_int_binop<'ctx>(
             throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
         NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
-        NumAddChecked => env.call_intrinsic(
-            &LLVM_ADD_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumAddChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_ADD_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_add_with_overflow",
+            )
+        }
         NumAddSaturated => {
             env.call_intrinsic(&LLVM_ADD_SATURATED[int_width], &[lhs.into(), rhs.into()])
         }
@@ -1438,10 +1491,23 @@ fn build_int_binop<'ctx>(
             throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
         NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
-        NumSubChecked => env.call_intrinsic(
-            &LLVM_SUB_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumSubChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_SUB_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_sub_with_overflow",
+            )
+        }
         NumSubSaturated => {
             env.call_intrinsic(&LLVM_SUB_SATURATED[int_width], &[lhs.into(), rhs.into()])
         }
@@ -1461,10 +1527,23 @@ fn build_int_binop<'ctx>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_MUL_SATURATED_INT[int_width],
         ),
-        NumMulChecked => env.call_intrinsic(
-            &LLVM_MUL_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumMulChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_MUL_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_mul_with_overflow",
+            )
+        }
         NumGt => {
             if int_width.is_signed() {
                 bd.build_int_compare(SGT, lhs, rhs, "gt_int").into()
@@ -1639,6 +1718,7 @@ pub fn build_num_binop<'a, 'ctx>(
             match lhs_builtin {
                 Int(int_width) => build_int_binop(
                     env,
+                    layout_interner,
                     parent,
                     int_width,
                     lhs_arg.into_int_value(),
@@ -1945,20 +2025,19 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
     }
 }
 
-fn dec_to_i128<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+fn dec_unary_op<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    fn_name: &str,
+    dec: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
     use roc_target::OperatingSystem::*;
 
     let dec = dec.into_int_value();
-
     match env.target_info.operating_system {
-        Windows => {
-            //
-            call_bitcode_fn(env, &[dec_alloca(env, dec).into()], bitcode::DEC_TO_I128)
-        }
+        Windows => call_bitcode_fn(env, &[dec_alloca(env, dec).into()], fn_name),
         Unix => {
             let (low, high) = dec_split_into_words(env, dec);
-
-            call_bitcode_fn(env, &[low.into(), high.into()], bitcode::DEC_TO_I128)
+            call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
         }
         Wasi => unimplemented!(),
     }
@@ -2056,10 +2135,10 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
 /// Zig returns a nominal `WithOverflow(Dec)` struct (see [zig_with_overflow_roc_dec]),
 /// but the Roc side may flatten the overflow struct. LLVM does not admit comparisons
 /// between the two representations, so always cast to the Roc representation.
-fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
+fn change_with_overflow_to_roc_type<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    val: StructValue<'ctx>,
+    val: impl BasicValue<'ctx>,
     return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let return_type = convert::basic_type_from_layout(
@@ -2067,7 +2146,8 @@ fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
         layout_interner,
         layout_interner.get_repr(return_layout),
     );
-    let casted = cast_basic_basic(env.builder, val.into(), return_type);
+    let casted = cast_basic_basic(env.builder, val.as_basic_value_enum(), return_type);
+
     use_roc_value(
         env,
         layout_interner,
@@ -2075,6 +2155,31 @@ fn change_with_overflow_dec_to_roc_type<'a, 'ctx>(
         casted,
         "use_dec_with_overflow",
     )
+}
+
+fn build_dec_unary_op<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    _layout_interner: &STLayoutInterner<'a>,
+    _parent: FunctionValue<'ctx>,
+    arg: BasicValueEnum<'ctx>,
+    _return_layout: InLayout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
+        NumAcos => dec_unary_op(env, bitcode::DEC_ACOS, arg),
+        NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
+        NumAtan => dec_unary_op(env, bitcode::DEC_ATAN, arg),
+        NumCos => dec_unary_op(env, bitcode::DEC_COS, arg),
+        NumSin => dec_unary_op(env, bitcode::DEC_SIN, arg),
+        NumTan => dec_unary_op(env, bitcode::DEC_TAN, arg),
+
+        _ => {
+            unreachable!("Unrecognized dec unary operation: {:?}", op);
+        }
+    }
 }
 
 fn build_dec_binop<'a, 'ctx>(
@@ -2091,15 +2196,15 @@ fn build_dec_binop<'a, 'ctx>(
     match op {
         NumAddChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumSubChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumMulChecked => {
             let val = dec_binop_with_overflow(env, bitcode::DEC_MUL_WITH_OVERFLOW, lhs, rhs);
-            change_with_overflow_dec_to_roc_type(env, layout_interner, val, return_layout)
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
         }
         NumAdd => build_dec_binop_throw_on_overflow(
             env,
@@ -2126,8 +2231,21 @@ fn build_dec_binop<'a, 'ctx>(
             "decimal multiplication overflowed",
         ),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
+
+        NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),
+        NumGt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_GREATER_THAN[IntWidth::I128]),
+        NumLte => call_bitcode_fn(
+            env,
+            &[lhs, rhs],
+            &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128],
+        ),
+        NumGte => call_bitcode_fn(
+            env,
+            &[lhs, rhs],
+            &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128],
+        ),
         _ => {
-            unreachable!("Unrecognized int binary operation: {:?}", op);
+            unreachable!("Unrecognized dec binary operation: {:?}", op);
         }
     }
 }
@@ -2190,19 +2308,22 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
         NumToFrac => {
             // This is an Int, so we need to convert it.
 
-            let target_float_type = match layout_interner.get_repr(return_layout) {
+            match layout_interner.get_repr(return_layout) {
                 LayoutRepr::Builtin(Builtin::Float(float_width)) => {
-                    convert::float_type_from_float_width(env, float_width)
+                    let target_float_type = convert::float_type_from_float_width(env, float_width);
+
+                    bd.build_cast(
+                        InstructionOpcode::SIToFP,
+                        arg,
+                        target_float_type,
+                        "i64_to_f64",
+                    )
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::DEC_FROM_INT[arg_width])
                 }
                 _ => internal_error!("There can only be floats here!"),
-            };
-
-            bd.build_cast(
-                InstructionOpcode::SIToFP,
-                arg,
-                target_float_type,
-                "i64_to_f64",
-            )
+            }
         }
         NumToIntChecked => {
             // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }
@@ -2573,6 +2694,7 @@ fn build_float_unary_op<'a, 'ctx>(
         // trigonometry
         NumSin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SIN[float_width]),
         NumCos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COS[float_width]),
+        NumTan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_TAN[float_width]),
 
         NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN[float_width]),
         NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS[float_width]),

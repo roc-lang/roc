@@ -1,18 +1,18 @@
 procedure #Derived.0 (#Derived.1):
-    let #Derived_gen.10 : [C {}, C {}] = TagId(0) #Derived.1;
-    let #Derived_gen.9 : [C {}, C {}] = CallByName Encode.23 #Derived_gen.10;
-    ret #Derived_gen.9;
+    let #Derived_gen.11 : [C {}, C {}] = TagId(0) #Derived.1;
+    let #Derived_gen.10 : [C {}, C {}] = CallByName Encode.23 #Derived_gen.11;
+    ret #Derived_gen.10;
 
 procedure #Derived.2 (#Derived.3, #Derived.4, #Attr.12):
-    let #Derived.1 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.14 #Derived_gen.13:
-        let #Derived_gen.12 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.13 #Derived.4;
-        ret #Derived_gen.12;
+    let #Derived_gen.19 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    joinpoint #Derived_gen.15 #Derived_gen.14:
+        let #Derived_gen.13 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.14 #Derived.4;
+        ret #Derived_gen.13;
     in
-    let #Derived_gen.16 : Str = "A";
-    let #Derived_gen.17 : List [] = Array [];
-    let #Derived_gen.15 : {Str, List []} = CallByName TotallyNotJson.32 #Derived_gen.16 #Derived_gen.17;
-    jump #Derived_gen.14 #Derived_gen.15;
+    let #Derived_gen.17 : Str = "A";
+    let #Derived_gen.18 : List [] = Array [];
+    let #Derived_gen.16 : {Str, List []} = CallByName TotallyNotJson.32 #Derived_gen.17 #Derived_gen.18;
+    jump #Derived_gen.15 #Derived_gen.16;
 
 procedure #Derived.5 (#Derived.6):
     let #Derived_gen.1 : [C {}, C {}] = TagId(1) #Derived.6;
@@ -20,7 +20,7 @@ procedure #Derived.5 (#Derived.6):
     ret #Derived_gen.0;
 
 procedure #Derived.7 (#Derived.8, #Derived.9, #Attr.12):
-    let #Derived.6 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let #Derived_gen.9 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     joinpoint #Derived_gen.5 #Derived_gen.4:
         let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.8 #Derived_gen.4 #Derived.9;
         ret #Derived_gen.3;
@@ -127,7 +127,7 @@ procedure List.8 (#Attr.2, #Attr.3):
     let List.614 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
     ret List.614;
 
-procedure List.86 (#Derived_gen.18, #Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_gen.22):
+procedure List.86 (#Derived_gen.20, #Derived_gen.21, #Derived_gen.22, #Derived_gen.23, #Derived_gen.24):
     joinpoint List.564 List.148 List.149 List.150 List.151 List.152:
         let List.566 : Int1 = CallByName Num.22 List.151 List.152;
         if List.566 then
@@ -140,9 +140,9 @@ procedure List.86 (#Derived_gen.18, #Derived_gen.19, #Derived_gen.20, #Derived_g
             dec List.148;
             ret List.149;
     in
-    jump List.564 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22;
+    jump List.564 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24;
 
-procedure List.86 (#Derived_gen.32, #Derived_gen.33, #Derived_gen.34, #Derived_gen.35, #Derived_gen.36):
+procedure List.86 (#Derived_gen.34, #Derived_gen.35, #Derived_gen.36, #Derived_gen.37, #Derived_gen.38):
     joinpoint List.604 List.148 List.149 List.150 List.151 List.152:
         let List.606 : Int1 = CallByName Num.22 List.151 List.152;
         if List.606 then
@@ -155,27 +155,27 @@ procedure List.86 (#Derived_gen.32, #Derived_gen.33, #Derived_gen.34, #Derived_g
             dec List.148;
             ret List.149;
     in
-    jump List.604 #Derived_gen.32 #Derived_gen.33 #Derived_gen.34 #Derived_gen.35 #Derived_gen.36;
+    jump List.604 #Derived_gen.34 #Derived_gen.35 #Derived_gen.36 #Derived_gen.37 #Derived_gen.38;
 
 procedure Num.127 (#Attr.2):
-    let Num.311 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.311;
+    let Num.310 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.310;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.312 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.312;
+    let Num.311 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.311;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.315 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.315;
+    let Num.314 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.314;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.313 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.313;
+    let Num.312 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.312;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.314 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.314;
+    let Num.313 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.313;
 
 procedure Str.12 (#Attr.2):
     let Str.290 : List U8 = lowlevel StrToUtf8 #Attr.2;

@@ -13,6 +13,7 @@
     --top-bar-bg: #222;
     --top-bar-fg: #eee;
     --top-bar-logo-hover: #8055E4;
+    --top-bar-height: 50px;
     --header-link-color: #107F79;
     --header-link-hover: #222;
     --link-color: #7546e2;
@@ -43,6 +44,7 @@ html,
 body {
     margin: 0;
     padding: 0;
+    height: 100%;
 }
 
 footer {
@@ -76,7 +78,7 @@ li {
 #top-bar {
     background-color: var(--top-bar-bg);
     width: 100%;
-    height: 50px;
+    height: var(--top-bar-height);
 }
 
 #top-bar nav {
@@ -635,7 +637,7 @@ h4 {
 /* Comments `#` and Documentation comments `##` */
 samp .comment,
 code .comment {
-  color: var(--green);
+    color: var(--green);
 }
 
 /* Number, String, Tag literals */
@@ -651,19 +653,19 @@ samp .constant,
 code .constant,
 samp .literal,
 code .literal {
-  color: var(--cyan);
+    color: var(--cyan);
 }
 
 /* Keywords and punctuation */
-samp .keyword, 
+samp .keyword,
 code .keyword,
-samp .punctuation.section, 
+samp .punctuation.section,
 code .punctuation.section,
-samp .punctuation.separator, 
+samp .punctuation.separator,
 code .punctuation.separator,
-samp .punctuation.terminator, 
+samp .punctuation.terminator,
 code .punctuation.terminator,
-samp .kw, 
+samp .kw,
 code .kw {
     color: var(--magenta);
 }
@@ -673,13 +675,13 @@ samp .op,
 code .op,
 samp .keyword.operator,
 code .keyword.operator {
-  color: var(--orange);
+    color: var(--orange);
 }
 
 /* Delimieters */
 samp .delimeter,
 code .delimeter {
-  color: var(--gray);
+    color: var(--gray);
 }
 
 /* Variables modules and field names */
@@ -691,7 +693,7 @@ samp .meta.block,
 code .meta.block,
 samp .lowerident,
 code .lowerident {
-  color: var(--blue);
+    color: var(--blue);
 }
 
 /* Types, Tags, and Modules */
@@ -701,12 +703,12 @@ samp .meta.path,
 code .meta.path,
 samp .upperident,
 code .upperident {
-  color: var(--green);
+    color: var(--green);
 }
 
 samp .dim,
 code .dim {
-  opacity: 0.55;
+    opacity: 0.55;
 }
 
 .button-container {

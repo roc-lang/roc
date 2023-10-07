@@ -729,7 +729,9 @@ fn parse_type_variable<'a>(
         min_indent,
     ) {
         Ok((_, name, state)) => {
-            if name == crate::keyword::IMPLEMENTS && stop_at_surface_has {
+            if name == crate::keyword::WHERE
+                || (name == crate::keyword::IMPLEMENTS && stop_at_surface_has)
+            {
                 Err((NoProgress, EType::TEnd(state.pos())))
             } else {
                 let answer = TypeAnnotation::BoundVariable(name);

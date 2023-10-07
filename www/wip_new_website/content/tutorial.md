@@ -22,7 +22,7 @@ Try typing this in the REPL and pressing Enter:
 
 The REPL should cheerfully display the following:
 
-<pre><samp><span class="literal">"Hello, World!" </span><span class="colon">:</span> Str <span class="comment">               # val1</span></samp></pre>
+<pre><samp><span class="literal">"Hello, World!" </span><span class="colon">:</span> Str</samp></pre>
 
 Congratulations! You've just written your first Roc code.
 

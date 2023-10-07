@@ -53,7 +53,7 @@ fn f64_tuple() {
     assert_evals_to!(
         indoc!(
             r#"
-                   tup = (17.2, 15.1, 19.3)
+                   tup = (17.2f64, 15.1f64, 19.3f64)
 
                    tup.0
                 "#
@@ -65,7 +65,7 @@ fn f64_tuple() {
     assert_evals_to!(
         indoc!(
             r#"
-                   tup = (17.2, 15.1, 19.3)
+                   tup = (17.2f64, 15.1f64, 19.3f64)
 
                    tup.1
                 "#
@@ -77,7 +77,7 @@ fn f64_tuple() {
     assert_evals_to!(
         indoc!(
             r#"
-                    tup = (17.2, 15.1, 19.3)
+                    tup = (17.2f64, 15.1f64, 19.3f64)
 
                     tup.2
                 "#
@@ -291,7 +291,7 @@ fn f64_tuple2_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-                   (3.1, 5.1)
+                   (3.1f64, 5.1f64)
                 "#
         ),
         (3.1, 5.1),
@@ -319,7 +319,7 @@ fn bool_tuple4_literal() {
 // Not supported by wasm because of the size of the tuple:
 // FromWasm32Memory is only implemented for tuples of up to 4 elements
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn i64_tuple9_literal() {
     assert_evals_to!(
         indoc!(
@@ -445,7 +445,7 @@ fn return_tuple_float_int() {
     assert_evals_to!(
         indoc!(
             r#"
-                (1.23, 0x1)
+                (1.23f64, 0x1)
                 "#
         ),
         (1.23, 0x1),
@@ -459,7 +459,7 @@ fn return_tuple_int_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                ( 0x1, 1.23 )
+                ( 0x1, 1.23f64 )
                 "#
         ),
         (0x1, 1.23),
@@ -473,7 +473,7 @@ fn return_tuple_float_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                ( 2.46, 1.23 )
+                ( 2.46f64, 1.23f64 )
                 "#
         ),
         (2.46, 1.23),
@@ -487,7 +487,7 @@ fn return_tuple_float_float_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                ( 2.46, 1.23, 0.1 )
+                ( 2.46f64, 1.23f64, 0.1f64 )
                 "#
         ),
         (2.46, 1.23, 0.1),
@@ -501,7 +501,7 @@ fn return_nested_tuple() {
     assert_evals_to!(
         indoc!(
             r#"
-                (0x0, (2.46, 1.23, 0.1))
+                (0x0, (2.46f64, 1.23f64, 0.1f64))
                 "#
         ),
         (0x0, (2.46, 1.23, 0.1)),

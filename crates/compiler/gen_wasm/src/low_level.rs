@@ -1099,7 +1099,23 @@ impl<'a> LowLevelCall<'a> {
                     }
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                    I128 => {
+                        self.load_args(backend);
+                        let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
+                            &bitcode::NUM_GREATER_THAN[IntWidth::I128]
+                        } else {
+                            &bitcode::NUM_GREATER_THAN[IntWidth::U128]
+                        };
+
+                        self.load_args_and_call_zig(backend, intrinsic);
+                    }
+                    Decimal => {
+                        // same as i128
+                        self.load_args_and_call_zig(
+                            backend,
+                            &bitcode::NUM_GREATER_THAN[IntWidth::I128],
+                        );
+                    }
                 }
             }
             NumGte => {
@@ -1121,7 +1137,23 @@ impl<'a> LowLevelCall<'a> {
                     }
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                    I128 => {
+                        self.load_args(backend);
+                        let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
+                            &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128]
+                        } else {
+                            &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::U128]
+                        };
+
+                        self.load_args_and_call_zig(backend, intrinsic);
+                    }
+                    Decimal => {
+                        // same as i128
+                        self.load_args_and_call_zig(
+                            backend,
+                            &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128],
+                        );
+                    }
                 }
             }
             NumLt => {
@@ -1143,7 +1175,23 @@ impl<'a> LowLevelCall<'a> {
                     }
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                    I128 => {
+                        self.load_args(backend);
+                        let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
+                            &bitcode::NUM_LESS_THAN[IntWidth::I128]
+                        } else {
+                            &bitcode::NUM_LESS_THAN[IntWidth::U128]
+                        };
+
+                        self.load_args_and_call_zig(backend, intrinsic);
+                    }
+                    Decimal => {
+                        // same as i128
+                        self.load_args_and_call_zig(
+                            backend,
+                            &bitcode::NUM_LESS_THAN[IntWidth::I128],
+                        );
+                    }
                 }
             }
             NumLte => {
@@ -1166,7 +1214,23 @@ impl<'a> LowLevelCall<'a> {
                     }
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                    I128 => {
+                        self.load_args(backend);
+                        let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
+                            &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128]
+                        } else {
+                            &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::U128]
+                        };
+
+                        self.load_args_and_call_zig(backend, intrinsic);
+                    }
+                    Decimal => {
+                        // same as i128
+                        self.load_args_and_call_zig(
+                            backend,
+                            &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128],
+                        );
+                    }
                 }
             }
             NumCompare => {
@@ -1216,7 +1280,10 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.f64_lt();
                         backend.code_builder.i32_add();
                     }
-                    x => todo!("{:?} for {:?}", self.lowlevel, x),
+                    I128 | Decimal => {
+                        self.load_args(backend);
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_COMPARE[IntWidth::I128]);
+                    }
                 }
             }
             NumDivFrac => {
@@ -1464,11 +1531,26 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_SIN[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_SIN);
+                }
                 _ => panic_ret_type(),
             },
             NumCos => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_COS[width]);
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_COS);
+                }
+                _ => panic_ret_type(),
+            },
+            NumTan => match self.ret_layout_raw {
+                LayoutRepr::Builtin(Builtin::Float(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_TAN[width]);
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_TAN);
                 }
                 _ => panic_ret_type(),
             },
@@ -1494,6 +1576,7 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
+                let arg_is_signed = symbol_is_signed_int(backend, self.arguments[0]);
                 match (ret_type, arg_type) {
                     (F32, I32) => backend.code_builder.f32_convert_s_i32(),
                     (F32, I64) => backend.code_builder.f32_convert_s_i64(),
@@ -1504,6 +1587,36 @@ impl<'a> LowLevelCall<'a> {
                     (F64, I64) => backend.code_builder.f64_convert_s_i64(),
                     (F64, F32) => backend.code_builder.f64_promote_f32(),
                     (F64, F64) => {}
+
+                    (Decimal, I32) => {
+                        let int_width = match arg_is_signed {
+                            true => IntWidth::I32,
+                            false => IntWidth::U32,
+                        };
+
+                        self.load_args_and_call_zig(backend, &bitcode::DEC_FROM_INT[int_width]);
+                    }
+                    (Decimal, I64) => {
+                        let int_width = match arg_is_signed {
+                            true => IntWidth::I64,
+                            false => IntWidth::U64,
+                        };
+
+                        self.load_args_and_call_zig(backend, &bitcode::DEC_FROM_INT[int_width]);
+                    }
+                    (Decimal, F32) => {
+                        self.load_args_and_call_zig(
+                            backend,
+                            &bitcode::DEC_FROM_FLOAT[FloatWidth::F32],
+                        );
+                    }
+                    (Decimal, F64) => {
+                        self.load_args_and_call_zig(
+                            backend,
+                            &bitcode::DEC_FROM_FLOAT[FloatWidth::F64],
+                        );
+                    }
+                    (Decimal, Decimal) => {}
 
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
@@ -1622,17 +1735,26 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ATAN[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ATAN);
+                }
                 _ => panic_ret_type(),
             },
             NumAcos => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ACOS[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ACOS);
+                }
                 _ => panic_ret_type(),
             },
             NumAsin => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_ASIN[width]);
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_ASIN);
                 }
                 _ => panic_ret_type(),
             },

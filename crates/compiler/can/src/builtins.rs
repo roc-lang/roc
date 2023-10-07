@@ -186,6 +186,7 @@ map_symbol_to_lowlevel_and_arity! {
     NumNeg; NUM_NEG; 1,
     NumSin; NUM_SIN; 1,
     NumCos; NUM_COS; 1,
+    NumTan; NUM_TAN; 1,
     NumSqrtUnchecked; NUM_SQRT; 1,
     NumLogUnchecked; NUM_LOG; 1,
     NumRound; NUM_ROUND; 1,

@@ -44,6 +44,10 @@ pub const RocDec = extern struct {
         return ret;
     }
 
+    pub fn toF64(dec: RocDec) f64 {
+        return @intToFloat(f64, dec.num) / comptime @intToFloat(f64, one_point_zero_i128);
+    }
+
     // TODO: If Str.toDec eventually supports more error types, return errors here.
     // For now, just return null which will give the default error.
     pub fn fromStr(roc_str: RocStr) ?RocDec {
@@ -229,6 +233,11 @@ pub const RocDec = extern struct {
     pub fn negate(self: RocDec) ?RocDec {
         var negated = math.negate(self.num) catch null;
         return if (negated) |n| .{ .num = n } else null;
+    }
+
+    pub fn abs(self: RocDec) !RocDec {
+        const absolute = try math.absInt(self.num);
+        return RocDec{ .num = absolute };
     }
 
     pub fn addWithOverflow(self: RocDec, other: RocDec) WithOverflow(RocDec) {
@@ -418,6 +427,67 @@ pub const RocDec = extern struct {
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
+    }
+
+    fn mod2pi(self: RocDec) RocDec {
+        // This is made to be used before calling trig functions that work on the range 0 to 2*pi.
+        // It should be reasonable fast (much faster than calling @mod) and much more accurate as well.
+        // b is 2*pi as a dec. which is 6.2831853071795864769252867665590057684
+        // as dec is times 10^18 so 6283185307179586476.9252867665590057684
+        const b0: u64 = 6283185307179586476;
+        // Fraction that reprensents 64 bits of precision past what dec normally supports.
+        // 0.9252867665590057684 as binary to 64 places.
+        const b1: u64 = 0b1110110011011111100101111111000111001010111000100101011111110111;
+
+        // This is dec/(b0+1), but as a multiplication.
+        // So dec * (1/(b0+1)). This is way faster.
+        const dec = self.num;
+        const tmp = @intCast(i128, num_.mul_u128(math.absCast(dec), 249757942369376157886101012127821356963).hi >> (190 - 128));
+        const q0 = if (dec < 0) -tmp else tmp;
+
+        const upper = q0 * b0;
+        var lower: i128 = undefined;
+        const overflow = @mulWithOverflow(i128, q0, b1, &lower);
+        // TODO: maybe write this out branchlessly.
+        // Currently is is probably cmovs, but could be just math?
+        const q0_sign: i128 =
+            if (q0 > 0) 1 else -1;
+        const overflow_val: i128 = if (overflow) q0_sign << 64 else 0;
+        const full = upper + @intCast(i128, lower >> 64) + overflow_val;
+
+        var out = dec - full;
+        if (out < 0) {
+            out += b0;
+        }
+
+        return RocDec{ .num = out };
+    }
+
+    // I belive the output of the trig functions is always in range of Dec.
+    // If not, we probably should just make it saturate the Dec.
+    // I don't think this should crash or return errors.
+    pub fn sin(self: RocDec) RocDec {
+        return fromF64(math.sin(self.mod2pi().toF64())).?;
+    }
+
+    pub fn cos(self: RocDec) RocDec {
+        return fromF64(math.cos(self.mod2pi().toF64())).?;
+    }
+
+    pub fn tan(self: RocDec) RocDec {
+        return fromF64(math.tan(self.mod2pi().toF64())).?;
+    }
+
+    pub fn asin(self: RocDec) RocDec {
+        return fromF64(math.asin(self.toF64())).?;
+    }
+
+    pub fn acos(self: RocDec) RocDec {
+        return fromF64(math.acos(self.toF64())).?;
+    }
+
+    pub fn atan(self: RocDec) RocDec {
+        return fromF64(math.atan(self.toF64())).?;
     }
 };
 
@@ -1122,7 +1192,45 @@ pub fn toStr(arg: RocDec) callconv(.C) RocStr {
 }
 
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
-    return if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| dec.num else @panic("TODO runtime exception failing convert f64 to RocDec");
+    if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg})) |dec| {
+        return dec.num;
+    } else {
+        @panic("TODO runtime exception failing convert f64 to RocDec");
+    }
+}
+
+pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
+    const arg_f64 = arg_f32;
+    if (@call(.{ .modifier = always_inline }, RocDec.fromF64, .{arg_f64})) |dec| {
+        return dec.num;
+    } else {
+        @panic("TODO runtime exception failing convert f64 to RocDec");
+    }
+}
+
+pub fn toF64(arg: RocDec) callconv(.C) f64 {
+    return @call(.{ .modifier = always_inline }, RocDec.toF64, .{arg});
+}
+
+pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(self: T) callconv(.C) i128 {
+            const this = @intCast(i128, self);
+
+            var result: i128 = undefined;
+
+            if (@mulWithOverflow(i128, this, RocDec.one_point_zero_i128, &result)) {
+                @panic("TODO runtime exception failing convert integer to RocDec");
+            } else {
+                return result;
+            }
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn fromU64C(arg: u64) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.fromU64, .{arg}).toI128();
 }
 
 pub fn toI128(arg: RocDec) callconv(.C) i128 {
@@ -1141,6 +1249,11 @@ pub fn negateC(arg: RocDec) callconv(.C) i128 {
     return if (@call(.{ .modifier = always_inline }, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
 }
 
+pub fn absC(arg: RocDec) callconv(.C) i128 {
+    const result = @call(.{ .modifier = always_inline }, RocDec.abs, .{arg}) catch @panic("TODO overflow for calling absolute value on RocDec");
+    return result.num;
+}
+
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
     return @call(.{ .modifier = always_inline }, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
@@ -1155,6 +1268,30 @@ pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.{ .modifier = always_inline }, RocDec.div, .{ arg1, arg2 }).num;
+}
+
+pub fn sinC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.sin, .{arg}).num;
+}
+
+pub fn cosC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.cos, .{arg}).num;
+}
+
+pub fn tanC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.tan, .{arg}).num;
+}
+
+pub fn asinC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.asin, .{arg}).num;
+}
+
+pub fn acosC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.acos, .{arg}).num;
+}
+
+pub fn atanC(arg: RocDec) callconv(.C) i128 {
+    return @call(.{ .modifier = always_inline }, RocDec.atan, .{arg}).num;
 }
 
 pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {

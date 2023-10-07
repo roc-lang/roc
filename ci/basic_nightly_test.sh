@@ -31,6 +31,7 @@ cd roc_nightly
 # test roc hello world
 ./roc examples/helloWorld.roc
 
+# test rust platform
 ./roc examples/platform-switching/rocLovesRust.roc
 
 run_zig_test=true
@@ -47,9 +48,19 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 if $run_zig_test ; then
+    # test zig platform
     ./roc examples/platform-switching/rocLovesZig.roc
 fi
 
+# test C platform
 ./roc examples/platform-switching/rocLovesC.roc
+
+# test repl
+cd ../ci/repl_basic_test
+cargo build --release
+cp target/release/repl_basic_test ../../roc_nightly
+cd ../../roc_nightly
+./repl_basic_test
+
 
 cd ..

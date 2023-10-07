@@ -1,11 +1,11 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.293 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.292 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Test.2 (Test.3, Test.1):
-    let Test.17 : Int1 = false;
-    let Test.18 : Int1 = lowlevel Eq Test.17 Test.3;
-    if Test.18 then
+    let Test.18 : Int1 = false;
+    let Test.19 : Int1 = lowlevel Eq Test.18 Test.3;
+    if Test.19 then
         let Test.13 : [C , C I64] = TagId(0) ;
         ret Test.13;
     else
@@ -13,14 +13,14 @@ procedure Test.2 (Test.3, Test.1):
         ret Test.14;
 
 procedure Test.4 (Test.5, #Attr.12):
-    let Test.1 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.16 : I64 = CallByName Num.19 Test.5 Test.1;
+    let Test.17 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.16 : I64 = CallByName Num.19 Test.5 Test.17;
     ret Test.16;
 
 procedure Test.0 (#Derived_gen.2):
     joinpoint Test.7 Test.1:
-        let Test.20 : I64 = 1i64;
-        let Test.9 : I64 = CallByName Num.19 Test.1 Test.20;
+        let Test.21 : I64 = 1i64;
+        let Test.9 : I64 = CallByName Num.19 Test.1 Test.21;
         let Test.12 : Int1 = false;
         let Test.10 : [C , C I64] = CallByName Test.2 Test.12 Test.1;
         let Test.11 : U8 = GetTagId Test.10;

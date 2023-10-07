@@ -61,6 +61,13 @@ impl FloatWidth {
             _ => None,
         }
     }
+
+    pub const fn type_name(&self) -> &'static str {
+        match self {
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+        }
+    }
 }
 
 #[repr(u8)]
@@ -121,7 +128,13 @@ impl IntWidth {
             U128 | I128 => {
                 // the C ABI defines 128-bit integers to always be 16B aligned,
                 // according to https://reviews.llvm.org/D28990#655487
-                16
+                //
+                // however, rust does not always think that this is true
+                match target_info.architecture {
+                    Architecture::X86_64 => 16,
+                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
+                    Architecture::X86_32 => 8,
+                }
             }
         }
     }
@@ -259,6 +272,7 @@ macro_rules! int_intrinsic {
 
 pub const NUM_SIN: IntrinsicName = float_intrinsic!("roc_builtins.num.sin");
 pub const NUM_COS: IntrinsicName = float_intrinsic!("roc_builtins.num.cos");
+pub const NUM_TAN: IntrinsicName = float_intrinsic!("roc_builtins.num.tan");
 pub const NUM_ASIN: IntrinsicName = float_intrinsic!("roc_builtins.num.asin");
 pub const NUM_ACOS: IntrinsicName = float_intrinsic!("roc_builtins.num.acos");
 pub const NUM_ATAN: IntrinsicName = float_intrinsic!("roc_builtins.num.atan");
@@ -302,6 +316,14 @@ pub const NUM_IS_MULTIPLE_OF: IntrinsicName = int_intrinsic!("roc_builtins.num.i
 
 pub const NUM_SHIFT_RIGHT_ZERO_FILL: IntrinsicName =
     int_intrinsic!("roc_builtins.num.shift_right_zero_fill");
+
+pub const NUM_COMPARE: IntrinsicName = int_intrinsic!("roc_builtins.num.compare");
+pub const NUM_LESS_THAN: IntrinsicName = int_intrinsic!("roc_builtins.num.less_than");
+pub const NUM_LESS_THAN_OR_EQUAL: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.less_than_or_equal");
+pub const NUM_GREATER_THAN: IntrinsicName = int_intrinsic!("roc_builtins.num.greater_than");
+pub const NUM_GREATER_THAN_OR_EQUAL: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.greater_than_or_equal");
 
 pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_leading_zero_bits");
@@ -371,23 +393,33 @@ pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
 pub const LIST_REFCOUNT_PTR: &str = "roc_builtins.list.refcount_ptr";
 pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
 
-pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
-pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
-pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
-pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
-pub const DEC_EQ: &str = "roc_builtins.dec.eq";
-pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
-pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
-pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
-pub const DEC_DIV: &str = "roc_builtins.dec.div";
-pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
+pub const DEC_ABS: &str = "roc_builtins.dec.abs";
+pub const DEC_ACOS: &str = "roc_builtins.dec.acos";
 pub const DEC_ADD_OR_PANIC: &str = "roc_builtins.dec.add_or_panic";
 pub const DEC_ADD_SATURATED: &str = "roc_builtins.dec.add_saturated";
-pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
-pub const DEC_SUB_OR_PANIC: &str = "roc_builtins.dec.sub_or_panic";
-pub const DEC_SUB_SATURATED: &str = "roc_builtins.dec.sub_saturated";
+pub const DEC_ADD_WITH_OVERFLOW: &str = "roc_builtins.dec.add_with_overflow";
+pub const DEC_ASIN: &str = "roc_builtins.dec.asin";
+pub const DEC_ATAN: &str = "roc_builtins.dec.atan";
+pub const DEC_COS: &str = "roc_builtins.dec.cos";
+pub const DEC_DIV: &str = "roc_builtins.dec.div";
+pub const DEC_EQ: &str = "roc_builtins.dec.eq";
+pub const DEC_FROM_F64: &str = "roc_builtins.dec.from_f64";
+pub const DEC_FROM_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.dec.from_float");
+pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_int");
+pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
+pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
+pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
+pub const DEC_NEGATE: &str = "roc_builtins.dec.negate";
+pub const DEC_NEQ: &str = "roc_builtins.dec.neq";
+pub const DEC_SIN: &str = "roc_builtins.dec.sin";
+pub const DEC_SUB_OR_PANIC: &str = "roc_builtins.dec.sub_or_panic";
+pub const DEC_SUB_SATURATED: &str = "roc_builtins.dec.sub_saturated";
+pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
+pub const DEC_TAN: &str = "roc_builtins.dec.tan";
+pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
+pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";

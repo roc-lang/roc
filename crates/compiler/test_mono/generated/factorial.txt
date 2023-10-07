@@ -1,10 +1,10 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.293 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.292 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.292 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.291 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
     joinpoint Test.7 Test.2 Test.3:

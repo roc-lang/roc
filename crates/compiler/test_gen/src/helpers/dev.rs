@@ -215,9 +215,9 @@ pub fn helper(
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
-    // TODO make this an envrionment variable
-    if false {
+    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
         let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
         std::fs::copy(&app_o_file, file_path).unwrap();
     }
 
@@ -298,17 +298,28 @@ impl<T> RocCallResult<T> {
     }
 }
 
+fn get_raw_fn<'a, T>(
+    fn_name: &str,
+    lib: &'a libloading::Library,
+) -> libloading::Symbol<'a, unsafe extern "C" fn() -> T> {
+    unsafe {
+        lib.get(fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{fn_name}`"))
+            .expect("errored")
+    }
+}
+
 fn get_test_main_fn<T>(
     lib: &libloading::Library,
 ) -> libloading::Symbol<unsafe extern "C" fn() -> RocCallResult<T>> {
-    let main_fn_name = "test_main";
+    get_raw_fn("test_main", lib)
+}
 
-    unsafe {
-        lib.get(main_fn_name.as_bytes())
-            .ok()
-            .ok_or(format!("Unable to JIT compile `{main_fn_name}`"))
-            .expect("errored")
-    }
+pub(crate) fn run_function<T>(fn_name: &str, lib: &libloading::Library) -> T {
+    let main = get_raw_fn::<T>(fn_name, lib);
+
+    unsafe { main() }
 }
 
 pub(crate) fn run_test_main<T>(lib: &libloading::Library) -> Result<T, (String, CrashTag)> {
@@ -352,7 +363,16 @@ macro_rules! assert_evals_to {
         let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
-        let result = $crate::helpers::dev::run_test_main::<$ty>(&lib);
+        // NOTE: on aarch64 our infrastructure for roc_panic does not work yet. Therefore we call
+        // just the main roc function which does not do anything to catch/report panics.
+        let result = if cfg!(target_arch = "aarch64") {
+            let typ = std::any::type_name::<$ty>();
+            println!("calling the `{_main_fn_name}: {typ}` function");
+            let result = $crate::helpers::dev::run_function::<$ty>(&_main_fn_name, &lib);
+            Ok(result)
+        } else {
+            $crate::helpers::dev::run_test_main::<$ty>(&lib)
+        };
 
         if !errors.is_empty() {
             dbg!(&errors);

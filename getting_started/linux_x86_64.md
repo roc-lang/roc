@@ -10,16 +10,36 @@ which includes the Roc compiler and some helpful utilities.
 1. Untar the archive:
 
     ```sh
-    tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz
+    tar -xf roc_nightly-linux_x86_64-latest.tar.gz
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+
     ```sh
     export PATH=$PATH:~/path/to/roc_nightly-linux_x86_64-<VERSION>
     ```
 
 1. Check everything worked by executing `roc version`
+
+1. Install libc development files and ld (binutils) if you'd like to use the repl (`roc repl`):
+   - On Ubuntu/Debian:
+
+    ```sh
+    sudo apt install libc-dev binutils
+    ```
+
+   - On ArchLinux/Manjaro:
+
+   ```sh
+   sudo pacman -S glibc binutils
+   ```
+
+   - on Fedora:
+
+   ```sh
+   sudo dnf install glibc-devel binutils
+   ```
 
 ## How to install Roc platform dependencies
 
