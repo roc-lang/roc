@@ -1432,6 +1432,7 @@ define_builtins! {
         81 LIST_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
         82 LIST_UPDATE: "update"
         83 LIST_WALK_WITH_INDEX: "walkWithIndex"
+        84 LIST_CHUNKS_OF: "chunksOf"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
