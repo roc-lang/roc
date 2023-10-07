@@ -965,7 +965,7 @@ fn build_proc<'a, B: Backend<'a>>(
                         //  4ed4: 91000000      add x0, x0, #0x0
                         //      0000000000004ed4:  ARM64_RELOC_PAGEOFF12    ___unnamed_11
                         write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: offset + proc_offset + 4,
                             size: 12,
                             kind: RelocationKind::MachO {
                                 value: object::macho::ARM64_RELOC_PAGEOFF12,
