@@ -925,7 +925,7 @@ fn build_proc<'a, B: Backend<'a>>(
                         //     700: 90000001        adrp    x1, 0x0 <std.builtin.default_panic>
                         //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
                         let r = write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: proc_offset + offset,
                             size: 21,
                             kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
                             encoding: RelocationEncoding::Generic,
@@ -938,7 +938,7 @@ fn build_proc<'a, B: Backend<'a>>(
                         //     704: 91000021        add x1, x1, #0x0
                         //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
                         write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: proc_offset + offset + 4,
                             size: 12,
                             kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
                             encoding: RelocationEncoding::Generic,
@@ -949,7 +949,7 @@ fn build_proc<'a, B: Backend<'a>>(
                         //    4ed0: 90000000        adrp    x0, 0x4000 <_std.unicode.utf8Decode4+0x16c>
                         //      0000000000004ed0:  ARM64_RELOC_PAGE21   ___unnamed_11
                         let r = write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: proc_offset + offset,
                             size: 21,
                             kind: RelocationKind::MachO {
                                 value: object::macho::ARM64_RELOC_PAGE21,
@@ -965,7 +965,7 @@ fn build_proc<'a, B: Backend<'a>>(
                         //  4ed4: 91000000      add x0, x0, #0x0
                         //      0000000000004ed4:  ARM64_RELOC_PAGEOFF12    ___unnamed_11
                         write::Relocation {
-                            offset: offset + proc_offset,
+                            offset: proc_offset + offset + 4,
                             size: 12,
                             kind: RelocationKind::MachO {
                                 value: object::macho::ARM64_RELOC_PAGEOFF12,
