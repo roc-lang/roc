@@ -3323,10 +3323,7 @@ impl RecordFields {
         let range2 = helper(self.variables_start);
         let range3 = helper(self.field_types_start);
 
-        let it = range1
-            .into_iter()
-            .zip(range2)
-            .zip(range3);
+        let it = range1.into_iter().zip(range2).zip(range3);
 
         it.map(|((i1, i2), i3)| (SubsIndex::new(i1), SubsIndex::new(i2), SubsIndex::new(i3)))
     }

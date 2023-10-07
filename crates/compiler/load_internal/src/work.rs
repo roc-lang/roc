@@ -331,10 +331,7 @@ impl<'a> Dependencies<'a> {
                     None | Some(Status::NotStarted) | Some(Status::Pending) => {
                         // this shorthand is not resolved, add a dependency
                         {
-                            let entry = self
-                                .waiting_for
-                                .entry(next_step.clone())
-                                .or_default();
+                            let entry = self.waiting_for.entry(next_step.clone()).or_default();
 
                             entry.insert(job.clone());
                         }
