@@ -2237,7 +2237,7 @@ fn update<'a>(
                         // If we're building an app module, and this was the platform
                         // specified in its header's `to` field, record it as our platform.
                         if state.opt_platform_shorthand == Some(config_shorthand) {
-                            debug_assert!(matches!(state.platform_data, None));
+                            debug_assert!(state.platform_data.is_none());
 
                             state.platform_data = Some(PlatformData {
                                 module_id: header.module_id,

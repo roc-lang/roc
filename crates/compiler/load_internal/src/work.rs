@@ -70,7 +70,7 @@ impl MakeSpecializationsDependents {
             "already added successors for module '{module_id:?}'"
         );
 
-        entry.succ.extend(succ.into_iter());
+        entry.succ.extend(succ);
 
         // The module for derives implicitly depends on every other module
         entry.succ.insert(ModuleId::DERIVED_GEN);
@@ -334,13 +334,13 @@ impl<'a> Dependencies<'a> {
                             let entry = self
                                 .waiting_for
                                 .entry(next_step.clone())
-                                .or_insert_with(Default::default);
+                                .or_default();
 
                             entry.insert(job.clone());
                         }
 
                         {
-                            let entry = self.notifies.entry(job).or_insert_with(Default::default);
+                            let entry = self.notifies.entry(job).or_default();
 
                             entry.insert(next_step);
                         }

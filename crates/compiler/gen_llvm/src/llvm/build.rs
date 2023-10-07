@@ -1887,7 +1887,7 @@ fn build_tag<'a, 'ctx>(
             );
 
             let struct_type = env.context.struct_type(
-                env.arena.alloc_slice_fill_iter(field_types.into_iter()),
+                env.arena.alloc_slice_fill_iter(field_types),
                 false,
             );
 
