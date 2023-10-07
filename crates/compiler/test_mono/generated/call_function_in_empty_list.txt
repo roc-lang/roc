@@ -1,7 +1,7 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.535 : List {} = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
+    let List.545 : List {} = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.2 #Attr.3;
     decref #Attr.2;
-    ret List.535;
+    ret List.545;
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
