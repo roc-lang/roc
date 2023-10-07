@@ -88,6 +88,26 @@ fn f64_record() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn pass_bool_record() {
+    // found a bug there the register to use was not incremented correctly
+    assert_evals_to!(
+        indoc!(
+            r#"
+               true : Bool
+               true = Bool.true
+
+               f = \_, x -> x
+
+               f { x: true, y: true } 23
+               "#
+        ),
+        23,
+        i64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn fn_record() {
     assert_evals_to!(
