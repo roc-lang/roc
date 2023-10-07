@@ -4733,10 +4733,7 @@ impl StorageSubs {
             (self_offsets.symbol_names + offsets.symbol_names) as usize
         );
 
-        move |v| {
-            let offsets = offsets;
-            Self::offset_variable(&offsets, v)
-        }
+        move |v| Self::offset_variable(&offsets, v)
     }
 
     fn offset_flat_type(offsets: &StorageSubsOffsets, flat_type: &FlatType) -> FlatType {
