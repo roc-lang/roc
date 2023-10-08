@@ -308,6 +308,24 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     /// If the host has a `main` function then we need to insert a `_start` to call it.
     /// This is something linkers do, and this backend is also a linker!
     fn maybe_call_host_main(&mut self) {
+        const START: &str = "_start";
+
+        // If _start exists, just export it. Trust it to call main.
+        if let Ok(start_sym_index) = self.module.linking.find_internal_symbol(START) {
+            let start_fn_index = match self.module.linking.symbol_table[start_sym_index] {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
+                _ => panic!("linker symbol `{START}` is not a function"),
+            };
+            self.module.export.append(Export {
+                name: START,
+                ty: ExportType::Func,
+                index: start_fn_index,
+            });
+            return;
+        }
+
+        // _start doesn't exist. Check for a `main` and create a _start that calls it.
+        // Note: if `main` is prefixed with some other module name, we won't find it!
         let main_symbol_index = match self.module.linking.find_internal_symbol("main") {
             Ok(x) => x,
             Err(_) => return,
@@ -319,21 +337,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 return;
             }
         };
-
-        const START: &str = "_start";
-
-        if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
-            let fn_index = match self.module.linking.symbol_table[sym_index] {
-                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                _ => panic!("linker symbol `{START}` is not a function"),
-            };
-            self.module.export.append(Export {
-                name: START,
-                ty: ExportType::Func,
-                index: fn_index,
-            });
-            return;
-        }
 
         self.module.add_function_signature(Signature {
             param_types: bumpalo::vec![in self.env.arena],
