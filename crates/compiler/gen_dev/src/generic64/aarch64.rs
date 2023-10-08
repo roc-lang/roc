@@ -554,7 +554,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         let mut state = AArch64CallStoreArgs {
             general_i: 0,
             float_i: 0,
-            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
+            // 0 makes the math work, but I think we can make the math clearer with changes to
+            //   setup_stack and cleanup_stack. Then we could use SHADOW_SPACE_SIZE here to mirror
+            //   LoadArgs
+            // tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
+            tmp_stack_offset: 0,
         };
 
         for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
