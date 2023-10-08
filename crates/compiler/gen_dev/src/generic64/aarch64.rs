@@ -647,16 +647,142 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         }
     }
 
-    fn setjmp(_buf: &mut Vec<'_, u8>) {
-        eprintln!("setjmp is not implemented on this target!");
+    fn setjmp(buf: &mut Vec<'_, u8>) {
+        use AArch64GeneralReg::*;
+        type ASM = AArch64Assembler;
+
+        // based on the musl libc setjmp implementation
+        //
+        // 0000000000211570 <__setjmp>:
+        //   211570:       a9005013        stp     x19, x20, [x0]
+        //   211574:       a9015815        stp     x21, x22, [x0, #16]
+        //   211578:       a9026017        stp     x23, x24, [x0, #32]
+        //   21157c:       a9036819        stp     x25, x26, [x0, #48]
+        //   211580:       a904701b        stp     x27, x28, [x0, #64]
+        //   211584:       a905781d        stp     x29, x30, [x0, #80]
+        //   211588:       910003e2        mov     x2, sp
+        //   21158c:       f9003402        str     x2, [x0, #104]
+        //   211590:       6d072408        stp     d8, d9, [x0, #112]
+        //   211594:       6d082c0a        stp     d10, d11, [x0, #128]
+        //   211598:       6d09340c        stp     d12, d13, [x0, #144]
+        //   21159c:       6d0a3c0e        stp     d14, d15, [x0, #160]
+        //   2115a0:       d2800000        mov     x0, #0x0                        // #0
+        //   2115a4:       d65f03c0        ret
+
+        let env = X0;
+
+        // store caller-saved (i.e. non-volatile) registers
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x00, X19);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x08, X20);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x10, X21);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x18, X22);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x20, X23);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x28, X24);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x30, X25);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x38, X26);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x40, X27);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x48, X28);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x50, FP);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x58, LR);
+
+        // mov of sp requires an addition with zero
+        ASM::add_reg64_reg64_imm32(buf, X2, ZRSP, 0);
+        ASM::mov_mem64_offset32_reg64(buf, env, 104, X2);
+
+        ASM::mov_mem64_offset32_freg64(buf, env, 112, AArch64FloatReg::V8);
+        ASM::mov_mem64_offset32_freg64(buf, env, 120, AArch64FloatReg::V9);
+        ASM::mov_mem64_offset32_freg64(buf, env, 128, AArch64FloatReg::V10);
+        ASM::mov_mem64_offset32_freg64(buf, env, 136, AArch64FloatReg::V11);
+        ASM::mov_mem64_offset32_freg64(buf, env, 144, AArch64FloatReg::V12);
+        ASM::mov_mem64_offset32_freg64(buf, env, 152, AArch64FloatReg::V13);
+        ASM::mov_mem64_offset32_freg64(buf, env, 160, AArch64FloatReg::V14);
+        ASM::mov_mem64_offset32_freg64(buf, env, 168, AArch64FloatReg::V15);
+
+        ASM::mov_reg64_imm64(buf, X0, 0);
+
+        ASM::ret(buf)
     }
 
-    fn longjmp(_buf: &mut Vec<'_, u8>) {
-        eprintln!("longjmp is not implemented on this target!");
+    fn longjmp(buf: &mut Vec<'_, u8>) {
+        use AArch64GeneralReg::*;
+        type ASM = AArch64Assembler;
+
+        // 0000000000211534 <_longjmp>:
+        //   211534:       a9405013        ldp     x19, x20, [x0]
+        //   211538:       a9415815        ldp     x21, x22, [x0, #16]
+        //   21153c:       a9426017        ldp     x23, x24, [x0, #32]
+        //   211540:       a9436819        ldp     x25, x26, [x0, #48]
+        //   211544:       a944701b        ldp     x27, x28, [x0, #64]
+        //   211548:       a945781d        ldp     x29, x30, [x0, #80]
+        //   21154c:       f9403402        ldr     x2, [x0, #104]
+        //   211550:       9100005f        mov     sp, x2
+        //   211554:       6d472408        ldp     d8, d9, [x0, #112]
+        //   211558:       6d482c0a        ldp     d10, d11, [x0, #128]
+        //   21155c:       6d49340c        ldp     d12, d13, [x0, #144]
+        //   211560:       6d4a3c0e        ldp     d14, d15, [x0, #160]
+        //   211564:       7100003f        cmp     w1, #0x0
+        //   211568:       1a9f1420        csinc   w0, w1, wzr, ne  // ne = any
+        //   21156c:       d61f03c0        br      x30
+
+        // load the caller-saved registers
+        let env = X0;
+
+        ASM::mov_reg64_mem64_offset32(buf, X19, env, 0x00);
+        ASM::mov_reg64_mem64_offset32(buf, X20, env, 0x08);
+        ASM::mov_reg64_mem64_offset32(buf, X21, env, 0x10);
+        ASM::mov_reg64_mem64_offset32(buf, X22, env, 0x18);
+        ASM::mov_reg64_mem64_offset32(buf, X23, env, 0x20);
+        ASM::mov_reg64_mem64_offset32(buf, X24, env, 0x28);
+        ASM::mov_reg64_mem64_offset32(buf, X25, env, 0x30);
+        ASM::mov_reg64_mem64_offset32(buf, X26, env, 0x38);
+        ASM::mov_reg64_mem64_offset32(buf, X27, env, 0x40);
+        ASM::mov_reg64_mem64_offset32(buf, X28, env, 0x48);
+        ASM::mov_reg64_mem64_offset32(buf, FP, env, 0x50);
+        ASM::mov_reg64_mem64_offset32(buf, LR, env, 0x58);
+
+        ASM::mov_reg64_mem64_offset32(buf, X2, env, 104);
+        ASM::add_reg64_reg64_imm32(buf, ZRSP, X2, 0);
+
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V8, env, 112);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V9, env, 120);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V10, env, 128);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V11, env, 136);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V12, env, 144);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V13, env, 152);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V14, env, 160);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V15, env, 168);
+
+        ASM::mov_reg64_reg64(buf, X0, X10);
+
+        jmp_reg64(buf, ZRSP)
     }
 
-    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
-        eprintln!("roc_panic is not implemented on this target!");
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        use AArch64GeneralReg::*;
+        type ASM = AArch64Assembler;
+
+        // move the first argument to roc_panic (a *RocStr) into x9
+        ASM::mov_reg64_reg64(buf, X9, X0);
+
+        // move the crash tag into the second return register. We add 1 to it because the 0 value
+        // is already used for "no crash occurred"
+        ASM::add_reg64_reg64_imm32(buf, X10, X1, 1);
+
+        // the setlongjmp_buffer
+        ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), X0);
+        ASM::mov_reg64_mem64_offset32(buf, X0, X0, 0);
+
+        // the value to return from the longjmp. It is a pointer to the last 3 words of the setlongjmp_buffer
+        // they represent the errore message.
+        ASM::mov_reg64_imm64(buf, X2, 170);
+        ASM::add_reg64_reg64_reg64(buf, X2, X2, X0);
+
+        for offset in [0, 8, 16] {
+            ASM::mov_reg64_mem64_offset32(buf, X11, X9, offset);
+            ASM::mov_mem64_offset32_reg64(buf, X2, offset, X11);
+        }
+
+        Self::longjmp(buf)
     }
 }
 
@@ -4097,6 +4223,13 @@ fn scvtf_freg_reg64(
     );
 
     buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn jmp_reg64(buf: &mut Vec<'_, u8>, base: AArch64GeneralReg) {
+    let inst = 0b11010110000111110000000000000000 | ((base as u32) << 5);
+
+    buf.extend(inst.to_le_bytes());
 }
 
 #[cfg(test)]
