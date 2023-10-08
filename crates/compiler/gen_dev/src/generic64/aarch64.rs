@@ -752,9 +752,13 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V14, env, 160);
         ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V15, env, 168);
 
-        ASM::mov_reg64_reg64(buf, X0, X10);
+        // Move the string pointer into X0
+        // Move the panic tag into X1
+        ASM::mov_reg64_reg64(buf, X0, X1);
+        ASM::mov_reg64_reg64(buf, X1, X10);
 
-        jmp_reg64(buf, ZRSP)
+        // Break to the value of the link register
+        jmp_reg64(buf, LR);
     }
 
     fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
@@ -770,16 +774,15 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
         // the setlongjmp_buffer
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), X0);
-        ASM::mov_reg64_mem64_offset32(buf, X0, X0, 0);
 
         // the value to return from the longjmp. It is a pointer to the last 3 words of the setlongjmp_buffer
-        // they represent the errore message.
-        ASM::mov_reg64_imm64(buf, X2, 170);
-        ASM::add_reg64_reg64_reg64(buf, X2, X2, X0);
+        // they represent the error message. (168 + 8) which is after V15 register.
+        ASM::mov_reg64_imm64(buf, X1, 176);
+        ASM::add_reg64_reg64_reg64(buf, X1, X1, X0);
 
         for offset in [0, 8, 16] {
             ASM::mov_reg64_mem64_offset32(buf, X11, X9, offset);
-            ASM::mov_mem64_offset32_reg64(buf, X2, offset, X11);
+            ASM::mov_mem64_offset32_reg64(buf, X1, offset, X11);
         }
 
         Self::longjmp(buf)
