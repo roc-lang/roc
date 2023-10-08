@@ -531,7 +531,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
 
         // the setlongjmp_buffer
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
-        ASM::mov_reg64_mem64_offset32(buf, RDI, RDI, 0);
 
         // the value to return from the longjmp. It is a pointer to the last 3 words of the setlongjmp_buffer
         // they represent the errore message.
@@ -1769,7 +1768,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         // the setlongjmp_buffer
         let env = R8;
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), env);
-        ASM::mov_reg64_mem64_offset32(buf, env, env, 0);
 
         // move the roc_str bytes into the setlongjmp_buffer
         for offset in [0, 8, 16] {
