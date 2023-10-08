@@ -449,14 +449,14 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
                     w - 16,
                 );
 
-                let mut offset = aligned_stack_size - fn_call_stack_size;
+                let mut offset = aligned_stack_size - fn_call_stack_size - 16;
                 for reg in saved_general_regs {
-                    offset -= 8;
                     AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
+                    offset -= 8;
                 }
                 for reg in saved_float_regs {
-                    offset -= 8;
                     AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
+                    offset -= 8;
                 }
                 aligned_stack_size
             } else {
@@ -481,14 +481,14 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, w - 0x10);
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, w - 0x08);
 
-            let mut offset = aligned_stack_size - fn_call_stack_size;
+            let mut offset = aligned_stack_size - fn_call_stack_size - 16;
             for reg in saved_general_regs {
-                offset -= 8;
                 AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
+                offset -= 8;
             }
             for reg in saved_float_regs {
-                offset -= 8;
                 AArch64Assembler::mov_freg64_base32(buf, *reg, offset);
+                offset -= 8;
             }
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
