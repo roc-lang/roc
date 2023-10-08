@@ -265,7 +265,7 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                             size: 32,
                             kind: RelocationKind::MachO {
                                 value: object::macho::ARM64_RELOC_PAGEOFF12,
-                                relative: true,
+                                relative: false,
                             },
                             encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
