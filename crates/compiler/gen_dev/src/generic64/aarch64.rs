@@ -2065,7 +2065,10 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
             debug_assert!(offset % 8 == 0);
             ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
         } else {
-            todo!("base offsets over 32k for AArch64");
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, offset as i64);
+            Self::add_reg64_reg64_reg64(buf, tmp, tmp, src);
+            ldr_freg64_reg64_imm12(buf, dst, tmp, 0);
         }
     }
 
