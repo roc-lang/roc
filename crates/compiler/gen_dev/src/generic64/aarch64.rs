@@ -982,7 +982,7 @@ impl AArch64CallLoadArgs {
 
                 ASM::mov_base32_reg64(buf, offset, *reg1);
 
-                self.general_i += 2;
+                self.general_i += 1;
             }
             None => {
                 storage_manager.complex_stack_arg(&sym, self.argument_offset, 8);
