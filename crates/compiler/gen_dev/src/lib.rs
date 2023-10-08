@@ -1520,20 +1520,18 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrFromUtf8Range => self.build_fn_call(
-                sym,
-                bitcode::STR_FROM_UTF8_RANGE.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            //            LowLevel::StrToUtf8 => self.build_fn_call(
-            //                sym,
-            //                bitcode::STR_TO_UTF8.to_string(),
-            //                args,
-            //                arg_layouts,
-            //                ret_layout,
-            //            ),
+            LowLevel::StrFromUtf8Range => {
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::STR_FROM_UTF8_RANGE.to_string(),
+                    &[args[0], args[1], args[2], update_mode],
+                    &[arg_layouts[0], arg_layouts[1], arg_layouts[2], Layout::U8],
+                    ret_layout,
+                )
+            }
             LowLevel::StrRepeat => self.build_fn_call(
                 sym,
                 bitcode::STR_REPEAT.to_string(),
