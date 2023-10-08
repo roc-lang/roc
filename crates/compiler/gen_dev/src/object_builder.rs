@@ -647,7 +647,7 @@ fn build_object<'a, B: Backend<'a>>(
             // The symbol isn't defined yet and will just be used by other rc procs.
             let section_id = output.add_section(
                 output.segment_name(StandardSegment::Text).to_vec(),
-                format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+                format_symbol_name(sym),
                 SectionKind::Text,
             );
 
@@ -837,7 +837,7 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
 
     let section_id = output.add_section(
         output.segment_name(StandardSegment::Text).to_vec(),
-        format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+        format_symbol_name(sym),
         SectionKind::Text,
     );
 
@@ -1032,7 +1032,7 @@ fn add_undefined_rc_proc(
             if name == rc_name {
                 let section_id = output.add_section(
                     output.segment_name(StandardSegment::Text).to_vec(),
-                    format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+                    format_symbol_name(*sym),
                     SectionKind::Text,
                 );
 
@@ -1050,4 +1050,11 @@ fn add_undefined_rc_proc(
             }
         }
     }
+}
+
+fn format_symbol_name(sym: roc_module::symbol::Symbol) -> std::vec::Vec<u8> {
+    let name = format!(".text.{:x}", sym.as_u64());
+    let length = Ord::min(name.len(), 16);
+
+    name.as_bytes()[..length].to_vec()
 }
