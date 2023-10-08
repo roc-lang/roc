@@ -1490,10 +1490,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         if imm < (1 << 12) {
             cmp_reg64_imm12(buf, reg, imm as u16);
         } else {
-            todo!(
-                "cmp immediate with value over 12 bits for AArch64: {:#x}",
-                imm
-            );
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, i64::from_ne_bytes(imm.to_ne_bytes()));
+            cmp_reg64_reg64(buf, reg, tmp);
         }
 
         if (-(1 << 20)..(1 << 20)).contains(&offset) {
