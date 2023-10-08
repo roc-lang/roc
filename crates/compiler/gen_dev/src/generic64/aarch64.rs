@@ -405,65 +405,63 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32 {
+        let frame_pointer_link_register = 16;
+
         // Full size is upcast to i64 to make sure we don't overflow here.
         let full_stack_size = match requested_stack_size
-            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32)
+            // space for the frame pointer FP and the link register LR
+            .and_then(|size| size.checked_add(frame_pointer_link_register))
+            // extra space for arguments that did not fit into registers
             .and_then(|size| size.checked_add(fn_call_stack_size))
         {
             Some(size) => size,
             _ => internal_error!("Ran out of stack space"),
         };
 
-        let alignment = if full_stack_size <= 0 {
-            0
-        } else {
-            full_stack_size % STACK_ALIGNMENT as i32
-        };
-
-        let offset = if alignment == 0 {
-            0
-        } else {
-            STACK_ALIGNMENT - alignment as u8
-        };
-
-        if let Some(aligned_stack_size) = full_stack_size.checked_add(offset as i32) {
-            if aligned_stack_size > 0 {
-                // sub     sp, sp, #0x10
-                AArch64Assembler::sub_reg64_reg64_imm32(
-                    buf,
-                    AArch64GeneralReg::ZRSP,
-                    AArch64GeneralReg::ZRSP,
-                    aligned_stack_size,
-                );
-
-                // All the following stores could be optimized by using `STP` to store pairs.
-                let w = aligned_stack_size;
-                AArch64Assembler::mov_stack32_reg64(buf, w - 0x10, AArch64GeneralReg::FP);
-                AArch64Assembler::mov_stack32_reg64(buf, w - 0x08, AArch64GeneralReg::LR);
-
-                // update the frame pointer
-                AArch64Assembler::add_reg64_reg64_imm32(
-                    buf,
-                    AArch64GeneralReg::FP,
-                    AArch64GeneralReg::ZRSP,
-                    w - 16,
-                );
-
-                let mut offset = aligned_stack_size - fn_call_stack_size - 16;
-                for reg in saved_general_regs {
-                    AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
-                    offset -= 8;
-                }
-                for reg in saved_float_regs {
-                    AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
-                    offset -= 8;
-                }
-                aligned_stack_size
-            } else {
-                0
+        const fn next_multiple_of(lhs: i32, rhs: i32) -> i32 {
+            match lhs % rhs {
+                0 => lhs,
+                r => lhs + (rhs - r),
             }
+        }
+
+        let aligned_stack_size = next_multiple_of(full_stack_size, STACK_ALIGNMENT as i32);
+
+        if aligned_stack_size > 0 {
+            // sub     sp, sp, #0x10
+            AArch64Assembler::sub_reg64_reg64_imm32(
+                buf,
+                AArch64GeneralReg::ZRSP,
+                AArch64GeneralReg::ZRSP,
+                aligned_stack_size,
+            );
+
+            // All the following stores could be optimized by using `STP` to store pairs.
+            let w = aligned_stack_size;
+            AArch64Assembler::mov_stack32_reg64(buf, w - 0x10, AArch64GeneralReg::FP);
+            AArch64Assembler::mov_stack32_reg64(buf, w - 0x08, AArch64GeneralReg::LR);
+
+            // update the frame pointer
+            AArch64Assembler::add_reg64_reg64_imm32(
+                buf,
+                AArch64GeneralReg::FP,
+                AArch64GeneralReg::ZRSP,
+                w - frame_pointer_link_register,
+            );
+
+            let mut offset = aligned_stack_size - fn_call_stack_size - frame_pointer_link_register;
+            for reg in saved_general_regs {
+                AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
+                offset -= 8;
+            }
+            for reg in saved_float_regs {
+                AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
+                offset -= 8;
+            }
+            aligned_stack_size
         } else {
-            internal_error!("Ran out of stack space");
+            0
         }
     }
 
@@ -475,13 +473,15 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     ) {
+        let frame_pointer_link_register = 16;
+
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
             let w = aligned_stack_size;
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, w - 0x10);
             AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, w - 0x08);
 
-            let mut offset = aligned_stack_size - fn_call_stack_size - 16;
+            let mut offset = aligned_stack_size - fn_call_stack_size - frame_pointer_link_register;
             for reg in saved_general_regs {
                 AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
                 offset -= 8;

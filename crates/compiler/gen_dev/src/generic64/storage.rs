@@ -126,7 +126,8 @@ pub struct StorageManager<
     free_stack_chunks: Vec<'a, (i32, u32)>,
     stack_size: u32,
 
-    // The amount of extra stack space needed to pass args for function calling.
+    /// Amount of extra stack space needed to pass arguments for a function call
+    /// This is usually zero, and only used when the argument passing registers are all used
     fn_call_stack_size: u32,
 }
 
