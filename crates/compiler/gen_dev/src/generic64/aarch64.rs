@@ -437,15 +437,16 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
                 );
 
                 // All the following stores could be optimized by using `STP` to store pairs.
-                AArch64Assembler::mov_stack32_reg64(buf, 0x00, AArch64GeneralReg::LR);
-                AArch64Assembler::mov_stack32_reg64(buf, 0x08, AArch64GeneralReg::FP);
+                let w = aligned_stack_size;
+                AArch64Assembler::mov_stack32_reg64(buf, w - 0x10, AArch64GeneralReg::LR);
+                AArch64Assembler::mov_stack32_reg64(buf, w - 0x08, AArch64GeneralReg::FP);
 
                 // update the frame pointer
                 AArch64Assembler::add_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::FP,
                     AArch64GeneralReg::ZRSP,
-                    0,
+                    w - 16,
                 );
 
                 let mut offset = aligned_stack_size - fn_call_stack_size;
@@ -476,8 +477,9 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ) {
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
-            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, 0x00);
-            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, 0x80);
+            let w = aligned_stack_size;
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, w - 0x10);
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, w - 0x08);
 
             let mut offset = aligned_stack_size - fn_call_stack_size;
             for reg in saved_general_regs {
