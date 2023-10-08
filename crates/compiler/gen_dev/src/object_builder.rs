@@ -957,7 +957,7 @@ fn build_proc<'a, B: Backend<'a>>(
                             },
                             encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
-                            addend: -4,
+                            addend: 0,
                         };
 
                         relocations.push((section_id, r));
@@ -969,7 +969,7 @@ fn build_proc<'a, B: Backend<'a>>(
                             size: 12,
                             kind: RelocationKind::MachO {
                                 value: object::macho::ARM64_RELOC_PAGEOFF12,
-                                relative: true,
+                                relative: false,
                             },
                             encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
