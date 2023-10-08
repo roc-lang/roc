@@ -266,8 +266,8 @@ pub const RocStr = extern struct {
         const source_ptr = self.asU8ptr();
         const dest_ptr = result.asU8ptrMut();
 
-        @memcpy(dest_ptr, source_ptr, old_length);
-        @memset(dest_ptr + old_length, 0, delta_length);
+        std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
+        std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
 
         self.decref();
 
