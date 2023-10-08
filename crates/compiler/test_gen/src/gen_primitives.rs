@@ -4612,3 +4612,21 @@ fn linked_list_trmc() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn many_arguments() {
+    // exhausts all argument registers on x86 and aarch
+    assert_evals_to!(
+        indoc!(
+            r#"
+            fun = \a,b,c,d, e,f,g,h, i ->
+                (a + b + c + d) + (e + f + g + h) + i
+
+            fun 0i64 1 2 3 4 5 6 7 8
+            "#
+        ),
+        1 + 2 + 3 + 4 + 5 + 6 + 7 + 8,
+        i64
+    );
+}
