@@ -1021,7 +1021,11 @@ fn build_proc<'a, B: Backend<'a>>(
     }
 }
 
-fn add_undefined_rc_proc(output: &mut Object<'_>, name: &String, rc_proc_names: &Vec<'_, (symbol::Symbol, String)>) {
+fn add_undefined_rc_proc(
+    output: &mut Object<'_>,
+    name: &String,
+    rc_proc_names: &Vec<'_, (symbol::Symbol, String)>,
+) {
     // If the symbol is an undefined reference counting procedure, we need to add it here.
     if output.symbol_id(name.as_bytes()).is_none() {
         for (sym, rc_name) in rc_proc_names.iter() {
