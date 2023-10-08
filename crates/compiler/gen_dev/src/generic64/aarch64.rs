@@ -1727,7 +1727,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         offset: i32,
         src: AArch64FloatReg,
     ) {
-        if offset < 0 {
+        if (-256..256).contains(&offset) {
             stur_freg64_reg64_imm9(buf, src, dst, offset as i16)
         } else if (0..=u16::MAX as i32).contains(&offset) {
             debug_assert!(offset % 8 == 0);
@@ -2059,7 +2059,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src: AArch64GeneralReg,
         offset: i32,
     ) {
-        if offset < 0 {
+        if (-256..256).contains(&offset) {
             ldur_freg64_reg64_imm9(buf, dst, src, offset as i16)
         } else if (0..=u16::MAX as i32).contains(&offset) {
             debug_assert!(offset % 8 == 0);
