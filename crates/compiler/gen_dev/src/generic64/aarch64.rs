@@ -437,21 +437,18 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
                 );
 
                 // All the following stores could be optimized by using `STP` to store pairs.
-                let mut offset = aligned_stack_size;
-                offset -= 8;
-                AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::LR);
-                offset -= 8;
-                AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
+                AArch64Assembler::mov_stack32_reg64(buf, 0x00, AArch64GeneralReg::LR);
+                AArch64Assembler::mov_stack32_reg64(buf, 0x08, AArch64GeneralReg::FP);
 
                 // update the frame pointer
                 AArch64Assembler::add_reg64_reg64_imm32(
                     buf,
                     AArch64GeneralReg::FP,
                     AArch64GeneralReg::ZRSP,
-                    offset,
+                    0,
                 );
 
-                offset = aligned_stack_size - fn_call_stack_size;
+                let mut offset = aligned_stack_size - fn_call_stack_size;
                 for reg in saved_general_regs {
                     offset -= 8;
                     AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
@@ -479,13 +476,10 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ) {
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
-            let mut offset = aligned_stack_size;
-            offset -= 8;
-            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, offset);
-            offset -= 8;
-            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, 0x00);
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, 0x80);
 
-            offset = aligned_stack_size - fn_call_stack_size;
+            let mut offset = aligned_stack_size - fn_call_stack_size;
             for reg in saved_general_regs {
                 offset -= 8;
                 AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
@@ -554,11 +548,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         let mut state = AArch64CallStoreArgs {
             general_i: 0,
             float_i: 0,
-            // 0 makes the math work, but I think we can make the math clearer with changes to
-            //   setup_stack and cleanup_stack. Then we could use SHADOW_SPACE_SIZE here to mirror
-            //   LoadArgs
-            // tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
-            tmp_stack_offset: 0,
+            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
         };
 
         for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
