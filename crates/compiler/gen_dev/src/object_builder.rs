@@ -920,6 +920,8 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
             }
             Relocation::LinkedData { offset, name } => {
+                add_undefined_rc_proc(output, name, &rc_proc_names);
+
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
                         //     700: 90000001        adrp    x1, 0x0 <std.builtin.default_panic>
@@ -1005,30 +1007,7 @@ fn build_proc<'a, B: Backend<'a>>(
                     output.add_symbol(builtin_symbol);
                 }
 
-                // If the symbol is an undefined reference counting procedure, we need to add it here.
-                if output.symbol_id(name.as_bytes()).is_none() {
-                    for (sym, rc_name) in rc_proc_names.iter() {
-                        if name == rc_name {
-                            let section_id = output.add_section(
-                                output.segment_name(StandardSegment::Text).to_vec(),
-                                format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
-                                SectionKind::Text,
-                            );
-
-                            let rc_symbol = Symbol {
-                                name: name.as_bytes().to_vec(),
-                                value: 0,
-                                size: 0,
-                                kind: SymbolKind::Text,
-                                scope: SymbolScope::Linkage,
-                                weak: false,
-                                section: SymbolSection::Section(section_id),
-                                flags: SymbolFlags::None,
-                            };
-                            output.add_symbol(rc_symbol);
-                        }
-                    }
-                }
+                add_undefined_rc_proc(output, name, &rc_proc_names);
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     create_relocation(target_info, sym_id, offset + proc_offset)
@@ -1039,5 +1018,32 @@ fn build_proc<'a, B: Backend<'a>>(
             Relocation::JmpToReturn { .. } => unreachable!(),
         };
         relocations.push((section_id, elfreloc));
+    }
+}
+
+fn add_undefined_rc_proc(output: &mut Object<'_>, name: &String, rc_proc_names: &Vec<'_, (symbol::Symbol, String)>) {
+    // If the symbol is an undefined reference counting procedure, we need to add it here.
+    if output.symbol_id(name.as_bytes()).is_none() {
+        for (sym, rc_name) in rc_proc_names.iter() {
+            if name == rc_name {
+                let section_id = output.add_section(
+                    output.segment_name(StandardSegment::Text).to_vec(),
+                    format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+                    SectionKind::Text,
+                );
+
+                let rc_symbol = Symbol {
+                    name: name.as_bytes().to_vec(),
+                    value: 0,
+                    size: 0,
+                    kind: SymbolKind::Text,
+                    scope: SymbolScope::Linkage,
+                    weak: false,
+                    section: SymbolSection::Section(section_id),
+                    flags: SymbolFlags::None,
+                };
+                output.add_symbol(rc_symbol);
+            }
+        }
     }
 }
