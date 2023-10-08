@@ -259,19 +259,49 @@ pub const RocStr = extern struct {
         const old_length = self.len();
         const delta_length = new_length - old_length;
 
-        var result = RocStr.allocate(new_length);
+        const element_width = 1;
+        const result_is_big = new_length >= SMALL_STRING_SIZE;
 
-        // transfer the memory
+        if (result_is_big) {
+            const capacity = utils.calculateCapacity(0, new_length, element_width);
+            var result = RocStr.allocateBig(new_length, capacity);
 
-        const source_ptr = self.asU8ptr();
-        const dest_ptr = result.asU8ptrMut();
+            // transfer the memory
 
-        std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
-        std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
+            const source_ptr = self.asU8ptr();
+            const dest_ptr = result.asU8ptrMut();
 
-        self.decref();
+            const builtin = @import("builtin");
+            if (builtin.target.cpu.arch != .wasm32) {
+                std.debug.print("allocating a big thing? {s}\n", .{source_ptr[0..old_length]});
+            }
 
-        return result;
+            std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
+
+            self.decref();
+
+            return result;
+        } else {
+            var string = RocStr.empty();
+
+            const dest_ptr = @ptrCast([*]u8, &string);
+            dest_ptr[@sizeOf(RocStr) - 1] = @intCast(u8, new_length) | 0b1000_0000;
+
+            const source_ptr = self.asU8ptr();
+
+            const builtin = @import("builtin");
+            if (builtin.target.cpu.arch != .wasm32) {
+                std.debug.print("allocating a small thing? {s}\n", .{source_ptr[0..old_length]});
+            }
+
+            std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
+
+            self.decref();
+
+            return string;
+        }
     }
 
     pub fn isSmallStr(self: RocStr) bool {
