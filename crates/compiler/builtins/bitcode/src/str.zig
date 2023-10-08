@@ -1857,13 +1857,12 @@ const CountAndStart = extern struct {
 };
 
 pub fn fromUtf8RangeC(
-    output: *FromUtf8Result,
     list: RocList,
     start: usize,
     count: usize,
     update_mode: UpdateMode,
-) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ list, start, count, update_mode });
+) callconv(.C) FromUtf8Result {
+    return fromUtf8Range(list, start, count, update_mode);
 }
 
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
