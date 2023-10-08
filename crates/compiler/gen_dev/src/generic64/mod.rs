@@ -1901,11 +1901,13 @@ impl<
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
 
-                // Not would usually be implemented as `xor src, -1` followed by `and src, 1`
-                // but since our booleans are represented as `0x101010101010101` currently, we can simply XOR with that
-                let bool_val = [true as u8; 8];
-                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i64::from_ne_bytes(bool_val));
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
                 ASM::xor_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+
+                // we may need to mask out other bits in the end? but a boolean should be 0 or 1.
+                // if that invariant is upheld, this mask should not be required
+                // ASM::and_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
             x => todo!("Not: layout, {:?}", x),
