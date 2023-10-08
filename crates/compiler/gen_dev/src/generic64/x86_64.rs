@@ -2040,6 +2040,8 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             offset: buf.len() as u64 - 4,
             name: fn_name,
         });
+
+        X86_64Assembler::mov_reg64_mem64_offset32(buf, dst, dst, 0);
     }
 
     #[inline(always)]

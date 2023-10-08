@@ -1048,9 +1048,6 @@ impl<
 
         // now, this gives a pointer to the value
         ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg);
-
-        // dereference
-        ASM::mov_reg64_mem64_offset32(&mut self.buf, reg, reg, 0);
     }
 
     fn build_fn_call(

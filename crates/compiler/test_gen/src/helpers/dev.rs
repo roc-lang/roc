@@ -363,16 +363,7 @@ macro_rules! assert_evals_to {
         let (_main_fn_name, errors, lib) =
             $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
 
-        // NOTE: on aarch64 our infrastructure for roc_panic does not work yet. Therefore we call
-        // just the main roc function which does not do anything to catch/report panics.
-        let result = if cfg!(target_arch = "aarch64") {
-            let typ = std::any::type_name::<$ty>();
-            println!("calling the `{_main_fn_name}: {typ}` function");
-            let result = $crate::helpers::dev::run_function::<$ty>(&_main_fn_name, &lib);
-            Ok(result)
-        } else {
-            $crate::helpers::dev::run_test_main::<$ty>(&lib)
-        };
+        let result = $crate::helpers::dev::run_test_main::<$ty>(&lib);
 
         if !errors.is_empty() {
             dbg!(&errors);
