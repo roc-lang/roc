@@ -452,11 +452,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
 
             let mut offset = aligned_stack_size - fn_call_stack_size - frame_pointer_link_register;
             for reg in saved_general_regs {
-                AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
+                AArch64Assembler::mov_base32_reg64(buf, -offset, *reg);
                 offset -= 8;
             }
             for reg in saved_float_regs {
-                AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
+                AArch64Assembler::mov_base32_freg64(buf, -offset, *reg);
                 offset -= 8;
             }
             aligned_stack_size
@@ -480,12 +480,12 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             let mut offset = aligned_stack_size - fn_call_stack_size - frame_pointer_link_register;
 
             for reg in saved_general_regs {
-                AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
+                AArch64Assembler::mov_reg64_base32(buf, *reg, -offset);
                 offset -= 8;
             }
 
             for reg in saved_float_regs {
-                AArch64Assembler::mov_freg64_base32(buf, *reg, offset);
+                AArch64Assembler::mov_freg64_base32(buf, *reg, -offset);
                 offset -= 8;
             }
 
