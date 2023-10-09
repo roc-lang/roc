@@ -3921,7 +3921,7 @@ impl<
                     // it's just a null pointer
                     self.load_literal_i64(sym, 0);
                 } else {
-                    let (largest_variant, _largest_variant_size) = other_tags
+                    let (largest_variant_fields, _largest_variant_size) = other_tags
                         .iter()
                         .map(|fields| {
                             let struct_layout = self
@@ -3935,6 +3935,16 @@ impl<
                         })
                         .max_by(|(_, a), (_, b)| a.cmp(b))
                         .unwrap();
+
+                    let largest_variant =
+                        if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                            self.layout_interner
+                                .insert_direct_no_semantic(LayoutRepr::Struct(
+                                    self.env.arena.alloc([largest_variant_fields, Layout::U8]),
+                                ))
+                        } else {
+                            largest_variant_fields
+                        };
 
                     let other_fields = if tag_id < nullable_id {
                         other_tags[tag_id as usize]
@@ -4046,7 +4056,7 @@ impl<
                 let stores_tag_id_as_data =
                     union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
 
-                let (largest_variant, _largest_variant_size) = tags
+                let (largest_variant_fields, _largest_variant_size) = tags
                     .iter()
                     .map(|fields| {
                         let struct_layout = self
@@ -4060,6 +4070,15 @@ impl<
                     })
                     .max_by(|(_, a), (_, b)| a.cmp(b))
                     .unwrap();
+
+                let largest_variant = if stores_tag_id_as_data {
+                    self.layout_interner
+                        .insert_direct_no_semantic(LayoutRepr::Struct(
+                            self.env.arena.alloc([largest_variant_fields, Layout::U8]),
+                        ))
+                } else {
+                    largest_variant_fields
+                };
 
                 // construct the payload as a struct on the stack
                 let data_struct_layout = self
