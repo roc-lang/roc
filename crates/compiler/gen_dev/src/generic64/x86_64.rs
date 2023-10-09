@@ -2039,6 +2039,8 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             name: fn_name,
         });
 
+        // on X86_64, we actually get a pointer to a pointer
+        // so we just dereference to get just a pointer to the data
         X86_64Assembler::mov_reg64_mem64_offset32(buf, dst, dst, 0);
     }
 

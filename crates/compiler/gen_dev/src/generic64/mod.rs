@@ -3184,6 +3184,12 @@ impl<
 
         let mut element_symbols = std::vec::Vec::new();
 
+        // NOTE: this realizes all the list elements on the stack before they are put into the
+        // list. This turns out to be important. Creating the literals as we go causes issues with
+        // register usage.
+        //
+        // Of course this is inefficient when there are many elements (causes lots of stack
+        // spillage.
         for (i, elem) in elements.iter().enumerate() {
             match elem {
                 ListLiteralElement::Symbol(sym) => {
@@ -3228,11 +3234,9 @@ impl<
         }
 
         // Setup list on stack.
-        dbg!("we will now be putting things onto the stack");
         self.storage_manager.with_tmp_general_reg(
             &mut self.buf,
             |storage_manager, buf, tmp_reg| {
-                dbg!(tmp_reg);
                 let alignment = Ord::max(8, element_alignment) as u32;
                 let base_offset =
                     storage_manager.claim_stack_area_with_alignment(*sym, 24, alignment);

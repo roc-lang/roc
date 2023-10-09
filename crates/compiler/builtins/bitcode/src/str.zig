@@ -271,11 +271,6 @@ pub const RocStr = extern struct {
             const source_ptr = self.asU8ptr();
             const dest_ptr = result.asU8ptrMut();
 
-            const builtin = @import("builtin");
-            if (builtin.target.cpu.arch != .wasm32) {
-                std.debug.print("allocating a big thing? {s}\n", .{source_ptr[0..old_length]});
-            }
-
             std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
             std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
 
@@ -285,15 +280,12 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
+            // I believe taking this reference on the stack here is important for correctness.
+            // Doing it via a method call seemed to cause issues
             const dest_ptr = @ptrCast([*]u8, &string);
             dest_ptr[@sizeOf(RocStr) - 1] = @intCast(u8, new_length) | 0b1000_0000;
 
             const source_ptr = self.asU8ptr();
-
-            const builtin = @import("builtin");
-            if (builtin.target.cpu.arch != .wasm32) {
-                std.debug.print("allocating a small thing? {s}\n", .{source_ptr[0..old_length]});
-            }
 
             std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
             std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);

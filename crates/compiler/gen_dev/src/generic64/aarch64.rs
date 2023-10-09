@@ -510,6 +510,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
     ) {
+        // loading arguments occurs at an offset (but storing arguments does not)
         let mut state = AArch64CallLoadArgs {
             general_i: 0,
             float_i: 0,
@@ -550,6 +551,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             );
         }
 
+        // storing arguments does not have a stack offset (loading arguments does)
         let mut state = AArch64CallStoreArgs {
             general_i: 0,
             float_i: 0,
@@ -1137,9 +1139,7 @@ impl AArch64CallStoreArgs {
                 self.general_i += 1;
             }
             None => {
-                // Copy to stack using return reg as buffer.
                 let tmp = AArch64GeneralReg::X15;
-
                 ASM::mov_reg64_base32(buf, tmp, offset);
                 ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
 
@@ -1167,9 +1167,7 @@ impl AArch64CallStoreArgs {
 
             self.general_i += 2;
         } else {
-            // Copy to stack using return reg as buffer.
             let reg = AArch64GeneralReg::X15;
-
             ASM::mov_reg64_base32(buf, reg, offset);
             ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
 
