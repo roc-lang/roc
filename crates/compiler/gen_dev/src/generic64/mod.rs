@@ -3150,11 +3150,14 @@ impl<
         element_in_layout: &InLayout<'a>,
         elements: &[ListLiteralElement<'a>],
     ) {
+        dbg!(&elements);
+
         let element_layout = self.layout_interner.get_repr(*element_in_layout);
         let element_width = self.layout_interner.stack_size(*element_in_layout) as u64;
+        let element_alignment = self.layout_interner.alignment_bytes(*element_in_layout) as u64;
 
         // load the total size of the data we want to store (excludes refcount)
-        let data_bytes_symbol = Symbol::DEV_TMP;
+        let data_bytes_symbol = self.debug_symbol("data_bytes");
         let data_bytes = element_width * elements.len() as u64;
         self.load_literal(
             &data_bytes_symbol,
@@ -3163,7 +3166,7 @@ impl<
         );
 
         // Load allocation alignment (u32)
-        let element_alignment_symbol = Symbol::DEV_TMP2;
+        let element_alignment_symbol = self.debug_symbol("element_alignment");
         self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
         let allocation_symbol = self.debug_symbol("list_allocation");
@@ -3180,6 +3183,8 @@ impl<
         let ptr_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, &allocation_symbol);
+
+        dbg!(ptr_reg);
 
         // Copy everything into output array.
         let mut element_offset = 0;
@@ -3218,10 +3223,14 @@ impl<
         }
 
         // Setup list on stack.
+        dbg!("we will now be putting things onto the stack");
         self.storage_manager.with_tmp_general_reg(
             &mut self.buf,
             |storage_manager, buf, tmp_reg| {
-                let base_offset = storage_manager.claim_stack_area_with_alignment(*sym, 24, 8);
+                dbg!(tmp_reg);
+                let alignment = Ord::max(8, element_alignment) as u32;
+                let base_offset =
+                    storage_manager.claim_stack_area_with_alignment(*sym, 24, alignment);
                 ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
 
                 ASM::mov_reg64_imm64(buf, tmp_reg, elements.len() as i64);
