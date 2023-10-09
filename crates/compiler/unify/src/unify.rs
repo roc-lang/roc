@@ -731,15 +731,15 @@ fn unify_two_aliases<M: MetaCollector>(
         let args_it = args
             .type_variables()
             .into_iter()
-            .zip(other_args.type_variables().into_iter());
+            .zip(other_args.type_variables());
 
         let lambda_set_it = args
             .lambda_set_variables()
             .into_iter()
-            .zip(other_args.lambda_set_variables().into_iter());
+            .zip(other_args.lambda_set_variables());
 
         let infer_ext_in_output_vars_it = (args.infer_ext_in_output_variables().into_iter())
-            .zip(other_args.infer_ext_in_output_variables().into_iter());
+            .zip(other_args.infer_ext_in_output_variables());
 
         let mut merged_args = Vec::with_capacity(args.type_variables().len());
         let mut merged_lambda_set_args = Vec::with_capacity(args.lambda_set_variables().len());
@@ -3391,7 +3391,7 @@ fn unify_zip_slices<M: MetaCollector>(
 ) -> Outcome<M> {
     let mut outcome = Outcome::default();
 
-    let it = left.into_iter().zip(right.into_iter());
+    let it = left.into_iter().zip(right);
 
     for (l_index, r_index) in it {
         let l_var = env[l_index];
