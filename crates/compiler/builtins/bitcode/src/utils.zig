@@ -219,6 +219,9 @@ pub fn decrefDataPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
 ) callconv(.C) void {
+    if (DEBUG_ALLOC and builtin.target.cpu.arch != .wasm32) {
+        std.debug.print("we will decref the data pointer {*}\n", .{bytes_or_null});
+    }
     var bytes = bytes_or_null orelse return;
 
     const data_ptr = @ptrToInt(bytes);
