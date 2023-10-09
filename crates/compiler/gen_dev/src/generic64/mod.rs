@@ -3150,8 +3150,6 @@ impl<
         element_in_layout: &InLayout<'a>,
         elements: &[ListLiteralElement<'a>],
     ) {
-        dbg!(&elements);
-
         let element_layout = self.layout_interner.get_repr(*element_in_layout);
         let element_width = self.layout_interner.stack_size(*element_in_layout) as u64;
         let element_alignment = self.layout_interner.alignment_bytes(*element_in_layout) as u64;
@@ -3179,30 +3177,37 @@ impl<
         self.free_symbol(&data_bytes_symbol);
         self.free_symbol(&element_alignment_symbol);
 
+        enum Origin {
+            S(Symbol),
+            L(Symbol),
+        }
+
+        let mut element_symbols = std::vec::Vec::new();
+
+        for (i, elem) in elements.iter().enumerate() {
+            match elem {
+                ListLiteralElement::Symbol(sym) => {
+                    self.load_literal_symbols(&[*sym]);
+                    element_symbols.push(Origin::S(*sym));
+                }
+                ListLiteralElement::Literal(lit) => {
+                    let sym = self.debug_symbol(&format!("lit_{i}"));
+                    self.load_literal(&sym, element_in_layout, lit);
+                    element_symbols.push(Origin::L(sym));
+                }
+            }
+        }
+
         // The pointer already points to the first element
         let ptr_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, &allocation_symbol);
 
-        dbg!(ptr_reg);
-
         // Copy everything into output array.
         let mut element_offset = 0;
-        for elem in elements {
-            // TODO: this could be a lot faster when loading large lists
-            // if we move matching on the element layout to outside this loop.
-            // It also greatly bloats the code here.
-            // Refactor this and switch to one external match.
-            // We also could make loadining indivitual literals much faster
+        for elem in element_symbols {
             let element_symbol = match elem {
-                ListLiteralElement::Symbol(sym) => {
-                    self.load_literal_symbols(&[*sym]);
-                    *sym
-                }
-                ListLiteralElement::Literal(lit) => {
-                    self.load_literal(&Symbol::DEV_TMP, element_in_layout, lit);
-                    Symbol::DEV_TMP
-                }
+                Origin::S(s) | Origin::L(s) => s,
             };
 
             Self::ptr_write(
@@ -3217,7 +3222,7 @@ impl<
             );
 
             element_offset += element_width as i32;
-            if element_symbol == Symbol::DEV_TMP {
+            if let Origin::L(element_symbol) = elem {
                 self.free_symbol(&element_symbol);
             }
         }
