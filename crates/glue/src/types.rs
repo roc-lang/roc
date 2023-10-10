@@ -57,6 +57,7 @@ pub struct Types {
     aligns: Vec<u32>,
 
     entry_points: Vec<(String, TypeId)>,
+    effects: Vec<(String, TypeId)>,
 
     // Needed to check for duplicates
     types_by_name: FnvHashMap<String, TypeId>,
@@ -87,6 +88,7 @@ impl Types {
             aligns,
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             entry_points: Vec::new(),
+            effects: Vec::new(),
             deps: VecMap::with_capacity(cap),
         }
     }
@@ -99,7 +101,9 @@ impl Types {
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
-        mut entry_points: MutMap<Symbol, Variable>,
+        entry_points: MutMap<Symbol, Variable>,
+        // e.g. effect functions like stdoutLine
+        effects: Vec<(Symbol, Variable)>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
         let mut env = Env::new(
@@ -111,22 +115,29 @@ impl Types {
             target,
         );
 
-        for (_symbol, var) in entry_points.clone() {
-            env.lambda_set_ids = env.find_lambda_sets(var);
-            let id = env.add_toplevel_type(var, &mut types);
+        // Add all the entrypoints (e.g. `mainForHost`) to types.entry_points
+        for (&symbol, &var) in entry_points.iter() {
+            env.lambda_set_ids.extend(env.find_lambda_sets(var));
 
-            let key = entry_points
-                .iter()
-                .find_map(|(k, v)| (*v == var).then_some((*k, id)));
+            let type_id = env.add_toplevel_type(var, &mut types);
+            let name = symbol.as_str(env.interns).to_string();
 
-            if let Some((k, id)) = key {
-                let name = k.as_str(env.interns).to_string();
-                types.entry_points.push((name, id));
-                entry_points.remove(&k);
-            }
+            types.entry_points.push((name, type_id));
         }
 
-        debug_assert!(entry_points.is_empty());
+        // Add all the effects (e.g. `stdoutLine`) to types.effects
+        for (symbol, var) in effects.iter().copied() {
+            env.lambda_set_ids.extend(env.find_lambda_sets(var));
+
+            let type_id = env.add_toplevel_type(var, &mut types);
+            let name = symbol.as_str(env.interns).to_string();
+
+            // TODO remove this check once Task is a builtin; this is only necessary
+            // because we currently generate these from `hosted` modules.
+            if !["after", "map", "always", "forever"].contains(&name.as_str()) {
+                types.effects.push((name, type_id));
+            }
+        }
 
         env.resolve_pending_recursive_types(&mut types);
 
@@ -135,6 +146,10 @@ impl Types {
 
     pub fn entry_points(&self) -> &[(String, TypeId)] {
         self.entry_points.as_slice()
+    }
+
+    pub fn effects(&self) -> &[(String, TypeId)] {
+        self.effects.as_slice()
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
@@ -663,10 +678,17 @@ impl From<&Types> for roc_type::Types {
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
 
+        let effects = types
+            .effects()
+            .iter()
+            .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
+            .collect();
+
         roc_type::Types {
             aligns: types.aligns.as_slice().into(),
             deps,
             entrypoints,
+            effects,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(roc_type::RocType::from).collect(),
             typesByName: types_by_name,
@@ -1383,26 +1405,41 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
-        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_repr(layout) {
-            LayoutRepr::Builtin(builtin) => {
-                add_builtin_type(env, builtin, var, opt_name, types, layout)
-            }
-            _ => {
-                if symbol.is_builtin() {
-                    todo!(
-                        "Handle Apply for builtin symbol {:?} and layout {:?}",
-                        symbol,
-                        layout
-                    )
-                } else {
-                    todo!(
-                        "Handle non-builtin Apply for symbol {:?} and layout {:?}",
-                        symbol,
-                        layout
-                    )
+        Content::Structure(FlatType::Apply(symbol, type_arguments)) => {
+            match env.layout_cache.get_repr(layout) {
+                LayoutRepr::Builtin(builtin) => {
+                    add_builtin_type(env, builtin, var, opt_name, types, layout)
+                }
+                LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(field_layouts))
+                    if *symbol == Symbol::BOX_BOX_TYPE =>
+                {
+                    let payload_vars = &subs.variables[type_arguments.indices()];
+
+                    let payload_id =
+                        add_type_help(env, field_layouts[0], payload_vars[0], None, types);
+
+                    let typ = RocType::RocBox(payload_id);
+                    let type_id = types.add_anonymous(&env.layout_cache.interner, typ, layout);
+
+                    type_id
+                }
+                _ => {
+                    if symbol.is_builtin() {
+                        todo!(
+                            "Handle Apply for builtin symbol {:?} and layout {:?}",
+                            symbol,
+                            layout
+                        )
+                    } else {
+                        todo!(
+                            "Handle non-builtin Apply for symbol {:?} and layout {:?}",
+                            symbol,
+                            layout
+                        )
+                    }
                 }
             }
-        },
+        }
         Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
@@ -1489,6 +1526,17 @@ fn add_type_help<'a>(
                             }
                         }
                     }
+                    LayoutRepr::Union { .. } if *name == Symbol::DECODE_DECODE_ERROR => {
+                        // NOTE: There is already another branch handling Decode.DecodeError!
+                        // It looks like this:
+                        //
+                        // LayoutRepr::Struct { .. } if *name == Symbol::DECODE_DECODE_ERROR => {
+                        //
+                        // Look down below for a branch like this and delete it, before
+                        // implementing this branch (since if DecodeError has become a LayoutRepr::Union,
+                        // that means it must have multiple tags in it now.)
+                        todo!("glue for Decode.DecodeError has not yet been implemented.");
+                    }
                     LayoutRepr::Struct { .. } if *name == Symbol::RESULT_RESULT => {
                         // can happen if one or both of a and b in `Result.Result a b` are the
                         // empty tag union `[]`
@@ -1538,8 +1586,22 @@ fn add_type_help<'a>(
 
                         type_id
                     }
-                    _ => {
-                        unreachable!()
+                    LayoutRepr::Struct { .. } if *name == Symbol::DECODE_DECODE_ERROR => {
+                        // Currently, it's:
+                        //
+                        //     DecodeError : [TooShort]
+                        //
+                        // So, unit.
+                        //
+                        // If we ever add any more errors cases to this, then it will become
+                        // a LayoutRepr::Union instead.
+                        types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+                    }
+                    repr => {
+                        unreachable!(
+                            "Encountered an unrecognized builtin Alias named `{name}` with this repr: {:?}",
+                            repr
+                        );
                     }
                 }
             } else {

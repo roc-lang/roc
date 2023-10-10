@@ -65,7 +65,9 @@ use roc_solve::module::{extract_module_owned_implementations, SolveConfig, Solve
 use roc_solve::FunctionKind;
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
-use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
+use roc_types::subs::{
+    copy_import_to, CopiedImport, ExposedTypesStorageSubs, Rank, Subs, VarStore, Variable,
+};
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
@@ -691,7 +693,11 @@ impl MakeSpecializationsPass {
 #[derive(Debug)]
 struct State<'a> {
     pub root_id: ModuleId,
+    pub hosted_vars_by_symbol: Vec<(Symbol, Variable)>,
+    pub hosted_ids: Vec<ModuleId>, // This is just for `hosted` modules
+
     pub root_subs: Option<Subs>,
+    pub hosted_subs: VecMap<ModuleId, Subs>,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
     pub opt_platform_shorthand: Option<&'a str>,
@@ -779,7 +785,9 @@ impl<'a> State<'a> {
 
         Self {
             root_id,
+            hosted_ids: Vec::new(),
             root_subs: None,
+            hosted_subs: VecMap::default(),
             opt_platform_shorthand,
             cache_dir,
             target_info,
@@ -802,6 +810,7 @@ impl<'a> State<'a> {
             ident_ids_by_module,
             declarations_by_id: MutMap::default(),
             exposed_symbols_by_module: MutMap::default(),
+            hosted_vars_by_symbol: Vec::new(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_types: Arc::new(Mutex::new(cached_types)),
@@ -2097,8 +2106,6 @@ fn update<'a>(
             use HeaderType::*;
 
             log!("loaded header for {:?}", header.module_id);
-            let home = header.module_id;
-
             let mut work = MutSet::default();
 
             // Register the package's path under its shorthand
@@ -2267,6 +2274,8 @@ fn update<'a>(
                             ));
                             state.platform_path = PlatformPath::RootIsHosted;
                         }
+
+                        state.hosted_ids.push(header.module_id);
                     }
                 }
             }
@@ -2290,7 +2299,7 @@ fn update<'a>(
 
             state
                 .exposed_symbols_by_module
-                .insert(home, exposed_symbols);
+                .insert(header.module_id, exposed_symbols);
 
             // add the prelude
             let mut header = header;
@@ -2311,6 +2320,9 @@ fn update<'a>(
                 extend_header_with_builtin(header, ModuleId::HASH);
                 extend_header_with_builtin(header, ModuleId::INSPECT);
             }
+
+            // We don't need it to be mutable from here on.
+            let header = header;
 
             state
                 .module_cache
@@ -2342,11 +2354,13 @@ fn update<'a>(
 
             work.extend(new_work);
 
-            state.module_cache.headers.insert(header.module_id, header);
+            let module_id = header.module_id;
+
+            state.module_cache.headers.insert(module_id, header);
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
-            let work = state.dependencies.notify(home, Phase::LoadHeader);
+            let work = state.dependencies.notify(module_id, Phase::LoadHeader);
 
             start_tasks(arena, &mut state, work, injector, worker_listeners)?;
 
@@ -2469,6 +2483,26 @@ fn update<'a>(
                 None
             };
 
+            if state.hosted_ids.contains(&module_id) {
+                state
+                    .hosted_subs
+                    .insert(module_id, solved_subs.inner().clone());
+
+                // Get all the exposed symbols in top-level decls for this `hosted` module.
+                //
+                // We assume every top-level decl in the hosted module
+                // is supposed to be implemented by the host (e.g. it's just a type annotation)
+                state
+                    .hosted_vars_by_symbol
+                    .extend(decls.symbols.iter().enumerate().map(|(index, loc_symbol)| {
+                        // Get the Variable corresponding to this symbol
+                        let symbol = loc_symbol.value;
+                        let var = decls.variables.get(index).unwrap();
+
+                        (symbol, *var)
+                    }));
+            }
+
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
             // if there is a platform, the `platform` module provides host-exposed,
@@ -2514,7 +2548,7 @@ fn update<'a>(
                 state.timings.insert(module_id, module_timing);
 
                 if state.exec_mode.build_if_checks() {
-                    // We there may outstanding modules in the typecheked cache whose ident IDs
+                    // There may outstanding modules in the typecheked cache whose ident IDs
                     // aren't registered; transfer all of their idents over to the state, since
                     // we're now done and ready to report errors.
                     for (
@@ -2865,13 +2899,26 @@ fn update<'a>(
 
                     // use the subs of the root module;
                     // this is used in the repl to find the type of `main`
-                    let subs = state.root_subs.clone().unwrap();
+                    let subs = {
+                        let mut empty = None;
+                        std::mem::swap(&mut empty, &mut state.root_subs);
+
+                        empty
+                    }
+                    .unwrap();
+
+                    let exposed_to_host = {
+                        let mut empty = ExposedToHost::default();
+                        std::mem::swap(&mut empty, &mut state.exposed_to_host);
+
+                        empty
+                    };
 
                     msg_tx
                         .send(Msg::FinishedAllSpecialization {
                             subs,
                             layout_interner,
-                            exposed_to_host: state.exposed_to_host.clone(),
+                            exposed_to_host,
                             module_expectations,
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -3183,7 +3230,7 @@ fn proc_layout_for<'a>(
 #[allow(clippy::too_many_arguments)]
 fn finish(
     mut state: State,
-    solved: Solved<Subs>,
+    mut solved: Solved<Subs>,
     exposed_aliases_by_symbol: MutMap<Symbol, Alias>,
     exposed_vars_by_symbol: Vec<(Symbol, Variable)>,
     exposed_types_storage: ExposedTypesStorageSubs,
@@ -3224,6 +3271,29 @@ fn finish(
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
+    // Import all the hosted_vars_by_symbol into the root module's Subs,
+    // and update the variables in hosted_vars_by_symbol to use the resulting
+    // variables in the root module's Subs, since that's the Subs they'll
+    // be looked up in later in `roc glue`.
+    for (symbol, var) in state.hosted_vars_by_symbol.iter_mut() {
+        // TODO it would be nice to have a better way to do this than by cloning
+        // each `hosted` module's Subs into `hosted_subs` like this.
+        // However, module_cache.typechecked seems to always have removed
+        // the `hosted` modules by the time this matters.
+        //
+        // Fortunately, `hosted_subs` can go away if `hosted` modules do,
+        // which seems likely in the future.
+        let hosted_subs = state
+            .hosted_subs
+            .get(&symbol.module_id())
+            .unwrap_or_else(|| {
+                internal_error!("state.hosted_subs had no entry for ModuleId {:?}, even though the symbol {:?} in hosted_vars_by_symbol had that ModuleId", symbol.module_id(), symbol);
+            });
+
+        *var =
+            copy_import_to(hosted_subs, solved.inner_mut(), false, *var, Rank::import()).variable;
+    }
+
     roc_checkmate::dump_checkmate!(checkmate);
 
     LoadedModule {
@@ -3237,6 +3307,7 @@ fn finish(
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
         exposed_to_host: exposed_vars_by_symbol.into_iter().collect(),
+        effects: state.hosted_vars_by_symbol,
         exposed_types_storage,
         resolved_implementations,
         sources,
@@ -4493,7 +4564,7 @@ impl<'a> BuildTask<'a> {
 }
 
 fn synth_import(subs: &mut Subs, content: roc_types::subs::Content) -> Variable {
-    use roc_types::subs::{Descriptor, Mark, OptVariable, Rank};
+    use roc_types::subs::{Descriptor, Mark, OptVariable};
     subs.fresh(Descriptor {
         content,
         rank: Rank::import(),

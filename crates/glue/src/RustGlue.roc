@@ -1,11 +1,10 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
     imports [
-        pf.Types.{ Types },
-        pf.Shape.{ Shape, RocFn },
-        pf.File.{ File },
-        pf.TypeId.{ TypeId },
-        "../static/Cargo.toml" as rocAppCargoToml : Str,
+        pf.Types.{ Types }, pf.Shape.{ Shape, RocFn }, pf.File.{ File }, pf.TypeId.{ TypeId },
+        "../static/roc_app/Cargo.toml" as rocAppCargoToml : Str,
+        "../static/roc_fn/Cargo.toml" as rocFnCargoToml : Str,
+        "../static/roc_fn/src/lib.rs" as rocFnLibRs : Str,
         "../../roc_std/Cargo.toml" as rocStdCargoToml : Str,
         "../../roc_std/src/lib.rs" as rocStdLib : Str,
         "../../roc_std/src/roc_box.rs" as rocStdBox : Str,
@@ -34,14 +33,50 @@ makeGlue = \typesByArch ->
 
                 """
 
-    typesByArch
-    |> List.map convertTypesToFile
-    |> List.append { name: "roc_app/src/lib.rs", content: modFileContent }
-    |> List.concat staticFiles
+    rocAppFiles =
+        typesByArch
+        |> List.map convertTypesToFile
+        |> List.append { name: "roc_app/src/lib.rs", content: modFileContent }
+
+    rocFnFile =
+        List.first typesByArch
+        |> Result.map convertEffectsToFile
+
+    staticFiles
+    |> List.concat rocAppFiles
+    |> List.appendIfOk rocFnFile
     |> Ok
 
 ## These are always included, and don't depend on the specifics of the app.
 staticFiles : List File
+<<<<<<< HEAD
+staticFiles =
+    [
+        { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
+        { name: "roc_fn/Cargo.toml", content: rocFnCargoToml },
+        { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
+        { name: "roc_std/src/lib.rs", content: rocStdLib },
+        { name: "roc_std/src/roc_box.rs", content: rocStdBox },
+        { name: "roc_std/src/roc_list.rs", content: rocStdList },
+        { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
+        { name: "roc_std/src/roc_set.rs", content: rocStdSet },
+        { name: "roc_std/src/roc_str.rs", content: rocStdStr },
+        { name: "roc_std/src/storage.rs", content: rocStdStorage },
+    ]
+||||||| ac25eef44
+staticFiles =
+    [
+        { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
+        { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
+        { name: "roc_std/src/lib.rs", content: rocStdLib },
+        { name: "roc_std/src/roc_box.rs", content: rocStdBox },
+        { name: "roc_std/src/roc_list.rs", content: rocStdList },
+        { name: "roc_std/src/roc_dict.rs", content: rocStdDict },
+        { name: "roc_std/src/roc_set.rs", content: rocStdSet },
+        { name: "roc_std/src/roc_str.rs", content: rocStdStr },
+        { name: "roc_std/src/storage.rs", content: rocStdStorage },
+    ]
+=======
 staticFiles = [
     { name: "roc_app/Cargo.toml", content: rocAppCargoToml },
     { name: "roc_std/Cargo.toml", content: rocStdCargoToml },
@@ -53,6 +88,7 @@ staticFiles = [
     { name: "roc_std/src/roc_str.rs", content: rocStdStr },
     { name: "roc_std/src/storage.rs", content: rocStdStorage },
 ]
+>>>>>>> origin/main
 
 convertTypesToFile : Types -> File
 convertTypesToFile = \types ->
@@ -130,6 +166,21 @@ convertTypesToFile = \types ->
 generateEntryPoints : Str, Types -> Str
 generateEntryPoints = \buf, types ->
     List.walk (Types.entryPoints types) buf \accum, T name id -> generateEntryPoint accum types name id
+
+convertEffectsToFile : Types -> File
+convertEffectsToFile = \types ->
+    effectsStr = List.walk (Types.effects types) "" \accum, T name id ->
+        generateEffect accum types name id
+
+    content =
+        when Str.replaceFirst rocFnLibRs "// {{ROC_HOSTED_FNS}} //" effectsStr is
+            Ok str -> str
+            Err NotFound -> crash "The lib.rs template for effects glue was missing its ROC_HOSTED_FNS template string!"
+
+    {
+        name: "roc_fn/src/lib.rs",
+        content,
+    }
 
 generateEntryPoint : Str, Types, Str, TypeId -> Str
 generateEntryPoint = \buf, types, name, id ->
@@ -273,6 +324,33 @@ generateFunction = \buf, types, rocFn ->
             }
         }
     }
+    """
+
+generateEffect : Str, Types, Str, TypeId -> Str
+generateEffect = \buf, types, name, id ->
+    { args, ret } =
+        when Types.shape types id is
+            Function rocFn ->
+                {
+                    args:
+                        rocFn.args
+                        |> List.map \argId -> typeName types argId
+                        |> Str.joinWith ", ",
+
+                    ret: typeName types rocFn.ret
+                }
+
+            _ ->
+                # This will compile to a thunk, e.g. `{} -> Ret`
+                { args: "", ret: typeName types id }
+
+    """
+        \(buf)
+        HostedFn {
+            name: "\(name)",
+            arg_types: &[\(args)],
+            ret_type: \(ret),
+        },
     """
 
 generateStruct : Str, Types, TypeId, _, _, _ -> Str
@@ -2016,6 +2094,7 @@ archName = \arch ->
         X86x64 ->
             "x86_64"
 
+fileHeader : Str
 fileHeader =
     """
     // ⚠️ GENERATED CODE ⚠️ - this entire file was generated by the `roc glue` CLI command
@@ -2035,7 +2114,6 @@ fileHeader =
     #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::needless_borrow)]
     #![allow(clippy::clone_on_copy)]
-
 
 
     """

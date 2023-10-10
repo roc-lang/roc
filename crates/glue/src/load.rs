@@ -264,7 +264,13 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(ext);
                     stack.extend(var_slice!(fields.variables()));
                 }
-                Tuple(_, _) => todo!(),
+                Tuple(fields, ext) => {
+                    let fields = *fields;
+                    let ext = *ext;
+
+                    stack.push(ext);
+                    stack.extend(var_slice!(fields.variables()));
+                }
                 TagUnion(tags, ext) => {
                     let tags = *tags;
                     let ext = *ext;
@@ -347,6 +353,7 @@ pub fn load_types(
         mut solved,
         interns,
         exposed_to_host,
+        effects,
         ..
     } = roc_load::load_and_typecheck(
         arena,
@@ -386,11 +393,15 @@ pub fn load_types(
         );
     }
 
-    // Get the variables for all the exposed_to_host symbols
-    let variables = (0..decls.len()).filter_map(|index| {
-        let symbol = decls.symbols[index].value;
-        exposed_to_host.get(&symbol).copied()
-    });
+    let generated = effects.iter().map(|(_, var)| *var);
+
+    // Get the variables for all the exposed_to_host and generated symbols
+    let variables = (0..decls.len())
+        .filter_map(|index| {
+            let symbol = decls.symbols[index].value;
+            exposed_to_host.get(&symbol).copied()
+        })
+        .chain(generated);
 
     let operating_system = target_info.operating_system;
     let architectures = Architecture::iter();
@@ -405,7 +416,6 @@ pub fn load_types(
         let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut glue_procs_by_layout = MutMap::default();
-
         let mut extern_names = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
@@ -466,6 +476,7 @@ pub fn load_types(
             layout_cache,
             target_info,
             exposed_to_host.clone(),
+            effects.clone(),
         );
 
         arch_types.push(types);

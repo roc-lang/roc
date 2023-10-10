@@ -36,7 +36,10 @@ pub struct LoadedModule {
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub declarations_by_id: MutMap<ModuleId, Declarations>,
+    /// things in the platform's `provides`, e.g. `mainForHost`
     pub exposed_to_host: MutMap<Symbol, Variable>,
+    /// user-defined effects in `hosted` modules, e.g. `stdoutLine`
+    pub effects: Vec<(Symbol, Variable)>,
     pub dep_idents: IdentIdsByModule,
     pub exposed_aliases: MutMap<Symbol, Alias>,
     pub exposed_values: Vec<Symbol>,
