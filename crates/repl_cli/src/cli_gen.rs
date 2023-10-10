@@ -54,12 +54,18 @@ pub fn eval_llvm(
 
     let interns = loaded.interns.clone();
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     let (lib, main_fn_name, subs, layout_interner) =
         mono_module_to_dylib_llvm(&arena, target, loaded, opt_level)
             .expect("we produce a valid Dylib");
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
     let (lib, main_fn_name, subs, layout_interner) =
         mono_module_to_dylib_asm(&arena, target, loaded, opt_level)
             .expect("we produce a valid Dylib");
@@ -166,7 +172,13 @@ impl ReplAppMemory for CliMemory {
     }
 }
 
-#[cfg_attr(target_os = "linux", allow(unused))]
+#[cfg_attr(
+    all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    allow(unused)
+)]
 fn mono_module_to_dylib_llvm<'a>(
     arena: &'a Bump,
     target: &Triple,
@@ -269,7 +281,13 @@ fn mono_module_to_dylib_llvm<'a>(
         .map(|lib| (lib, main_fn_name, subs, layout_interner))
 }
 
-#[cfg_attr(not(target_os = "linux"), allow(unused))]
+#[cfg_attr(
+    not(all(
+        any(target_os = "linux", target_os = "macos"),
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )),
+    allow(unused)
+)]
 fn mono_module_to_dylib_asm<'a>(
     arena: &'a Bump,
     target: &Triple,
