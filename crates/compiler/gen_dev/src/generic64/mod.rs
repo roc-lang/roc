@@ -1800,6 +1800,11 @@ impl<
 
                 self.free_symbol(tmp);
             }
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
+                // This instruction will never execute, but we need a value the symbol
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
+            }
             _ => {
                 let ident_ids = self
                     .interns
@@ -1875,6 +1880,11 @@ impl<
                 ASM::neq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
 
                 self.free_symbol(tmp)
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
+                // This instruction will never execute, but we need a value the symbol
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
             }
             _ => {
                 // defer to equality
