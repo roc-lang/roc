@@ -9,3 +9,4 @@ version.workspace = true
 
 [dependencies]
 bumpalo.workspace = true
+roc_collections = { path = "../collections" }

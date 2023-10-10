@@ -2637,6 +2637,7 @@ name = "roc_intern"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "roc_collections",
 ]
 
 [[package]]

@@ -1,19 +1,21 @@
 //! Intern strings
 #![warn(clippy::dbg_macro)]
 
+pub mod int_map;
 pub mod sized_strings;
 
 use sized_strings::{Str4, UsizeModulo};
 
-pub struct Interns<Id> {
-    str4s: Vec<Option<Str4>>,
-    all_ids: Vec<Id>,
+pub struct Interns<'a, Id> {
+    str4s: VecMap<'a, Str4, Id>,
+    all_ids: Vec<'a, Id>,
 }
 
-impl<Id> Interns<Id> {
-    pub fn add(&mut self, string: &str) {
+impl<'a, Id> Interns<'a, Id> {
+    pub fn add(&mut self, &mut Arena, string: &str) {
         match string.len() {
             1..=4 => {
+                // TODO strore in vecmap!!!
                 store_in_hashmap(&mut self.str4s, Str4::new(string));
             }
             5..=8 => {
