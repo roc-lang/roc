@@ -78,13 +78,15 @@ impl<T> RocList<T> {
     }
 
     fn elems_from_allocation(allocation: NonNull<c_void>) -> NonNull<ManuallyDrop<T>> {
+        let offset = Self::alloc_alignment() - core::mem::size_of::<*const u8>() as u32;
         let alloc_ptr = allocation.as_ptr();
 
         unsafe {
             let elem_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr).cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
-            alloc_ptr
+            let rc_ptr = alloc_ptr.offset(offset as isize);
+            rc_ptr
                 .cast::<Storage>()
                 .write(Storage::new_reference_counted());
 
@@ -810,6 +812,17 @@ mod tests {
         // RocDec is special because it's alignment is 16
         let a = RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]);
         let b = a.clone();
+
+        assert_eq!(a, b);
+
+        drop(a);
+        drop(b);
+    }
+
+    #[test]
+    fn compare_list_str() {
+        let a = RocList::from_slice(&[crate::RocStr::from("ab")]);
+        let b = RocList::from_slice(&[crate::RocStr::from("ab")]);
 
         assert_eq!(a, b);
 
