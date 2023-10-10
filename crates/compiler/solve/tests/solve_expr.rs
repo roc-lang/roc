@@ -8,6 +8,7 @@ extern crate bumpalo;
 #[cfg(test)]
 mod solve_expr {
     use roc_load::LoadedModule;
+    use roc_solve::FunctionKind;
     use test_solve_helpers::{format_problems, run_load_and_infer};
 
     use roc_types::pretty_print::{name_and_print_var, DebugPrint};
@@ -27,7 +28,7 @@ mod solve_expr {
                 ..
             },
             src,
-        ) = run_load_and_infer(src, [], false)?;
+        ) = run_load_and_infer(src, [], false, FunctionKind::LambdaSet)?;
 
         let mut can_problems = can_problems.remove(&home).unwrap_or_default();
         let type_problems = type_problems.remove(&home).unwrap_or_default();
@@ -49,7 +50,7 @@ mod solve_expr {
 
         exposed_to_host.retain(|s, _| !abilities_store.is_specialization_name(*s));
 
-        debug_assert!(exposed_to_host.len() == 1, "{:?}", exposed_to_host);
+        debug_assert!(exposed_to_host.len() == 1, "{exposed_to_host:?}");
         let (_symbol, variable) = exposed_to_host.into_iter().next().unwrap();
         let actual_str = name_and_print_var(variable, subs, home, &interns, DebugPrint::NOTHING);
 
@@ -61,8 +62,7 @@ mod solve_expr {
 
         assert!(
             can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
+            "Canonicalization problems: {can_problems}"
         );
 
         assert_eq!(actual, expected.to_string());
@@ -73,17 +73,13 @@ mod solve_expr {
 
         assert!(
             can_problems.is_empty(),
-            "Canonicalization problems: {}",
-            can_problems
+            "Canonicalization problems: {can_problems}"
         );
 
         if !type_problems.is_empty() {
             // fail with an assert, but print the problems normally so rust doesn't try to diff
             // an empty vec with the problems.
-            panic!(
-                "expected:\n{:?}\ninferred:\n{:?}\nproblems:\n{}",
-                expected, actual, type_problems,
-            );
+            panic!("expected:\n{expected:?}\ninferred:\n{actual:?}\nproblems:\n{type_problems}",);
         }
         assert_eq!(actual, expected.to_string());
     }
@@ -95,7 +91,7 @@ mod solve_expr {
 
     #[test]
     fn float_literal() {
-        infer_eq("0.5", "Float *");
+        infer_eq("0.5", "Frac *");
     }
 
     #[test]
@@ -801,7 +797,7 @@ mod solve_expr {
                     (\a -> a) 3.14
                 "#
             ),
-            "Float *",
+            "Frac *",
         );
     }
 
@@ -1065,7 +1061,7 @@ mod solve_expr {
 
     #[test]
     fn two_field_record() {
-        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Float * }");
+        infer_eq("{ x: 5, y : 3.14 }", "{ x : Num *, y : Frac * }");
     }
 
     #[test]
@@ -1090,7 +1086,7 @@ mod solve_expr {
 
     #[test]
     fn tuple_literal_ty() {
-        infer_eq("(5, 3.14 )", "( Num *, Float * )*");
+        infer_eq("(5, 3.14 )", "( Num *, Frac * )*");
     }
 
     #[test]
@@ -2250,7 +2246,7 @@ mod solve_expr {
                     { numIdentity, x : numIdentity 42, y }
                 "#
             ),
-            "{ numIdentity : Num a -> Num a, x : Num *, y : Float * }",
+            "{ numIdentity : Num a -> Num a, x : Num *, y : Frac * }",
         );
     }
 
@@ -2427,7 +2423,7 @@ mod solve_expr {
                     threePointZero
                 "#
             ),
-            "Float *",
+            "Frac *",
         );
     }
 
@@ -3150,7 +3146,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict k v, k, v -> Dict k v | k has Hash & Eq",
+            "Dict k v, k, v -> Dict k v where k implements Hash & Eq",
         );
     }
 
@@ -3162,7 +3158,7 @@ mod solve_expr {
                 Num.toFrac
                 "#
             ),
-            "Num * -> Float a",
+            "Num * -> Frac a",
         );
     }
 
@@ -3174,7 +3170,7 @@ mod solve_expr {
                 Num.pow
                 "#
             ),
-            "Float a, Float a -> Float a",
+            "Frac a, Frac a -> Frac a",
         );
     }
 
@@ -3186,7 +3182,7 @@ mod solve_expr {
                 Num.ceiling
                 "#
             ),
-            "Float * -> Int a",
+            "Frac * -> Int a",
         );
     }
 
@@ -3198,7 +3194,7 @@ mod solve_expr {
                 Num.floor
                 "#
             ),
-            "Float * -> Int a",
+            "Frac * -> Int a",
         );
     }
 
@@ -3210,7 +3206,7 @@ mod solve_expr {
                 Num.div
                 "#
             ),
-            "Float a, Float a -> Float a",
+            "Frac a, Frac a -> Frac a",
         )
     }
 
@@ -3222,7 +3218,7 @@ mod solve_expr {
                 Num.divChecked
                 "#
             ),
-            "Float a, Float a -> Result (Float a) [DivByZero]",
+            "Frac a, Frac a -> Result (Frac a) [DivByZero]",
         )
     }
 
@@ -3282,7 +3278,7 @@ mod solve_expr {
                 Num.atan
                 "#
             ),
-            "Float a -> Float a",
+            "Frac a -> Frac a",
         );
     }
 
@@ -3411,7 +3407,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                reconstructPath : Dict position position, position -> List position | position has Hash & Eq
+                reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
                 reconstructPath = \cameFrom, goal ->
                     when Dict.get cameFrom goal is
                         Err KeyNotFound ->
@@ -3423,7 +3419,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Dict position position, position -> List position | position has Hash & Eq",
+            "Dict position position, position -> List position where position implements Hash & Eq",
         );
     }
 
@@ -3458,7 +3454,7 @@ mod solve_expr {
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound] | position has Hash & Eq
+                cheapestOpen : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3473,14 +3469,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [KeyNotFound] | position has Hash & Eq
+                astar : Model position -> Result position [KeyNotFound] where position implements Hash & Eq
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [KeyNotFound] | position has Hash & Eq",
+            "Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
         );
     }
 
@@ -3667,7 +3663,7 @@ mod solve_expr {
                     negatePoint { x: 1, y: 2.1, z: 0x3 }
                 "#
             ),
-            "{ x : Num *, y : Float *, z : Int * }",
+            "{ x : Num *, y : Frac *, z : Int * }",
         );
     }
 
@@ -3684,7 +3680,7 @@ mod solve_expr {
                     { a, b }
                 "#
             ),
-            "{ a : { x : Num *, y : Float *, z : c }, b : { blah : Str, x : Num *, y : Float *, z : c1 } }",
+            "{ a : { x : Num *, y : Frac *, z : c }, b : { blah : Str, x : Num *, y : Frac *, z : c1 } }",
         );
     }
 
@@ -3797,11 +3793,11 @@ mod solve_expr {
     }
 
     #[test]
-    fn str_trim_left() {
+    fn str_trim_start() {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                Str.trimLeft
+                Str.trimStart
                 "#
             ),
             "Str -> Str",
@@ -4122,7 +4118,7 @@ mod solve_expr {
 
                 Key k : Num k
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -4236,7 +4232,7 @@ mod solve_expr {
                     _ ->
                       Empty
 
-                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
+                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4324,7 +4320,7 @@ mod solve_expr {
 
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
-                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v | k has Hash & Eq
+                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v where k implements Hash & Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4359,7 +4355,7 @@ mod solve_expr {
 
                 removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v where k implements Hash & Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->

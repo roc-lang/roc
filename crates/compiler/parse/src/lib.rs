@@ -17,6 +17,7 @@ pub mod module;
 pub mod number_literal;
 pub mod pattern;
 pub mod problems;
+pub mod src64;
 pub mod state;
 pub mod string_literal;
 pub mod test_helpers;

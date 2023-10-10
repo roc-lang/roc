@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: Nix linux x86_64 cargo test
 
@@ -16,8 +17,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
-        with:
-          clean: "true"
           
       - name: test building default.nix
         run: nix-build 
@@ -29,4 +28,10 @@ jobs:
         run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"
 
       - name: test the dev backend # these tests require an explicit feature flag
-        run: nix develop -c cargo test --locked --release --package test_gen --no-default-features --features gen-dev
+        run: nix develop -c cargo nextest run --locked --release --package test_gen --no-default-features --features gen-dev --no-fail-fast
+
+      - name: wasm repl tests
+        run: nix develop -c crates/repl_test/test_wasm.sh
+
+      - name: test building wasm repl
+        run: nix develop -c ./ci/www-repl.sh

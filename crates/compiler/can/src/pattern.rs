@@ -76,7 +76,7 @@ pub enum Pattern {
     Underscore,
 
     /// An identifier that marks a specialization of an ability member.
-    /// For example, given an ability member definition `hash : a -> U64 | a has Hash`,
+    /// For example, given an ability member definition `hash : a -> U64 where a implements Hash`,
     /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
     /// new symbol for the specialized "hash" identifier.
     AbilityMemberSpecialization {
@@ -531,7 +531,7 @@ pub fn canonicalize_pattern<'a>(
                     use std::ops::Neg;
 
                     let sign_str = if is_negative { "-" } else { "" };
-                    let int_str = format!("{}{}", sign_str, int).into_boxed_str();
+                    let int_str = format!("{sign_str}{int}").into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
                         IntValue::I128(n) if is_negative => {

@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: Nix macOS x86_64 cargo test
 
@@ -15,11 +16,9 @@ jobs:
     runs-on: [macos-12]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v2
-        with:
-          clean: "true"
+      - uses: actions/checkout@v3
 
-      - uses: cachix/install-nix-action@v20
+      - uses: cachix/install-nix-action@v22
 
       - name: execute cli_run tests only, the full tests take too long but are run nightly
         run: nix develop -c cargo test --locked --release -p roc_cli

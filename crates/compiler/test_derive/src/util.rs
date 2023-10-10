@@ -3,6 +3,10 @@ use std::path::PathBuf;
 
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
+use roc_solve::{
+    module::{SolveConfig, SolveOutput},
+    FunctionKind,
+};
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -21,7 +25,8 @@ use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
 use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
-use roc_load_internal::file::{add_imports, LoadedModule, Threading};
+use roc_load_internal::file::{add_imports, Threading};
+use roc_load_internal::module::LoadedModule;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
@@ -182,7 +187,7 @@ macro_rules! v {
          use roc_types::subs::{Subs, Content};
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
-     ($name:ident has $ability:path) => {{
+     ($name:ident implements $ability:path) => {{
          use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
          |subs: &mut Subs| {
              let name_index =
@@ -333,7 +338,7 @@ fn assemble_derived_golden(
     specialization_lsets.sort_by_key(|(region, _)| *region);
     for (region, var) in specialization_lsets {
         let pretty_lset = print_var(var, false);
-        let _ = writeln!(pretty_buf, "#   @<{}>: {}", region, pretty_lset);
+        let _ = writeln!(pretty_buf, "#   @<{region}>: {pretty_lset}");
     }
 
     pretty_buf.push_str(derived_source);
@@ -418,18 +423,31 @@ fn check_derived_typechecks_and_golden(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
         std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "1")
     );
-    let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
-        test_module,
+
+    let solve_config = SolveConfig {
+        home: test_module,
+        constraints: &constraints,
+        root_constraint: constr,
         types,
-        &constraints,
-        constr,
+        function_kind: FunctionKind::LambdaSet,
+        pending_derives: Default::default(),
+        exposed_by_module: &exposed_for_module.exposed_by_module,
+        derived_module: Default::default(),
+
+        #[cfg(debug_assertions)]
+        checkmate: None,
+    };
+
+    let SolveOutput {
+        subs: mut solved_subs,
+        errors: problems,
+        ..
+    } = roc_solve::module::run_solve(
+        solve_config,
         RigidVariables::default(),
         test_subs,
         Default::default(),
         abilities_store,
-        Default::default(),
-        &exposed_for_module.exposed_by_module,
-        Default::default(),
     );
     dbg_do!(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
@@ -465,10 +483,7 @@ fn check_derived_typechecks_and_golden(
             .render_raw(80, &mut roc_reporting::report::CiWrite::new(&mut buf))
             .unwrap();
 
-        panic!(
-            "Derived does not typecheck:\n{}\nDerived def:\n{}",
-            buf, derived_program
-        );
+        panic!("Derived does not typecheck:\n{buf}\nDerived def:\n{derived_program}");
     }
 
     let golden = assemble_derived_golden(
@@ -512,6 +527,7 @@ where
         path.parent().unwrap().to_path_buf(),
         Default::default(),
         target_info,
+        FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
         RocCacheDir::Disallowed,

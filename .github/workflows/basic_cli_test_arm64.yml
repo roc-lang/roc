@@ -1,0 +1,22 @@
+on:
+  workflow_dispatch:
+
+# this cancels workflows currently in progress if you start a new one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-basic-cli-release-arm64:
+    runs-on: [self-hosted, Linux, ARM64]
+    steps:
+      - name: clone basic-cli repo
+        uses: actions/checkout@v3
+        with:
+          repository: roc-lang/basic-cli
+          ref: main
+      
+      - name: Run all tests with latest roc nightly + latest basic-cli release
+        run: |
+          sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
+          ./ci/test_latest_release.sh

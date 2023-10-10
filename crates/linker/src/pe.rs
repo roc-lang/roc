@@ -444,13 +444,13 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                         "__fixsfti",
                         "__fixunsdfti",
                         "__fixunssfti",
+                        "__lshrti3",
                         "memcpy_decision",
                     ]
                     .contains(&name.as_str());
                     if *address == 0 && !name.starts_with("roc") && !is_ingested_compiler_rt {
                         eprintln!(
-                            "I don't know the address of the {} function! this may cause segfaults",
-                            name
+                            "I don't know the address of the {name} function! this may cause segfaults"
                         );
                     }
 
@@ -1107,11 +1107,15 @@ impl<'a> AppSections<'a> {
 
         for (i, section) in file.sections().enumerate() {
             let kind = match section.name() {
-                Ok(".text") => SectionKind::Text,
-                // Ok(".data") => SectionKind::Data,
-                Ok(".rdata") => SectionKind::ReadOnlyData,
-
-                _ => continue,
+                Ok(name) => {
+                    match name {
+                        _ if name.starts_with(".text") => SectionKind::Text,
+                        // _ if name.starts_with(".data") => SectionKind::Data,
+                        _ if name.starts_with(".rdata") => SectionKind::ReadOnlyData,
+                        _ => continue,
+                    }
+                }
+                Err(_) => continue,
             };
 
             let mut relocations: MutMap<String, Vec<AppRelocation>> = MutMap::default();
@@ -1717,7 +1721,7 @@ mod test {
             std::io::stdout().write_all(&output.stdout).unwrap();
             std::io::stderr().write_all(&output.stderr).unwrap();
 
-            panic!("zig build-exe failed: {}", command_str);
+            panic!("zig build-exe failed: {command_str}");
         }
 
         let preprocessed_host_filename =
@@ -1938,7 +1942,7 @@ mod test {
             std::io::stdout().write_all(&output.stdout).unwrap();
             std::io::stderr().write_all(&output.stderr).unwrap();
 
-            panic!("zig build-exe failed: {}", command_str);
+            panic!("zig build-exe failed: {command_str}");
         }
 
         let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();

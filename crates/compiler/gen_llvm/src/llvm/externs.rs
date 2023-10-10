@@ -160,9 +160,16 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             }
         }
 
-        unreachable_function(env, "roc_getppid");
-        unreachable_function(env, "roc_mmap");
-        unreachable_function(env, "roc_shm_open");
+        match env.target_info.operating_system {
+            roc_target::OperatingSystem::Windows => {
+                // We don't need these functions on Windows
+            }
+            _ => {
+                unreachable_function(env, "roc_getppid");
+                unreachable_function(env, "roc_mmap");
+                unreachable_function(env, "roc_shm_open");
+            }
+        }
 
         add_sjlj_roc_panic(env)
     }

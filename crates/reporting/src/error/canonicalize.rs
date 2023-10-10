@@ -42,9 +42,9 @@ const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
 const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
 const ABILITY_HAS_TYPE_VARIABLES: &str = "ABILITY HAS TYPE VARIABLES";
-const HAS_CLAUSE_IS_NOT_AN_ABILITY: &str = "HAS CLAUSE IS NOT AN ABILITY";
-const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
-const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
+const IMPLEMENTS_CLAUSE_IS_NOT_AN_ABILITY: &str = "IMPLEMENTS CLAUSE IS NOT AN ABILITY";
+const ILLEGAL_IMPLEMENTS_CLAUSE: &str = "ILLEGAL IMPLEMENTS CLAUSE";
+const ABILITY_MEMBER_MISSING_IMPLEMENTS_CLAUSE: &str = "ABILITY MEMBER MISSING IMPLEMENTS CLAUSE";
 const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
 const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
 const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
@@ -557,14 +557,8 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This string interpolation is invalid:"),
                 alloc.region(lines.convert_region(region)),
-                alloc.concat([
-                    alloc.reflow(r"I was expecting an identifier, like "),
-                    alloc.parser_suggestion("\\u(message)"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("\\u(LoremIpsum.text)"),
-                    alloc.text("."),
-                ]),
-                alloc.reflow(r"Learn more about string interpolation at TODO"),
+                alloc.reflow(r"String interpolations cannot contain newlines or other interpolations."),
+                alloc.reflow(r"You can learn more about string interpolation at <https://www.roc-lang.org/tutorial#string-interpolation>"),
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
@@ -648,35 +642,37 @@ pub fn can_problem<'b>(
             title = ABILITY_HAS_TYPE_VARIABLES.to_string();
         }
 
-        Problem::HasClauseIsNotAbility {
+        Problem::ImplementsClauseIsNotAbility {
             region: clause_region,
         } => {
             doc = alloc.stack([
-                alloc.reflow(r#"The type referenced in this "has" clause is not an ability:"#),
+                alloc.reflow(
+                    r#"The type referenced in this "implements" clause is not an ability:"#,
+                ),
                 alloc.region(lines.convert_region(clause_region)),
             ]);
-            title = HAS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
+            title = IMPLEMENTS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
         }
 
-        Problem::IllegalHasClause { region } => {
+        Problem::IllegalImplementsClause { region } => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("A "),
-                    alloc.keyword("has"),
+                    alloc.reflow("An "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause is not allowed here:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(
                         " clauses can only be specified on the top-level type annotations.",
                     ),
                 ]),
             ]);
-            title = ILLEGAL_HAS_CLAUSE.to_string();
+            title = ILLEGAL_IMPLEMENTS_CLAUSE.to_string();
         }
 
-        Problem::DuplicateHasAbility { ability, region } => {
+        Problem::DuplicateImplementsAbility { ability, region } => {
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("I already saw that this type variable is bound to the "),
@@ -685,15 +681,15 @@ pub fn can_problem<'b>(
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.reflow("Abilities only need to bound to a type variable once in a "),
-                    alloc.keyword("has"),
+                    alloc.reflow("Abilities only need to bound to a type variable once in an "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause!"),
                 ]),
             ]);
             title = "DUPLICATE BOUND ABILITY".to_string();
         }
 
-        Problem::AbilityMemberMissingHasClause {
+        Problem::AbilityMemberMissingImplementsClause {
             member,
             ability,
             region,
@@ -702,35 +698,35 @@ pub fn can_problem<'b>(
                 alloc.concat([
                     alloc.reflow("The definition of the ability member "),
                     alloc.symbol_unqualified(member),
-                    alloc.reflow(" does not include a "),
-                    alloc.keyword("has"),
+                    alloc.reflow(" does not include an "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause binding a type variable to the ability "),
                     alloc.symbol_unqualified(ability),
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.reflow("Ability members must include a "),
-                    alloc.keyword("has"),
+                    alloc.reflow("Ability members must include an "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause binding a type variable to an ability, like"),
                 ]),
                 alloc.type_block(alloc.concat([
                     alloc.type_variable("a".into()),
                     alloc.space(),
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_unqualified(ability),
                 ])),
                 alloc.concat([alloc
                     .reflow("Otherwise, the function does not need to be part of the ability!")]),
             ]);
-            title = ABILITY_MEMBER_MISSING_HAS_CLAUSE.to_string();
+            title = ABILITY_MEMBER_MISSING_IMPLEMENTS_CLAUSE.to_string();
         }
 
         Problem::AbilityMemberMultipleBoundVars {
             member,
             ability,
-            span_has_clauses,
+            span_implements_clauses: span_has_clauses,
             mut bound_var_names,
         } => {
             doc = alloc.stack([
@@ -778,13 +774,13 @@ pub fn can_problem<'b>(
                 ),
                 alloc
                     .hint("")
-                    .append(alloc.reflow("Perhaps you meant to include a "))
-                    .append(alloc.keyword("has"))
+                    .append(alloc.reflow("Perhaps you meant to include an "))
+                    .append(alloc.keyword(roc_parse::keyword::IMPLEMENTS))
                     .append(alloc.reflow(" annotation, like")),
                 alloc.type_block(alloc.concat([
                     alloc.type_variable(suggested_var_name),
                     alloc.space(),
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_unqualified(ability),
                 ])),
@@ -843,7 +839,7 @@ pub fn can_problem<'b>(
                     alloc.reflow("An implementation of "), alloc.symbol_unqualified(member), alloc.reflow(" could not be found in this scope:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {}: my{} }}", member_str, member_str))]))
+                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {member_str}: my{member_str} }}"))]))
             ]);
             title = IMPLEMENTATION_NOT_FOUND.to_string();
         }
@@ -851,7 +847,7 @@ pub fn can_problem<'b>(
             let hint = if ability.is_builtin() {
                 alloc.hint("").append(
                     alloc.reflow("if you want this implementation to be derived, don't include a record of implementations. For example,")
-                        .append(alloc.type_block(alloc.concat([alloc.type_str("has ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
+                        .append(alloc.type_block(alloc.concat([alloc.type_str(roc_parse::keyword::IMPLEMENTS), alloc.type_str(" ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
                         .append(alloc.reflow(" will attempt to derive ").append(alloc.symbol_unqualified(ability))))
             } else {
                 alloc.nil()

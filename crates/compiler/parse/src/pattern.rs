@@ -1,4 +1,4 @@
-use crate::ast::{Has, Pattern, PatternAs, Spaceable};
+use crate::ast::{Implements, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -116,7 +116,7 @@ fn loc_tag_pattern_args_help<'a>() -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>,
     zero_or_more!(loc_tag_pattern_arg(false))
 }
 
-/// Like `loc_tag_pattern_args_help`, but stops if a "has" keyword is seen (indicating an ability).
+/// Like `loc_tag_pattern_args_help`, but stops if a "implements" keyword is seen (indicating an ability).
 fn loc_type_def_tag_pattern_args_help<'a>(
 ) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
     zero_or_more!(loc_tag_pattern_arg(true))
@@ -138,7 +138,7 @@ fn loc_tag_pattern_arg<'a>(
 
         let Loc { region, value } = loc_pat;
 
-        if stop_on_has_kw && matches!(value, Pattern::Identifier("has")) {
+        if stop_on_has_kw && matches!(value, Pattern::Identifier(crate::keyword::IMPLEMENTS)) {
             Err((NoProgress, EPattern::End(original_state.pos())))
         } else {
             Ok((
@@ -154,12 +154,19 @@ fn loc_tag_pattern_arg<'a>(
     }
 }
 
-pub fn loc_has_parser<'a>() -> impl Parser<'a, Loc<Has<'a>>, EPattern<'a>> {
+pub fn loc_implements_parser<'a>() -> impl Parser<'a, Loc<Implements<'a>>, EPattern<'a>> {
     then(
         loc_tag_pattern_arg(false),
         |_arena, state, progress, pattern| {
-            if matches!(pattern.value, Pattern::Identifier("has")) {
-                Ok((progress, Loc::at(pattern.region, Has::Has), state))
+            if matches!(
+                pattern.value,
+                Pattern::Identifier(crate::keyword::IMPLEMENTS)
+            ) {
+                Ok((
+                    progress,
+                    Loc::at(pattern.region, Implements::Implements),
+                    state,
+                ))
             } else {
                 Err((progress, EPattern::End(state.pos())))
             }

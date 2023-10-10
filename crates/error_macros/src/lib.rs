@@ -116,4 +116,14 @@ macro_rules! todo_abilities {
     };
 }
 
+#[macro_export]
+macro_rules! todo_lambda_erasure {
+    () => {
+        $crate::_incomplete_project!("Lambda Erasure", 5575)
+    };
+    ($($arg:tt)+) => {
+        $crate::_incomplete_project!("Lambda Erasure", 5575, $($arg)+)
+    };
+}
+
 // END LARGE SCALE PROJECTS

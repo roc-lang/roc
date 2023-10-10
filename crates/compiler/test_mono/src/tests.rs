@@ -16,6 +16,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
+use roc_load::FunctionKind;
 use roc_load::LoadConfig;
 use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
@@ -104,6 +105,8 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
 
     let load_config = LoadConfig {
         target_info: TARGET_INFO,
+        // TODO parameterize
+        function_kind: FunctionKind::LambdaSet,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,
@@ -123,10 +126,10 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
         ))) => {
-            println!("{}", report);
+            println!("{report}");
             panic!();
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     };
 
     use roc_load::MonomorphizedModule;
@@ -146,7 +149,9 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, allow_type_errors: boo
         println!("Ignoring {} canonicalization problems", can_problems.len());
     }
 
-    assert!(allow_type_errors || type_problems.is_empty());
+    if !(allow_type_errors || type_problems.is_empty()) {
+        panic!("mono test has type problems:\n\n{:#?}", type_problems);
+    }
 
     let main_fn_symbol = exposed_to_host.top_level_values.keys().copied().next();
 
@@ -199,7 +204,7 @@ fn verify_procedures<'a>(
 
     let result = procs_string.join("\n");
 
-    let path = format!("generated/{}.txt", test_name);
+    let path = format!("generated/{test_name}.txt");
     std::fs::create_dir_all("generated").unwrap();
     std::fs::write(&path, result).unwrap();
 
@@ -1344,10 +1349,10 @@ fn specialize_ability_call() {
         r#"
         app "test" provides [main] to "./platform"
 
-        MHash has
-            hash : a -> U64 | a has MHash
+        MHash implements
+            hash : a -> U64 where a implements MHash
 
-        Id := U64 has [MHash {hash}]
+        Id := U64 implements [MHash {hash}]
 
         hash : Id -> U64
         hash = \@Id n -> n
@@ -1380,20 +1385,20 @@ fn encode() {
         r#"
         app "test" provides [myU8Bytes] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
-        MEncoding has
-          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+        MEncoding implements
+          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
-        Format has
-          u8 : U8 -> MEncoder fmt | fmt has Format
+        Format implements
+          u8 : U8 -> MEncoder fmt where fmt implements Format
 
 
-        Linear := {} has [Format {u8}]
+        Linear := {} implements [Format {u8}]
 
         u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 has [MEncoding {toEncoder}]
+        MyU8 := U8 implements [MEncoding {toEncoder}]
 
         toEncoder = \@MyU8 n -> u8 n
 
@@ -2326,32 +2331,6 @@ fn issue_4557() {
 }
 
 #[mono_test]
-fn nullable_wrapped_with_non_nullable_singleton_tags() {
-    indoc!(
-        r###"
-        app "test" provides [main] to "./platform"
-
-        F : [
-            A F,
-            B,
-            C,
-        ]
-
-        g : F -> Str
-        g = \f -> when f is
-                A _ -> "A"
-                B -> "B"
-                C -> "C"
-
-        main =
-            g (A (B))
-            |> Str.concat (g B)
-            |> Str.concat (g C)
-        "###
-    )
-}
-
-#[mono_test]
 fn nullable_wrapped_with_nullable_not_last_index() {
     indoc!(
         r###"
@@ -2600,20 +2579,20 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" provides [main] to "./platform"
 
-        MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+        MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
-        MEncoding has
-          toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+        MEncoding implements
+          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
-        Format has
-          u8 : {} -> MEncoder fmt | fmt has Format
-          str : {} -> MEncoder fmt | fmt has Format
-          tag : MEncoder fmt -> MEncoder fmt | fmt has Format
+        Format implements
+          u8 : {} -> MEncoder fmt where fmt implements Format
+          str : {} -> MEncoder fmt where fmt implements Format
+          tag : MEncoder fmt -> MEncoder fmt where fmt implements Format
 
-        Linear := {} has [Format {u8: lU8, str: lStr, tag: lTag}]
+        Linear := {} implements [Format {u8: lU8, str: lStr, tag: lTag}]
 
-        MU8 := U8 has [MEncoding {toEncoder: toEncoderU8}]
-        MStr := Str has [MEncoding {toEncoder: toEncoderStr}]
+        MU8 := U8 implements [MEncoding {toEncoder: toEncoderU8}]
+        MStr := Str implements [MEncoding {toEncoder: toEncoderStr}]
 
         Q a b := { a: a, b: b }
 
@@ -2663,7 +2642,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         r#"
         app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -2701,7 +2680,7 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
         r#"
         app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-        Q a b := { a: a, b: b } has [Encoding {toEncoder: toEncoderQ}]
+        Q a b := { a: a, b: b } implements [Encoding {toEncoder: toEncoderQ}]
 
         toEncoderQ =
             \@Q t -> Encode.custom \bytes, fmt ->
@@ -2873,11 +2852,11 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
         LinkedList : [Nil, Cons { first : Chain, rest : LinkedList }]
 
         main =
-            base : LinkedList 
+            base : LinkedList
             base = Nil
 
             walker : LinkedList, Chain -> LinkedList
-            walker = \rest, first -> Cons { first, rest } 
+            walker = \rest, first -> Cons { first, rest }
 
             list : List Chain
             list = []
@@ -3004,7 +2983,7 @@ fn rb_tree_fbip() {
                 if k < kx
                     then Node Red (ins l k v) kx vx r
                 else
-                    if k > kx 
+                    if k > kx
                         then Node Red l kx vx (ins r k v)
                         else Node Red l k v r
         "#
@@ -3017,10 +2996,10 @@ fn specialize_after_match() {
         r#"
         app "test" provides [main] to "./platform"
 
-        main = 
+        main =
             listA : LinkedList Str
             listA = Nil
-            
+
             listB : LinkedList Str
             listB = Nil
 
@@ -3033,13 +3012,13 @@ fn specialize_after_match() {
             Nil -> linkedListLength listB
             Cons a aa -> when listB is
                 Nil -> linkedListLength listA
-                Cons b bb -> 
+                Cons b bb ->
                     lengthA = (linkedListLength aa) + 1
                     lengthB = linkedListLength listB
                     if lengthA > lengthB
                         then lengthA
                         else lengthB
-        
+
         linkedListLength : LinkedList a -> Nat
         linkedListLength = \list -> when list is
             Nil -> 0
@@ -3088,7 +3067,7 @@ fn drop_specialize_after_jump() {
             v = "value"
             t = { left: { left: v, right: v }, right: v }
             tupleItem t
-        
+
         tupleItem = \t ->
             true = Bool.true
             l = t.left
@@ -3143,6 +3122,139 @@ fn dbg_str_followed_by_number() {
         main =
             dbg ""
             42
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_reverse() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        reverse : LinkedList a -> LinkedList a
+        reverse = \list -> reverseHelp Nil list
+
+        reverseHelp : LinkedList a, LinkedList a -> LinkedList a
+        reverseHelp = \accum, list ->
+            when list is
+                Nil -> accum
+                Cons first rest -> reverseHelp (Cons first accum) rest
+
+        main : LinkedList I64
+        main = reverse (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_map() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        map : (a -> b), LinkedList a -> LinkedList b
+        map = \f, list ->
+            when list is
+                Nil -> Nil
+                Cons x xs -> Cons (f x) (map f xs)
+
+        main : LinkedList I64
+        main = map (\x -> x + 1i64) (Cons 42 Nil)
+        "#
+    )
+}
+
+#[mono_test]
+fn linked_list_filter() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        LinkedList a : [Nil, Cons a (LinkedList a)]
+
+        filter : LinkedList a, (a -> Bool) -> LinkedList a
+        filter = \list, predicate ->
+            when list is
+                Nil -> Nil
+                Cons x xs ->
+                    if predicate x then
+                        Cons x (filter xs predicate)
+                    else
+                        filter xs predicate
+
+
+        main : LinkedList I64
+        main = filter (Cons 1 (Cons 2 Nil)) Num.isEven
+        "#
+    )
+}
+
+#[mono_test]
+fn capture_void_layout_task() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Fx a : {} -> a
+
+        Task ok err : Fx (Result ok err)
+
+        succeed : ok -> Task ok *
+        succeed = \ok -> \{} -> Ok ok
+
+        after : Fx a, (a -> Fx b) -> Fx b
+        after = \fx, toNext ->
+            afterInner = \{} ->
+                fxOut = fx {}
+                next = toNext fxOut
+                next {}
+
+            afterInner
+
+        await : Task a err, (a -> Task b err) -> Task b err
+        await = \fx, toNext ->
+            inner = after fx \result ->
+                when result is
+                    Ok a ->
+                        bFx = toNext a
+                        bFx
+                    Err e -> (\{} -> Err e)
+            inner
+
+        forEach : List a, (a -> Task {} err) -> Task {} err
+        forEach = \list, fromElem ->
+            List.walk list (succeed {}) \task, elem ->
+                await task \{} -> fromElem elem
+
+        main : Task {} []
+        main =
+            forEach [] \_ -> succeed {}
+        "#
+    )
+}
+
+#[mono_test]
+fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Ast : [ A, B, C Str Ast ]
+
+        main : Str
+        main =
+            x : Ast
+            x = A
+
+            when x is
+                A -> "A"
+                B -> "B"
+                C _ _ -> "C"
         "#
     )
 }

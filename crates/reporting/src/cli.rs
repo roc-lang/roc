@@ -133,13 +133,13 @@ pub fn report_problems(
         problems_reported = warnings.len();
 
         for warning in warnings.iter() {
-            println!("\n{}\n", warning);
+            println!("\n{warning}\n");
         }
     } else {
         problems_reported = errors.len();
 
         for error in errors.iter() {
-            println!("\n{}\n", error);
+            println!("\n{error}\n");
         }
     }
 

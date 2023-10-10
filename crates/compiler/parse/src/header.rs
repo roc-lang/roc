@@ -2,6 +2,7 @@ use crate::ast::{
     Collection, CommentOrNewline, Malformed, Spaced, Spaces, StrLiteral, TypeAnnotation,
 };
 use crate::blankspace::space0_e;
+use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
@@ -300,7 +301,7 @@ pub struct PackageEntry<'a> {
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
-    map!(
+    map_with_arena!(
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
@@ -308,18 +309,25 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
         and!(
             optional(and!(
                 skip_second!(
-                    specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
+                    and!(
+                        specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
+                        space0_e(EPackageEntry::IndentPackage)
+                    ),
                     word1(b':', EPackageEntry::Colon)
                 ),
                 space0_e(EPackageEntry::IndentPackage)
             )),
             loc!(specialize(EPackageEntry::BadPackage, package_name()))
         ),
-        move |(opt_shorthand, package_or_path)| {
+        move |arena, (opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
-                Some((shorthand, spaces_after_shorthand)) => PackageEntry {
+                Some(((shorthand, spaces_before_colon), spaces_after_colon)) => PackageEntry {
                     shorthand,
-                    spaces_after_shorthand,
+                    spaces_after_shorthand: merge_spaces(
+                        arena,
+                        spaces_before_colon,
+                        spaces_after_colon,
+                    ),
                     package_name: package_or_path,
                 },
                 None => PackageEntry {

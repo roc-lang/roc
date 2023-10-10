@@ -241,7 +241,7 @@ fn is_exhaustive(matrix: &RefPatternMatrix, n: usize) -> PatternMatrix {
                     .collect();
                 let rest: Vec<Vec<Pattern>> = is_exhaustive(&new_matrix, n - 1);
 
-                let last: _ = alt_list
+                let last = alt_list
                     .iter()
                     .filter_map(|r| is_missing(alts.clone(), &ctors, r));
 

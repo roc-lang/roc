@@ -21,14 +21,12 @@ default = ["target-aarch64", "target-x86_64", "target-wasm32"]
 i386-cli-run = ["target-x86"]
 wasm32-cli-run = ["target-wasm32", "run-wasm32"]
 
-editor = ["roc_editor"]
-
 run-wasm32 = ["roc_wasm_interp"]
 
 # Compiling for a different target than the current machine can cause linker errors.
 target-aarch64 = ["roc_build/target-aarch64", "roc_repl_cli/target-aarch64"]
 target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
-target-wasm32 = ["roc_build/target-wasm32", "roc_repl_cli/target-wasm32"]
+target-wasm32 = ["roc_build/target-wasm32"]
 target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 
@@ -43,7 +41,6 @@ roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
 roc_docs = { path = "../docs" }
-roc_editor = { path = "../editor", optional = true }
 roc_error_macros = { path = "../error_macros" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_gen_llvm = { path = "../compiler/gen_llvm" }

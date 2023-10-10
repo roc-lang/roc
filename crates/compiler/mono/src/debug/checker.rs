@@ -6,12 +6,12 @@ use roc_module::symbol::Symbol;
 
 use crate::{
     ir::{
-        Call, CallSpecId, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
-        ModifyRc, Param, Proc, ProcLayout, Stmt,
+        Call, CallSpecId, CallType, ErasedField, Expr, HigherOrderLowLevel, JoinPointId,
+        ListLiteralElement, ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
-        Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
-        UnionLayout,
+        Builtin, FunctionPointer, InLayout, Layout, LayoutInterner, LayoutRepr, STLayoutInterner,
+        TagIdIntType, UnionLayout,
     },
 };
 
@@ -27,6 +27,10 @@ pub enum UseKind {
     SwitchCond,
     ExpectCond,
     ExpectLookup,
+    ErasedMake(ErasedField),
+    Erased,
+    FunctionPointer,
+    Alloca,
 }
 
 pub enum ProblemKind<'a> {
@@ -69,6 +73,9 @@ pub enum ProblemKind<'a> {
         symbol: Symbol,
         proc_layout: ProcLayout<'a>,
         similar: Vec<ProcLayout<'a>>,
+    },
+    PtrToUndefinedProc {
+        symbol: Symbol,
     },
     DuplicateCallSpecId {
         old_call_line: usize,
@@ -113,6 +120,24 @@ pub enum ProblemKind<'a> {
     CreateTagPayloadMismatch {
         num_needed: usize,
         num_given: usize,
+    },
+    ErasedMakeValueNotBoxed {
+        symbol: Symbol,
+        def_layout: InLayout<'a>,
+        def_line: usize,
+    },
+    ErasedMakeCalleeNotFunctionPointer {
+        symbol: Symbol,
+        def_layout: InLayout<'a>,
+        def_line: usize,
+    },
+    ErasedLoadValueNotBoxed {
+        symbol: Symbol,
+        target_layout: InLayout<'a>,
+    },
+    ErasedLoadCalleeNotFunctionPointer {
+        symbol: Symbol,
+        target_layout: InLayout<'a>,
     },
 }
 
@@ -271,7 +296,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
         match body {
             Stmt::Let(x, e, x_layout, rest) => {
-                if let Some(e_layout) = self.check_expr(e) {
+                if let Some(e_layout) = self.check_expr(e, *x_layout) {
                     if self.not_equiv(e_layout, *x_layout) {
                         self.problem(ProblemKind::SymbolDefMismatch {
                             symbol: *x,
@@ -350,12 +375,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     self.problem(ProblemKind::RedefinedJoinPoint { id, old_line })
                 }
                 self.in_scope(|ctx| {
-                    for Param {
-                        symbol,
-                        layout,
-                        ownership: _,
-                    } in parameters
-                    {
+                    for Param { symbol, layout } in parameters {
                         ctx.insert(*symbol, *layout);
                     }
                     ctx.check_stmt(body)
@@ -373,11 +393,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         });
                     }
                     for (arg, param) in symbols.iter().zip(parameters.iter()) {
-                        let Param {
-                            symbol: _,
-                            ownership: _,
-                            layout,
-                        } = param;
+                        let Param { symbol: _, layout } = param;
                         self.check_sym_layout(*arg, *layout, UseKind::JumpArg);
                     }
                 } else {
@@ -388,7 +404,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
-    fn check_expr(&mut self, e: &Expr<'a>) -> Option<InLayout<'a>> {
+    fn check_expr(&mut self, e: &Expr<'a>, target_layout: InLayout<'a>) -> Option<InLayout<'a>> {
         match e {
             Expr::Literal(_) => None,
             Expr::NullPointer => None,
@@ -397,11 +413,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_layout,
                 tag_id,
                 arguments,
+                reuse,
             } => {
                 let interned_layout = self
                     .interner
                     .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
+
+                if let Some(reuse_token) = reuse {
+                    self.check_sym_layout(reuse_token.symbol, interned_layout, UseKind::TagReuse);
+                }
+
                 self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
+
                 Some(interned_layout)
             }
             Expr::Struct(syms) => {
@@ -429,6 +452,14 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
                 ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
             }),
+            &Expr::UnionFieldPtrAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
+                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, tag_id, index)
+            }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {
                     match elem {
@@ -449,37 +480,39 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 // TODO don't know what the element layout is
                 None
             }
-            &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
-                let inner = layout;
-                Some(
-                    ctx.interner
-                        .insert_direct_no_semantic(LayoutRepr::Boxed(inner)),
-                )
-            }),
-            &Expr::ExprUnbox { symbol } => self.with_sym_layout(symbol, |ctx, def_line, layout| {
-                let layout = ctx.resolve(layout);
-                match ctx.interner.get_repr(layout) {
-                    LayoutRepr::Boxed(inner) => Some(inner),
-                    _ => {
-                        ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
-                        None
+            &Expr::ErasedMake { value, callee } => Some(self.check_erased_make(value, callee)),
+            &Expr::ErasedLoad { symbol, field } => {
+                Some(self.check_erased_load(symbol, field, target_layout))
+            }
+            &Expr::FunctionPointer { lambda_name } => {
+                let lambda_symbol = lambda_name.name();
+                let proc = self.procs.iter().find(|((name, proc), _)| {
+                    *name == lambda_symbol && proc.niche == lambda_name.niche()
+                });
+                match proc {
+                    None => {
+                        self.problem(ProblemKind::PtrToUndefinedProc {
+                            symbol: lambda_symbol,
+                        });
+                        Some(target_layout)
+                    }
+                    Some(((_, proc_layout), _)) => {
+                        let ProcLayout {
+                            arguments, result, ..
+                        } = proc_layout;
+
+                        let fn_ptr =
+                            self.interner
+                                .insert_direct_no_semantic(LayoutRepr::FunctionPointer(
+                                    FunctionPointer {
+                                        args: arguments,
+                                        ret: *result,
+                                    },
+                                ));
+
+                        Some(fn_ptr)
                     }
                 }
-            }),
-            &Expr::Reuse {
-                symbol,
-                update_tag_id: _,
-                update_mode: _,
-                tag_layout,
-                tag_id: _,
-                arguments: _,
-            } => {
-                let union = self
-                    .interner
-                    .insert_direct_no_semantic(LayoutRepr::Union(tag_layout));
-                self.check_sym_layout(symbol, union, UseKind::TagReuse);
-                // TODO also check update arguments
-                Some(union)
             }
             &Expr::Reset {
                 symbol,
@@ -490,6 +523,17 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 update_mode: _,
             } => {
                 self.check_sym_exists(symbol);
+                None
+            }
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => {
+                if let Some(initializer) = initializer {
+                    self.check_sym_exists(*initializer);
+                    self.check_sym_layout(*initializer, *element_layout, UseKind::Alloca);
+                }
+
                 None
             }
             Expr::RuntimeErrorFunction(_) => None,
@@ -566,6 +610,58 @@ impl<'a, 'r> Ctx<'a, 'r> {
         })
     }
 
+    fn check_union_field_ptr_at_index(
+        &mut self,
+        structure: Symbol,
+        interned_union_layout: InLayout<'a>,
+        union_layout: UnionLayout<'a>,
+        tag_id: u16,
+        index: u64,
+    ) -> Option<InLayout<'a>> {
+        let union = self
+            .interner
+            .insert_direct_no_semantic(LayoutRepr::Union(union_layout));
+
+        let field_ptr_layout = match get_tag_id_payloads(union_layout, tag_id) {
+            TagPayloads::IdNotInUnion => None,
+            TagPayloads::Payloads(payloads) => payloads.get(index as usize).map(|field_layout| {
+                self.interner
+                    .insert_direct_no_semantic(LayoutRepr::Ptr(*field_layout))
+            }),
+        };
+
+        self.with_sym_layout(structure, |ctx, def_line, _layout| {
+            ctx.check_sym_layout(structure, union, UseKind::TagExpr);
+
+            match get_tag_id_payloads(union_layout, tag_id) {
+                TagPayloads::IdNotInUnion => {
+                    ctx.problem(ProblemKind::IndexingTagIdNotInUnion {
+                        structure,
+                        def_line,
+                        tag_id,
+                        union_layout: interned_union_layout,
+                    });
+                    None
+                }
+                TagPayloads::Payloads(payloads) => {
+                    if field_ptr_layout.is_none() {
+                        ctx.problem(ProblemKind::TagUnionStructIndexOOB {
+                            structure,
+                            def_line,
+                            tag_id,
+                            index,
+                            size: payloads.len(),
+                        });
+
+                        None
+                    } else {
+                        field_ptr_layout
+                    }
+                }
+            }
+        })
+    }
+
     fn check_call(&mut self, call: &Call<'a>) -> Option<InLayout<'a>> {
         let Call {
             call_type,
@@ -604,6 +700,23 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     self.call_spec_ids.insert(*specialization_id, self.line)
                 {
                     self.problem(ProblemKind::DuplicateCallSpecId { old_call_line });
+                }
+                Some(*ret_layout)
+            }
+            CallType::ByPointer {
+                pointer,
+                ret_layout,
+                arg_layouts,
+            } => {
+                let expected_layout =
+                    self.interner
+                        .insert_direct_no_semantic(LayoutRepr::FunctionPointer(FunctionPointer {
+                            args: arg_layouts,
+                            ret: *ret_layout,
+                        }));
+                self.check_sym_layout(*pointer, expected_layout, UseKind::FunctionPointer);
+                for (arg, wanted_layout) in arguments.iter().zip(arg_layouts.iter()) {
+                    self.check_sym_layout(*arg, *wanted_layout, UseKind::CallArg);
                 }
                 Some(*ret_layout)
             }
@@ -656,12 +769,92 @@ impl<'a, 'r> Ctx<'a, 'r> {
     }
 
     fn check_modify_rc(&mut self, rc: ModifyRc) {
+        use ModifyRc::*;
+
         match rc {
-            ModifyRc::Inc(sym, _) | ModifyRc::Dec(sym) | ModifyRc::DecRef(sym) => {
+            Inc(sym, _) | Dec(sym) | DecRef(sym) | Free(sym) => {
                 // TODO: also check that sym layout needs refcounting
                 self.check_sym_exists(sym);
             }
         }
+    }
+
+    fn check_erased_make(&mut self, value: Option<Symbol>, callee: Symbol) -> InLayout<'a> {
+        if let Some(value) = value {
+            self.with_sym_layout(value, |this, def_line, layout| {
+                let repr = this.interner.get_repr(layout);
+                if !matches!(
+                    repr,
+                    LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+                ) {
+                    this.problem(ProblemKind::ErasedMakeValueNotBoxed {
+                        symbol: value,
+                        def_layout: layout,
+                        def_line,
+                    });
+                }
+
+                Option::<()>::None
+            });
+        }
+        self.with_sym_layout(callee, |this, def_line, layout| {
+            let repr = this.interner.get_repr(layout);
+            if !matches!(repr, LayoutRepr::FunctionPointer(_)) {
+                this.problem(ProblemKind::ErasedMakeCalleeNotFunctionPointer {
+                    symbol: callee,
+                    def_layout: layout,
+                    def_line,
+                });
+            }
+
+            Option::<()>::None
+        });
+
+        Layout::ERASED
+    }
+
+    fn check_erased_load(
+        &mut self,
+        symbol: Symbol,
+        field: ErasedField,
+        target_layout: InLayout<'a>,
+    ) -> InLayout<'a> {
+        self.check_sym_layout(symbol, Layout::ERASED, UseKind::Erased);
+
+        match field {
+            ErasedField::Value => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(
+                    repr,
+                    LayoutRepr::Union(UnionLayout::NullableUnwrapped { .. })
+                ) {
+                    self.problem(ProblemKind::ErasedLoadValueNotBoxed {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+            ErasedField::ValuePtr => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::Ptr(_)) {
+                    self.problem(ProblemKind::ErasedLoadValueNotBoxed {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+            ErasedField::Callee => {
+                let repr = self.interner.get_repr(target_layout);
+                if !matches!(repr, LayoutRepr::FunctionPointer(_)) {
+                    self.problem(ProblemKind::ErasedLoadCalleeNotFunctionPointer {
+                        symbol,
+                        target_layout,
+                    });
+                }
+            }
+        }
+
+        target_layout
     }
 }
 
@@ -720,7 +913,7 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
             nullable_id,
             other_fields,
         } => {
-            if tag_id == nullable_id as _ {
+            if tag_id == nullable_id as u16 {
                 TagPayloads::Payloads(&[])
             } else {
                 check_tag_id_oob!(2);

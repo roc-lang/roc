@@ -1,42 +1,42 @@
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.522 : U8 = GetTagId #Attr.3;
-    joinpoint List.523 List.521:
-        ret List.521;
+    let List.546 : U8 = GetTagId #Attr.3;
+    joinpoint List.547 List.545:
+        ret List.545;
     in
-    switch List.522:
+    switch List.546:
         case 0:
-            let List.524 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
+            let List.548 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.4 #Attr.3;
             decref #Attr.2;
-            jump List.523 List.524;
+            jump List.547 List.548;
     
         case 1:
-            let List.525 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
+            let List.549 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.6 #Attr.3;
             decref #Attr.2;
-            jump List.523 List.525;
+            jump List.547 List.549;
     
         default:
-            let List.526 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
+            let List.550 : List U8 = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.8 #Attr.3;
             decref #Attr.2;
-            jump List.523 List.526;
+            jump List.547 List.550;
     
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.289 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.289;
+    let Num.293 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.293;
 
 procedure Test.4 (Test.5, #Attr.12):
-    let Test.1 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.15 : U8 = CallByName Num.19 Test.5 Test.1;
+    let Test.16 : U8 = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let Test.15 : U8 = CallByName Num.19 Test.5 Test.16;
     ret Test.15;
 
 procedure Test.6 (Test.7, #Attr.12):
-    let Test.2 : U8 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.17 : U8 = CallByName Num.19 Test.7 Test.2;
-    ret Test.17;
+    let Test.19 : U8 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.18 : U8 = CallByName Num.19 Test.7 Test.19;
+    ret Test.18;
 
 procedure Test.8 (Test.9):
-    let Test.19 : U8 = CallByName Num.19 Test.9 Test.9;
-    ret Test.19;
+    let Test.21 : U8 = CallByName Num.19 Test.9 Test.9;
+    ret Test.21;
 
 procedure Test.0 ():
     let Test.1 : U8 = 1i64;
@@ -47,21 +47,21 @@ procedure Test.0 ():
         ret Test.10;
     in
     let Test.12 : Str = "";
-    let Test.22 : Str = "A";
-    let Test.23 : Int1 = lowlevel Eq Test.22 Test.12;
-    dec Test.22;
-    if Test.23 then
+    let Test.24 : Str = "A";
+    let Test.25 : Int1 = lowlevel Eq Test.24 Test.12;
+    dec Test.24;
+    if Test.25 then
         dec Test.12;
         let Test.14 : [C U8, C U8, C ] = TagId(0) Test.1;
         jump Test.13 Test.14;
     else
-        let Test.20 : Str = "B";
-        let Test.21 : Int1 = lowlevel Eq Test.20 Test.12;
-        dec Test.20;
+        let Test.22 : Str = "B";
+        let Test.23 : Int1 = lowlevel Eq Test.22 Test.12;
         dec Test.12;
-        if Test.21 then
-            let Test.16 : [C U8, C U8, C ] = TagId(1) Test.2;
-            jump Test.13 Test.16;
+        dec Test.22;
+        if Test.23 then
+            let Test.17 : [C U8, C U8, C ] = TagId(1) Test.2;
+            jump Test.13 Test.17;
         else
-            let Test.18 : [C U8, C U8, C ] = TagId(2) ;
-            jump Test.13 Test.18;
+            let Test.20 : [C U8, C U8, C ] = TagId(2) ;
+            jump Test.13 Test.20;

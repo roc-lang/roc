@@ -5,7 +5,7 @@ use indoc::indoc;
 #[cfg(target_os = "linux")]
 static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
-#[cfg(all(target_os = "linux"))]
+#[cfg(target_os = "linux")]
 fn build_host() {
     use roc_build::program::build_and_preprocess_host;
     use roc_linker::preprocessed_host_filename;
@@ -122,10 +122,10 @@ fn valgrind_test_linux(source: &str) {
         Err(roc_build::program::BuildFileError::LoadingProblem(
             roc_load::LoadingProblem::FormattedReport(report),
         )) => {
-            eprintln!("{}", report);
+            eprintln!("{report}");
             panic!("");
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     }
 
     drop(temp_dir)
@@ -180,7 +180,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                     what: _,
                     xwhat,
                 } = error;
-                println!("Valgrind Error: {}\n", kind);
+                println!("Valgrind Error: {kind}\n");
 
                 if let Some(ValgrindErrorXWhat {
                     text,
@@ -188,14 +188,14 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                     leakedblocks: _,
                 }) = xwhat
                 {
-                    println!("    {}", text);
+                    println!("    {text}");
                 }
             }
             panic!("Valgrind found memory errors");
         }
     } else {
         let exit_code = match valgrind_out.status.code() {
-            Some(code) => format!("exit code {}", code),
+            Some(code) => format!("exit code {code}"),
             None => "no exit code".to_string(),
         };
 
@@ -286,12 +286,12 @@ fn list_concat_empty_list_zero_sized_type() {
 }
 
 #[test]
-fn str_trim_right_capacity() {
+fn str_trim_end_capacity() {
     valgrind_test(indoc!(
         r#"
         (
             str = "a" |> Str.reserve 30
-            out = str |> Str.trimRight
+            out = str |> Str.trimEnd
 
             if out == "" then "A" else "B"
         )
@@ -300,12 +300,12 @@ fn str_trim_right_capacity() {
 }
 
 #[test]
-fn str_trim_left_capacity() {
+fn str_trim_start_capacity() {
     valgrind_test(indoc!(
         r#"
         (
             str = "    a" |> Str.reserve 30
-            out = str |> Str.trimLeft
+            out = str |> Str.trimStart
 
             if out == "" then "A" else "B"
         )

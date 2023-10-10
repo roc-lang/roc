@@ -67,11 +67,10 @@ impl MakeSpecializationsDependents {
         let entry = self.entry(module_id);
         debug_assert!(
             entry.succ.is_empty(),
-            "already added successors for module '{:?}'",
-            module_id
+            "already added successors for module '{module_id:?}'"
         );
 
-        entry.succ.extend(succ.into_iter());
+        entry.succ.extend(succ);
 
         // The module for derives implicitly depends on every other module
         entry.succ.insert(ModuleId::DERIVED_GEN);
@@ -332,16 +331,13 @@ impl<'a> Dependencies<'a> {
                     None | Some(Status::NotStarted) | Some(Status::Pending) => {
                         // this shorthand is not resolved, add a dependency
                         {
-                            let entry = self
-                                .waiting_for
-                                .entry(next_step.clone())
-                                .or_insert_with(Default::default);
+                            let entry = self.waiting_for.entry(next_step.clone()).or_default();
 
                             entry.insert(job.clone());
                         }
 
                         {
-                            let entry = self.notifies.entry(job).or_insert_with(Default::default);
+                            let entry = self.notifies.entry(job).or_default();
 
                             entry.insert(next_step);
                         }
@@ -516,8 +512,7 @@ impl<'a> Dependencies<'a> {
         debug_assert_eq!(
             make_specializations_dependents.0.len(),
             default_make_specializations_dependents_len,
-            "more modules were added to the graph: {:?}",
-            make_specializations_dependents
+            "more modules were added to the graph: {make_specializations_dependents:?}"
         );
 
         output
@@ -567,8 +562,7 @@ impl<'a> Dependencies<'a> {
         debug_assert_eq!(
             make_specializations_dependents.0.len(),
             default_make_specializations_dependents_len,
-            "more modules were added to the graph: {:?}",
-            make_specializations_dependents
+            "more modules were added to the graph: {make_specializations_dependents:?}"
         );
 
         output

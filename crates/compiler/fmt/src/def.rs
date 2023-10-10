@@ -117,13 +117,13 @@ impl<'a> Formattable for TypeDef<'a> {
                         buf,
                         Parens::NotNeeded,
                         Newlines::from_bool(make_multiline),
-                        indent + 1 + INDENT,
+                        indent + INDENT,
                     );
                 }
             }
             Ability {
                 header: TypeHeader { name, vars },
-                loc_has: _,
+                loc_implements: _,
                 members,
             } => {
                 buf.indent(indent);
@@ -133,8 +133,8 @@ impl<'a> Formattable for TypeDef<'a> {
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                     buf.indent(indent);
                 }
-
-                buf.push_str(" has");
+                buf.spaces(1);
+                buf.push_str(roc_parse::keyword::IMPLEMENTS);
 
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);

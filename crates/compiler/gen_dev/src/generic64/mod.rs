@@ -5,7 +5,7 @@ use crate::{
 use bumpalo::collections::{CollectIn, Vec};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::{CallerProc, CodeGenHelp, HelperOp};
 use roc_mono::ir::{
@@ -30,12 +30,15 @@ use storage::{RegStorage, StorageManager};
 
 // TODO: on all number functions double check and deal with over/underflow.
 
+// NOTE: must fit in 27 bits and aligned to 4 for aarch64
+const JUMP_PLACEHOLDER: i32 = 0x0011_1100;
+
 #[derive(Debug, Clone, Copy)]
 pub enum RegisterWidth {
-    W8,
-    W16,
-    W32,
-    W64,
+    W8 = 0b00,
+    W16 = 0b01,
+    W32 = 0b10,
+    W64 = 0b11,
 }
 
 impl RegisterWidth {
@@ -134,6 +137,10 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         sym: &Symbol,
         layout: &InLayout<'a>,
     );
+
+    fn setjmp(buf: &mut Vec<'_, u8>);
+    fn longjmp(buf: &mut Vec<'_, u8>);
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>);
 }
 
 pub enum CompareOperation {
@@ -238,10 +245,37 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: GeneralReg,
     );
 
+    fn data_pointer(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: GeneralReg,
+    );
+
     /// Jumps by an offset of offset bytes unconditionally.
     /// It should always generate the same number of bytes to enable replacement if offset changes.
     /// It returns the base offset to calculate the jump from (generally the instruction after the jump).
     fn jmp_imm32(buf: &mut Vec<'_, u8>, offset: i32) -> usize;
+
+    /// Updates a jump instruction to a new offset and returns the number of bytes written.
+    fn update_jmp_imm32_offset(
+        buf: &mut Vec<'_, u8>,
+        jmp_location: u64,
+        base_offset: u64,
+        target_offset: u64,
+    ) {
+        let old_buf_len = buf.len();
+
+        // write the jmp at the back of buf
+        let jmp_offset = target_offset as i32 - base_offset as i32;
+        Self::jmp_imm32(buf, jmp_offset);
+
+        // move the new jmp instruction into position
+        buf.copy_within(old_buf_len.., jmp_location as usize);
+
+        // wipe the jmp we created at the end
+        buf.truncate(old_buf_len)
+    }
 
     fn tail_call(buf: &mut Vec<'_, u8>) -> u64;
 
@@ -276,6 +310,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     fn mov_reg32_freg32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg);
     fn mov_reg64_freg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: FloatReg);
+
+    fn mov_freg32_reg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
+    fn mov_freg64_reg64(buf: &mut Vec<'_, u8>, dst: FloatReg, src: GeneralReg);
 
     fn mov_reg_reg(
         buf: &mut Vec<'_, u8>,
@@ -315,38 +352,90 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
-    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
-    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
+    fn mov_reg_base32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+    );
+
+    fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W64, dst, offset)
+    }
+    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W32, dst, offset)
+    }
+    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W16, dst, offset)
+    }
+    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32) {
+        Self::mov_reg_base32(buf, RegisterWidth::W8, dst, offset)
+    }
 
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
+    fn mov_base32_freg32(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
 
-    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
-    fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
-    fn mov_base32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
-    fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg);
+    fn mov_base32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        offset: i32,
+        src: GeneralReg,
+    );
+
+    fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W64, offset, src)
+    }
+    fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W32, offset, src)
+    }
+    fn mov_base32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W16, offset, src)
+    }
+    fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: GeneralReg) {
+        Self::mov_base32_reg(buf, RegisterWidth::W8, offset, src)
+    }
 
     // move from memory (a pointer) to register
+    fn mov_reg_mem_offset32(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+
     fn mov_reg64_mem64_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W64, dst, src, offset)
+    }
     fn mov_reg32_mem32_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W32, dst, src, offset)
+    }
     fn mov_reg16_mem16_offset32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src: GeneralReg,
         offset: i32,
-    );
-    fn mov_reg8_mem8_offset32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg, offset: i32);
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W16, dst, src, offset)
+    }
+    fn mov_reg8_mem8_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    ) {
+        Self::mov_reg_mem_offset32(buf, RegisterWidth::W8, dst, src, offset)
+    }
 
     fn mov_freg64_mem64_offset32(
         buf: &mut Vec<'_, u8>,
@@ -362,25 +451,46 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
 
     // move from register to memory
+    fn mov_mem_offset32_reg(
+        buf: &mut Vec<'_, u8>,
+        register_width: RegisterWidth,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    );
+
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W64, dst, offset, src)
+    }
     fn mov_mem32_offset32_reg32(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W32, dst, offset, src)
+    }
     fn mov_mem16_offset32_reg16(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         offset: i32,
         src: GeneralReg,
-    );
-    fn mov_mem8_offset32_reg8(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, src: GeneralReg);
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W16, dst, offset, src)
+    }
+    fn mov_mem8_offset32_reg8(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    ) {
+        Self::mov_mem_offset32_reg(buf, RegisterWidth::W8, dst, offset, src)
+    }
 
     fn movesd_mem64_offset32_freg64(
         buf: &mut Vec<'_, u8>,
@@ -405,6 +515,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         offset: i32,
     );
 
+    fn mov_mem64_offset32_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: FloatReg,
+    );
     fn mov_freg64_stack32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
     fn mov_reg64_stack32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32);
     fn mov_stack32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: FloatReg);
@@ -713,6 +829,12 @@ impl<
     fn interner(&self) -> &STLayoutInterner<'a> {
         self.layout_interner
     }
+    fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
+        &mut self.relocs
+    }
+    fn target_info(&self) -> TargetInfo {
+        self.storage_manager.target_info
+    }
     fn module_interns_helpers_mut(
         &mut self,
     ) -> (
@@ -813,7 +935,6 @@ impl<
 
         // Update jumps to returns.
         let ret_offset = self.buf.len() - end_jmp_size;
-        let mut tmp = bumpalo::vec![in self.env.arena];
         for reloc in old_relocs
             .iter()
             .filter(|reloc| matches!(reloc, Relocation::JmpToReturn { .. }))
@@ -825,7 +946,12 @@ impl<
             } = reloc
             {
                 if *inst_loc as usize + *inst_size as usize != self.buf.len() {
-                    self.update_jmp_imm32_offset(&mut tmp, *inst_loc, *offset, ret_offset as u64);
+                    ASM::update_jmp_imm32_offset(
+                        &mut self.buf,
+                        *inst_loc,
+                        *offset,
+                        ret_offset as u64,
+                    );
                 }
             }
         }
@@ -886,10 +1012,42 @@ impl<
         (out.into_bump_slice(), offset)
     }
 
+    fn build_roc_setjmp(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::setjmp(&mut out);
+
+        out.into_bump_slice()
+    }
+
+    fn build_roc_longjmp(&mut self) -> &'a [u8] {
+        let mut out = bumpalo::vec![in self.env.arena];
+
+        CC::longjmp(&mut out);
+
+        out.into_bump_slice()
+    }
+
+    fn build_roc_panic(&mut self) -> (&'a [u8], Vec<'a, Relocation>) {
+        let mut out = bumpalo::vec![in self.env.arena];
+        let mut relocs = bumpalo::vec![in self.env.arena];
+
+        CC::roc_panic(&mut out, &mut relocs);
+
+        (out.into_bump_slice(), relocs)
+    }
+
     fn build_fn_pointer(&mut self, dst: &Symbol, fn_name: String) {
         let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
         ASM::function_pointer(&mut self.buf, &mut self.relocs, fn_name, reg)
+    }
+
+    fn build_data_pointer(&mut self, dst: &Symbol, data_name: String) {
+        let reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+
+        // now, this gives a pointer to the value
+        ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg);
     }
 
     fn build_fn_call(
@@ -935,8 +1093,13 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            LayoutRepr::I128 | LayoutRepr::U128 => {
-                let offset = self.storage_manager.claim_stack_area(dst, 16);
+            // Note that on windows there is only 1 general return register so we can't use this optimisation
+            LayoutRepr::I128 | LayoutRepr::U128 if CC::GENERAL_RETURN_REGS.len() > 1 => {
+                let offset = self.storage_manager.claim_stack_area_layout(
+                    self.layout_interner,
+                    *dst,
+                    Layout::U128,
+                );
 
                 ASM::mov_base32_reg64(&mut self.buf, offset, CC::GENERAL_RETURN_REGS[0]);
                 ASM::mov_base32_reg64(&mut self.buf, offset + 8, CC::GENERAL_RETURN_REGS[1]);
@@ -1015,7 +1178,7 @@ impl<
             // Build unconditional jump to the end of this switch.
             // Since we don't know the offset yet, set it to 0 and overwrite later.
             let jmp_location = self.buf.len();
-            let jmp_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+            let jmp_offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER);
             ret_jumps.push((jmp_location, jmp_offset));
 
             // Overwrite the original jne with the correct offset.
@@ -1047,8 +1210,8 @@ impl<
         // Update all return jumps to jump past the default case.
         let ret_offset = self.buf.len();
         for (jmp_location, start_offset) in ret_jumps.into_iter() {
-            self.update_jmp_imm32_offset(
-                &mut tmp,
+            ASM::update_jmp_imm32_offset(
+                &mut self.buf,
                 jmp_location as u64,
                 start_offset as u64,
                 ret_offset as u64,
@@ -1085,14 +1248,16 @@ impl<
         self.build_stmt(layout_ids, body, ret_layout);
 
         // Overwrite the all jumps to the joinpoint with the correct offset.
-        let mut tmp = bumpalo::vec![in self.env.arena];
         for (jmp_location, start_offset) in self
             .join_map
             .remove(id)
             .unwrap_or_else(|| internal_error!("join point not defined"))
         {
-            tmp.clear();
-            self.update_jmp_imm32_offset(&mut tmp, jmp_location, start_offset, join_location);
+            // join_location: byte offset where the body of the joinpoint starts
+            // jmp_location: byte offset where the jump instruction starts
+            // start_offset: byte offset where the jump instruction ends
+
+            ASM::update_jmp_imm32_offset(&mut self.buf, jmp_location, start_offset, join_location);
         }
     }
 
@@ -1107,7 +1272,7 @@ impl<
             .setup_jump(self.layout_interner, &mut self.buf, id, args, arg_layouts);
 
         let jmp_location = self.buf.len();
-        let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
+        let start_offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER);
 
         if let Some(vec) = self.join_map.get_mut(id) {
             vec.push((jmp_location as u64, start_offset as u64))
@@ -1156,6 +1321,15 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_ADD_OR_PANIC.to_string(),
+                    &[*src1, *src2],
+                    &[Layout::DEC, Layout::DEC],
+                    &Layout::DEC,
+                );
+            }
             x => todo!("NumAdd: layout, {:?}", x),
         }
     }
@@ -1200,51 +1374,20 @@ impl<
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
     ) {
-        use Builtin::Int;
+        let function_name = match self.interner().get_repr(*num_layout) {
+            LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_ADD_CHECKED_INT[width],
+            LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_ADD_CHECKED_FLOAT[width],
+            LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_ADD_WITH_OVERFLOW,
+            x => internal_error!("NumAddChecked is not defined for {:?}", x),
+        };
 
-        let buf = &mut self.buf;
-
-        let struct_size = self.layout_interner.stack_size(*return_layout);
-
-        let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
-
-        match self.layout_interner.get_repr(*num_layout) {
-            LayoutRepr::Builtin(Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
-                let dst_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP);
-
-                let overflow_reg = self
-                    .storage_manager
-                    .claim_general_reg(buf, &Symbol::DEV_TMP2);
-
-                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
-                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
-
-                ASM::add_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
-                ASM::set_if_overflow(buf, overflow_reg);
-
-                ASM::mov_base32_reg64(buf, base_offset, dst_reg);
-                ASM::mov_base32_reg64(buf, base_offset + 8, overflow_reg);
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            LayoutRepr::Builtin(Int(
-                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
-            )) => {
-                todo!("addChecked for unsigned integers")
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                todo!("addChecked for f64")
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                todo!("addChecked for f32")
-            }
-            x => todo!("NumAdd: layout, {:?}", x),
-        }
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
     }
 
     fn build_num_sub_checked(
@@ -1349,6 +1492,62 @@ impl<
         }
     }
 
+    fn build_num_mul_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
+                let intrinsic = bitcode::NUM_MUL_SATURATED_INT[width].to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                let intrinsic = bitcode::DEC_MUL_SATURATED.to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            x => todo!("NumMulSaturated: layout, {:?}", x),
+        }
+    }
+
+    fn build_num_mul_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
+    ) {
+        let function_name = match self.interner().get_repr(*num_layout) {
+            LayoutRepr::Builtin(Builtin::Int(width)) => &bitcode::NUM_MUL_CHECKED_INT[width],
+            LayoutRepr::Builtin(Builtin::Float(width)) => &bitcode::NUM_MUL_CHECKED_FLOAT[width],
+            LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_MUL_WITH_OVERFLOW,
+            x => internal_error!("NumMulChecked is not defined for {:?}", x),
+        };
+
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
+    }
+
     fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(
@@ -1402,6 +1601,25 @@ impl<
                 ASM::div_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             x => todo!("NumDiv: layout, {:?}", x),
+        }
+    }
+
+    fn build_num_div_ceil(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    ) {
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_DIV_CEIL[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+            x => todo!("NumDivCeilUnchecked: layout, {:?}", x),
         }
     }
 
@@ -1509,7 +1727,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, src1_reg, src2_reg);
             }
-            LayoutRepr::U128 | LayoutRepr::I128 => {
+            LayoutRepr::U128 | LayoutRepr::I128 | LayoutRepr::DEC => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
 
                 // put the arguments on the stack
@@ -1560,7 +1778,6 @@ impl<
 
                 ASM::eq_freg_freg_reg64(&mut self.buf, dst_reg, src_reg1, src_reg2, float_width)
             }
-            LayoutRepr::DEC => todo!("NumEq: layout, {:?}", self.layout_interner.dbg(Layout::DEC)),
             LayoutRepr::STR => {
                 // use a zig call
                 self.build_fn_call(
@@ -1582,6 +1799,11 @@ impl<
                 ASM::eq_reg_reg_reg(&mut self.buf, width, dst_reg, dst_reg, tmp_reg);
 
                 self.free_symbol(tmp);
+            }
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
+                // This instruction will never execute, but we need a value the symbol
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
             }
             _ => {
                 let ident_ids = self
@@ -1659,6 +1881,11 @@ impl<
 
                 self.free_symbol(tmp)
             }
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
+                // This instruction will never execute, but we need a value the symbol
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
+            }
             _ => {
                 // defer to equality
 
@@ -1684,11 +1911,13 @@ impl<
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
 
-                // Not would usually be implemented as `xor src, -1` followed by `and src, 1`
-                // but since our booleans are represented as `0x101010101010101` currently, we can simply XOR with that
-                let bool_val = [true as u8; 8];
-                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i64::from_ne_bytes(bool_val));
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
                 ASM::xor_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+
+                // we may need to mask out other bits in the end? but a boolean should be 0 or 1.
+                // if that invariant is upheld, this mask should not be required
+                // ASM::and_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
             x => todo!("Not: layout, {:?}", x),
@@ -1702,54 +1931,12 @@ impl<
         arg_layout: &InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
-        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
-        match (
-            self.layout_interner.get_repr(*arg_layout),
-            self.layout_interner.get_repr(*ret_layout),
-        ) {
-            (
-                LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
-                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
-                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-                LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)),
-            ) => {
-                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
-            }
-            (a, r) => todo!("NumToFrac: layout, arg {:?}, ret {:?}", a, r),
+        match *ret_layout {
+            Layout::F32 => self.num_to_f32(dst, src, arg_layout),
+            Layout::F64 => self.num_to_f64(dst, src, arg_layout),
+            Layout::DEC => self.num_to_dec(dst, src, arg_layout),
+
+            other => todo!("NumToFrac: layout {other:?} is not Frac"),
         }
     }
 
@@ -1954,18 +2141,73 @@ impl<
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let caller_proc = CallerProc::new(
-            self.env.arena,
-            self.env.module_id,
-            ident_ids,
-            self.layout_interner,
-            &higher_order.passed_function,
-            higher_order.closure_env_layout,
+        let caller_proc = match higher_order.op {
+            HigherOrder::ListMap { .. }
+            | HigherOrder::ListMap2 { .. }
+            | HigherOrder::ListMap3 { .. }
+            | HigherOrder::ListMap4 { .. } => CallerProc::new_list_map(
+                self.env.arena,
+                self.env.module_id,
+                ident_ids,
+                self.layout_interner,
+                &higher_order.passed_function,
+                higher_order.closure_env_layout,
+            ),
+            HigherOrder::ListSortWith { .. } => CallerProc::new_compare(
+                self.env.arena,
+                self.env.module_id,
+                ident_ids,
+                self.layout_interner,
+                &higher_order.passed_function,
+                higher_order.closure_env_layout,
+            ),
+        };
+
+        let caller = self.debug_symbol("caller");
+        let caller_string = self.lambda_name_to_string(
+            LambdaName::no_niche(caller_proc.proc_symbol),
+            std::iter::empty(),
+            None,
+            Layout::UNIT,
         );
+
+        self.caller_procs.push(caller_proc);
+
+        let argument_layouts = match higher_order.closure_env_layout {
+            None => higher_order.passed_function.argument_layouts,
+            Some(_) => &higher_order.passed_function.argument_layouts[1..],
+        };
+
+        // function pointer to a function that takes a pointer, and increments
+        let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
+            self.increment_fn_pointer(closure_env_layout)
+        } else {
+            // null pointer
+            self.load_literal_i64(&Symbol::DEV_TMP, 0);
+            Symbol::DEV_TMP
+        };
+
+        let data = self.debug_symbol("data");
+        if let Some(_closure_data_layout) = higher_order.closure_env_layout {
+            let data_symbol = higher_order.passed_function.captured_environment;
+            self.storage_manager
+                .ensure_symbol_on_stack(&mut self.buf, &data_symbol);
+            let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&data_symbol);
+
+            // Load address of output element into register.
+            let reg = self.storage_manager.claim_general_reg(&mut self.buf, &data);
+            ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
+        } else {
+            // use a null pointer
+            self.load_literal(&data, &Layout::U64, &Literal::Int(0u128.to_be_bytes()));
+        }
+
+        let ptr = Layout::U64;
+        let usize_ = Layout::U64;
 
         match higher_order.op {
             HigherOrder::ListMap { xs } => {
-                let old_element_layout = higher_order.passed_function.argument_layouts[0];
+                let old_element_layout = argument_layouts[0];
                 let new_element_layout = higher_order.passed_function.return_layout;
 
                 let input_list_layout = LayoutRepr::Builtin(Builtin::List(old_element_layout));
@@ -1973,8 +2215,6 @@ impl<
                     .layout_interner
                     .insert_direct_no_semantic(input_list_layout);
 
-                let caller = self.debug_symbol("caller");
-                let data = self.debug_symbol("data");
                 let alignment = self.debug_symbol("alignment");
                 let old_element_width = self.debug_symbol("old_element_width");
                 let new_element_width = self.debug_symbol("new_element_width");
@@ -1984,46 +2224,7 @@ impl<
                 self.load_layout_stack_size(old_element_layout, old_element_width);
                 self.load_layout_stack_size(new_element_layout, new_element_width);
 
-                let caller_string = self.lambda_name_to_string(
-                    LambdaName::no_niche(caller_proc.proc_symbol),
-                    std::iter::empty(),
-                    None,
-                    Layout::UNIT,
-                );
-
-                // self.helper_proc_symbols .extend([(caller_proc.proc_symbol, caller_proc.proc_layout)]);
-                self.caller_procs.push(caller_proc);
-
-                // function pointer to a function that takes a pointer, and increments
-                let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
-                    self.increment_fn_pointer(closure_env_layout)
-                } else {
-                    // null pointer
-                    self.load_literal_i64(&Symbol::DEV_TMP, 0);
-                    Symbol::DEV_TMP
-                };
-
                 self.build_fn_pointer(&caller, caller_string);
-
-                if let Some(_closure_data_layout) = higher_order.closure_env_layout {
-                    let data_symbol = higher_order.passed_function.captured_environment;
-                    self.storage_manager
-                        .ensure_symbol_on_stack(&mut self.buf, &data_symbol);
-                    let (new_elem_offset, _) =
-                        self.storage_manager.stack_offset_and_size(&data_symbol);
-
-                    // Load address of output element into register.
-                    let reg = self.storage_manager.claim_general_reg(&mut self.buf, &data);
-                    ASM::add_reg64_reg64_imm32(
-                        &mut self.buf,
-                        reg,
-                        CC::BASE_PTR_REG,
-                        new_elem_offset,
-                    );
-                } else {
-                    // use a null pointer
-                    self.load_literal(&data, &Layout::U64, &Literal::Int(0u128.to_be_bytes()));
-                }
 
                 // we pass a null pointer when the data is not owned. the zig code must not call this!
                 let data_is_owned = higher_order.closure_env_layout.is_some()
@@ -2055,9 +2256,6 @@ impl<
                     new_element_width,
                 ];
 
-                let ptr = Layout::U64;
-                let usize_ = Layout::U64;
-
                 let layouts = [
                     input_list_in_layout,
                     ptr,
@@ -2069,37 +2267,398 @@ impl<
                     usize_,
                 ];
 
-                // Setup the return location.
-                let base_offset = self
-                    .storage_manager
-                    .claim_stack_area(dst, self.layout_interner.stack_size(ret_layout));
-
-                self.build_fn_call(
-                    &Symbol::DEV_TMP3,
+                self.build_fn_call_stack_return(
                     bitcode::LIST_MAP.to_string(),
                     &arguments,
                     &layouts,
-                    &ret_layout,
+                    ret_layout,
+                    *dst,
                 );
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+            }
+            HigherOrder::ListMap2 { xs, ys } => {
+                let old_element_layout1 = argument_layouts[0];
+                let old_element_layout2 = argument_layouts[1];
+                let new_element_layout = higher_order.passed_function.return_layout;
 
-                // Return list value from fn call
-                self.storage_manager.copy_symbol_to_stack_offset(
-                    self.layout_interner,
-                    &mut self.buf,
-                    base_offset,
-                    &Symbol::DEV_TMP3,
-                    &ret_layout,
+                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
+                let input_list_in_layout1 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout1);
+
+                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
+                let input_list_in_layout2 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout2);
+
+                let alignment = self.debug_symbol("alignment");
+                let old_element_width1 = self.debug_symbol("old_element_width1");
+                let old_element_width2 = self.debug_symbol("old_element_width2");
+                let new_element_width = self.debug_symbol("new_element_width");
+
+                self.load_layout_alignment(new_element_layout, alignment);
+
+                self.load_layout_stack_size(old_element_layout1, old_element_width1);
+                self.load_layout_stack_size(old_element_layout2, old_element_width2);
+
+                self.load_layout_stack_size(new_element_layout, new_element_width);
+
+                let dec1 = self.decrement_fn_pointer(old_element_layout1);
+                let dec2 = self.decrement_fn_pointer(old_element_layout2);
+
+                self.build_fn_pointer(&caller, caller_string);
+
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
+                self.load_literal(
+                    &Symbol::DEV_TMP2,
+                    &Layout::BOOL,
+                    &Literal::Bool(data_is_owned),
                 );
 
-                self.free_symbol(&Symbol::DEV_TMP3);
+                //    list1: RocList,
+                //    list2: RocList,
+                //    caller: Caller1,
+                //    data: Opaque,
+                //    inc_n_data: IncN,
+                //    data_is_owned: bool,
+                //    alignment: u32,
+                //    old_element_width1: usize,
+                //    old_element_width2: usize,
+                //    new_element_width: usize,
+
+                let arguments = [
+                    xs,
+                    ys,
+                    caller,
+                    data,
+                    inc_n_data,
+                    Symbol::DEV_TMP2,
+                    alignment,
+                    old_element_width1,
+                    old_element_width2,
+                    new_element_width,
+                    dec1,
+                    dec2,
+                ];
+
+                let layouts = [
+                    input_list_in_layout1,
+                    input_list_in_layout2,
+                    ptr,
+                    ptr,
+                    ptr,
+                    Layout::BOOL,
+                    Layout::U32,
+                    usize_,
+                    usize_,
+                    usize_,
+                    ptr, // dec1
+                    ptr, // dec2
+                ];
+
+                self.build_fn_call_stack_return(
+                    bitcode::LIST_MAP2.to_string(),
+                    &arguments,
+                    &layouts,
+                    ret_layout,
+                    *dst,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
             }
-            HigherOrder::ListMap2 { .. } => todo!(),
-            HigherOrder::ListMap3 { .. } => todo!(),
-            HigherOrder::ListMap4 { .. } => todo!(),
-            HigherOrder::ListSortWith { .. } => todo!(),
+            HigherOrder::ListMap3 { xs, ys, zs } => {
+                let old_element_layout1 = argument_layouts[0];
+                let old_element_layout2 = argument_layouts[1];
+                let old_element_layout3 = argument_layouts[2];
+                let new_element_layout = higher_order.passed_function.return_layout;
+
+                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
+                let input_list_in_layout1 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout1);
+
+                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
+                let input_list_in_layout2 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout2);
+
+                let input_list_layout3 = LayoutRepr::Builtin(Builtin::List(old_element_layout3));
+                let input_list_in_layout3 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout3);
+
+                let alignment = self.debug_symbol("alignment");
+                let old_element_width1 = self.debug_symbol("old_element_width1");
+                let old_element_width2 = self.debug_symbol("old_element_width2");
+                let old_element_width3 = self.debug_symbol("old_element_width3");
+                let new_element_width = self.debug_symbol("new_element_width");
+
+                self.load_layout_alignment(new_element_layout, alignment);
+
+                self.load_layout_stack_size(old_element_layout1, old_element_width1);
+                self.load_layout_stack_size(old_element_layout2, old_element_width2);
+                self.load_layout_stack_size(old_element_layout3, old_element_width3);
+
+                self.load_layout_stack_size(new_element_layout, new_element_width);
+
+                let dec1 = self.decrement_fn_pointer(old_element_layout1);
+                let dec2 = self.decrement_fn_pointer(old_element_layout2);
+                let dec3 = self.decrement_fn_pointer(old_element_layout3);
+
+                self.build_fn_pointer(&caller, caller_string);
+
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
+                self.load_literal(
+                    &Symbol::DEV_TMP2,
+                    &Layout::BOOL,
+                    &Literal::Bool(data_is_owned),
+                );
+
+                //    list1: RocList,
+                //    list2: RocList,
+                //    caller: Caller1,
+                //    data: Opaque,
+                //    inc_n_data: IncN,
+                //    data_is_owned: bool,
+                //    alignment: u32,
+                //    old_element_width1: usize,
+                //    old_element_width2: usize,
+                //    new_element_width: usize,
+
+                let arguments = [
+                    xs,
+                    ys,
+                    zs,
+                    caller,
+                    data,
+                    inc_n_data,
+                    Symbol::DEV_TMP2,
+                    alignment,
+                    old_element_width1,
+                    old_element_width2,
+                    old_element_width3,
+                    new_element_width,
+                    dec1,
+                    dec2,
+                    dec3,
+                ];
+
+                let layouts = [
+                    input_list_in_layout1,
+                    input_list_in_layout2,
+                    input_list_in_layout3,
+                    ptr,
+                    ptr,
+                    ptr,
+                    Layout::BOOL,
+                    Layout::U32,
+                    usize_, // old_element_width_1
+                    usize_, // old_element_width_2
+                    usize_, // old_element_width_3
+                    usize_, // new_element_width
+                    ptr,    // dec1
+                    ptr,    // dec2
+                    ptr,    // dec3
+                ];
+
+                self.build_fn_call_stack_return(
+                    bitcode::LIST_MAP3.to_string(),
+                    &arguments,
+                    &layouts,
+                    ret_layout,
+                    *dst,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
+            HigherOrder::ListMap4 { xs, ys, zs, ws } => {
+                let old_element_layout1 = argument_layouts[0];
+                let old_element_layout2 = argument_layouts[1];
+                let old_element_layout3 = argument_layouts[2];
+                let old_element_layout4 = argument_layouts[3];
+                let new_element_layout = higher_order.passed_function.return_layout;
+
+                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
+                let input_list_in_layout1 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout1);
+
+                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
+                let input_list_in_layout2 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout2);
+
+                let input_list_layout3 = LayoutRepr::Builtin(Builtin::List(old_element_layout3));
+                let input_list_in_layout3 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout3);
+
+                let input_list_layout4 = LayoutRepr::Builtin(Builtin::List(old_element_layout4));
+                let input_list_in_layout4 = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout4);
+
+                let alignment = self.debug_symbol("alignment");
+                let old_element_width1 = self.debug_symbol("old_element_width1");
+                let old_element_width2 = self.debug_symbol("old_element_width2");
+                let old_element_width3 = self.debug_symbol("old_element_width3");
+                let old_element_width4 = self.debug_symbol("old_element_width4");
+                let new_element_width = self.debug_symbol("new_element_width");
+
+                self.load_layout_alignment(new_element_layout, alignment);
+
+                self.load_layout_stack_size(old_element_layout1, old_element_width1);
+                self.load_layout_stack_size(old_element_layout2, old_element_width2);
+                self.load_layout_stack_size(old_element_layout3, old_element_width3);
+                self.load_layout_stack_size(old_element_layout4, old_element_width4);
+
+                self.load_layout_stack_size(new_element_layout, new_element_width);
+
+                let dec1 = self.decrement_fn_pointer(old_element_layout1);
+                let dec2 = self.decrement_fn_pointer(old_element_layout2);
+                let dec3 = self.decrement_fn_pointer(old_element_layout3);
+                let dec4 = self.decrement_fn_pointer(old_element_layout4);
+
+                self.build_fn_pointer(&caller, caller_string);
+
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
+                self.load_literal(
+                    &Symbol::DEV_TMP2,
+                    &Layout::BOOL,
+                    &Literal::Bool(data_is_owned),
+                );
+
+                let arguments = [
+                    xs,
+                    ys,
+                    zs,
+                    ws,
+                    caller,
+                    data,
+                    inc_n_data,
+                    Symbol::DEV_TMP2,
+                    alignment,
+                    old_element_width1,
+                    old_element_width2,
+                    old_element_width3,
+                    old_element_width4,
+                    new_element_width,
+                    dec1,
+                    dec2,
+                    dec3,
+                    dec4,
+                ];
+
+                let layouts = [
+                    input_list_in_layout1,
+                    input_list_in_layout2,
+                    input_list_in_layout3,
+                    input_list_in_layout4,
+                    ptr,
+                    ptr,
+                    ptr,
+                    Layout::BOOL,
+                    Layout::U32,
+                    usize_, // old_element_width_1
+                    usize_, // old_element_width_2
+                    usize_, // old_element_width_3
+                    usize_, // old_element_width_4
+                    usize_, // new_element_width
+                    ptr,    // dec1
+                    ptr,    // dec2
+                    ptr,    // dec3
+                    ptr,    // dec4
+                ];
+
+                self.build_fn_call_stack_return(
+                    bitcode::LIST_MAP4.to_string(),
+                    &arguments,
+                    &layouts,
+                    ret_layout,
+                    *dst,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
+            HigherOrder::ListSortWith { xs } => {
+                let element_layout = argument_layouts[0];
+
+                let input_list_layout = LayoutRepr::Builtin(Builtin::List(element_layout));
+                let input_list_in_layout = self
+                    .layout_interner
+                    .insert_direct_no_semantic(input_list_layout);
+
+                let alignment = self.debug_symbol("alignment");
+                let element_width = self.debug_symbol("old_element_width");
+
+                self.load_layout_alignment(element_layout, alignment);
+                self.load_layout_stack_size(element_layout, element_width);
+
+                self.build_fn_pointer(&caller, caller_string);
+
+                // we pass a null pointer when the data is not owned. the zig code must not call this!
+                let data_is_owned = higher_order.closure_env_layout.is_some()
+                    && higher_order.passed_function.owns_captured_environment;
+
+                self.load_literal(
+                    &Symbol::DEV_TMP2,
+                    &Layout::BOOL,
+                    &Literal::Bool(data_is_owned),
+                );
+
+                //    input: RocList,
+                //    caller: CompareFn,
+                //    data: Opaque,
+                //    inc_n_data: IncN,
+                //    data_is_owned: bool,
+                //    alignment: u32,
+                //    element_width: usize,
+
+                let arguments = [
+                    xs,
+                    caller,
+                    data,
+                    inc_n_data,
+                    Symbol::DEV_TMP2,
+                    alignment,
+                    element_width,
+                ];
+
+                let layouts = [
+                    input_list_in_layout,
+                    ptr,
+                    ptr,
+                    ptr,
+                    Layout::BOOL,
+                    Layout::U32,
+                    usize_,
+                ];
+
+                self.build_fn_call_stack_return(
+                    bitcode::LIST_SORT_WITH.to_string(),
+                    &arguments,
+                    &layouts,
+                    ret_layout,
+                    *dst,
+                );
+
+                self.free_symbol(&Symbol::DEV_TMP);
+                self.free_symbol(&Symbol::DEV_TMP2);
+            }
         }
     }
 
@@ -2122,9 +2681,9 @@ impl<
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
-        let base_offset = self
-            .storage_manager
-            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
 
         let lowlevel_args = [
             capacity,
@@ -2185,9 +2744,9 @@ impl<
         );
 
         // Setup the return location.
-        let base_offset = self
-            .storage_manager
-            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
 
         let lowlevel_args = bumpalo::vec![
         in self.env.arena;
@@ -2259,9 +2818,9 @@ impl<
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
-        let base_offset = self
-            .storage_manager
-            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
 
         let lowlevel_args = [
             list,
@@ -2371,9 +2930,9 @@ impl<
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
         // Setup the return location.
-        let base_offset = self
-            .storage_manager
-            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
 
         let ret_fields =
             if let LayoutRepr::Struct(field_layouts) = self.layout_interner.get_repr(*ret_layout) {
@@ -2462,15 +3021,15 @@ impl<
         let list_b_layout = arg_layouts[1];
 
         // Load list alignment argument (u32).
-        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
+        self.load_layout_alignment(elem_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
-        let base_offset = self
-            .storage_manager
-            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
 
         let lowlevel_args = bumpalo::vec![
         in self.env.arena;
@@ -2536,9 +3095,9 @@ impl<
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
         // Setup the return location.
-        let base_offset = self
-            .storage_manager
-            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
 
         let lowlevel_args = [
             list,
@@ -2582,7 +3141,10 @@ impl<
     }
 
     fn create_empty_array(&mut self, sym: &Symbol) {
-        let base_offset = self.storage_manager.claim_stack_area(sym, 24);
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area_with_alignment(*sym, 24, 8);
+
         self.storage_manager
             .with_tmp_general_reg(&mut self.buf, |_storage_manager, buf, reg| {
                 ASM::mov_reg64_imm64(buf, reg, 0);
@@ -2600,9 +3162,10 @@ impl<
     ) {
         let element_layout = self.layout_interner.get_repr(*element_in_layout);
         let element_width = self.layout_interner.stack_size(*element_in_layout) as u64;
+        let element_alignment = self.layout_interner.alignment_bytes(*element_in_layout) as u64;
 
         // load the total size of the data we want to store (excludes refcount)
-        let data_bytes_symbol = Symbol::DEV_TMP;
+        let data_bytes_symbol = self.debug_symbol("data_bytes");
         let data_bytes = element_width * elements.len() as u64;
         self.load_literal(
             &data_bytes_symbol,
@@ -2611,11 +3174,12 @@ impl<
         );
 
         // Load allocation alignment (u32)
-        let element_alignment_symbol = Symbol::DEV_TMP2;
-        self.load_layout_alignment(Layout::U32, element_alignment_symbol);
+        let element_alignment_symbol = self.debug_symbol("element_alignment");
+        self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
+        let allocation_symbol = self.debug_symbol("list_allocation");
         self.allocate_with_refcount(
-            Symbol::DEV_TMP3,
+            allocation_symbol,
             data_bytes_symbol,
             element_alignment_symbol,
         );
@@ -2623,28 +3187,43 @@ impl<
         self.free_symbol(&data_bytes_symbol);
         self.free_symbol(&element_alignment_symbol);
 
+        enum Origin {
+            S(Symbol),
+            L(Symbol),
+        }
+
+        let mut element_symbols = std::vec::Vec::new();
+
+        // NOTE: this realizes all the list elements on the stack before they are put into the
+        // list. This turns out to be important. Creating the literals as we go causes issues with
+        // register usage.
+        //
+        // Of course this is inefficient when there are many elements (causes lots of stack
+        // spillage.
+        for (i, elem) in elements.iter().enumerate() {
+            match elem {
+                ListLiteralElement::Symbol(sym) => {
+                    self.load_literal_symbols(&[*sym]);
+                    element_symbols.push(Origin::S(*sym));
+                }
+                ListLiteralElement::Literal(lit) => {
+                    let sym = self.debug_symbol(&format!("lit_{i}"));
+                    self.load_literal(&sym, element_in_layout, lit);
+                    element_symbols.push(Origin::L(sym));
+                }
+            }
+        }
+
         // The pointer already points to the first element
         let ptr_reg = self
             .storage_manager
-            .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
+            .load_to_general_reg(&mut self.buf, &allocation_symbol);
 
         // Copy everything into output array.
         let mut element_offset = 0;
-        for elem in elements {
-            // TODO: this could be a lot faster when loading large lists
-            // if we move matching on the element layout to outside this loop.
-            // It also greatly bloats the code here.
-            // Refactor this and switch to one external match.
-            // We also could make loadining indivitual literals much faster
+        for elem in element_symbols {
             let element_symbol = match elem {
-                ListLiteralElement::Symbol(sym) => {
-                    self.load_literal_symbols(&[*sym]);
-                    *sym
-                }
-                ListLiteralElement::Literal(lit) => {
-                    self.load_literal(&Symbol::DEV_TMP, element_in_layout, lit);
-                    Symbol::DEV_TMP
-                }
+                Origin::S(s) | Origin::L(s) => s,
             };
 
             Self::ptr_write(
@@ -2659,7 +3238,7 @@ impl<
             );
 
             element_offset += element_width as i32;
-            if element_symbol == Symbol::DEV_TMP {
+            if let Origin::L(element_symbol) = elem {
                 self.free_symbol(&element_symbol);
             }
         }
@@ -2668,7 +3247,9 @@ impl<
         self.storage_manager.with_tmp_general_reg(
             &mut self.buf,
             |storage_manager, buf, tmp_reg| {
-                let base_offset = storage_manager.claim_stack_area(sym, 24);
+                let alignment = Ord::max(8, element_alignment) as u32;
+                let base_offset =
+                    storage_manager.claim_stack_area_with_alignment(*sym, 24, alignment);
                 ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
 
                 ASM::mov_reg64_imm64(buf, tmp_reg, elements.len() as i64);
@@ -2676,7 +3257,7 @@ impl<
                 ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
             },
         );
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&allocation_symbol);
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &InLayout<'a>, fields: &'a [Symbol]) {
@@ -2791,14 +3372,7 @@ impl<
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, structure);
 
-                let mask_symbol = self.debug_symbol("tag_id_mask");
-                let mask_reg = self
-                    .storage_manager
-                    .claim_general_reg(&mut self.buf, &mask_symbol);
-                ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
-
-                // mask out the tag id bits
-                ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
+                let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
 
                 let mut offset = 0;
                 for field in &other_fields[..index as usize] {
@@ -2809,11 +3383,13 @@ impl<
                     &mut self.buf,
                     &mut self.storage_manager,
                     self.layout_interner,
-                    ptr_reg,
+                    mask_reg,
                     offset as i32,
                     element_layout,
                     *sym,
                 );
+
+                self.free_symbol(&mask_symbol)
             }
             UnionLayout::Recursive(tag_layouts) => {
                 let other_fields = tag_layouts[tag_id as usize];
@@ -2824,15 +3400,13 @@ impl<
                     .load_to_general_reg(&mut self.buf, structure);
 
                 // mask out the tag id bits
-                if !union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
-                    let mask_symbol = self.debug_symbol("tag_id_mask");
-                    let mask_reg = self
-                        .storage_manager
-                        .claim_general_reg(&mut self.buf, &mask_symbol);
-                    ASM::mov_reg64_imm64(&mut self.buf, mask_reg, (!0b111) as _);
-
-                    ASM::and_reg64_reg64_reg64(&mut self.buf, ptr_reg, ptr_reg, mask_reg);
-                }
+                let (unmasked_symbol, unmasked_reg) =
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                        (None, ptr_reg)
+                    } else {
+                        let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
+                        (Some(mask_symbol), mask_reg)
+                    };
 
                 let mut offset = 0;
                 for field in &other_fields[..index as usize] {
@@ -2843,16 +3417,113 @@ impl<
                     &mut self.buf,
                     &mut self.storage_manager,
                     self.layout_interner,
-                    ptr_reg,
+                    unmasked_reg,
                     offset as i32,
                     element_layout,
                     *sym,
                 );
+
+                if let Some(unmasked_symbol) = unmasked_symbol {
+                    self.free_symbol(&unmasked_symbol);
+                }
             }
         }
     }
 
-    fn build_ptr_write(
+    fn load_union_field_ptr_at_index(
+        &mut self,
+        sym: &Symbol,
+        structure: &Symbol,
+        tag_id: TagIdIntType,
+        index: u64,
+        union_layout: &UnionLayout<'a>,
+    ) {
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, structure);
+
+        let sym_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
+
+        match union_layout {
+            UnionLayout::NonRecursive(_) => {
+                unreachable!("operation not supported")
+            }
+            UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                let mut offset = 0;
+                for field in &field_layouts[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+            }
+            UnionLayout::NullableUnwrapped {
+                nullable_id,
+                other_fields,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
+            }
+
+            UnionLayout::NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
+
+                let other_fields = if tag_id < *nullable_id {
+                    other_tags[tag_id as usize]
+                } else {
+                    other_tags[tag_id as usize - 1]
+                };
+
+                let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, mask_reg, offset as i32);
+
+                self.free_symbol(&mask_symbol);
+            }
+            UnionLayout::Recursive(tag_layouts) => {
+                let other_fields = tag_layouts[tag_id as usize];
+
+                let ptr_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, structure);
+
+                // mask out the tag id bits
+                let (unmasked_symbol, unmasked_reg) =
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                        (None, ptr_reg)
+                    } else {
+                        let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
+                        (Some(mask_symbol), mask_reg)
+                    };
+
+                let mut offset = 0;
+                for field in &other_fields[..index as usize] {
+                    offset += self.layout_interner.stack_size(*field);
+                }
+
+                ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, unmasked_reg, offset as i32);
+
+                if let Some(unmasked_symbol) = unmasked_symbol {
+                    self.free_symbol(&unmasked_symbol);
+                }
+            }
+        }
+    }
+
+    fn build_ptr_store(
         &mut self,
         sym: Symbol,
         ptr: Symbol,
@@ -2888,6 +3559,65 @@ impl<
         ASM::mov_base32_reg64(&mut self.buf, base_offset, ptr_reg);
     }
 
+    fn build_ptr_load(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &ptr);
+
+        let offset = 0;
+
+        Self::ptr_read(
+            &mut self.buf,
+            &mut self.storage_manager,
+            self.layout_interner,
+            ptr_reg,
+            offset,
+            element_layout,
+            sym,
+        );
+    }
+
+    fn build_ptr_clear_tag_id(&mut self, sym: Symbol, ptr: Symbol) {
+        let buf = &mut self.buf;
+
+        let ptr_reg = self.storage_manager.load_to_general_reg(buf, &ptr);
+        let sym_reg = self.storage_manager.claim_general_reg(buf, &sym);
+
+        ASM::mov_reg64_imm64(buf, sym_reg, !0b111);
+        ASM::and_reg64_reg64_reg64(buf, sym_reg, sym_reg, ptr_reg);
+    }
+
+    fn build_alloca(&mut self, sym: Symbol, value: Option<Symbol>, element_layout: InLayout<'a>) {
+        // 1. acquire some stack space
+        let element_width = self.interner().stack_size(element_layout);
+        let allocation = self.debug_symbol("stack_allocation");
+        let ptr = self.debug_symbol("ptr");
+
+        if element_width == 0 {
+            self.storage_manager.claim_pointer_stack_area(sym);
+            return;
+        }
+
+        let base_offset = self.storage_manager.claim_stack_area_layout(
+            self.layout_interner,
+            allocation,
+            element_layout,
+        );
+
+        let ptr_reg = self.storage_manager.claim_general_reg(&mut self.buf, &ptr);
+
+        ASM::mov_reg64_reg64(&mut self.buf, ptr_reg, CC::BASE_PTR_REG);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, base_offset);
+
+        if let Some(value) = value {
+            self.build_ptr_store(sym, ptr, value, element_layout);
+        } else {
+            // this is now a pointer to uninitialized memory!
+            let r = self.storage_manager.claim_general_reg(&mut self.buf, &sym);
+            ASM::mov_reg64_reg64(&mut self.buf, r, ptr_reg);
+        }
+    }
+
     fn expr_box(
         &mut self,
         sym: Symbol,
@@ -2920,27 +3650,13 @@ impl<
         self.free_symbol(&element_width_symbol);
         self.free_symbol(&element_alignment_symbol);
 
-        self.build_ptr_write(sym, allocation, value, element_layout);
+        self.build_ptr_store(sym, allocation, value, element_layout);
 
         self.free_symbol(&allocation);
     }
 
     fn expr_unbox(&mut self, dst: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
-        let ptr_reg = self
-            .storage_manager
-            .load_to_general_reg(&mut self.buf, &ptr);
-
-        let offset = 0;
-
-        Self::ptr_read(
-            &mut self.buf,
-            &mut self.storage_manager,
-            self.layout_interner,
-            ptr_reg,
-            offset,
-            element_layout,
-            dst,
-        );
+        self.build_ptr_load(dst, ptr, element_layout)
     }
 
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
@@ -3010,9 +3726,11 @@ impl<
                     .chain(nullable_id + 1..number_of_tags);
 
                 let table = self.debug_symbol("tag_id_table");
-                let table_offset = self
-                    .storage_manager
-                    .claim_stack_area(&table, (number_of_tags * 2) as _);
+                let table_offset = self.storage_manager.claim_stack_area_with_alignment(
+                    table,
+                    (number_of_tags * 2) as _,
+                    8,
+                );
 
                 let mut offset = table_offset;
                 for i in it {
@@ -3065,9 +3783,7 @@ impl<
 
                 let target_info = self.storage_manager.target_info;
                 if union_layout.stores_tag_id_as_data(target_info) {
-                    let offset = union_layout
-                        .tag_id_offset(self.interner(), target_info)
-                        .unwrap() as i32;
+                    let offset = union_layout.tag_id_offset(self.interner()).unwrap() as i32;
 
                     let ptr_reg = self
                         .storage_manager
@@ -3111,18 +3827,19 @@ impl<
         tag_id: TagIdIntType,
         reuse: Option<Symbol>,
     ) {
-        let target_info = self.storage_manager.target_info;
-
         let layout_interner: &mut STLayoutInterner<'a> = self.layout_interner;
         let buf: &mut Vec<'a, u8> = &mut self.buf;
 
-        let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(layout_interner, target_info);
+        let (data_size, data_alignment) = union_layout.data_size_and_alignment(layout_interner);
 
         match union_layout {
             UnionLayout::NonRecursive(field_layouts) => {
                 let id_offset = data_size - data_alignment;
-                let base_offset = self.storage_manager.claim_stack_area(sym, data_size);
+                let base_offset = self.storage_manager.claim_stack_area_with_alignment(
+                    *sym,
+                    data_size,
+                    data_alignment,
+                );
                 let mut current_offset = base_offset;
 
                 let it = fields.iter().zip(field_layouts[tag_id as usize].iter());
@@ -3144,7 +3861,7 @@ impl<
                         ASM::mov_reg64_imm64(buf, reg, tag_id as i64);
 
                         let total_id_offset = base_offset as u32 + id_offset;
-                        debug_assert!(total_id_offset % data_alignment == 0);
+                        debug_assert_eq!(total_id_offset % data_alignment, 0);
 
                         // pick the right instruction based on the alignment of the tag id
                         if field_layouts.len() <= u8::MAX as _ {
@@ -3214,6 +3931,31 @@ impl<
                     // it's just a null pointer
                     self.load_literal_i64(sym, 0);
                 } else {
+                    let (largest_variant_fields, _largest_variant_size) = other_tags
+                        .iter()
+                        .map(|fields| {
+                            let struct_layout = self
+                                .layout_interner
+                                .insert_direct_no_semantic(LayoutRepr::Struct(fields));
+
+                            (
+                                struct_layout,
+                                self.layout_interner.stack_size(struct_layout),
+                            )
+                        })
+                        .max_by(|(_, a), (_, b)| a.cmp(b))
+                        .unwrap();
+
+                    let largest_variant =
+                        if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                            self.layout_interner
+                                .insert_direct_no_semantic(LayoutRepr::Struct(
+                                    self.env.arena.alloc([largest_variant_fields, Layout::U8]),
+                                ))
+                        } else {
+                            largest_variant_fields
+                        };
+
                     let other_fields = if tag_id < nullable_id {
                         other_tags[tag_id as usize]
                     } else {
@@ -3235,12 +3977,6 @@ impl<
                         fields,
                     );
 
-                    // now effectively box this struct
-                    let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
-                    self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
-
-                    self.free_symbol(&temp_sym);
-
                     let tag_id_symbol = self.debug_symbol("tag_id");
 
                     // index zero is taken up by the nullable tag, so any tags before it in the
@@ -3252,40 +3988,118 @@ impl<
                     };
 
                     // finally, we need to tag the pointer
-                    debug_assert!(tag_id < 8);
-                    self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                        // allocate space on the stack for the whole tag payload
+                        let scratch_space = self.debug_symbol("scratch_space");
+                        let (data_size, data_alignment) =
+                            union_layout.data_size_and_alignment(self.layout_interner);
+                        let to_offset = self.storage_manager.claim_stack_area_with_alignment(
+                            scratch_space,
+                            data_size,
+                            data_alignment,
+                        );
 
-                    self.build_int_bitwise_or(
-                        sym,
-                        &untagged_pointer_symbol,
-                        &tag_id_symbol,
-                        IntWidth::U64,
-                    );
+                        // copy the inner struct into the reserved space
+                        let (from_offset, variant_size) =
+                            self.storage_manager.stack_offset_and_size(&temp_sym);
+                        self.storage_manager.copy_to_stack_offset(
+                            &mut self.buf,
+                            variant_size,
+                            from_offset,
+                            to_offset,
+                        );
 
-                    self.free_symbol(&untagged_pointer_symbol);
-                    self.free_symbol(&tag_id_symbol);
+                        // create the tag id
+                        {
+                            self.load_literal_i64(&tag_id_symbol, tag_id as _);
+                            let tag_id_offset = union_layout.tag_id_offset(self.interner());
+
+                            self.storage_manager
+                                .ensure_symbol_on_stack(&mut self.buf, &tag_id_symbol);
+                            let (from_offset, tag_id_size) =
+                                self.storage_manager.stack_offset_and_size(&tag_id_symbol);
+                            let to_offset = to_offset + tag_id_offset.unwrap() as i32;
+
+                            // move the tag id into position
+                            self.storage_manager.copy_to_stack_offset(
+                                &mut self.buf,
+                                tag_id_size,
+                                from_offset,
+                                to_offset,
+                            );
+                        }
+
+                        // now effectively box whole data + id struct
+                        self.expr_box(*sym, scratch_space, largest_variant, reuse);
+
+                        self.free_symbol(&tag_id_symbol);
+                        self.free_symbol(&scratch_space);
+                        self.free_symbol(&temp_sym);
+                    } else {
+                        // now effectively box this struct
+                        let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
+                        self.expr_box(untagged_pointer_symbol, temp_sym, layout, reuse);
+
+                        self.free_symbol(&temp_sym);
+
+                        self.load_literal_i64(&tag_id_symbol, pointer_tag as _);
+
+                        self.build_int_bitwise_or(
+                            sym,
+                            &untagged_pointer_symbol,
+                            &tag_id_symbol,
+                            IntWidth::U64,
+                        );
+
+                        self.free_symbol(&untagged_pointer_symbol);
+                        self.free_symbol(&tag_id_symbol);
+                        self.free_symbol(&temp_sym);
+                    }
                 }
             }
             UnionLayout::Recursive(tags) => {
                 self.load_literal_symbols(fields);
 
-                let whole_struct_symbol = self.debug_symbol("whole_struct_symbol");
                 let tag_id_symbol = self.debug_symbol("tag_id_symbol");
                 let other_fields = tags[tag_id as usize];
 
                 let stores_tag_id_as_data =
                     union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
 
+                let (largest_variant_fields, _largest_variant_size) = tags
+                    .iter()
+                    .map(|fields| {
+                        let struct_layout = self
+                            .layout_interner
+                            .insert_direct_no_semantic(LayoutRepr::Struct(fields));
+
+                        (
+                            struct_layout,
+                            self.layout_interner.stack_size(struct_layout),
+                        )
+                    })
+                    .max_by(|(_, a), (_, b)| a.cmp(b))
+                    .unwrap();
+
+                let largest_variant = if stores_tag_id_as_data {
+                    self.layout_interner
+                        .insert_direct_no_semantic(LayoutRepr::Struct(
+                            self.env.arena.alloc([largest_variant_fields, Layout::U8]),
+                        ))
+                } else {
+                    largest_variant_fields
+                };
+
                 // construct the payload as a struct on the stack
                 let data_struct_layout = self
                     .layout_interner
                     .insert_direct_no_semantic(LayoutRepr::Struct(other_fields));
 
-                let tag_id_layout = union_layout.tag_id_layout();
-
                 if stores_tag_id_as_data {
-                    let inner_struct_symbol = self.debug_symbol("inner_struct_symbol");
+                    self.load_literal_symbols(fields);
 
+                    // create the data as a record
+                    let inner_struct_symbol = self.debug_symbol("inner_struct_symbol");
                     self.storage_manager.create_struct(
                         self.layout_interner,
                         &mut self.buf,
@@ -3294,30 +4108,55 @@ impl<
                         fields,
                     );
 
-                    self.load_literal_i64(&tag_id_symbol, tag_id as _);
-
-                    let arena = self.env.arena;
-                    let whole_struct_layout =
-                        self.layout_interner
-                            .insert_direct_no_semantic(LayoutRepr::Struct(
-                                arena.alloc([data_struct_layout, tag_id_layout]),
-                            ));
-
-                    self.storage_manager.create_struct(
-                        self.layout_interner,
-                        &mut self.buf,
-                        &whole_struct_symbol,
-                        &whole_struct_layout,
-                        arena.alloc([inner_struct_symbol, tag_id_symbol]),
+                    // allocate space on the stack for the whole tag payload
+                    let scratch_space = self.debug_symbol("scratch_space");
+                    let (data_size, data_alignment) =
+                        union_layout.data_size_and_alignment(self.layout_interner);
+                    let to_offset = self.storage_manager.claim_stack_area_with_alignment(
+                        scratch_space,
+                        data_size,
+                        data_alignment,
                     );
 
-                    self.expr_box(*sym, whole_struct_symbol, whole_struct_layout, reuse);
+                    // copy the inner struct into the reserved space
+                    let (from_offset, variant_size) = self
+                        .storage_manager
+                        .stack_offset_and_size(&inner_struct_symbol);
+                    self.storage_manager.copy_to_stack_offset(
+                        &mut self.buf,
+                        variant_size,
+                        from_offset,
+                        to_offset,
+                    );
+
+                    // create the tag id
+                    {
+                        self.load_literal_i64(&tag_id_symbol, tag_id as _);
+                        let tag_id_offset = union_layout.tag_id_offset(self.interner());
+
+                        self.storage_manager
+                            .ensure_symbol_on_stack(&mut self.buf, &tag_id_symbol);
+                        let (from_offset, tag_id_size) =
+                            self.storage_manager.stack_offset_and_size(&tag_id_symbol);
+                        let to_offset = to_offset + tag_id_offset.unwrap() as i32;
+
+                        // move the tag id into position
+                        self.storage_manager.copy_to_stack_offset(
+                            &mut self.buf,
+                            tag_id_size,
+                            from_offset,
+                            to_offset,
+                        );
+                    }
+
+                    // now effectively box whole data + id struct
+                    self.expr_box(*sym, scratch_space, largest_variant, reuse);
 
                     self.free_symbol(&tag_id_symbol);
-                    self.free_symbol(&whole_struct_symbol);
                     self.free_symbol(&inner_struct_symbol);
                 } else {
                     self.load_literal_symbols(fields);
+                    let whole_struct_symbol = self.debug_symbol("whole_struct_symbol");
                     self.storage_manager.create_struct(
                         self.layout_interner,
                         &mut self.buf,
@@ -3326,12 +4165,31 @@ impl<
                         fields,
                     );
 
+                    let (data_size, data_alignment) =
+                        union_layout.data_size_and_alignment(self.layout_interner);
+                    let scratch_space = self.debug_symbol("scratch_space");
+                    let to_offset = self.storage_manager.claim_stack_area_with_alignment(
+                        scratch_space,
+                        data_size,
+                        data_alignment,
+                    );
+
+                    // this is a cheaty copy, because the destination may be wider than the source
+                    let (from_offset, _) =
+                        self.storage_manager.stack_offset_and_size(&scratch_space);
+                    self.storage_manager.copy_to_stack_offset(
+                        &mut self.buf,
+                        data_size,
+                        from_offset,
+                        to_offset,
+                    );
+
                     // now effectively box this struct
                     let untagged_pointer_symbol = self.debug_symbol("untagged_pointer");
                     self.expr_box(
                         untagged_pointer_symbol,
                         whole_struct_symbol,
-                        data_struct_layout,
+                        largest_variant,
                         reuse,
                     );
 
@@ -3387,7 +4245,11 @@ impl<
                 self.storage_manager.with_tmp_general_reg(
                     &mut self.buf,
                     |storage_manager, buf, reg| {
-                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+                        let base_offset = storage_manager.claim_stack_area_layout(
+                            self.layout_interner,
+                            *sym,
+                            Layout::U128,
+                        );
 
                         let mut num_bytes = [0; 8];
                         num_bytes.copy_from_slice(&bytes[..8]);
@@ -3412,20 +4274,24 @@ impl<
                 ASM::mov_reg64_imm64(&mut self.buf, reg, *x as i64);
             }
             (Literal::Float(x), LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64))) => {
-                let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
+                let freg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x;
-                ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, reg, val);
+                ASM::mov_freg64_imm64(&mut self.buf, &mut self.relocs, freg, val);
             }
             (Literal::Float(x), LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32))) => {
-                let reg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
+                let freg = self.storage_manager.claim_float_reg(&mut self.buf, sym);
                 let val = *x as f32;
-                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
+                ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, freg, val);
             }
             (Literal::Decimal(bytes), LayoutRepr::Builtin(Builtin::Decimal)) => {
                 self.storage_manager.with_tmp_general_reg(
                     &mut self.buf,
                     |storage_manager, buf, reg| {
-                        let base_offset = storage_manager.claim_stack_area(sym, 16);
+                        let base_offset = storage_manager.claim_stack_area_layout(
+                            self.layout_interner,
+                            *sym,
+                            Layout::DEC,
+                        );
 
                         let mut num_bytes = [0; 8];
                         num_bytes.copy_from_slice(&bytes[..8]);
@@ -3446,7 +4312,12 @@ impl<
                     self.storage_manager.with_tmp_general_reg(
                         &mut self.buf,
                         |storage_manager, buf, reg| {
-                            let base_offset = storage_manager.claim_stack_area(sym, 24);
+                            let base_offset = storage_manager.claim_stack_area_layout(
+                                self.layout_interner,
+                                *sym,
+                                Layout::STR,
+                            );
+
                             let mut bytes = [0; 24];
                             bytes[..x.len()].copy_from_slice(x.as_bytes());
                             bytes[23] = (x.len() as u8) | 0b1000_0000;
@@ -3511,10 +4382,16 @@ impl<
                 LayoutRepr::LambdaSet(lambda_set) => {
                     self.return_symbol(sym, &lambda_set.runtime_representation())
                 }
+                LayoutRepr::Struct([]) => {
+                    // there is nothing to do here
+                }
                 LayoutRepr::Union(UnionLayout::NonRecursive(_))
                 | LayoutRepr::Builtin(_)
-                | LayoutRepr::Struct(_) => {
-                    internal_error!("All primitive values should fit in a single register");
+                | LayoutRepr::Struct(_)
+                | LayoutRepr::Erased(_) => {
+                    internal_error!(
+                        "All primitive values should fit in a single register {repr:?}"
+                    );
                 }
             }
         } else {
@@ -3527,7 +4404,7 @@ impl<
             )
         }
         let inst_loc = self.buf.len() as u64;
-        let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
+        let offset = ASM::jmp_imm32(&mut self.buf, JUMP_PLACEHOLDER) as u64;
         self.relocs.push(Relocation::JmpToReturn {
             inst_loc,
             inst_size: self.buf.len() as u64 - inst_loc,
@@ -3766,7 +4643,11 @@ impl<
             (U64, U128) => {
                 let src_reg = self.storage_manager.load_to_general_reg(buf, src);
 
-                let base_offset = self.storage_manager.claim_stack_area(dst, 16);
+                let base_offset = self.storage_manager.claim_stack_area_layout(
+                    self.layout_interner,
+                    *dst,
+                    Layout::U128,
+                );
 
                 let tmp = Symbol::DEV_TMP;
                 let tmp_reg = self.storage_manager.claim_general_reg(buf, &tmp);
@@ -3855,6 +4736,132 @@ impl<
         CC: CallConv<GeneralReg, FloatReg, ASM>,
     > Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC>
 {
+    fn build_fn_call_stack_return<const N: usize>(
+        &mut self,
+        function_name: String,
+        arguments: &[Symbol; N],
+        layouts: &[InLayout<'a>; N],
+        ret_layout: InLayout<'a>,
+        dst: Symbol,
+    ) {
+        // Setup the return location.
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, dst, ret_layout);
+
+        let tmp = self.debug_symbol("call_with_stack_return_result");
+
+        self.build_fn_call(
+            &tmp,
+            function_name,
+            arguments.as_slice(),
+            layouts.as_slice(),
+            &ret_layout,
+        );
+
+        // Return list value from fn call
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &tmp,
+            &ret_layout,
+        );
+
+        self.free_symbol(&tmp);
+    }
+
+    fn clear_tag_id(&mut self, ptr_reg: GeneralReg) -> (Symbol, GeneralReg) {
+        let unmasked_symbol = self.debug_symbol("unmasked");
+        let unmasked_reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &unmasked_symbol);
+
+        ASM::mov_reg64_imm64(&mut self.buf, unmasked_reg, (!0b111) as _);
+
+        ASM::and_reg64_reg64_reg64(&mut self.buf, unmasked_reg, ptr_reg, unmasked_reg);
+
+        (unmasked_symbol, unmasked_reg)
+    }
+
+    fn num_to_f32(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+        match self.layout_interner.get_repr(*arg_layout) {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)) => {
+                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
+                ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::F32),
+        }
+    }
+
+    fn num_to_f64(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+        match self.layout_interner.get_repr(*arg_layout) {
+            LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)) => {
+                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
+                ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::F64),
+        }
+    }
+
+    fn num_to_dec(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        match self.layout_interner.get_repr(*arg_layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_FROM_INT[int_width].to_string(),
+                    &[*src],
+                    &[*arg_layout],
+                    &Layout::DEC,
+                );
+            }
+
+            arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::DEC),
+        }
+    }
+
+    fn compare_128bit(
+        &mut self,
+        op: CompareOperation,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        width: IntWidth,
+    ) {
+        let intrinsic = match op {
+            CompareOperation::LessThan => &bitcode::NUM_LESS_THAN[width],
+            CompareOperation::LessThanOrEqual => &bitcode::NUM_LESS_THAN_OR_EQUAL[width],
+            CompareOperation::GreaterThan => &bitcode::NUM_GREATER_THAN[width],
+            CompareOperation::GreaterThanOrEqual => &bitcode::NUM_GREATER_THAN_OR_EQUAL[width],
+        };
+
+        self.build_fn_call(
+            dst,
+            intrinsic.to_string(),
+            &[*src1, *src2],
+            &[Layout::U128, Layout::U128],
+            &Layout::U8,
+        );
+    }
+
     fn compare(
         &mut self,
         op: CompareOperation,
@@ -3905,6 +4912,12 @@ impl<
                     float_width,
                     op,
                 );
+            }
+            LayoutRepr::Builtin(Builtin::Int(width @ (IntWidth::I128 | IntWidth::U128))) => {
+                self.compare_128bit(op, dst, src1, src2, width);
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.compare_128bit(op, dst, src1, src2, IntWidth::I128);
             }
             x => todo!("NumLt: layout, {:?}", x),
         }
@@ -3990,7 +5003,7 @@ impl<
         tmp_reg: GeneralReg,
         offset: i32,
     ) {
-        let base_offset = storage_manager.claim_stack_area(&dst, 24);
+        let base_offset = storage_manager.claim_stack_area_with_alignment(dst, 24, 8);
 
         ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
         ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
@@ -4019,7 +5032,8 @@ impl<
             return;
         }
 
-        let base_offset = storage_manager.claim_stack_area(&dst, stack_size);
+        // 16 is a guess here. In practice this is the highest alignment we encounter in roc datastructures
+        let base_offset = storage_manager.claim_stack_area_with_alignment(dst, stack_size, 16);
 
         if size - copied >= 8 {
             for _ in (0..(size - copied)).step_by(8) {
@@ -4072,7 +5086,22 @@ impl<
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
                         // can we treat this as 2 u64's?
-                        todo!()
+                        storage_manager.with_tmp_general_reg(
+                            buf,
+                            |storage_manager, buf, tmp_reg| {
+                                let base_offset = storage_manager.claim_stack_area_layout(
+                                    layout_interner,
+                                    dst,
+                                    Layout::U128,
+                                );
+
+                                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
+                                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                                ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
+                                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                            },
+                        );
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         let dst_reg = storage_manager.claim_general_reg(buf, &dst);
@@ -4110,6 +5139,19 @@ impl<
                 }
                 Builtin::Decimal => {
                     // same as 128-bit integer
+                    storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                        let base_offset = storage_manager.claim_stack_area_layout(
+                            layout_interner,
+                            dst,
+                            Layout::DEC,
+                        );
+
+                        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset);
+                        ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+                        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, offset + 8);
+                        ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+                    });
                 }
                 Builtin::Str | Builtin::List(_) => {
                     storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
@@ -4176,6 +5218,8 @@ impl<
                     dst,
                 );
             }
+
+            LayoutRepr::Erased(_) => todo_lambda_erasure!(),
         }
     }
 
@@ -4236,7 +5280,9 @@ impl<
                 }
 
                 let (from_offset, stack_size) = storage_manager.stack_offset_and_size(&value);
-                debug_assert!(from_offset % 8 == 0);
+
+                // on x86_64 this is too strict.
+                // debug_assert_eq!(from_offset % 8, 0);
 
                 storage_manager.with_tmp_general_reg(buf, |_storage_manager, buf, tmp_reg| {
                     let mut copied = 0;
@@ -4299,22 +5345,6 @@ impl<
                     }
                 });
             }
-        }
-    }
-
-    /// Updates a jump instruction to a new offset and returns the number of bytes written.
-    fn update_jmp_imm32_offset(
-        &mut self,
-        tmp: &mut Vec<'a, u8>,
-        jmp_location: u64,
-        base_offset: u64,
-        target_offset: u64,
-    ) {
-        tmp.clear();
-        let jmp_offset = target_offset as i32 - base_offset as i32;
-        ASM::jmp_imm32(tmp, jmp_offset);
-        for (i, byte) in tmp.iter().enumerate() {
-            self.buf[jmp_location as usize + i] = *byte;
         }
     }
 
@@ -4389,7 +5419,7 @@ macro_rules! single_register_layouts {
 #[macro_export]
 macro_rules! pointer_layouts {
     () => {
-        LayoutRepr::Boxed(_)
+        LayoutRepr::Ptr(_)
             | LayoutRepr::RecursivePointer(_)
             | LayoutRepr::Union(
                 UnionLayout::Recursive(_)
@@ -4397,5 +5427,6 @@ macro_rules! pointer_layouts {
                     | UnionLayout::NullableWrapped { .. }
                     | UnionLayout::NullableUnwrapped { .. },
             )
+            | LayoutRepr::FunctionPointer(_)
     };
 }

@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: CI
 
@@ -17,9 +18,7 @@ jobs:
     env:
       RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
     steps:
-      - uses: actions/checkout@v2
-        with:
-          clean: "true"
+      - uses: actions/checkout@v3
 
       - name: Check for duplicate AUTHORS
         run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
@@ -38,10 +37,7 @@ jobs:
 
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
-
-      - name: test launching the editor
-        run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
-
+        
       - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
 
@@ -61,8 +57,7 @@ jobs:
         run: ./ci/www-repl.sh && sccache --show-stats
 
       #TODO i386 (32-bit linux) cli tests
-
       #TODO verify-no-git-changes
 
       - name: test website build script
-        run: REPL_DEBUG=1 bash www/build.sh
+        run: bash www/build.sh

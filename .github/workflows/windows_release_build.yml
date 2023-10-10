@@ -1,4 +1,5 @@
-on: [pull_request]
+on:
+  pull_request:
 
 name: windows - release build
 
@@ -18,7 +19,7 @@ jobs:
 
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
@@ -32,8 +33,8 @@ jobs:
       - name: zig version
         run: zig version
 
-      - name: install rust nightly 1.66
-        run: rustup install nightly-2022-10-30
+      - name: install rust nightly 1.71.0
+        run: rustup install nightly-2023-05-28
 
       - name: set up llvm 13
         run: |

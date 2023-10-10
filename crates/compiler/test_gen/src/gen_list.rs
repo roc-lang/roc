@@ -7,13 +7,12 @@ use crate::helpers::dev::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
-#[allow(unused_imports)]
 use crate::helpers::with_larger_debug_stack;
 //use crate::assert_wasm_evals_to as assert_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocList, RocResult, RocStr};
+use roc_std::{RocDec, RocList, RocResult, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -83,6 +82,32 @@ fn bool_list_literal() {
         ),
         RocList::from_slice(&[false; 1]),
         RocList<bool>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn dec_list_literal() {
+    assert_evals_to!(
+        "[1.0dec, 2.0dec]",
+        RocList::from_slice(&[RocDec::from(1), RocDec::from(2)]),
+        RocList<RocDec>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn dec_list_join() {
+    assert_evals_to!(
+        "List.concat [1.0dec, 2.0] [3.0, 4.0, 5.0]",
+        RocList::from_slice(&[
+            RocDec::from(1),
+            RocDec::from(2),
+            RocDec::from(3),
+            RocDec::from(4),
+            RocDec::from(5),
+        ]),
+        RocList<RocDec>
     );
 }
 
@@ -459,6 +484,38 @@ fn list_split_last() {
         "List.splitLast [] 1",
         RocResult::err(()),
         RocResult<(RocList<i64>, RocList<i64>), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_chunks_of() {
+    assert_evals_to!(
+        "List.chunksOf [1, 2, 3, 4, 5, 6, 7, 8] 3",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::from_slice(&[1, 2, 3]),
+            RocList::from_slice(&[4, 5, 6]),
+            RocList::from_slice(&[7, 8]),
+        ]),
+        RocList<RocList<i64>>
+    );
+
+    assert_evals_to!(
+        "List.chunksOf [1, 2, 3, 4] 5",
+        RocList::<RocList<i64>>::from_slice(&[RocList::from_slice(&[1, 2, 3, 4]),]),
+        RocList<RocList<i64>>
+    );
+
+    assert_evals_to!(
+        "List.chunksOf [1, 2, 3] 0",
+        RocList::<RocList<i64>>::from_slice(&[]),
+        RocList<RocList<i64>>
+    );
+
+    assert_evals_to!(
+        "List.chunksOf [] 5",
+        RocList::<RocList<i64>>::from_slice(&[]),
+        RocList<RocList<i64>>
     );
 }
 
@@ -960,7 +1017,7 @@ fn list_walk_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat | a has Eq
+        find : List a, a -> Option Nat where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -1389,7 +1446,7 @@ fn list_map_closure_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map4_group() {
     assert_evals_to!(
         indoc!(
@@ -1403,7 +1460,7 @@ fn list_map4_group() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map4_different_length() {
     assert_evals_to!(
         indoc!(
@@ -1422,7 +1479,7 @@ fn list_map4_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map3_group() {
     assert_evals_to!(
         indoc!(
@@ -1436,7 +1493,7 @@ fn list_map3_group() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map3_different_length() {
     assert_evals_to!(
         indoc!(
@@ -1454,7 +1511,7 @@ fn list_map3_different_length() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map2_pair() {
     assert_evals_to!(
         indoc!(
@@ -1469,7 +1526,7 @@ fn list_map2_pair() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_map2_different_lengths() {
     assert_evals_to!(
         indoc!(
@@ -1519,7 +1576,7 @@ fn list_join_two_non_empty_lists() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_two_non_empty_lists_of_float() {
     assert_evals_to!(
-        "List.join [[1.2, 1.1], [2.1, 2.2]]",
+        "List.join [[1.2f64, 1.1], [2.1, 2.2]]",
         RocList::from_slice(&[1.2, 1.1, 2.1, 2.2]),
         RocList<f64>
     );
@@ -1533,7 +1590,7 @@ fn list_join_to_big_list() {
             r#"
                 List.join
                     [
-                        [1.2, 1.1],
+                        [1.2f64, 1.1],
                         [2.1, 2.2],
                         [3.0, 4.0, 5.0, 6.1, 9.0],
                         [3.0, 4.0, 5.0, 6.1, 9.0],
@@ -1583,7 +1640,7 @@ fn list_join_all_empty_lists() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_join_one_empty_list() {
     assert_evals_to!(
-        "List.join [[1.2, 1.1], []]",
+        "List.join [[1.2f64, 1.1], []]",
         RocList::from_slice(&[1.2, 1.1]),
         RocList<f64>
     );
@@ -1762,8 +1819,8 @@ fn list_concat_two_non_empty_lists() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_bigger_non_empty_lists() {
     assert_evals_to!(
-        "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
-        RocList::from_slice(&[1.1, 2.2, 3.3, 4.4, 5.5]),
+        "List.concat [1.1f64, 2.2] [3.3, 4.4, 5.5]",
+        RocList::from_slice(&[1.1f64, 2.2, 3.3, 4.4, 5.5]),
         RocList<f64>
     );
 }
@@ -1777,14 +1834,14 @@ fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec2: Vec<i64> = (0..num_elems2)
         .map(|i| 54321 % (i + num_elems1 + num_elems2 + 1))
         .collect();
-    let slice_str1 = format!("{:?}", vec1);
-    let slice_str2 = format!("{:?}", vec2);
+    let slice_str1 = format!("{vec1:?}");
+    let slice_str2 = format!("{vec2:?}");
     let mut expected = vec1;
 
     expected.extend(vec2);
 
     assert_evals_to!(
-        &format!("List.concat {} {}", slice_str1, slice_str2),
+        &format!("List.concat {slice_str1} {slice_str2}"),
         RocList::from_slice(&expected),
         RocList<i64>
     );
@@ -2165,7 +2222,7 @@ fn replace_shared_int_list() {
 
                 { x, y }
 
-            wrapper [2.1, 4.3]
+            wrapper [2.1f64, 4.3]
             "#
         ),
         (7.7, 4.3),
@@ -2215,7 +2272,7 @@ fn set_unique_int_list() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn set_unique_list_oob() {
     assert_evals_to!(
-        "List.set [3, 17, 4.1] 1337 9.25",
+        "List.set [3f64, 17, 4.1] 1337 9.25",
         RocList::from_slice(&[3.0, 17.0, 4.1]),
         RocList<f64>
     );
@@ -2241,7 +2298,7 @@ fn set_shared_int_list() {
 
                 { x, y }
 
-            wrapper [2.1, 4.3]
+            wrapper [2.1f64, 4.3]
             "#
         ),
         (7.7, 4.3),
@@ -2797,7 +2854,13 @@ fn list_max() {
 fn list_sum() {
     assert_evals_to!("List.sum []", 0, i64);
     assert_evals_to!("List.sum [1, 2, 3]", 6, i64);
-    assert_evals_to!("List.sum [1.1, 2.2, 3.3]", 6.6, f64);
+    assert_evals_to!("List.sum [1.1f64, 2.2, 3.3]", 6.6, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_sum_dec() {
+    assert_evals_to!("List.sum [1.0dec, 2.0]", RocDec::from(3), RocDec);
 }
 
 #[test]
@@ -2805,7 +2868,7 @@ fn list_sum() {
 fn list_product() {
     assert_evals_to!("List.product []", 1, i64);
     assert_evals_to!("List.product [1, 2, 3]", 6, i64);
-    assert_evals_to!("List.product [1.1, 2.2, 3.3]", 1.1 * 2.2 * 3.3, f64);
+    assert_evals_to!("List.product [1.1f64, 2.2, 3.3]", 1.1 * 2.2 * 3.3, f64);
 }
 
 #[test]
@@ -2910,7 +2973,7 @@ fn cleanup_because_exception() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_with() {
     assert_evals_to!(
         "List.sortWith [] Num.compare",
@@ -2930,7 +2993,7 @@ fn list_sort_with() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_asc() {
     assert_evals_to!(
         "List.sortAsc []",
@@ -2945,7 +3008,7 @@ fn list_sort_asc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_sort_desc() {
     assert_evals_to!(
         "List.sortDesc []",
@@ -2983,7 +3046,7 @@ fn list_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn list_all_empty_with_unknown_element_type() {
     assert_evals_to!("List.all [] (\\_ -> Bool.true)", true, bool);
 }
@@ -3693,7 +3756,7 @@ fn list_walk_backwards_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat | a has Eq
+        find : List a, a -> Option Nat where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -3811,6 +3874,9 @@ fn list_range_length_overflow() {
 
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 mod pattern_match {
+    #[allow(unused_imports)]
+    use crate::helpers::with_larger_debug_stack;
+
     #[cfg(feature = "gen-llvm")]
     use crate::helpers::llvm::assert_evals_to;
 
@@ -3857,62 +3923,66 @@ mod pattern_match {
 
     #[test]
     fn ranged_matches_head() {
-        assert_evals_to!(
-            r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [A, A, ..] -> 3u8
-                [A, B, ..] -> 4u8
-                [B, ..] -> 5u8
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                r#"
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [A, A, ..] -> 3u8
+                    [A, B, ..] -> 4u8
+                    [B, ..] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
-                helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
-                helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
-            RocList::from_slice(&[
-                1, //
-                2, //
-                3, 3, 3, 3, //
-                4, 4, 4, 4, //
-                5, 5, 5, 5, //
-            ]),
-            RocList<u8>
-        )
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [A, A, B], helper [A, A, B, A],
+                    helper [A, B], helper [A, B, A], helper [A, B, B], helper [A, B, A, B],
+                    helper [B], helper [B, A], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
+                RocList::from_slice(&[
+                    1, //
+                    2, //
+                    3, 3, 3, 3, //
+                    4, 4, 4, 4, //
+                    5, 5, 5, 5, //
+                ]),
+                RocList<u8>
+            )
+        });
     }
 
     #[test]
     fn ranged_matches_tail() {
-        assert_evals_to!(
-            r#"
-            helper = \l -> when l is
-                [] -> 1u8
-                [A] -> 2u8
-                [.., A, A] -> 3u8
-                [.., B, A] -> 4u8
-                [.., B] -> 5u8
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                r#"
+                helper = \l -> when l is
+                    [] -> 1u8
+                    [A] -> 2u8
+                    [.., A, A] -> 3u8
+                    [.., B, A] -> 4u8
+                    [.., B] -> 5u8
 
-            [
-                helper [],
-                helper [A],
-                helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
-                helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
-                helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
-            ]
-            "#,
-            RocList::from_slice(&[
-                1, //
-                2, //
-                3, 3, 3, 3, //
-                4, 4, 4, 4, //
-                5, 5, 5, 5, //
-            ]),
-            RocList<u8>
-        )
+                [
+                    helper [],
+                    helper [A],
+                    helper [A, A], helper [A, A, A], helper [B, A, A], helper [A, B, A, A],
+                    helper [B, A], helper [A, B, A], helper [B, B, A], helper [B, A, B, A],
+                    helper [B], helper [A, B], helper [B, B], helper [B, A, B, B],
+                ]
+                "#,
+                RocList::from_slice(&[
+                    1, //
+                    2, //
+                    3, 3, 3, 3, //
+                    4, 4, 4, 4, //
+                    5, 5, 5, 5, //
+                ]),
+                RocList<u8>
+            )
+        })
     }
 
     #[test]

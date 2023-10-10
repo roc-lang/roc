@@ -241,6 +241,7 @@ pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE
 pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
 
 /// A machine-readable format for text styles (colors and other styles)
+#[derive(Debug, PartialEq)]
 pub struct StyleCodes {
     pub red: &'static str,
     pub green: &'static str,
@@ -438,7 +439,7 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
+        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {opaque:?}");
 
         text!(self, "@{}", opaque.as_str(self.interns)).annotate(Annotation::Opaque)
     }
@@ -674,7 +675,15 @@ impl<'a> RocDocAllocator<'a> {
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
 
-            let line: &str = self.src_lines.get(i as usize).unwrap_or(&"");
+            // filter out any escape characters for the current line that could mess up the output.
+            let line: String = self
+                .src_lines
+                .get(i as usize)
+                .unwrap_or(&"")
+                .chars()
+                .filter(|&c| !c.is_ascii_control() || c == '\t')
+                .collect::<String>();
+
             let is_line_empty = line.trim().is_empty();
             let rest_of_line = if !is_line_empty {
                 self.text(line)
@@ -1612,7 +1621,7 @@ pub fn to_file_problem_report<'b>(
         }
         _ => {
             let error = std::io::Error::from(error);
-            let formatted = format!("{}", error);
+            let formatted = format!("{error}");
             let doc = alloc.stack([
                 alloc.reflow(r"I tried to read this file:"),
                 alloc.string(filename).annotate(Annotation::Error).indent(4),

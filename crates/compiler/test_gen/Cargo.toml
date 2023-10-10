@@ -18,7 +18,13 @@ wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 tempfile.workspace = true
 
+[dependencies]
+roc_gen_llvm = { path = "../gen_llvm", optional = true }
+inkwell = { workspace = true, optional = true }
+
 [dev-dependencies]
+roc_gen_dev = { path = "../gen_dev" }
+roc_gen_wasm = { path = "../gen_wasm" }
 roc_bitcode = { path = "../builtins/bitcode" }
 roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"] }
 roc_builtins = { path = "../builtins" }
@@ -28,9 +34,6 @@ roc_command_utils = { path = "../../utils/command" }
 roc_constrain = { path = "../constrain" }
 roc_debug_flags = { path = "../debug_flags" }
 roc_error_macros = { path = "../../error_macros" }
-roc_gen_dev = { path = "../gen_dev" }
-roc_gen_llvm = { path = "../gen_llvm" }
-roc_gen_wasm = { path = "../gen_wasm" }
 roc_load = { path = "../load" }
 roc_module = { path = "../module" }
 roc_mono = { path = "../mono" }
@@ -50,8 +53,6 @@ roc_wasm_module = { path = "../../wasm_module" }
 bumpalo.workspace = true
 criterion.workspace = true
 indoc.workspace = true
-inkwell.workspace = true
-lazy_static.workspace = true
 libc.workspace = true
 libloading.workspace = true
 target-lexicon.workspace = true
@@ -61,7 +62,7 @@ tempfile.workspace = true
 [features]
 default = ["gen-llvm"]
 gen-dev = []
-gen-llvm = []
+gen-llvm = ["roc_gen_llvm", "inkwell"]
 gen-llvm-wasm = ["gen-llvm"]
 gen-wasm = []
 

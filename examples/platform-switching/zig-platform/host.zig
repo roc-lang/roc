@@ -6,20 +6,6 @@ const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 
-comptime {
-    // This is a workaround for https://github.com/ziglang/zig/issues/8218
-    // which is only necessary on macOS.
-    //
-    // Once that issue is fixed, we can undo the changes in
-    // 177cf12e0555147faa4d436e52fc15175c2c4ff0 and go back to passing
-    // -fcompiler-rt in link.rs instead of doing this. Note that this
-    // workaround is present in many host.zig files, so make sure to undo
-    // it everywhere!
-    if (builtin.os.tag == .macos) {
-        _ = @import("compiler_rt");
-    }
-}
-
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
 extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;

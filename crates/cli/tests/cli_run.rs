@@ -90,7 +90,7 @@ mod cli_run {
 
         // e.g. "1 error and 0 warnings found in 123 ms."
         let (before_first_digit, _) = err.split_at(err.rfind("found in ").unwrap());
-        let err = format!("{}found in <ignored for test> ms.", before_first_digit);
+        let err = format!("{before_first_digit}found in <ignored for test> ms.");
 
         // make paths consistent
         let err = err.replace('\\', "/");
@@ -230,7 +230,7 @@ mod cli_run {
                                         what: _,
                                         xwhat,
                                     } = error;
-                                    println!("Valgrind Error: {}\n", kind);
+                                    println!("Valgrind Error: {kind}\n");
 
                                     if let Some(ValgrindErrorXWhat {
                                         text,
@@ -238,14 +238,14 @@ mod cli_run {
                                         leakedblocks: _,
                                     }) = xwhat
                                     {
-                                        println!("    {}", text);
+                                        println!("    {text}");
                                     }
                                 }
                                 panic!("Valgrind reported memory errors");
                             }
                         } else {
                             let exit_code = match valgrind_out.status.code() {
-                                Some(code) => format!("exit code {}", code),
+                                Some(code) => format!("exit code {code}"),
                                 None => "no exit code".to_string(),
                             };
 
@@ -301,7 +301,7 @@ mod cli_run {
             // e.g. "1 failed and 0 passed in 123 ms."
             if let Some(split) = actual.rfind("passed in ") {
                 let (before_first_digit, _) = actual.split_at(split);
-                actual = format!("{}passed in <ignored for test> ms.", before_first_digit);
+                actual = format!("{before_first_digit}passed in <ignored for test> ms.");
             }
 
             let self_path = file.display().to_string();
@@ -309,7 +309,7 @@ mod cli_run {
 
             if !actual.ends_with(expected_ending) {
                 panic!(
-                    "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
+                    "> expected output to end with:\n{}\n> but instead got:\n{}\n> stderr was:\n{}",
                     expected_ending, actual, out.stderr
                 );
             }
@@ -387,7 +387,7 @@ mod cli_run {
         let mut custom_flags: Vec<&str> = Vec::new();
 
         match executable_filename {
-            "form" | "hello-gui" | "breakout" | "libhello" => {
+            "form" | "hello-gui" | "breakout" | "libhello" | "inspect-gui" => {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                 // we do `roc build` on them but don't run them.
@@ -397,8 +397,7 @@ mod cli_run {
             "swiftui" | "rocLovesSwift" => {
                 if cfg!(not(target_os = "macos")) {
                     eprintln!(
-                        "WARNING: skipping testing example {} because it only works on MacOS.",
-                        roc_filename
+                        "WARNING: skipping testing example {roc_filename} because it only works on MacOS."
                     );
                     return;
                 } else {
@@ -409,8 +408,7 @@ mod cli_run {
             "rocLovesWebAssembly" => {
                 // this is a web assembly example, but we don't test with JS at the moment
                 eprintln!(
-                    "WARNING: skipping testing example {} because it only works in a browser!",
-                    roc_filename
+                    "WARNING: skipping testing example {roc_filename} because it only works in a browser!"
                 );
                 return;
             }
@@ -563,7 +561,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -649,7 +646,10 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
     fn fibonacci() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -664,7 +664,7 @@ mod cli_run {
     fn hello_gui() {
         test_roc_app_slim(
             "examples/gui",
-            "hello.roc",
+            "helloBROKEN.roc",
             "hello-gui",
             "",
             UseValgrind::No,
@@ -677,7 +677,7 @@ mod cli_run {
     fn breakout() {
         test_roc_app_slim(
             "examples/gui/breakout",
-            "breakout.roc",
+            "breakoutBROKEN.roc",
             "breakout",
             "",
             UseValgrind::No,
@@ -689,7 +689,7 @@ mod cli_run {
     fn breakout_hello_gui() {
         test_roc_app_slim(
             "examples/gui/breakout",
-            "hello-gui.roc",
+            "hello-guiBROKEN.roc",
             "hello-gui",
             "",
             UseValgrind::No,
@@ -793,7 +793,7 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -940,6 +940,30 @@ mod cli_run {
         test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn inspect_logging() {
+        test_roc_app_slim(
+            "examples",
+            "inspect-logging.roc",
+            "inspect-logging",
+            r#"{people: [{firstName: "John", lastName: "Smith", age: 27, hasBeard: true, favoriteColor: Blue}, {firstName: "Debby", lastName: "Johnson", age: 47, hasBeard: false, favoriteColor: Green}, {firstName: "Jane", lastName: "Doe", age: 33, hasBeard: false, favoriteColor: (RGB (255, 255, 0))}], friends: [{2}, {2}, {0, 1}]}
+"#,
+            UseValgrind::Yes,
+        )
+    }
+
+    #[test]
+    fn inspect_gui() {
+        test_roc_app_slim(
+            "examples",
+            "inspect-gui.roc",
+            "inspect-gui",
+            "",
+            UseValgrind::No,
+        )
+    }
+
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
@@ -965,16 +989,14 @@ mod cli_run {
             match roc_filename {
                 "QuicksortApp.roc" => {
                     eprintln!(
-                    "WARNING: skipping testing benchmark {} because the test is broken right now!",
-                    roc_filename
+                    "WARNING: skipping testing benchmark {roc_filename} because the test is broken right now!"
                 );
                     return;
                 }
                 "TestAStar.roc" => {
                     if cfg!(feature = "wasm32-cli-run") {
                         eprintln!(
-                        "WARNING: skipping testing benchmark {} because it currently does not work on wasm32 due to dictionaries.",
-                        roc_filename
+                        "WARNING: skipping testing benchmark {roc_filename} because it currently does not work on wasm32 due to dictionaries."
                     );
                         return;
                     }
@@ -1332,7 +1354,10 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),

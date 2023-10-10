@@ -1,19 +1,15 @@
 // The only way we can provide values to wasm_bindgen's generated code is to set globals
-function setGlobalsForWasmBindgen() {
-  window.js_create_app = js_create_app;
-  window.js_run_app = js_run_app;
-  window.js_get_result_and_memory = js_get_result_and_memory;
+window.js_create_app = js_create_app;
+window.js_run_app = js_run_app;
+window.js_get_result_and_memory = js_get_result_and_memory;
 
-  // The only place we use console.error is in wasm_bindgen, where it gets a single string argument.
-  console.error = function displayErrorInHistoryPanel(string) {
-    const html = `<div class="panic">${string}</div>`;
-    updateHistoryEntry(repl.inputHistoryIndex, false, html);
-  };
-}
-setGlobalsForWasmBindgen();
+// The only place we use console.error is in wasm_bindgen, where it gets a single string argument.
+console.error = function displayErrorInHistoryPanel(string) {
+  const html = `<div class="panic">${string}</div>`;
+  updateHistoryEntry(repl.inputHistoryIndex, false, html);
+};
 
 import * as roc_repl_wasm from "./roc_repl_wasm.js";
-import { getMockWasiImports } from "./wasi.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
@@ -34,40 +30,68 @@ const repl = {
   compiler: null,
   app: null,
 
-  // Temporary storage for values passing back and forth between JS and Wasm
-  result: { addr: 0, buffer: new ArrayBuffer() },
+  // Temporary storage for the address of the result of running the user's code.
+  // Used while control flow returns to Rust to allocate space to copy the app's memory buffer.
+  result_addr: 0,
 };
 
 // Initialise
-repl.elemSourceInput.addEventListener("change", onInputChange);
+repl.elemSourceInput.addEventListener("input", onInput);
+repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then((instance) => {
+roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
-  repl.elemSourceInput.placeholder =
-    "Type some Roc code and press Enter. (Use Shift+Enter for multi-line input)";
+  repl.elemSourceInput.placeholder = "Type some Roc code and press Enter.";
+  repl.elemSourceInput.focus();
   repl.compiler = instance;
+
+  // Get help text from the compiler, and display it at top of the history panel
+  try {
+    const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
+    const helpElem = document.getElementById("help-text");
+    helpElem.innerHTML = helpText.trim();
+  } catch (e) {
+    // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
+    console.warn(e);
+  }
 });
 
 // ----------------------------------------------------------------------------
 // Handle inputs
 // ----------------------------------------------------------------------------
 
-function onInputChange(event) {
-  const inputText = event.target.value.trim();
+function onInput(event) {
+  // Have the textarea grow with the input
+  event.target.style.height = event.target.scrollHeight + 2 + "px"; // +2 for the border
+}
 
-  event.target.value = "";
+function onInputKeydown(event) {
+  const ENTER = 13;
 
-  repl.inputQueue.push(inputText);
-  if (repl.inputQueue.length === 1) {
-    processInputQueue();
+  const { keyCode } = event;
+
+  if (keyCode === ENTER) {
+    if (!event.shiftKey && !event.ctrlKey && !event.altKey) {
+      // Don't advance the caret to the next line
+      event.preventDefault();
+
+      const inputText = repl.elemSourceInput.value.trim();
+
+      repl.elemSourceInput.value = "";
+      repl.elemSourceInput.style.height = "";
+
+      repl.inputQueue.push(inputText);
+      if (repl.inputQueue.length === 1) {
+        processInputQueue();
+      }
+    }
   }
 }
 
 function onInputKeyup(event) {
   const UP = 38;
   const DOWN = 40;
-  const ENTER = 13;
 
   const { keyCode } = event;
 
@@ -75,6 +99,9 @@ function onInputKeyup(event) {
 
   switch (keyCode) {
     case UP:
+      if (repl.inputHistory.length === 0) {
+        return;
+      }
       if (repl.inputHistoryIndex == repl.inputHistory.length - 1) {
         repl.inputStash = el.value;
       }
@@ -86,17 +113,14 @@ function onInputKeyup(event) {
       break;
 
     case DOWN:
+      if (repl.inputHistory.length === 0) {
+        return;
+      }
       if (repl.inputHistoryIndex === repl.inputHistory.length - 1) {
         setInput(repl.inputStash);
       } else {
         repl.inputHistoryIndex++;
         setInput(repl.inputHistory[repl.inputHistoryIndex]);
-      }
-      break;
-
-    case ENTER:
-      if (!event.shiftKey) {
-        onInputChange({ target: repl.elemSourceInput });
       }
       break;
 
@@ -141,40 +165,35 @@ async function processInputQueue() {
 // Callbacks to JS from Rust
 // ----------------------------------------------------------------------------
 
-// Create an executable Wasm instance from an array of bytes
-// (Browser validates the module and does the final compilation.)
+// Load Wasm code into the browser's virtual machine, so we can run it later.
+// This operation is async, so we call it before entering any code shared
+// with the command-line REPL, which is sync.
 async function js_create_app(wasm_module_bytes) {
-  const wasiLinkObject = {}; // gives the WASI functions a reference to the app so they can write to its memory
-  const importObj = getMockWasiImports(wasiLinkObject);
-  const { instance } = await WebAssembly.instantiate(
-    wasm_module_bytes,
-    importObj
-  );
-  wasiLinkObject.instance = instance;
+  const { instance } = await WebAssembly.instantiate(wasm_module_bytes);
+  // Keep the instance alive so we can run it later from shared REPL code
   repl.app = instance;
 }
 
-// Call the main function of the app, via the test wrapper
-// Cache the result and return the size of the app's memory
+// Call the `main` function of the user app, via the `wrapper` function.
 function js_run_app() {
   const { wrapper, memory } = repl.app.exports;
-  const addr = wrapper();
-  const { buffer } = memory;
-  repl.result = { addr, buffer };
+
+  // Run the user code, and remember the result address
+  // We'll pass it to Rust in the next callback
+  repl.result_addr = wrapper();
 
   // Tell Rust how much space to reserve for its copy of the app's memory buffer.
-  // This is not predictable, since the app can resize its own memory via malloc.
-  return buffer.byteLength;
+  // We couldn't know that size until we actually ran the app.
+  return memory.buffer.byteLength;
 }
 
-// After the Rust app has allocated space for the app's memory buffer,
-// it calls this function and we copy it, and return the result too
+// After Rust has allocated space for the app's memory buffer,
+// we copy it, and return the result address too
 function js_get_result_and_memory(buffer_alloc_addr) {
-  const { addr, buffer } = repl.result;
-  const appMemory = new Uint8Array(buffer);
+  const appMemory = new Uint8Array(repl.app.exports.memory.buffer);
   const compilerMemory = new Uint8Array(repl.compiler.memory.buffer);
   compilerMemory.set(appMemory, buffer_alloc_addr);
-  return addr;
+  return repl.result_addr;
 }
 
 // ----------------------------------------------------------------------------
@@ -186,14 +205,14 @@ function createHistoryEntry(inputText) {
   repl.inputHistory.push(inputText);
 
   const firstLinePrefix = '<span class="input-line-prefix">» </span>';
-  const otherLinePrefix = '\n<span class="input-line-prefix">… </span>';
+  const otherLinePrefix = '<br><span class="input-line-prefix">… </span>';
   const inputLines = inputText.split("\n");
   if (inputLines[inputLines.length - 1] === "") {
     inputLines.pop();
   }
   const inputWithPrefixes = firstLinePrefix + inputLines.join(otherLinePrefix);
 
-  const inputElem = document.createElement("pre");
+  const inputElem = document.createElement("div");
   inputElem.innerHTML = inputWithPrefixes;
   inputElem.classList.add("input");
 
@@ -202,19 +221,18 @@ function createHistoryEntry(inputText) {
   historyItem.classList.add("history-item");
 
   repl.elemHistory.appendChild(historyItem);
-  repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
 
   return historyIndex;
 }
 
 function updateHistoryEntry(index, ok, outputText) {
-  const outputElem = document.createElement("pre");
+  const outputElem = document.createElement("div");
   outputElem.innerHTML = outputText;
-  outputElem.classList.add("output");
-  outputElem.classList.add(ok ? "output-ok" : "output-error");
+  outputElem.classList.add("output", ok ? "output-ok" : "output-error");
 
   const historyItem = repl.elemHistory.children[index];
   historyItem.appendChild(outputElem);
 
-  repl.elemHistory.scrollTop = repl.elemHistory.scrollHeight;
+  // Scroll the page to the bottom so you can see the most recent output.
+  window.scrollTo(0, document.body.scrollHeight);
 }

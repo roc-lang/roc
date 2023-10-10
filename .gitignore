@@ -38,18 +38,6 @@ metadata
 .vimrc
 .nvimrc
 
-#files too big to track in git
-editor/benches/resources/100000_lines.roc
-editor/benches/resources/10000_lines.roc
-editor/benches/resources/1000_lines.roc
-editor/benches/resources/100_lines.roc
-editor/benches/resources/25000000_lines.roc
-editor/benches/resources/50000_lines.roc
-editor/benches/resources/500_lines.roc
-
-# file editor creates when no arg is passed
-roc-projects
-
 # rust cache (sccache folder)
 sccache_dir
 
@@ -82,3 +70,9 @@ www/src/roc-tutorial
 # It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
 /**/Cargo.lock
 !/Cargo.lock
+
+# snapshot tests temp file
+*.pending-snap
+
+# checkmate
+checkmate_*.json

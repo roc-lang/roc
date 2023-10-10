@@ -1,10 +1,10 @@
+use roc_repl_cli::WELCOME_MESSAGE;
+use roc_repl_ui::SHORT_INSTRUCTIONS;
+use roc_test_utils::assert_multiline_str_eq;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
-
-use roc_repl_cli::{SHORT_INSTRUCTIONS, WELCOME_MESSAGE};
-use roc_test_utils::assert_multiline_str_eq;
 
 const ERROR_MESSAGE_START: char = '─';
 
@@ -75,13 +75,12 @@ pub fn repl_eval(input: &str) -> Out {
 
     // Remove the initial instructions from the output.
 
-    let expected_instructions = format!("{}{}", WELCOME_MESSAGE, SHORT_INSTRUCTIONS);
+    let expected_instructions = format!("{WELCOME_MESSAGE}{SHORT_INSTRUCTIONS}");
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(
         stdout.starts_with(&expected_instructions),
-        "Unexpected repl output: {}",
-        stdout
+        "Unexpected repl output: {stdout}"
     );
 
     let (_, answer) = stdout.split_at(expected_instructions.len());
@@ -101,8 +100,7 @@ pub fn repl_eval(input: &str) -> Out {
 
         assert!(
             answer.ends_with(&expected_after_answer),
-            "Unexpected repl output after answer: {}",
-            answer
+            "Unexpected repl output after answer: {answer}"
         );
 
         // Use [1..] to trim the leading '\n'
@@ -128,19 +126,13 @@ pub fn expect_success(input: &str, expected: &str) {
 
     assert_multiline_str_eq!("", out.stderr.as_str());
 
-    // Don't consider the auto variable name (e.g. "# val1") at the end.
-    // The state.rs tests do that!
     let mut iter = out.stdout.lines().rev();
     let line = iter.next().unwrap();
-    let comment_index = line.rfind('#').unwrap_or(line.len());
-    let line_without_comment = line[0..comment_index].trim_end();
 
-    // Sometimes the "# val1" wraps around to its own line; if this happens,
-    // we just use the preceding line instead.
-    if line_without_comment.is_empty() {
+    if line.is_empty() {
         assert_multiline_str_eq!(expected, iter.next().unwrap().trim_end());
     } else {
-        assert_multiline_str_eq!(expected, line_without_comment);
+        assert_multiline_str_eq!(expected, line);
     }
 
     assert!(out.status.success());

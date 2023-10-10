@@ -674,7 +674,7 @@ pub enum FoundSymbol {
     Symbol(Symbol),
 }
 
-/// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// Given an ability Foo implements foo : ..., returns (T, foo1) if the symbol at the given region is a
 /// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
 /// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
 pub fn find_symbol_at(

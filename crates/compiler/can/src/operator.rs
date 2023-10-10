@@ -7,7 +7,9 @@ use roc_module::called_via::BinOp::Pizza;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, Collection, RecordBuilderField, ValueDef, WhenBranch};
+use roc_parse::ast::{
+    AssignedField, Collection, RecordBuilderField, StrLiteral, StrSegment, ValueDef, WhenBranch,
+};
 use roc_region::all::{Loc, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -129,7 +131,6 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         Float(..)
         | Num(..)
         | NonBase10Int { .. }
-        | Str(_)
         | SingleQuote(_)
         | AccessorFunction(_)
         | Var { .. }
@@ -143,6 +144,28 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | OpaqueRef(_)
         | IngestedFile(_, _)
         | Crash => loc_expr,
+
+        Str(str_literal) => match str_literal {
+            StrLiteral::PlainLine(_) => loc_expr,
+            StrLiteral::Line(segments) => {
+                let region = loc_expr.region;
+                let value = Str(StrLiteral::Line(desugar_str_segments(arena, segments)));
+
+                arena.alloc(Loc { region, value })
+            }
+            StrLiteral::Block(lines) => {
+                let region = loc_expr.region;
+                let new_lines = Vec::from_iter_in(
+                    lines
+                        .iter()
+                        .map(|segments| desugar_str_segments(arena, segments)),
+                    arena,
+                );
+                let value = Str(StrLiteral::Block(new_lines.into_bump_slice()));
+
+                arena.alloc(Loc { region, value })
+            }
+        },
 
         TupleAccess(sub_expr, paths) => {
             let region = loc_expr.region;
@@ -288,7 +311,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
 
                             break builder_arg.closure;
                         }
-                        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+                        SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
                             current = *expr;
                         }
                         _ => break loc_arg,
@@ -382,7 +405,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 region: loc_expr.region,
             })
         }
-        SpaceBefore(expr, _) | SpaceAfter(expr, _) | ParensAround(expr) => {
+        SpaceBefore(expr, _) | SpaceAfter(expr, _) => {
             // Since we've already begun canonicalization, spaces and parens
             // are no longer needed and should be dropped.
             desugar_expr(
@@ -392,6 +415,20 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     region: loc_expr.region,
                 }),
             )
+        }
+        ParensAround(expr) => {
+            let desugared = desugar_expr(
+                arena,
+                arena.alloc(Loc {
+                    value: **expr,
+                    region: loc_expr.region,
+                }),
+            );
+
+            arena.alloc(Loc {
+                value: ParensAround(&desugared.value),
+                region: loc_expr.region,
+            })
         }
         If(if_thens, final_else_branch) => {
             // If does not get desugared into `when` so we can give more targeted error messages during type checking.
@@ -428,6 +465,34 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             })
         }
     }
+}
+
+fn desugar_str_segments<'a>(
+    arena: &'a Bump,
+    segments: &'a [StrSegment<'a>],
+) -> &'a [StrSegment<'a>] {
+    Vec::from_iter_in(
+        segments.iter().map(|segment| match segment {
+            StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => {
+                *segment
+            }
+            StrSegment::Interpolated(loc_expr) => {
+                let loc_desugared = desugar_expr(
+                    arena,
+                    arena.alloc(Loc {
+                        region: loc_expr.region,
+                        value: *loc_expr.value,
+                    }),
+                );
+                StrSegment::Interpolated(Loc {
+                    region: loc_desugared.region,
+                    value: arena.alloc(loc_desugared.value),
+                })
+            }
+        }),
+        arena,
+    )
+    .into_bump_slice()
 }
 
 fn desugar_field<'a>(

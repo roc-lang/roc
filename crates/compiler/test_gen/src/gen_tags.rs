@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use crate::helpers::with_larger_debug_stack;
+
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 
@@ -14,8 +17,6 @@ use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
 use roc_std::{RocList, RocStr, U128};
 
-use crate::helpers::with_larger_debug_stack;
-
 #[test]
 fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
@@ -29,8 +30,8 @@ fn width_and_alignment_u8_u8() {
 
     let layout = LayoutRepr::Union(UnionLayout::NonRecursive(&tt));
 
-    assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
-    assert_eq!(layout.stack_size(&interner, target_info), 2);
+    assert_eq!(layout.alignment_bytes(&interner), 1);
+    assert_eq!(layout.stack_size(&interner), 2);
 }
 
 #[test]
@@ -197,7 +198,7 @@ fn gen_if_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                if Bool.true then -1.0 else 1.0
+                if Bool.true then -1.0 else 1.0f64
                 "#
         ),
         -1.0,
@@ -765,7 +766,7 @@ fn join_point_when() {
                     when x is
                         Red -> 1
                         White -> 2
-                        Blue -> 3.1
+                        Blue -> 3.1f64
 
                 y
 
@@ -1380,7 +1381,7 @@ fn issue_2445() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn issue_2458() {
     assert_evals_to!(
         indoc!(
@@ -2060,7 +2061,7 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
                     _ -> (\a -> a)
 
 
-            main = ((fn "*") 3) * ((fn "+") 5)
+            main = ((fn "*") 3i64) * ((fn "+") 5)
             "#
         ),
         90,
@@ -2254,15 +2255,15 @@ fn recursive_tag_id_in_allocation_basic() {
 
             main =
                 when x is
-                    A _ -> "A"  
-                    B _ -> "B"  
-                    C _ -> "C"  
-                    D _ -> "D"  
-                    E _ -> "E"  
-                    F _ -> "F"  
-                    G _ -> "G"  
-                    H _ -> "H"  
-                    I _ -> "I"  
+                    A _ -> "A"
+                    B _ -> "B"
+                    C _ -> "C"
+                    D _ -> "D"
+                    E _ -> "E"
+                    F _ -> "F"
+                    G _ -> "G"
+                    H _ -> "H"
+                    I _ -> "I"
             "###
         ),
         RocStr::from("H"),

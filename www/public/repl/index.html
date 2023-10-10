@@ -1,38 +1,40 @@
 <!DOCTYPE html>
 
 <html>
-  <head>
-    <title>Roc REPL</title>
-    <link rel="stylesheet" href="/repl/repl.css" />
-  </head>
 
-  <body>
-    <div class="body-wrapper">
-      <section class="text">
-        <h1>The rockin' Roc REPL</h1>
-      </section>
+<head>
+  <meta charset="utf-8">
 
-      <section class="history">
-        <div class="scroll-wrap">
-          <div id="history-text" class="scroll code">
-            <div id="loading-message">
-              Loading Roc compiler as a WebAssembly module... please wait!
-            </div>
-          </div>
-        </div>
-      </section>
+  <title>REPL</title>
+  <link rel="stylesheet" href="/site.css" />
+  <link rel="stylesheet" href="/repl/repl.css" />
+  <link rel="icon" href="/favicon.svg">
+  <!-- Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
+    fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
+  -->
+  <link rel="mask-icon" href="/favicon.svg" color="#7d59dd">
+</head>
 
-      <section class="source">
-        <textarea
-          rows="5"
-          autofocus
-          id="source-input"
-          class="code"
-          placeholder="You can enter Roc code here after the compiler is loaded!"
-          disabled
-        ></textarea>
-      </section>
+<body>
+  <div id="top-bar">
+    <nav><a class="home-link" href="/" title="The Roc Programming Language">roc</a>
+      <div id="top-bar-links"><a href="/tutorial">tutorial</a><a
+          href="https://github.com/roc-lang/roc/tree/main/getting_started">install</a><a href="/repl">repl</a><a
+          href="/builtins">docs</a></div>
+    </nav>
+  </div>
+  <main>
+    <h1>The rockin’ Roc REPL</h1>
+    <code class="history">
+      <div id="help-text"></div>
+      <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
+    </code>
+    <section id="source-input-wrapper">
+      <textarea rows="5" autofocus id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+        disabled></textarea>
+    </section>
     </div>
     <script type="module" src="/repl/repl.js"></script>
-  </body>
+</body>
+
 </html>

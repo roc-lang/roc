@@ -2,80 +2,72 @@ procedure Bool.2 ():
     let Bool.23 : Int1 = true;
     ret Bool.23;
 
-procedure List.145 (List.146, List.147, List.144):
-    let List.540 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName Test.6 List.146 List.147 List.144;
-    ret List.540;
-
-procedure List.18 (List.142, List.143, List.144):
-    let List.521 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.93 List.142 List.143 List.144;
-    ret List.521;
+procedure List.18 (List.147, List.148, List.149):
+    let List.546 : U64 = 0i64;
+    let List.547 : U64 = CallByName List.6 List.147;
+    let List.545 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.87 List.147 List.148 List.149 List.546 List.547;
+    ret List.545;
 
 procedure List.6 (#Attr.2):
-    let List.538 : U64 = lowlevel ListLen #Attr.2;
-    ret List.538;
+    let List.556 : U64 = lowlevel ListLen #Attr.2;
+    ret List.556;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.537 : Int1 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.537;
+    let List.555 : Int1 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.555;
 
-procedure List.80 (List.544, List.545, List.546, List.547, List.548):
-    joinpoint List.527 List.439 List.440 List.441 List.442 List.443:
-        let List.529 : Int1 = CallByName Num.22 List.442 List.443;
-        if List.529 then
-            let List.536 : Int1 = CallByName List.66 List.439 List.442;
-            let List.530 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.145 List.440 List.536 List.441;
-            let List.533 : U64 = 1i64;
-            let List.532 : U64 = CallByName Num.19 List.442 List.533;
-            jump List.527 List.439 List.530 List.441 List.532 List.443;
+procedure List.87 (#Derived_gen.5, #Derived_gen.6, #Derived_gen.7, #Derived_gen.8, #Derived_gen.9):
+    joinpoint List.548 List.150 List.151 List.152 List.153 List.154:
+        let List.550 : Int1 = CallByName Num.22 List.153 List.154;
+        if List.550 then
+            let List.554 : Int1 = CallByName List.66 List.150 List.153;
+            let List.155 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName Test.6 List.151 List.554 List.152;
+            let List.553 : U64 = 1i64;
+            let List.552 : U64 = CallByName Num.51 List.153 List.553;
+            jump List.548 List.150 List.155 List.152 List.552 List.154;
         else
-            dec List.439;
-            ret List.440;
+            dec List.150;
+            ret List.151;
     in
-    jump List.527 List.544 List.545 List.546 List.547 List.548;
-
-procedure List.93 (List.436, List.437, List.438):
-    let List.525 : U64 = 0i64;
-    let List.526 : U64 = CallByName List.6 List.436;
-    let List.524 : [<rnw><null>, C *self Int1, C *self Int1] = CallByName List.80 List.436 List.437 List.438 List.525 List.526;
-    ret List.524;
-
-procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.287 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.287;
+    jump List.548 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7 #Derived_gen.8 #Derived_gen.9;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.288 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.288;
+    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.292;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.291 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.300 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.300;
+    let Str.291 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.291;
 
 procedure Test.1 (Test.5):
     ret Test.5;
 
-procedure Test.11 (Test.53, Test.54):
+procedure Test.11 (#Derived_gen.3, #Derived_gen.4):
     joinpoint Test.27 Test.12 #Attr.12:
-        let Test.8 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
-        let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.0:
+        let Test.34 : Int1 = UnionAtIndex (Id 2) (Index 1) #Attr.12;
+        let Test.33 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 2) (Index 0) #Attr.12;
+        joinpoint #Derived_gen.12:
             joinpoint Test.31 Test.29:
-                let Test.30 : U8 = GetTagId Test.7;
+                let Test.30 : U8 = GetTagId Test.33;
                 switch Test.30:
                     case 0:
-                        dec Test.7;
+                        dec Test.33;
                         let Test.28 : Str = CallByName Test.2 Test.29;
                         ret Test.28;
                 
                     case 1:
-                        let Test.28 : Str = CallByName Test.9 Test.29 Test.7;
+                        let Test.28 : Str = CallByName Test.9 Test.29 Test.33;
                         ret Test.28;
                 
                     default:
-                        jump Test.27 Test.29 Test.7;
+                        jump Test.27 Test.29 Test.33;
                 
             in
-            switch Test.8:
+            switch Test.34:
                 case 0:
                     let Test.32 : Str = CallByName Test.3 Test.12;
                     jump Test.31 Test.32;
@@ -85,87 +77,87 @@ procedure Test.11 (Test.53, Test.54):
                     jump Test.31 Test.32;
             
         in
-        let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.1 then
-            decref #Attr.12;
-            jump #Derived_gen.0;
+        let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.13 then
+            free #Attr.12;
+            jump #Derived_gen.12;
         else
-            inc Test.7;
+            inc Test.33;
             decref #Attr.12;
-            jump #Derived_gen.0;
+            jump #Derived_gen.12;
     in
-    jump Test.27 Test.53 Test.54;
+    jump Test.27 #Derived_gen.3 #Derived_gen.4;
 
 procedure Test.2 (Test.13):
     ret Test.13;
 
 procedure Test.3 (Test.14):
-    let Test.48 : Str = "!";
-    let Test.47 : Str = CallByName Str.3 Test.14 Test.48;
-    dec Test.48;
-    ret Test.47;
+    let Test.52 : Str = "!";
+    let Test.51 : Str = CallByName Str.3 Test.14 Test.52;
+    dec Test.52;
+    ret Test.51;
 
 procedure Test.4 (Test.15):
-    let Test.44 : Str = "(";
-    let Test.46 : Str = ")";
-    let Test.45 : Str = CallByName Str.3 Test.15 Test.46;
-    dec Test.46;
-    let Test.43 : Str = CallByName Str.3 Test.44 Test.45;
-    dec Test.45;
-    ret Test.43;
+    let Test.48 : Str = "(";
+    let Test.50 : Str = ")";
+    let Test.49 : Str = CallByName Str.3 Test.15 Test.50;
+    dec Test.50;
+    let Test.47 : Str = CallByName Str.3 Test.48 Test.49;
+    dec Test.49;
+    ret Test.47;
 
 procedure Test.6 (Test.7, Test.8, Test.5):
     if Test.5 then
-        let Test.33 : [<rnw><null>, C *self Int1, C *self Int1] = TagId(1) Test.7 Test.8;
-        ret Test.33;
+        let Test.35 : [<rnw><null>, C *self Int1, C *self Int1] = TagId(1) Test.7 Test.8;
+        ret Test.35;
     else
         let Test.26 : [<rnw><null>, C *self Int1, C *self Int1] = TagId(2) Test.7 Test.8;
         ret Test.26;
 
 procedure Test.9 (Test.10, #Attr.12):
-    let Test.8 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
-    let Test.7 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.2:
-        let Test.37 : U8 = GetTagId Test.7;
-        joinpoint Test.38 Test.36:
-            switch Test.8:
+    let Test.43 : Int1 = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+    let Test.42 : [<rnw><null>, C *self Int1, C *self Int1] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    joinpoint #Derived_gen.14:
+        let Test.39 : U8 = GetTagId Test.42;
+        joinpoint Test.40 Test.38:
+            switch Test.43:
                 case 0:
-                    let Test.35 : Str = CallByName Test.3 Test.36;
-                    ret Test.35;
+                    let Test.37 : Str = CallByName Test.3 Test.38;
+                    ret Test.37;
             
                 default:
-                    let Test.35 : Str = CallByName Test.4 Test.36;
-                    ret Test.35;
+                    let Test.37 : Str = CallByName Test.4 Test.38;
+                    ret Test.37;
             
         in
-        switch Test.37:
+        switch Test.39:
             case 0:
-                dec Test.7;
-                let Test.39 : Str = CallByName Test.2 Test.10;
-                jump Test.38 Test.39;
+                dec Test.42;
+                let Test.41 : Str = CallByName Test.2 Test.10;
+                jump Test.40 Test.41;
         
             case 1:
-                let Test.39 : Str = CallByName Test.9 Test.10 Test.7;
-                jump Test.38 Test.39;
+                let Test.41 : Str = CallByName Test.9 Test.10 Test.42;
+                jump Test.40 Test.41;
         
             default:
-                let Test.39 : Str = CallByName Test.11 Test.10 Test.7;
-                jump Test.38 Test.39;
+                let Test.41 : Str = CallByName Test.11 Test.10 Test.42;
+                jump Test.40 Test.41;
         
     in
-    let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.3 then
-        decref #Attr.12;
-        jump #Derived_gen.2;
+    let #Derived_gen.15 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.15 then
+        free #Attr.12;
+        jump #Derived_gen.14;
     else
-        inc Test.7;
+        inc Test.42;
         decref #Attr.12;
-        jump #Derived_gen.2;
+        jump #Derived_gen.14;
 
 procedure Test.0 ():
-    let Test.41 : Int1 = false;
-    let Test.42 : Int1 = true;
-    let Test.20 : List Int1 = Array [Test.41, Test.42];
+    let Test.45 : Int1 = false;
+    let Test.46 : Int1 = true;
+    let Test.20 : List Int1 = Array [Test.45, Test.46];
     let Test.21 : [<rnw><null>, C *self Int1, C *self Int1] = TagId(0) ;
     let Test.23 : Int1 = CallByName Bool.2;
     let Test.22 : Int1 = CallByName Test.1 Test.23;

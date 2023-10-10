@@ -259,19 +259,41 @@ pub const RocStr = extern struct {
         const old_length = self.len();
         const delta_length = new_length - old_length;
 
-        var result = RocStr.allocate(new_length);
+        const element_width = 1;
+        const result_is_big = new_length >= SMALL_STRING_SIZE;
 
-        // transfer the memory
+        if (result_is_big) {
+            const capacity = utils.calculateCapacity(0, new_length, element_width);
+            var result = RocStr.allocateBig(new_length, capacity);
 
-        const source_ptr = self.asU8ptr();
-        const dest_ptr = result.asU8ptrMut();
+            // transfer the memory
 
-        @memcpy(dest_ptr, source_ptr, old_length);
-        @memset(dest_ptr + old_length, 0, delta_length);
+            const source_ptr = self.asU8ptr();
+            const dest_ptr = result.asU8ptrMut();
 
-        self.decref();
+            std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
 
-        return result;
+            self.decref();
+
+            return result;
+        } else {
+            var string = RocStr.empty();
+
+            // I believe taking this reference on the stack here is important for correctness.
+            // Doing it via a method call seemed to cause issues
+            const dest_ptr = @ptrCast([*]u8, &string);
+            dest_ptr[@sizeOf(RocStr) - 1] = @intCast(u8, new_length) | 0b1000_0000;
+
+            const source_ptr = self.asU8ptr();
+
+            std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
+            std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
+
+            self.decref();
+
+            return string;
+        }
     }
 
     pub fn isSmallStr(self: RocStr) bool {
@@ -328,55 +350,6 @@ pub const RocStr = extern struct {
 
     pub fn isEmpty(self: RocStr) bool {
         return self.len() == 0;
-    }
-
-    // If a string happens to be null-terminated already, then we can pass its
-    // bytes directly to functions (e.g. for opening files) that require
-    // null-terminated strings. Otherwise, we need to allocate and copy a new
-    // null-terminated string, which has a much higher performance cost!
-    fn isNullTerminated(self: RocStr) bool {
-        const length = self.len();
-        const longest_small_str = @sizeOf(RocStr) - 1;
-
-        // NOTE: We want to compare length here, *NOT* check for isSmallStr!
-        // This is because we explicitly want the empty string to be handled in
-        // this branch, even though the empty string is not a small string.
-        //
-        // (The other branch dereferences the bytes pointer, which is not safe
-        // to do for the empty string.)
-        if (length <= longest_small_str) {
-            // If we're a small string, then usually the next byte after the
-            // end of the string will be zero. (Small strings set all their
-            // unused bytes to 0, so that comparison for equality can be fast.)
-            //
-            // However, empty strings are *not* null terminated, so if this is
-            // empty, it should return false.
-            //
-            // Also, if we are exactly a maximum-length small string,
-            // then the next byte is off the end of the struct;
-            // in that case, we are also not null-terminated!
-            return length != 0 and length != longest_small_str;
-        } else if (self.isSeamlessSlice()) {
-            // Seamless slices can not use the character past the end even if it is null.
-            return false;
-        } else {
-            // This is a big string, and it's not empty, so we can safely
-            // dereference the pointer.
-            const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-            const capacity_or_refcount: isize = (ptr - 1)[0];
-
-            // If capacity_or_refcount is positive, then it's a capacity value.
-            //
-            // If we have excess capacity, then we can safely read the next
-            // byte after the end of the string. Maybe it happens to be zero!
-            if (capacity_or_refcount > @intCast(isize, length)) {
-                return self.str_bytes[length] == 0;
-            } else {
-                // This string was refcounted or immortal; we can't safely read
-                // the next byte, so assume the string is not null-terminated.
-                return false;
-            }
-        }
     }
 
     pub fn isUnique(self: RocStr) bool {
@@ -1906,13 +1879,12 @@ const CountAndStart = extern struct {
 };
 
 pub fn fromUtf8RangeC(
-    output: *FromUtf8Result,
     list: RocList,
     start: usize,
     count: usize,
     update_mode: UpdateMode,
-) callconv(.C) void {
-    output.* = @call(.{ .modifier = always_inline }, fromUtf8Range, .{ list, start, count, update_mode });
+) callconv(.C) FromUtf8Result {
+    return fromUtf8Range(list, start, count, update_mode);
 }
 
 pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
@@ -2302,7 +2274,7 @@ pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     }
 }
 
-pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
+pub fn strTrimStart(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2350,7 +2322,7 @@ pub fn strTrimLeft(input_string: RocStr) callconv(.C) RocStr {
     }
 }
 
-pub fn strTrimRight(input_string: RocStr) callconv(.C) RocStr {
+pub fn strTrimEnd(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2583,22 +2555,22 @@ test "strTrim: small to small" {
     try expect(trimmed.isSmallStr());
 }
 
-test "strTrimLeft: empty" {
-    const trimmedEmpty = strTrimLeft(RocStr.empty());
+test "strTrimStart: empty" {
+    const trimmedEmpty = strTrimStart(RocStr.empty());
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
-test "strTrimLeft: blank" {
+test "strTrimStart: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
 
     try expect(trimmed.eq(RocStr.empty()));
 }
 
-test "strTrimLeft: large to large" {
+test "strTrimStart: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2611,12 +2583,12 @@ test "strTrimLeft: large to large" {
 
     try expect(!expected.isSmallStr());
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
 
     try expect(trimmed.eq(expected));
 }
 
-test "strTrimLeft: large to small" {
+test "strTrimStart: large to small" {
     // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = "                    hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -2629,14 +2601,14 @@ test "strTrimLeft: large to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
     defer trimmed.decref();
 
     try expect(trimmed.eq(expected));
     try expect(!trimmed.isSmallStr());
 }
 
-test "strTrimLeft: small to small" {
+test "strTrimStart: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2649,28 +2621,28 @@ test "strTrimLeft: small to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimLeft(original);
+    const trimmed = strTrimStart(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());
 }
 
-test "strTrimRight: empty" {
-    const trimmedEmpty = strTrimRight(RocStr.empty());
+test "strTrimEnd: empty" {
+    const trimmedEmpty = strTrimEnd(RocStr.empty());
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
-test "strTrimRight: blank" {
+test "strTrimEnd: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
 
     try expect(trimmed.eq(RocStr.empty()));
 }
 
-test "strTrimRight: large to large" {
+test "strTrimEnd: large to large" {
     const original_bytes = " hello even more giant world ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2683,12 +2655,12 @@ test "strTrimRight: large to large" {
 
     try expect(!expected.isSmallStr());
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
 
     try expect(trimmed.eq(expected));
 }
 
-test "strTrimRight: large to small" {
+test "strTrimEnd: large to small" {
     // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = " hello                    ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -2701,14 +2673,14 @@ test "strTrimRight: large to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
     defer trimmed.decref();
 
     try expect(trimmed.eq(expected));
     try expect(!trimmed.isSmallStr());
 }
 
-test "strTrimRight: small to small" {
+test "strTrimEnd: small to small" {
     const original_bytes = " hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
     defer original.decref();
@@ -2721,7 +2693,7 @@ test "strTrimRight: small to small" {
 
     try expect(expected.isSmallStr());
 
-    const trimmed = strTrimRight(original);
+    const trimmed = strTrimEnd(original);
 
     try expect(trimmed.eq(expected));
     try expect(trimmed.isSmallStr());

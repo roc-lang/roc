@@ -1,4 +1,5 @@
-#![allow(clippy::missing_safety_doc)]
+#![allow(clippy::missing_safety_doc, clippy::redundant_clone)]
+// TODO try removing allow clippy::redundant_clone if we're on rust 1.71 or later
 
 #[macro_use]
 extern crate pretty_assertions;
@@ -39,7 +40,7 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         0 => {
             let c_str = CStr::from_ptr(c_ptr as *const c_char);
             let string = c_str.to_str().unwrap();
-            panic!("roc_panic during test: {}", string);
+            panic!("roc_panic during test: {string}");
         }
         _ => todo!(),
     }
@@ -278,20 +279,27 @@ mod test_roc_std {
     fn roc_dec_fmt() {
         assert_eq!(
             format!("{}", RocDec::MIN),
-            "-1701411834604692317316.87303715884105728"
+            "-170141183460469231731.687303715884105728"
         );
 
         let half = RocDec::from_str("0.5").unwrap();
-        assert_eq!(format!("{}", half), "0.5");
+        assert_eq!(format!("{half}"), "0.5");
 
         let ten = RocDec::from_str("10").unwrap();
-        assert_eq!(format!("{}", ten), "10");
+        assert_eq!(format!("{ten}"), "10");
 
         let example = RocDec::from_str("1234.5678").unwrap();
-        assert_eq!(format!("{}", example), "1234.5678");
+        assert_eq!(format!("{example}"), "1234.5678");
 
         let example = RocDec::from_str("1_000.5678").unwrap();
-        assert_eq!(format!("{}", example), "1000.5678");
+        assert_eq!(format!("{example}"), "1000.5678");
+
+        let sample_negative = "-1.234";
+        let example = RocDec::from_str(sample_negative).unwrap();
+        assert_eq!(format!("{example}"), sample_negative);
+
+        let example = RocDec::from_str("1000.000").unwrap();
+        assert_eq!(format!("{example}"), "1000");
     }
 
     #[test]

@@ -7,6 +7,7 @@ interface Dict
         clear,
         capacity,
         len,
+        isEmpty,
         get,
         contains,
         insert,
@@ -21,6 +22,8 @@ interface Dict
         insertAll,
         keepShared,
         removeAll,
+        map,
+        joinMap,
     ]
     imports [
         Bool.{ Bool, Eq },
@@ -92,22 +95,22 @@ Dict k v := {
     # TODO: As an optimization, we can make all of these lists in one allocation
     # TODO: Grow data with the rest of the hashmap. This will require creating a list of garbage data.
     # TODO: Change remove to use tombstones. Store the tombstones in a bitmap.
-    # TODO: define Eq and Hash that are unordered. Only if value has hash/eq?
+    # TODO: define Eq and Hash that are unordered. Only if value implements hash/eq?
     metadata : List I8,
     dataIndices : List Nat,
     data : List (k, v),
     size : Nat,
-} | k has Hash & Eq
-     has [
-         Eq {
-             isEq,
-         },
-         Hash {
-             hash: hashDict,
-         },
-     ]
+} where k implements Hash & Eq
+    implements [
+        Eq {
+            isEq,
+        },
+        Hash {
+            hash: hashDict,
+        },
+    ]
 
-isEq : Dict k v, Dict k v -> Bool | k has Hash & Eq, v has Eq
+isEq : Dict k v, Dict k v -> Bool where k implements Hash & Eq, v implements Eq
 isEq = \xs, ys ->
     if len xs != len ys then
         Bool.false
@@ -120,14 +123,14 @@ isEq = \xs, ys ->
                 _ ->
                     Break Bool.false
 
-hashDict : hasher, Dict k v -> hasher | k has Hash & Eq, v has Hash, hasher has Hasher
+hashDict : hasher, Dict k v -> hasher where k implements Hash & Eq, v implements Hash, hasher implements Hasher
 hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 
 ## Return an empty dictionary.
 ## ```
 ## emptyDict = Dict.empty {}
 ## ```
-empty : {} -> Dict k v | k has Hash & Eq
+empty : {} -> Dict * *
 empty = \{} ->
     @Dict {
         metadata: List.repeat emptySlot 8,
@@ -139,21 +142,21 @@ empty = \{} ->
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
 ## ```
 ## foodDict =
-##           Dict.empty {}
-##           |> Dict.insert "apple" "fruit"
+##     Dict.empty {}
+##     |> Dict.insert "apple" "fruit"
 ##
 ## capacityOfDict = Dict.capacity foodDict
 ## ```
-capacity : Dict k v -> Nat | k has Hash & Eq
+capacity : Dict * * -> Nat
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
-    cap - Num.shiftRightZfBy cap 3
+    Num.subWrap cap (Num.shiftRightZfBy cap 3)
 
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Dict k v | k has Hash & Eq
+withCapacity : Nat -> Dict * *
 withCapacity = \_ ->
     # TODO: power of 2 * 8 and actual implementation
     empty {}
@@ -164,7 +167,7 @@ withCapacity = \_ ->
 ##     Dict.single "A" "B"
 ##     |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
 ## ```
-single : k, v -> Dict k v | k has Hash & Eq
+single : k, v -> Dict k v where k implements Hash & Eq
 single = \k, v ->
     insert (empty {}) k v
 
@@ -177,7 +180,7 @@ single = \k, v ->
 ##     |> Dict.insert 4 "Four"
 ##     |> Bool.isEq (Dict.fromList [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
-fromList : List (k, v) -> Dict k v | k has Hash & Eq
+fromList : List (k, v) -> Dict k v where k implements Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
     List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
@@ -192,9 +195,19 @@ fromList = \data ->
 ##     |> Dict.len
 ##     |> Bool.isEq 3
 ## ```
-len : Dict k v -> Nat | k has Hash & Eq
+len : Dict * * -> Nat
 len = \@Dict { size } ->
     size
+
+## Check if the dictinoary is empty.
+## ```
+## Dict.isEmpty (Dict.empty {} |> Dict.insert "key" 42)
+##
+## Dict.isEmpty (Dict.empty {})
+## ```
+isEmpty : Dict * * -> Bool
+isEmpty = \@Dict { size } ->
+    size == 0
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
 ## ```
@@ -208,7 +221,7 @@ len = \@Dict { size } ->
 ##
 ## expect Dict.len clearSongs == 0
 ## ```
-clear : Dict k v -> Dict k v | k has Hash & Eq
+clear : Dict k v -> Dict k v where k implements Hash & Eq
 clear = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
 
@@ -225,6 +238,28 @@ clear = \@Dict { metadata, dataIndices, data } ->
             size: 0,
         }
 
+## Convert each value in the dictionary to something new, by calling a conversion
+## function on each of them which receives both the key and the old value. Then return a
+## new dictionary containing the same keys and the converted values.
+map : Dict k a, (k, a -> b) -> Dict k b where k implements Hash & Eq, b implements Hash & Eq
+map = \dict, transform ->
+    init = withCapacity (capacity dict)
+
+    walk dict init \answer, k, v ->
+        insert answer k (transform k v)
+
+## Like [Dict.map], except the transformation function wraps the return value
+## in a dictionary. At the end, all the dictionaries get joined together
+## (using [Dict.insertAll]) into one dictionary.
+##
+## You may know a similar function named `concatMap` in other languages.
+joinMap : Dict a b, (a, b -> Dict x y) -> Dict x y where a implements Hash & Eq, x implements Hash & Eq
+joinMap = \dict, transform ->
+    init = withCapacity (capacity dict) # Might be a pessimization
+
+    walk dict init \answer, k, v ->
+        insertAll answer (transform k v)
+
 ## Iterate through the keys and values in the dictionary and call the provided
 ## function with signature `state, k, v -> state` for each value, with an
 ## initial `state` value provided for the first call.
@@ -236,7 +271,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ##     |> Dict.walk 0 (\count, _, qty -> count + qty)
 ##     |> Bool.isEq 36
 ## ```
-walk : Dict k v, state, (state, k, v -> state) -> state | k has Hash & Eq
+walk : Dict k v, state, (state, k, v -> state) -> state where k implements Hash & Eq
 walk = \@Dict { data }, initialState, transform ->
     List.walk data initialState (\state, (k, v) -> transform state k v)
 
@@ -268,7 +303,7 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## expect someoneIsAnAdult == Bool.true
 ## ```
-walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
+walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state where k implements Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, (k, v) -> transform state k v)
 
@@ -283,7 +318,7 @@ walkUntil = \@Dict { data }, initialState, transform ->
 ## expect Dict.get dictionary 1 == Ok "Apple"
 ## expect Dict.get dictionary 2000 == Err KeyNotFound
 ## ```
-get : Dict k v, k -> Result v [KeyNotFound] | k has Hash & Eq
+get : Dict k v, k -> Result v [KeyNotFound] where k implements Hash & Eq
 get = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -311,7 +346,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Dict.contains 1234
 ##     |> Bool.isEq Bool.true
 ## ```
-contains : Dict k v, k -> Bool | k has Hash & Eq
+contains : Dict k v, k -> Bool where k implements Hash & Eq
 contains = \@Dict { metadata, dataIndices, data }, key ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -336,7 +371,7 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Dict.get "Apples"
 ##     |> Bool.isEq (Ok 12)
 ## ```
-insert : Dict k v, k, v -> Dict k v | k has Hash & Eq
+insert : Dict k v, k, v -> Dict k v where k implements Hash & Eq
 insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -366,7 +401,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
                             metadata,
                             dataIndices,
                             data,
-                            size: size + 1,
+                            size: Num.addWrap size 1,
                         }
                     )
 
@@ -382,7 +417,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
 ##     |> Dict.len
 ##     |> Bool.isEq 0
 ## ```
-remove : Dict k v, k -> Dict k v | k has Hash & Eq
+remove : Dict k v, k -> Dict k v where k implements Hash & Eq
 remove = \@Dict { metadata, dataIndices, data, size }, key ->
     # TODO: change this from swap remove to tombstone and test is performance is still good.
     hashKey =
@@ -395,7 +430,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 
     when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
-            last = List.len data - 1
+            last = Num.subWrap (List.len data) 1
             dataIndex = listGetUnsafe dataIndices index
 
             if dataIndex == last then
@@ -403,7 +438,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
                     metadata: List.set metadata index deletedSlot,
                     dataIndices,
                     data: List.dropLast data,
-                    size: size - 1,
+                    size: Num.subWrap size 1,
                 }
             else
                 swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data, size }) index last
@@ -426,7 +461,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 ## expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
 ## expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
 ## ```
-update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Hash & Eq
+update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v where k implements Hash & Eq
 update = \dict, key, alter ->
     # TODO: look into optimizing by merging substeps and reducing lookups.
     possibleValue =
@@ -449,7 +484,7 @@ update = \dict, key, alter ->
 ##     |> Dict.toList
 ##     |> Bool.isEq [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]
 ## ```
-toList : Dict k v -> List (k, v) | k has Hash & Eq
+toList : Dict k v -> List (k, v) where k implements Hash & Eq
 toList = \@Dict { data } ->
     data
 
@@ -464,7 +499,7 @@ toList = \@Dict { data } ->
 ##     |> Dict.keys
 ##     |> Bool.isEq [1,2,3,4]
 ## ```
-keys : Dict k v -> List k | k has Hash & Eq
+keys : Dict k v -> List k where k implements Hash & Eq
 keys = \@Dict { data } ->
     List.map data (\(k, _) -> k)
 
@@ -479,7 +514,7 @@ keys = \@Dict { data } ->
 ##     |> Dict.values
 ##     |> Bool.isEq ["One","Two","Three","Four"]
 ## ```
-values : Dict k v -> List v | k has Hash & Eq
+values : Dict k v -> List v where k implements Hash & Eq
 values = \@Dict { data } ->
     List.map data (\(_, v) -> v)
 
@@ -507,7 +542,7 @@ values = \@Dict { data } ->
 ## expect
 ##     Dict.insertAll first second == expected
 ## ```
-insertAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
+insertAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 insertAll = \xs, ys ->
     walk ys xs insert
 
@@ -529,7 +564,7 @@ insertAll = \xs, ys ->
 ##
 ## expect Dict.keepShared first second == first
 ## ```
-keepShared : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
+keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 keepShared = \xs, ys ->
     walk
         xs
@@ -561,11 +596,11 @@ keepShared = \xs, ys ->
 ##
 ## expect Dict.removeAll first second == expected
 ## ```
-removeAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
+removeAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
-swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k has Hash & Eq
+swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v where k implements Hash & Eq
 swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
     (key, _) = listGetUnsafe data lastIndex
     hashKey =
@@ -591,7 +626,7 @@ swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIn
                 # Update index of swaped element.
                 dataIndices: List.set dataIndices index dataIndex,
                 data: nextData,
-                size: size - 1,
+                size: Num.subWrap size 1,
             }
 
         Err NotFound ->
@@ -629,7 +664,7 @@ nextEmptyOrDeletedHelper = \metadata, probe, offset ->
 
 # TODO: investigate if this needs to be split into more specific helper functions.
 # There is a chance that returning specific sub-info like the value would be faster.
-findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] | k has Hash & Eq
+findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] where k implements Hash & Eq
 findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     # For finding a value, we must search past all deleted element tombstones.
     index = Num.addWrap (mul8 probe.slotIndex) offset
@@ -661,12 +696,12 @@ findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
 # This is how we grow the container.
 # If we aren't to the load factor yet, just ignore this.
 # The container must have an updated size including any elements about to be inserted.
-maybeRehash : Dict k v -> Dict k v | k has Hash & Eq
+maybeRehash : Dict k v -> Dict k v where k implements Hash & Eq
 maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
     cap = List.len dataIndices
     maxLoadCap =
         # This is 7/8 * capacity, which is the max load factor.
-        cap - Num.shiftRightZfBy cap 3
+        Num.subWrap cap (Num.shiftRightZfBy cap 3)
 
     if size > maxLoadCap then
         rehash (@Dict { metadata, dataIndices, data, size })
@@ -674,7 +709,7 @@ maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
         @Dict { metadata, dataIndices, data, size }
 
 # TODO: switch rehash to iterate data and eventually clear out tombstones as well.
-rehash : Dict k v -> Dict k v | k has Hash & Eq
+rehash : Dict k v -> Dict k v where k implements Hash & Eq
 rehash = \@Dict { metadata, dataIndices, data, size } ->
     newLen = 2 * List.len dataIndices
     newDict =
@@ -687,7 +722,7 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
 
     rehashHelper newDict metadata dataIndices data 0
 
-rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v | k has Hash & Eq
+rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v where k implements Hash & Eq
 rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
     when List.get oldMetadata index is
         Ok md ->
@@ -702,13 +737,13 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
                     # Empty or deleted data
                     dict
 
-            rehashHelper nextDict oldMetadata oldDataIndices oldData (index + 1)
+            rehashHelper nextDict oldMetadata oldDataIndices oldData (Num.addWrap index 1)
 
         Err OutOfBounds ->
             # Walked entire list, complete now.
             dict
 
-insertForRehash : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
+insertForRehash : Dict k v, k, Nat -> Dict k v where k implements Hash & Eq
 insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -970,22 +1005,22 @@ expect
 
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
-# The current implementation is a form of [Wyhash final3](https://github.com/wangyi-fudan/wyhash/blob/a5995b98ebfa7bd38bfadc0919326d2e7aabb805/wyhash.h).
+# The current implementation is a form of [Wyhash final4](https://github.com/wangyi-fudan/wyhash/blob/77e50f267fbc7b8e2d09f2d455219adb70ad4749/wyhash.h).
 # It is 64bit and little endian specific currently.
 # TODO: wyhash is slow for large keys, use something like cityhash if the keys are too long.
 # TODO: Add a builtin to distinguish big endian systems and change loading orders.
 # TODO: Switch out Wymum on systems with slow 128bit multiplication.
-LowLevelHasher := { originalSeed : U64, state : U64 } has [
-         Hasher {
-             addBytes,
-             addU8,
-             addU16,
-             addU32,
-             addU64,
-             addU128,
-             complete,
-         },
-     ]
+LowLevelHasher := { initializedSeed : U64, state : U64 } implements [
+        Hasher {
+            addBytes,
+            addU8,
+            addU16,
+            addU32,
+            addU64,
+            addU128,
+            complete,
+        },
+    ]
 
 # unsafe primitive that does not perform a bounds check
 # TODO hide behind an InternalList.roc module
@@ -1001,14 +1036,30 @@ createLowLevelHasher = \seedOpt ->
         when seedOpt is
             PseudoRandSeed -> pseudoSeed {}
             WithSeed s -> s
-    @LowLevelHasher { originalSeed: seed, state: seed }
+    @LowLevelHasher { initializedSeed: initSeed seed, state: seed }
 
 combineState : LowLevelHasher, { a : U64, b : U64, seed : U64, length : U64 } -> LowLevelHasher
-combineState = \@LowLevelHasher { originalSeed, state }, { a, b, seed, length } ->
-    tmp = wymix (Num.bitwiseXor wyp1 a) (Num.bitwiseXor seed b)
-    hash = wymix (Num.bitwiseXor wyp1 length) tmp
+combineState = \@LowLevelHasher { initializedSeed, state }, { a, b, seed, length } ->
+    mum =
+        a
+        |> Num.bitwiseXor wyp1
+        |> wymum (Num.bitwiseXor b seed)
+    nexta =
+        mum.lower
+        |> Num.bitwiseXor wyp0
+        |> Num.bitwiseXor length
+    nextb =
+        mum.upper
+        |> Num.bitwiseXor wyp1
+    hash = wymix nexta nextb
 
-    @LowLevelHasher { originalSeed, state: wymix state hash }
+    @LowLevelHasher { initializedSeed, state: wymix state hash }
+
+initSeed = \seed ->
+    seed
+    |> Num.bitwiseXor wyp0
+    |> wymix wyp1
+    |> Num.bitwiseXor seed
 
 complete = \@LowLevelHasher { state } -> state
 
@@ -1017,8 +1068,7 @@ complete = \@LowLevelHasher { state } -> state
 # like using the output of the last hash as the seed to the current hash.
 # I am simply not sure the tradeoffs here. Theoretically this method is more sound.
 # Either way, the performance will be similar and we can change this later.
-addU8 = \@LowLevelHasher { originalSeed, state }, u8 ->
-    seed = Num.bitwiseXor originalSeed wyp0
+addU8 = \@LowLevelHasher { initializedSeed, state }, u8 ->
     p0 = Num.toU64 u8
     a =
         Num.shiftLeftBy p0 16
@@ -1026,10 +1076,9 @@ addU8 = \@LowLevelHasher { originalSeed, state }, u8 ->
         |> Num.bitwiseOr p0
     b = 0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 1 }
+    combineState (@LowLevelHasher { initializedSeed, state }) { a, b, seed: initializedSeed, length: 1 }
 
-addU16 = \@LowLevelHasher { originalSeed, state }, u16 ->
-    seed = Num.bitwiseXor originalSeed wyp0
+addU16 = \@LowLevelHasher { initializedSeed, state }, u16 ->
     p0 = Num.bitwiseAnd u16 0xFF |> Num.toU64
     p1 = Num.shiftRightZfBy u16 8 |> Num.toU64
     a =
@@ -1038,26 +1087,23 @@ addU16 = \@LowLevelHasher { originalSeed, state }, u16 ->
         |> Num.bitwiseOr p1
     b = 0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 2 }
+    combineState (@LowLevelHasher { initializedSeed, state }) { a, b, seed: initializedSeed, length: 2 }
 
-addU32 = \@LowLevelHasher { originalSeed, state }, u32 ->
-    seed = Num.bitwiseXor originalSeed wyp0
+addU32 = \@LowLevelHasher { initializedSeed, state }, u32 ->
     p0 = Num.toU64 u32
     a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b: a, seed, length: 4 }
+    combineState (@LowLevelHasher { initializedSeed, state }) { a, b: a, seed: initializedSeed, length: 4 }
 
-addU64 = \@LowLevelHasher { originalSeed, state }, u64 ->
-    seed = Num.bitwiseXor originalSeed wyp0
+addU64 = \@LowLevelHasher { initializedSeed, state }, u64 ->
     p0 = Num.bitwiseAnd 0xFFFF_FFFF u64
     p1 = Num.shiftRightZfBy u64 32
     a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p1
     b = Num.shiftLeftBy p1 32 |> Num.bitwiseOr p0
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 8 }
+    combineState (@LowLevelHasher { initializedSeed, state }) { a, b, seed: initializedSeed, length: 8 }
 
-addU128 = \@LowLevelHasher { originalSeed, state }, u128 ->
-    seed = Num.bitwiseXor originalSeed wyp0
+addU128 = \@LowLevelHasher { initializedSeed, state }, u128 ->
     lower = u128 |> Num.toU64
     upper = Num.shiftRightZfBy u128 64 |> Num.toU64
     p0 = Num.bitwiseAnd 0xFFFF_FFFF lower
@@ -1067,12 +1113,11 @@ addU128 = \@LowLevelHasher { originalSeed, state }, u128 ->
     a = Num.shiftLeftBy p0 32 |> Num.bitwiseOr p2
     b = Num.shiftLeftBy p3 32 |> Num.bitwiseOr p1
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a, b, seed, length: 16 }
+    combineState (@LowLevelHasher { initializedSeed, state }) { a, b, seed: initializedSeed, length: 16 }
 
 addBytes : LowLevelHasher, List U8 -> LowLevelHasher
-addBytes = \@LowLevelHasher { originalSeed, state }, list ->
+addBytes = \@LowLevelHasher { initializedSeed, state }, list ->
     length = List.len list
-    seed = Num.bitwiseXor originalSeed wyp0
     abs =
         if length <= 16 then
             if length >= 4 then
@@ -1082,17 +1127,17 @@ addBytes = \@LowLevelHasher { originalSeed, state }, list ->
                     (wyr4 list (Num.subWrap length 4) |> Num.shiftLeftBy 32)
                     |> Num.bitwiseOr (wyr4 list (Num.subWrap length 4 |> Num.subWrap x))
 
-                { a, b, seed }
+                { a, b, seed: initializedSeed }
             else if length > 0 then
-                { a: wyr3 list 0 length, b: 0, seed }
+                { a: wyr3 list 0 length, b: 0, seed: initializedSeed }
             else
-                { a: 0, b: 0, seed }
+                { a: 0, b: 0, seed: initializedSeed }
         else if length <= 48 then
-            hashBytesHelper16 seed list 0 length
+            hashBytesHelper16 initializedSeed list 0 length
         else
-            hashBytesHelper48 seed seed seed list 0 length
+            hashBytesHelper48 initializedSeed initializedSeed initializedSeed list 0 length
 
-    combineState (@LowLevelHasher { originalSeed, state }) { a: abs.a, b: abs.b, seed: abs.seed, length: Num.toU64 length }
+    combineState (@LowLevelHasher { initializedSeed, state }) { a: abs.a, b: abs.b, seed: abs.seed, length: Num.toU64 length }
 
 hashBytesHelper48 : U64, U64, U64, List U8, Nat, Nat -> { a : U64, b : U64, seed : U64 }
 hashBytesHelper48 = \seed, see1, see2, list, index, remaining ->
@@ -1205,7 +1250,7 @@ expect
         |> addBytes []
         |> complete
 
-    hash == 0x1C3F_F8BF_07F9_B0B3
+    hash == 0xD59C59757DBBE6B3
 
 expect
     hash =
@@ -1213,7 +1258,7 @@ expect
         |> addBytes [0x42]
         |> complete
 
-    hash == 0x8F9F_0A1E_E06F_0D52
+    hash == 0x38CE03D0E61AF963
 
 expect
     hash =
@@ -1221,7 +1266,7 @@ expect
         |> addU8 0x42
         |> complete
 
-    hash == 0x8F9F_0A1E_E06F_0D52
+    hash == 0x38CE03D0E61AF963
 
 expect
     hash =
@@ -1229,7 +1274,7 @@ expect
         |> addBytes [0xFF, 0xFF]
         |> complete
 
-    hash == 0x86CC_8B71_563F_F084
+    hash == 0xE1CB2FA0D6A64113
 
 expect
     hash =
@@ -1237,7 +1282,7 @@ expect
         |> addU16 0xFFFF
         |> complete
 
-    hash == 0x86CC_8B71_563F_F084
+    hash == 0xE1CB2FA0D6A64113
 
 expect
     hash =
@@ -1245,7 +1290,7 @@ expect
         |> addBytes [0x36, 0xA7]
         |> complete
 
-    hash == 0xD1A5_0F24_2536_84F8
+    hash == 0x26B8319EDAF81B15
 
 expect
     hash =
@@ -1253,7 +1298,7 @@ expect
         |> addU16 0xA736
         |> complete
 
-    hash == 0xD1A5_0F24_2536_84F8
+    hash == 0x26B8319EDAF81B15
 
 expect
     hash =
@@ -1261,7 +1306,7 @@ expect
         |> addBytes [0x00, 0x00, 0x00, 0x00]
         |> complete
 
-    hash == 0x3762_ACB1_7604_B541
+    hash == 0xA187D7CA074F9EE7
 
 expect
     hash =
@@ -1269,7 +1314,7 @@ expect
         |> addU32 0x0000_0000
         |> complete
 
-    hash == 0x3762_ACB1_7604_B541
+    hash == 0xA187D7CA074F9EE7
 
 expect
     hash =
@@ -1277,7 +1322,7 @@ expect
         |> addBytes [0xA9, 0x2F, 0xEE, 0x21]
         |> complete
 
-    hash == 0x20F3_3FD7_D32E_C7A9
+    hash == 0xA499EFE4C1454D09
 
 expect
     hash =
@@ -1285,7 +1330,7 @@ expect
         |> addU32 0x21EE_2FA9
         |> complete
 
-    hash == 0x20F3_3FD7_D32E_C7A9
+    hash == 0xA499EFE4C1454D09
 
 expect
     hash =
@@ -1293,7 +1338,7 @@ expect
         |> addBytes [0x5D, 0x66, 0xB1, 0x8F, 0x68, 0x44, 0xC7, 0x03, 0xE1, 0xDD, 0x23, 0x34, 0xBB, 0x9A, 0x42, 0xA7]
         |> complete
 
-    hash == 0xA16F_DDAA_C167_74C7
+    hash == 0xDD39A206AED64C73
 
 expect
     hash =
@@ -1301,7 +1346,7 @@ expect
         |> addU128 0xA742_9ABB_3423_DDE1_03C7_4468_8FB1_665D
         |> complete
 
-    hash == 0xA16F_DDAA_C167_74C7
+    hash == 0xDD39A206AED64C73
 
 expect
     hash =
@@ -1309,7 +1354,7 @@ expect
         |> Hash.hashStrBytes "abcdefghijklmnopqrstuvwxyz"
         |> complete
 
-    hash == 0xBEE0_A8FD_E990_D285
+    hash == 0x51C59DF5B1D15F40
 
 expect
     hash =
@@ -1317,7 +1362,7 @@ expect
         |> Hash.hashStrBytes "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
         |> complete
 
-    hash == 0xB3C5_8528_9D82_A6EF
+    hash == 0xD8D0A129D97A4E95
 
 expect
     hash =
@@ -1325,7 +1370,7 @@ expect
         |> Hash.hashStrBytes "1234567890123456789012345678901234567890123456789012345678901234567890"
         |> complete
 
-    hash == 0xDB6B_7997_7A55_BA03
+    hash == 0x8188065B44FB4AAA
 
 expect
     hash =
@@ -1333,7 +1378,7 @@ expect
         |> addBytes (List.repeat 0x77 100)
         |> complete
 
-    hash == 0x171F_EEE2_B764_8E5E
+    hash == 0x47A2A606EADF3378
 
 # Note, had to specify u8 in the lists below to avoid ability type resolution error.
 # Apparently it won't pick the default integer.
@@ -1343,7 +1388,7 @@ expect
         |> Hash.hashUnordered [8u8, 82u8, 3u8, 8u8, 24u8] List.walk
         |> complete
 
-    hash == 0x999F_B530_3529_F17D
+    hash == 0xB2E8254C08F16B20
 
 expect
     hash1 =

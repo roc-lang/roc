@@ -18,7 +18,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
@@ -1403,14 +1403,13 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
+        &ast::Expr::ParensAround(sub_expr) => {
+            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+
+            (loc_expr.value, output)
+        }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        bad_expr @ ast::Expr::ParensAround(_) => {
-            internal_error!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
-            );
-        }
         bad_expr @ ast::Expr::SpaceBefore(_, _) => {
             internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
@@ -2377,11 +2376,115 @@ fn flatten_str_literal<'a>(
     }
 }
 
+/// Comments, newlines, and nested interpolation are disallowed inside interpolation
 pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
-        ast::Expr::Var { .. } => true,
-        ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
-        _ => false,
+        // These definitely contain neither comments nor newlines, so they are valid
+        ast::Expr::Var { .. }
+        | ast::Expr::SingleQuote(_)
+        | ast::Expr::Str(StrLiteral::PlainLine(_))
+        | ast::Expr::Float(_)
+        | ast::Expr::Num(_)
+        | ast::Expr::NonBase10Int { .. }
+        | ast::Expr::AccessorFunction(_)
+        | ast::Expr::Crash
+        | ast::Expr::Underscore(_)
+        | ast::Expr::MalformedIdent(_, _)
+        | ast::Expr::Tag(_)
+        | ast::Expr::OpaqueRef(_)
+        | ast::Expr::MalformedClosure => true,
+        // Newlines are disallowed inside interpolation, and these all require newlines
+        ast::Expr::Dbg(_, _)
+        | ast::Expr::Defs(_, _)
+        | ast::Expr::Expect(_, _)
+        | ast::Expr::When(_, _)
+        | ast::Expr::Backpassing(_, _, _)
+        | ast::Expr::IngestedFile(_, _)
+        | ast::Expr::SpaceBefore(_, _)
+        | ast::Expr::Str(StrLiteral::Block(_))
+        | ast::Expr::SpaceAfter(_, _) => false,
+        // These can contain subexpressions, so we need to recursively check those
+        ast::Expr::Str(StrLiteral::Line(segments)) => {
+            segments.iter().all(|segment| match segment {
+                ast::StrSegment::EscapedChar(_)
+                | ast::StrSegment::Unicode(_)
+                | ast::StrSegment::Plaintext(_) => true,
+                // Disallow nested interpolation. Alternatively, we could allow it but require
+                // a comment above it apologizing to the next person who has to read the code.
+                ast::StrSegment::Interpolated(_) => false,
+            })
+        }
+        ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
+            ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+            }
+            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
+        }),
+        ast::Expr::Tuple(fields) => fields
+            .iter()
+            .all(|loc_field| is_valid_interpolation(&loc_field.value)),
+        ast::Expr::MultipleRecordBuilders(loc_expr)
+        | ast::Expr::UnappliedRecordBuilder(loc_expr)
+        | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
+        | ast::Expr::UnaryOp(loc_expr, _)
+        | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
+        ast::Expr::TupleAccess(sub_expr, _)
+        | ast::Expr::ParensAround(sub_expr)
+        | ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
+        ast::Expr::Apply(loc_expr, args, _called_via) => {
+            is_valid_interpolation(&loc_expr.value)
+                && args
+                    .iter()
+                    .all(|loc_arg| is_valid_interpolation(&loc_arg.value))
+        }
+        ast::Expr::BinOps(loc_exprs, loc_expr) => {
+            is_valid_interpolation(&loc_expr.value)
+                && loc_exprs
+                    .iter()
+                    .all(|(loc_expr, _binop)| is_valid_interpolation(&loc_expr.value))
+        }
+        ast::Expr::If(branches, final_branch) => {
+            is_valid_interpolation(&final_branch.value)
+                && branches.iter().all(|(loc_before, loc_after)| {
+                    is_valid_interpolation(&loc_before.value)
+                        && is_valid_interpolation(&loc_after.value)
+                })
+        }
+        ast::Expr::List(elems) => elems
+            .iter()
+            .all(|loc_expr| is_valid_interpolation(&loc_expr.value)),
+        ast::Expr::RecordUpdate { update, fields } => {
+            is_valid_interpolation(&update.value)
+                && fields.iter().all(|loc_field| match loc_field.value {
+                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+                    }
+                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::SpaceBefore(_, _)
+                    | ast::AssignedField::SpaceAfter(_, _) => false,
+                })
+        }
+        ast::Expr::RecordBuilder(fields) => fields.iter().all(|loc_field| match loc_field.value {
+            ast::RecordBuilderField::Value(_label, comments, loc_expr) => {
+                comments.is_empty() && is_valid_interpolation(&loc_expr.value)
+            }
+            ast::RecordBuilderField::ApplyValue(
+                _label,
+                comments_before,
+                comments_after,
+                loc_expr,
+            ) => {
+                comments_before.is_empty()
+                    && comments_after.is_empty()
+                    && is_valid_interpolation(&loc_expr.value)
+            }
+            ast::RecordBuilderField::Malformed(_) | ast::RecordBuilderField::LabelOnly(_) => true,
+            ast::RecordBuilderField::SpaceBefore(_, _)
+            | ast::RecordBuilderField::SpaceAfter(_, _) => false,
+        }),
     }
 }
 
@@ -2536,6 +2639,8 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
+
     pub function_bodies: Vec<Loc<FunctionDef>>,
     pub expressions: Vec<Loc<Expr>>,
     pub destructs: Vec<DestructureDef>,
@@ -2557,6 +2662,7 @@ impl Declarations {
             variables: Vec::with_capacity(capacity),
             symbols: Vec::with_capacity(capacity),
             annotations: Vec::with_capacity(capacity),
+            host_exposed_annotations: VecMap::new(),
             function_bodies: Vec::with_capacity(capacity),
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
@@ -2587,6 +2693,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2609,6 +2716,11 @@ impl Declarations {
             Recursive::TailRecursive => DeclarationTag::TailRecursive(function_def_index),
         };
 
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
+
         self.declarations.push(tag);
         self.variables.push(expr_var);
         self.symbols.push(symbol);
@@ -2629,6 +2741,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2643,6 +2756,11 @@ impl Declarations {
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
         let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
 
         self.declarations
             .push(DeclarationTag::Function(function_def_index));
@@ -2701,9 +2819,15 @@ impl Declarations {
         loc_expr: Loc<Expr>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
+
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -2759,6 +2883,7 @@ impl Declarations {
                             def.expr_var,
                             def.annotation,
                             None,
+                            None,
                         );
                     }
 
@@ -2769,6 +2894,7 @@ impl Declarations {
                             def.expr_var,
                             def.annotation,
                             None,
+                            None,
                         );
                     }
                 },
@@ -2778,6 +2904,7 @@ impl Declarations {
                         def.loc_expr,
                         def.expr_var,
                         def.annotation,
+                        None,
                         None,
                     );
                 }

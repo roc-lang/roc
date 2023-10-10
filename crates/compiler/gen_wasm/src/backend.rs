@@ -1,9 +1,9 @@
 use bitvec::vec::BitVec;
 use bumpalo::collections::{String, Vec};
 
-use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
-use roc_error_macros::internal_error;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -313,7 +313,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
             let fn_index = match self.module.linking.symbol_table[sym_index] {
                 SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                _ => panic!("linker symbol `{}` is not a function", START),
+                _ => panic!("linker symbol `{START}` is not a function"),
             };
             self.module.export.append(Export {
                 name: START,
@@ -463,7 +463,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         if DEBUG_SETTINGS.storage_map {
             println!("\nStorage:");
             for (sym, storage) in self.storage.symbol_storage_map.iter() {
-                println!("{:?} => {:?}", sym, storage);
+                println!("{sym:?} => {storage:?}");
             }
         }
     }
@@ -509,7 +509,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .last()
             .map(|l| self.layout_interner.get_repr(*l))
         {
-            Some(LayoutRepr::Boxed(inner)) => WasmLayout::new(self.layout_interner, inner),
+            Some(LayoutRepr::Ptr(inner)) => WasmLayout::new(self.layout_interner, inner),
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -540,8 +540,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
 
             let inner_layout = match self.layout_interner.get_repr(*wrapper_arg) {
-                LayoutRepr::Boxed(inner) => inner,
-                x => internal_error!("Expected a Boxed layout, got {:?}", x),
+                LayoutRepr::Ptr(inner) => inner,
+                x => internal_error!("Expected a Ptr layout, got {:?}", x),
             };
             if self.layout_interner.stack_size(inner_layout) == 0 {
                 continue;
@@ -634,8 +634,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         let inner_layout = match self.layout_interner.get_repr(value_layout) {
-            LayoutRepr::Boxed(inner) => inner,
-            x => internal_error!("Expected a Boxed layout, got {:?}", x),
+            LayoutRepr::Ptr(inner) => inner,
+            x => internal_error!("Expected a Ptr layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
         self.dereference_boxed_value(inner_layout);
@@ -719,7 +719,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Stmt::Jump(id, arguments) => self.stmt_jump(*id, arguments),
 
-            Stmt::Refcounting(modify, following) => self.stmt_refcounting(modify, following),
+            Stmt::Refcounting(modify, following) => match modify {
+                ModifyRc::Free(symbol) => self.stmt_refcounting_free(*symbol, following),
+                _ => self.stmt_refcounting(modify, following),
+            },
 
             Stmt::Dbg { .. } => todo!("dbg is not implemented in the wasm backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
@@ -999,6 +1002,43 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.stmt(rc_stmt);
     }
 
+    fn stmt_refcounting_free(&mut self, value: Symbol, following: &'a Stmt<'a>) {
+        let layout = self.storage.symbol_layouts[&value];
+        let alignment = self.layout_interner.allocation_alignment_bytes(layout);
+
+        // Get pointer and offset
+        let value_storage = self.storage.get(&value).to_owned();
+        let stored_with_local =
+            self.storage
+                .ensure_value_has_local(&mut self.code_builder, value, value_storage);
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", value)
+            }
+        };
+
+        // load pointer, and add the offset to the pointer
+        self.code_builder.get_local(tag_local_id);
+
+        if tag_offset > 0 {
+            self.code_builder.i32_const(tag_offset as i32);
+            self.code_builder.i32_add();
+        }
+
+        // NOTE: UTILS_FREE_DATA_PTR clears any tag id bits
+
+        // push the allocation's alignment
+        self.code_builder.i32_const(alignment as i32);
+
+        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
+
+        self.stmt(following);
+    }
+
     pub fn stmt_internal_error(&mut self, msg: &'a str) {
         let msg_sym = self.create_symbol("panic_str");
         let msg_storage = self.storage.allocate_var(
@@ -1064,8 +1104,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 tag_layout: union_layout,
                 tag_id,
                 arguments,
-                ..
-            } => self.expr_tag(union_layout, *tag_id, arguments, sym, storage, None),
+                reuse,
+            } => {
+                let reuse = reuse.map(|ru| ru.symbol);
+                self.expr_tag(union_layout, *tag_id, arguments, sym, storage, reuse)
+            }
 
             Expr::GetTagId {
                 structure,
@@ -1079,21 +1122,32 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            Expr::ExprBox { symbol: arg_sym } => self.expr_box(sym, *arg_sym, layout, storage),
-
-            Expr::ExprUnbox { symbol: arg_sym } => self.expr_unbox(sym, *arg_sym),
-
-            Expr::Reuse {
-                tag_layout,
+            Expr::UnionFieldPtrAtIndex {
+                structure,
                 tag_id,
-                arguments,
-                symbol: reused,
-                ..
-            } => self.expr_tag(tag_layout, *tag_id, arguments, sym, storage, Some(*reused)),
+                union_layout,
+                index,
+            } => self.expr_union_field_ptr_at_index(
+                *structure,
+                *tag_id,
+                union_layout,
+                *index,
+                sym,
+                storage,
+            ),
+
+            Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
+            Expr::ErasedMake { .. } => todo_lambda_erasure!(),
+            Expr::ErasedLoad { .. } => todo_lambda_erasure!(),
 
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
             Expr::ResetRef { symbol: arg, .. } => self.expr_resetref(*arg, sym, storage),
+
+            Expr::Alloca {
+                initializer,
+                element_layout,
+            } => self.expr_alloca(*initializer, *element_layout, sym, storage),
 
             Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100, false))
@@ -1106,8 +1160,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
      *******************************************************************/
 
     fn expr_literal(&mut self, lit: &Literal<'a>, storage: &StoredValue) {
-        let invalid_error =
-            || internal_error!("Literal value {:?} has invalid storage {:?}", lit, storage);
+        let invalid_error = || {
+            internal_error!(
+                "Literal value {:?} implements invalid storage {:?}",
+                lit,
+                storage
+            )
+        };
 
         match storage {
             StoredValue::VirtualMachineStack { value_type, .. } => {
@@ -1272,6 +1331,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 )
             }
 
+            CallType::ByPointer { .. } => {
+                todo_lambda_erasure!()
+            }
+
             CallType::LowLevel { op: lowlevel, .. } => {
                 self.expr_call_low_level(*lowlevel, arguments, ret_sym, ret_layout, ret_storage)
             }
@@ -1379,7 +1442,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .host_lookup
             .iter()
             .find(|(fn_name, _)| *fn_name == name)
-            .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
+            .unwrap_or_else(|| panic!("The Roc app tries to call `{name}` but I can't find it!"));
 
         self.called_fns.set(*fn_index as usize, true);
 
@@ -1569,7 +1632,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     ListLiteralElement::Literal(lit) => {
                         // This has no Symbol but our storage methods expect one.
                         // Let's just pretend it was defined in a `Let`.
-                        let debug_name = format!("{:?}_{}", sym, i);
+                        let debug_name = format!("{sym:?}_{i}");
                         let elem_sym = self.create_symbol(&debug_name);
                         let expr = Expr::Literal(*lit);
 
@@ -1636,7 +1699,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
         let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(self.layout_interner, TARGET_INFO);
+            union_layout.data_size_and_alignment(self.layout_interner);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1688,10 +1751,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Store the tag ID (if any)
         if stores_tag_id_as_data {
-            let id_offset = data_offset
-                + union_layout
-                    .tag_id_offset(self.layout_interner, TARGET_INFO)
-                    .unwrap();
+            let id_offset = data_offset + union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1774,9 +1834,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
-            let id_offset = union_layout
-                .tag_id_offset(self.layout_interner, TARGET_INFO)
-                .unwrap();
+            let id_offset = union_layout.tag_id_offset(self.layout_interner).unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
             let id_align = Align::from(id_align);
@@ -1876,44 +1934,92 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         );
     }
 
-    /*******************************************************************
-     * Box
-     *******************************************************************/
-
-    fn expr_box(
+    fn expr_union_field_ptr_at_index(
         &mut self,
-        ret_sym: Symbol,
-        arg_sym: Symbol,
-        layout: InLayout<'a>,
+        structure: Symbol,
+        tag_id: TagIdIntType,
+        union_layout: &UnionLayout<'a>,
+        index: u64,
+        symbol: Symbol,
         storage: &StoredValue,
     ) {
-        // create a local variable for the heap pointer
-        let ptr_local_id = match self.storage.ensure_value_has_local(
+        use UnionLayout::*;
+
+        debug_assert!(!union_layout.tag_is_null(tag_id));
+
+        let tag_index = tag_id as usize;
+        let field_layouts = match union_layout {
+            NonRecursive(tags) => tags[tag_index],
+            Recursive(tags) => tags[tag_index],
+            NonNullableUnwrapped(layouts) => *layouts,
+            NullableWrapped {
+                other_tags,
+                nullable_id,
+            } => {
+                let index = if tag_index > *nullable_id as usize {
+                    tag_index - 1
+                } else {
+                    tag_index
+                };
+                other_tags[index]
+            }
+            NullableUnwrapped { other_fields, .. } => *other_fields,
+        };
+
+        let field_offset: u32 = field_layouts
+            .iter()
+            .take(index as usize)
+            .map(|field_layout| self.layout_interner.stack_size(*field_layout))
+            .sum();
+
+        // Get pointer and offset to the tag's data
+        let structure_storage = self.storage.get(&structure).to_owned();
+        let stored_with_local = self.storage.ensure_value_has_local(
             &mut self.code_builder,
-            ret_sym,
+            structure,
+            structure_storage,
+        );
+        let (tag_local_id, tag_offset) = match stored_with_local {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            StoredValue::Local { local_id, .. } => (local_id, 0),
+            StoredValue::VirtualMachineStack { .. } => {
+                internal_error!("{:?} should have a local variable", structure)
+            }
+        };
+
+        let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
+
+        let from_offset = tag_offset + field_offset;
+
+        self.code_builder.get_local(tag_local_id);
+
+        if stores_tag_id_in_pointer {
+            self.code_builder.i32_const(-4); // 11111111...1100
+            self.code_builder.i32_and();
+        }
+
+        self.code_builder.i32_const(from_offset as _);
+        self.code_builder.i32_add();
+
+        let symbol_local = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            symbol,
             storage.clone(),
         ) {
             StoredValue::Local { local_id, .. } => local_id,
             _ => internal_error!("A heap pointer will always be an i32"),
         };
 
-        // allocate heap memory and load its data address onto the value stack
-        let arg_layout = match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Boxed(arg) => arg,
-            _ => internal_error!("ExprBox should always produce a Boxed layout"),
-        };
-        let (size, alignment) = self.layout_interner.stack_size_and_alignment(arg_layout);
-        self.allocate_with_refcount(Some(size), alignment, 1);
-
-        // store the pointer value from the value stack into the local variable
-        self.code_builder.set_local(ptr_local_id);
-
-        // copy the argument to the pointer address
-        self.storage
-            .copy_value_to_memory(&mut self.code_builder, ptr_local_id, 0, arg_sym);
+        self.code_builder.set_local(symbol_local);
     }
 
-    fn expr_unbox(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
+    /*******************************************************************
+     * Box
+     *******************************************************************/
+
+    pub(crate) fn ptr_load(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
         let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
             StoredValue::VirtualMachineStack { .. } => {
                 self.storage
@@ -2044,6 +2150,48 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         );
     }
 
+    fn expr_alloca(
+        &mut self,
+        initializer: Option<Symbol>,
+        element_layout: InLayout<'a>,
+        ret_symbol: Symbol,
+        ret_storage: &StoredValue,
+    ) {
+        // Alloca : a -> Ptr a
+        let (size, alignment_bytes) = self
+            .layout_interner
+            .stack_size_and_alignment(element_layout);
+
+        let (frame_ptr, offset) = self
+            .storage
+            .allocate_anonymous_stack_memory(size, alignment_bytes);
+
+        // write the default value into the stack memory
+        if let Some(initializer) = initializer {
+            self.storage.copy_value_to_memory(
+                &mut self.code_builder,
+                frame_ptr,
+                offset,
+                initializer,
+            );
+        }
+
+        // create a local variable for the pointer
+        let ptr_local_id = match self.storage.ensure_value_has_local(
+            &mut self.code_builder,
+            ret_symbol,
+            ret_storage.clone(),
+        ) {
+            StoredValue::Local { local_id, .. } => local_id,
+            _ => internal_error!("A pointer will always be an i32"),
+        };
+
+        self.code_builder.get_local(frame_ptr);
+        self.code_builder.i32_const(offset as i32);
+        self.code_builder.i32_add();
+        self.code_builder.set_local(ptr_local_id);
+    }
+
     /// Generate a refcount helper procedure and return a pointer (table index) to it
     /// This allows it to be indirectly called from Zig code
     pub fn get_refcount_fn_index(&mut self, layout: InLayout<'a>, op: HelperOp) -> u32 {
@@ -2062,10 +2210,15 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.register_helper_proc(spec_sym, spec_layout, ProcSource::Helper);
         }
 
+        let layout_repr = self.layout_interner.runtime_representation(layout);
+        let same_layout =
+            |layout| self.layout_interner.runtime_representation(layout) == layout_repr;
         let proc_index = self
             .proc_lookup
             .iter()
-            .position(|lookup| lookup.name == proc_symbol && lookup.layout.arguments[0] == layout)
+            .position(|lookup| {
+                lookup.name == proc_symbol && same_layout(lookup.layout.arguments[0])
+            })
             .unwrap();
 
         self.fn_index_offset + proc_index as u32

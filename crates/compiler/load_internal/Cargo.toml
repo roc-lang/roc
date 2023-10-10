@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 roc_builtins = { path = "../builtins" }
 roc_can = { path = "../can" }
+roc_checkmate = { path = "../checkmate" }
 roc_collections = { path = "../collections" }
 roc_constrain = { path = "../constrain" }
 roc_debug_flags = { path = "../debug_flags" }

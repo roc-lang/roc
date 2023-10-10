@@ -43,8 +43,7 @@ mod test_fmt {
                 fmt_defs(buf, &loc_defs, 0);
             }
             Err(error) => panic!(
-                r"Unexpected parse failure when parsing this for defs formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n",
-                src, error
+                r"Unexpected parse failure when parsing this for defs formatting:\n\n{src:?}\n\nParse error was:\n\n{error:?}\n\n"
             ),
         }
     }
@@ -67,8 +66,7 @@ mod test_fmt {
 
                 let (reparsed_ast, state) = module::parse_header(&arena, State::new(output.as_bytes())).unwrap_or_else(|err| {
                     panic!(
-                        "After formatting, the source code no longer parsed!\n\nParse error was: {:?}\n\nThe code that failed to parse:\n\n{}\n\n",
-                        err, output
+                        "After formatting, the source code no longer parsed!\n\nParse error was: {err:?}\n\nThe code that failed to parse:\n\n{output}\n\n"
                     );
                 });
 
@@ -80,13 +78,11 @@ mod test_fmt {
                 // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
                 // I don't have the patience to debug this right now, so let's leave it for another day...
                 // TODO: fix PartialEq impl on ast types
-                if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+                if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
                     panic!(
                         "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
-                        * * * Source code before formatting:\n{}\n\n\
-                        * * * Source code after formatting:\n{}\n\n",
-                        src,
-                        output
+                        * * * Source code before formatting:\n{src}\n\n\
+                        * * * Source code after formatting:\n{output}\n\n"
                     );
                 }
 
@@ -111,7 +107,7 @@ mod test_fmt {
                 // those more than we want to know that the expectation failed!
                 assert_multiline_str_eq!(expected, output);
             }
-            Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, error)
+            Err(error) => panic!("Unexpected parse failure when parsing this for module header formatting:\n\n{src:?}\n\nParse error was:\n\n{error:?}\n\n")
         };
     }
 
@@ -1983,11 +1979,11 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                succeed { 
+                succeed {
                     a: <- get "a" |> map (\x -> x * 2)
-                        |> batch,  
+                        |> batch,
                     b: <- get "b" |> batch,
-                    c: items 
+                    c: items
                         |> List.map \x -> x * 2
                 }
                 "#
@@ -2036,7 +2032,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 succeed {  a: <- get "a" |> batch,
-                    b: <- get "b" |> batch, 
+                    b: <- get "b" |> batch,
                 }
                 "#
             ),
@@ -2053,10 +2049,10 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                succeed 
-                    {  
+                succeed
+                    {
                         a: <- get "a" |> batch,
-                        b: <- get "b" |> batch, 
+                        b: <- get "b" |> batch,
                     }
                 "#
             ),
@@ -2076,7 +2072,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                succeed { a: <- get "a" } 
+                succeed { a: <- get "a" }
                     { b: <- get "b" }
                 "#
             ),
@@ -5425,10 +5421,10 @@ mod test_fmt {
     }
 
     #[test]
-    fn opaque_has_clause() {
+    fn opaque_implements_clause() {
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq, Hash]
+            A := U8 implements [Eq, Hash]
 
             0
             "#
@@ -5439,7 +5435,7 @@ mod test_fmt {
                 r#"
                 A :=
                     U8
-                    has [Eq, Hash]
+                    implements [Eq, Hash]
 
                 0
                 "#
@@ -5447,7 +5443,7 @@ mod test_fmt {
             indoc!(
                 r#"
                 A := U8
-                     has [Eq, Hash]
+                    implements [Eq, Hash]
 
                 0
                 "#
@@ -5457,15 +5453,15 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := a | a has Hash has [ Eq, Hash ]
+                A := a where a implements Hash implements [ Eq, Hash ]
 
                 0
                 "#
             ),
             indoc!(
                 r#"
-                A := a | a has Hash
-                     has [Eq, Hash]
+                A := a where a implements Hash
+                    implements [Eq, Hash]
 
                 0
                 "#
@@ -5475,14 +5471,14 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := U8 has []
+                A := U8 implements []
 
                 0
                 "#
             ),
             indoc!(
                 r#"
-                A := U8 has []
+                A := U8 implements []
 
                 0
                 "#
@@ -5522,10 +5518,10 @@ mod test_fmt {
     }
 
     #[test]
-    fn opaque_has_with_impls() {
+    fn opaque_implements_with_impls() {
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq { eq }, Hash { hash }]
+            A := U8 implements [Eq { eq }, Hash { hash }]
 
             0
             "#
@@ -5533,7 +5529,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq { eq, eq1 }]
+            A := U8 implements [Eq { eq, eq1 }]
 
             0
             "#
@@ -5542,8 +5538,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                A := U8 has [Eq {   eq,     eq1   }]
-                A := U8 has [Eq {
+                A := U8 implements [Eq {   eq,     eq1   }]
+                A := U8 implements [Eq {
                                     eq,
                                     eq1
                                 }]
@@ -5553,13 +5549,13 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                A := U8 has [Eq { eq, eq1 }]
-                A := U8 has [
-                         Eq {
-                             eq,
-                             eq1,
-                         },
-                     ]
+                A := U8 implements [Eq { eq, eq1 }]
+                A := U8 implements [
+                        Eq {
+                            eq,
+                            eq1,
+                        },
+                    ]
 
                 0
                 "#
@@ -5568,8 +5564,8 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := a | a has Other
-                 has [Eq { eq }, Hash { hash }]
+            A := a where a implements Other
+                implements [Eq { eq }, Hash { hash }]
 
             0
             "#
@@ -5577,7 +5573,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            A := U8 has [Eq {}]
+            A := U8 implements [Eq {}]
 
             0
             "#
@@ -5625,7 +5621,7 @@ mod test_fmt {
                     dataIndices : List Nat,
                     data : List (T k v),
                     size : Nat,
-                } | k has Hash & Eq
+                } where k implements Hash & Eq
 
                 a
                 "#
@@ -5837,12 +5833,12 @@ mod test_fmt {
             r#"
             interface Foo exposes [] imports []
 
-            A has
+            A implements
                 ## This is member ab
-                ab : a -> a | a has A
+                ab : a -> a where a implements A
 
                 ## This is member de
-                de : a -> a | a has A
+                de : a -> a where a implements A
 
             f = g
             "#
@@ -5884,7 +5880,7 @@ mod test_fmt {
     fn clauses_with_multiple_abilities() {
         expr_formats_same(indoc!(
             r#"
-            f : {} -> a | a has Eq & Hash & Decode
+            f : {} -> a where a implements Eq & Hash & Decode
 
             f
             "#
@@ -5893,8 +5889,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f : {} -> a | a has Eq & Hash & Decode,
-                              b has Eq & Hash
+                f : {} -> a where a implements Eq & Hash & Decode,
+                              b implements Eq & Hash
 
                 f
                 "#
@@ -5902,10 +5898,10 @@ mod test_fmt {
             indoc!(
                 // TODO: ideally, this would look a bit nicer - consider
                 // f : {} -> a
-                //   | a has Eq & Hash & Decode,
-                //     b has Eq & Hash
+                //   where a implements Eq & Hash & Decode,
+                //     b implements Eq & Hash
                 r#"
-                f : {} -> a | a has Eq & Hash & Decode, b has Eq & Hash
+                f : {} -> a where a implements Eq & Hash & Decode, b implements Eq & Hash
 
                 f
                 "#

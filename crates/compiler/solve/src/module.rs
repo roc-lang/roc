@@ -1,6 +1,8 @@
-use crate::solve::{self, Aliases};
+use crate::solve::RunSolveOutput;
+use crate::FunctionKind;
+use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
-use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
+use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expr::PendingDerives;
 use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
 use roc_collections::all::MutMap;
@@ -53,20 +55,50 @@ pub struct SolvedModule {
     pub exposed_types: ExposedTypesStorageSubs,
 }
 
-#[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
+pub struct SolveConfig<'a> {
+    /// The module we are solving.
+    pub home: ModuleId,
+    pub constraints: &'a Constraints,
+    pub root_constraint: Constraint,
+    /// All types introduced in the module. Canonicalized, but not necessarily yet associated with
+    /// a variable substitution.
+    pub types: Types,
+    /// How functions should be kinded.
+    pub function_kind: FunctionKind,
+    /// Table of types introduced in this module that claim to derive an ability implementation.
+    /// Due for checking and instantiation after the solver runs over the module.
+    pub pending_derives: PendingDerives,
+    /// Types exposed by other modules.
+    /// Available for late instantiation of imports, lambda sets, or ability types.
+    pub exposed_by_module: &'a ExposedByModule,
+    /// The unique `#Derived` module, used to generate and retrieve derived ability
+    /// implementations.
+    /// Needed during solving to resolve lambda sets from derived implementations that escape into
+    /// the user module.
+    pub derived_module: SharedDerivedModule,
+
+    #[cfg(debug_assertions)]
+    /// The checkmate collector for this module.
+    pub checkmate: Option<roc_checkmate::Collector>,
+}
+
+pub struct SolveOutput {
+    pub subs: Solved<Subs>,
+    pub scope: solve::Scope,
+    pub errors: Vec<TypeError>,
+    pub resolved_abilities_store: AbilitiesStore,
+
+    #[cfg(debug_assertions)]
+    pub checkmate: Option<roc_checkmate::Collector>,
+}
+
 pub fn run_solve(
-    home: ModuleId,
-    types: Types,
-    constraints: &Constraints,
-    constraint: ConstraintSoa,
+    config: SolveConfig<'_>,
     rigid_variables: RigidVariables,
     mut subs: Subs,
     mut aliases: Aliases,
     mut abilities_store: AbilitiesStore,
-    pending_derives: PendingDerives,
-    exposed_by_module: &ExposedByModule,
-    derived_module: SharedDerivedModule,
-) -> (Solved<Subs>, solve::Env, Vec<TypeError>, AbilitiesStore) {
+) -> SolveOutput {
     for (var, name) in rigid_variables.named {
         subs.rigid_var(var, name);
     }
@@ -84,21 +116,27 @@ pub fn run_solve(
     let mut problems = Vec::new();
 
     // Run the solver to populate Subs.
-    let (solved_subs, solved_env) = solve::run(
-        home,
-        types,
-        constraints,
+    let RunSolveOutput {
+        solved,
+        scope,
+        #[cfg(debug_assertions)]
+        checkmate,
+    } = solve::run(
+        config,
         &mut problems,
         subs,
         &mut aliases,
-        &constraint,
-        pending_derives,
         &mut abilities_store,
-        exposed_by_module,
-        derived_module,
     );
 
-    (solved_subs, solved_env, problems, abilities_store)
+    SolveOutput {
+        subs: solved,
+        scope,
+        errors: problems,
+        resolved_abilities_store: abilities_store,
+        #[cfg(debug_assertions)]
+        checkmate,
+    }
 }
 
 /// Copies exposed types and all ability specializations, which may be implicitly exposed.

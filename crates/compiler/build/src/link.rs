@@ -4,6 +4,7 @@ use roc_command_utils::{cargo, clang, rustup, zig};
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -126,7 +127,7 @@ fn find_wasi_libc_path() -> PathBuf {
     internal_error!("cannot find `wasi-libc.a`")
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_zig_host_native(
     env_path: &str,
@@ -161,7 +162,7 @@ pub fn build_zig_host_native(
 
     zig_cmd.args([
         zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
+        &format!("-femit-bin={emit_bin}"),
         "--pkg-begin",
         "glue",
         find_zig_glue_path().to_str().unwrap(),
@@ -252,99 +253,6 @@ pub fn build_zig_host_native(
         zig_cmd.args(&["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
         zig_cmd.args(&["-O", "ReleaseSmall"]);
-    }
-
-    zig_cmd
-}
-
-#[cfg(target_os = "macos")]
-#[allow(clippy::too_many_arguments)]
-pub fn build_zig_host_native(
-    env_path: &str,
-    env_home: &str,
-    emit_bin: &str,
-    zig_host_src: &str,
-    _target: &str,
-    opt_level: OptLevel,
-    shared_lib_path: Option<&Path>,
-    builtins_host_path: &Path,
-    // For compatibility with the non-macOS def above. Keep these in sync.
-) -> Command {
-    use serde_json::Value;
-
-    // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = zig().args(["env"]).output().unwrap();
-
-    let zig_env_json = if zig_env_output.status.success() {
-        std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
-            internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            );
-        })
-    } else {
-        match std::str::from_utf8(&zig_env_output.stderr) {
-            Ok(stderr) => internal_error!("`zig env` failed - stderr output was: {:?}", stderr),
-            Err(utf8_err) => internal_error!(
-                "`zig env` failed; its stderr output was invalid utf8 ({:?})",
-                utf8_err
-            ),
-        }
-    };
-
-    let mut zig_compiler_rt_path = match serde_json::from_str(zig_env_json) {
-        Ok(Value::Object(map)) => match map.get("std_dir") {
-            Some(Value::String(std_dir)) => PathBuf::from(Path::new(std_dir)),
-            _ => {
-                internal_error!("Expected JSON containing a `std_dir` String field from `zig env`, but got: {:?}", zig_env_json);
-            }
-        },
-        _ => {
-            internal_error!(
-                "Expected JSON containing a `std_dir` field from `zig env`, but got: {:?}",
-                zig_env_json
-            );
-        }
-    };
-
-    zig_compiler_rt_path.push("special");
-    zig_compiler_rt_path.push("compiler_rt.zig");
-
-    let mut zig_cmd = zig();
-    zig_cmd
-        .env_clear()
-        .env("PATH", env_path)
-        .env("HOME", env_home);
-    if let Some(shared_lib_path) = shared_lib_path {
-        zig_cmd.args([
-            "build-exe",
-            "-fPIE",
-            shared_lib_path.to_str().unwrap(),
-            builtins_host_path.to_str().unwrap(),
-        ]);
-    } else {
-        zig_cmd.args(["build-obj"]);
-    }
-    zig_cmd.args([
-        zig_host_src,
-        &format!("-femit-bin={}", emit_bin),
-        "--pkg-begin",
-        "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
-        // include the zig runtime
-        "--pkg-begin",
-        "compiler_rt",
-        zig_compiler_rt_path.to_str().unwrap(),
-        "--pkg-end",
-        // include libc
-        "--library",
-        "c",
-    ]);
-    if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(["-O", "ReleaseSafe"]);
-    } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
@@ -492,7 +400,7 @@ pub fn build_swift_host_native(
 
     match arch {
         Architecture::Aarch64(_) => command.arg("-arm64"),
-        _ => command.arg(format!("-{}", arch)),
+        _ => command.arg(format!("-{arch}")),
     };
 
     command
@@ -623,7 +531,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2022-10-30", "cargo"]);
+            cmd.args(["run", "nightly-2023-05-28", "cargo"]);
 
             cmd
         } else {
@@ -640,7 +548,7 @@ pub fn rebuild_host(
             let rust_flags = if cfg!(windows) {
                 "-Z export-executable-symbols"
             } else {
-                "-C link-dead-code"
+                "-C link-args=-rdynamic"
             };
             cargo_cmd.env("RUSTFLAGS", rust_flags);
             cargo_cmd.args(["--bin", "host"]);
@@ -878,11 +786,25 @@ fn get_target_str(target: &Triple) -> &str {
     }
 }
 
-fn nix_path_opt() -> Option<String> {
-    env::var_os("NIX_GLIBC_PATH").map(|path| path.into_string().unwrap())
+fn nix_paths() -> Vec<String> {
+    let mut paths = vec![];
+
+    if let Some(nix_libgcc_s_path) = env::var_os("NIX_LIBGCC_S_PATH") {
+        paths.push(nix_libgcc_s_path.into_string().unwrap())
+    }
+
+    if let Some(nix_glibc_path) = nix_glibc_path_opt() {
+        paths.push(nix_glibc_path.into_string().unwrap())
+    }
+
+    paths
 }
 
-fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
+fn nix_glibc_path_opt() -> Option<OsString> {
+    env::var_os("NIX_GLIBC_PATH")
+}
+
+fn build_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
     let mut guess_path = PathBuf::new();
     for s in segments {
         guess_path.push(s);
@@ -905,20 +827,19 @@ fn library_path<const N: usize>(segments: [&str; N]) -> Option<PathBuf> {
 /// match will be returned.
 ///
 /// If there are no matches, [`None`] will be returned.
-fn look_for_library(lib_dirs: &[&[&str]], lib_filename: &str) -> Option<PathBuf> {
+fn look_for_library(lib_dirs: &[PathBuf], lib_filename: &str) -> Option<PathBuf> {
     lib_dirs
         .iter()
-        .map(|lib_dir| {
-            lib_dir.iter().fold(PathBuf::new(), |mut path, segment| {
-                path.push(segment);
-                path
-            })
-        })
-        .map(|mut path| {
-            path.push(lib_filename);
-            path
+        .map(|path| {
+            let mut path_cl = path.clone();
+            path_cl.push(lib_filename);
+            path_cl
         })
         .find(|path| path.exists())
+}
+
+fn strs_to_path(strs: &[&str]) -> PathBuf {
+    strs.iter().collect()
 }
 
 fn link_linux(
@@ -955,50 +876,37 @@ fn link_linux(
         ));
     }
 
-    // Some things we'll need to build a list of dirs to check for libraries
-    let maybe_nix_path = nix_path_opt();
-    let usr_lib_arch = ["/usr", "lib", &architecture];
-    let lib_arch = ["/lib", &architecture];
-    let nix_path_segments;
-    let lib_dirs_if_nix: [&[&str]; 5];
-    let lib_dirs_if_nonix: [&[&str]; 4];
+    let nix_paths_vec_string = nix_paths();
+    let nix_paths_vec: Vec<PathBuf> = nix_paths_vec_string.iter().map(PathBuf::from).collect();
+    let usr_lib_arch_path = strs_to_path(&["/usr", "lib", &architecture]);
+    let lib_arch_path = strs_to_path(&["/lib", &architecture]);
 
-    // Build the aformentioned list
-    let lib_dirs: &[&[&str]] =
-        // give preference to nix_path if it's defined, this prevents bugs
-        if let Some(nix_path) = &maybe_nix_path {
-            nix_path_segments = [nix_path.as_str()];
-            lib_dirs_if_nix = [
-                &nix_path_segments,
-                &usr_lib_arch,
-                &lib_arch,
-                &["/usr", "lib"],
-                &["/usr", "lib64"],
-            ];
-            &lib_dirs_if_nix
-        } else {
-            lib_dirs_if_nonix = [
-                &usr_lib_arch,
-                &lib_arch,
-                &["/usr", "lib"],
-                &["/usr", "lib64"],
-            ];
-            &lib_dirs_if_nonix
-        };
+    let mut lib_dirs: Vec<PathBuf> = vec![];
+
+    // start with nix paths, this prevents version incompatibility
+    if !nix_paths_vec.is_empty() {
+        lib_dirs.extend(nix_paths_vec)
+    }
+
+    lib_dirs.extend([
+        usr_lib_arch_path,
+        lib_arch_path,
+        strs_to_path(&["/usr", "lib"]),
+        strs_to_path(&["/usr", "lib64"]),
+    ]);
 
     // Look for the libraries we'll need
-
     let libgcc_name = "libgcc_s.so.1";
-    let libgcc_path = look_for_library(lib_dirs, libgcc_name);
+    let libgcc_path = look_for_library(&lib_dirs, libgcc_name);
 
     let crti_name = "crti.o";
-    let crti_path = look_for_library(lib_dirs, crti_name);
+    let crti_path = look_for_library(&lib_dirs, crti_name);
 
     let crtn_name = "crtn.o";
-    let crtn_path = look_for_library(lib_dirs, crtn_name);
+    let crtn_path = look_for_library(&lib_dirs, crtn_name);
 
     let scrt1_name = "Scrt1.o";
-    let scrt1_path = look_for_library(lib_dirs, scrt1_name);
+    let scrt1_path = look_for_library(&lib_dirs, scrt1_name);
 
     // Unwrap all the paths at once so we can inform the user of all missing libs at once
     let (libgcc_path, crti_path, crtn_path, scrt1_path) =
@@ -1010,18 +918,29 @@ fn link_linux(
                     eprintln!("You may need to install libgcc\n");
                 }
                 if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
-                    eprintln!("Couldn't find the glibc development files!");
-                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
-                    eprintln!("You may need to install the glibc development package");
-                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
+                    eprintln!("Couldn't find the libc development files!");
+                    eprintln!("We need the files crti.o, crtn.o, and Scrt1.o");
+                    eprintln!();
+                    eprintln!("On Ubuntu/Debian execute:");
+                    eprintln!("\tsudo apt install libc-dev\n");
+                    eprintln!("On ArchLinux/Manjaro execute:");
+                    eprintln!("\tsudo pacman -S glibc\n");
+                    eprintln!("On Fedora execute:");
+                    eprintln!("\tsudo dnf install glibc-devel\n");
                 }
 
                 let dirs = lib_dirs
                     .iter()
-                    .map(|segments| segments.join("/"))
+                    .map(|path_buf| {
+                        path_buf
+                            .as_path()
+                            .to_str()
+                            .unwrap_or("FAILED TO CONVERT PATH TO STR")
+                            .to_string()
+                    })
                     .collect::<Vec<String>>()
                     .join("\n");
-                eprintln!("We looked in the following directories:\n{}", dirs);
+                eprintln!("We looked in the following directories:\n{dirs}");
                 process::exit(1);
             }
         };
@@ -1029,13 +948,16 @@ fn link_linux(
     let ld_linux = match target.architecture {
         Architecture::X86_64 => {
             // give preference to nix_path if it's defined, this prevents bugs
-            if let Some(nix_path) = nix_path_opt() {
-                library_path([&nix_path, "ld-linux-x86-64.so.2"])
+            if let Some(nix_glibc_path) = nix_glibc_path_opt() {
+                build_path([
+                    &nix_glibc_path.into_string().unwrap(),
+                    "ld-linux-x86-64.so.2",
+                ])
             } else {
-                library_path(["/lib64", "ld-linux-x86-64.so.2"])
+                build_path(["/lib64", "ld-linux-x86-64.so.2"])
             }
         }
-        Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Aarch64(_) => build_path(["/lib", "ld-linux-aarch64.so.1"]),
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
@@ -1171,6 +1093,12 @@ fn link_macos(
             // "--gc-sections",
             "-arch",
             &arch,
+            // Suppress warnings, because otherwise it prints:
+            //
+            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
+            //
+            // We can't disable that option without breaking either x64 mac or ARM mac
+            "-w",
             "-macos_version_min",
             &get_macos_version(),
         ])
@@ -1178,8 +1106,8 @@ fn link_macos(
 
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
-        ld_command.arg(format!("-L{}", sdk_path));
-        ld_command.arg(format!("-L{}/swift", sdk_path));
+        ld_command.arg(format!("-L{sdk_path}"));
+        ld_command.arg(format!("-L{sdk_path}/swift"));
     };
 
     let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
@@ -1381,9 +1309,7 @@ pub fn llvm_module_to_dylib(
 
     assert!(
         exit_status.success(),
-        "\n___________\nLinking command failed with status {:?}:\n\n  {:?}\n___________\n",
-        exit_status,
-        child
+        "\n___________\nLinking command failed with status {exit_status:?}:\n\n  {child:?}\n___________\n"
     );
 
     // Load the dylib

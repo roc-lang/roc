@@ -136,8 +136,8 @@ fn find_names_needed(
             if !root_appearances.contains_key(&root) {
                 roots.push(root);
             }
-            // Able vars are always printed at least twice (in the signature, and in the "has"
-            // clause set).
+            // Able vars are always printed at least twice (in the signature, and in the
+            // "implements" clause set).
             root_appearances.insert(root, Appearances::Multiple);
         }
         RecursionVar {
@@ -402,7 +402,11 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error | Structure(EmptyRecord) | Structure(EmptyTuple) | Structure(EmptyTagUnion) => {
+        Error
+        | Structure(EmptyRecord)
+        | Structure(EmptyTuple)
+        | Structure(EmptyTagUnion)
+        | ErasedLambda => {
             // Errors and empty records don't need names.
         }
     }
@@ -602,9 +606,16 @@ fn variable_to_string(
     ctx.able_variables.sort();
     ctx.able_variables.dedup();
     for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
-        buf.push_str(if i == 0 { " | " } else { ", " });
+        if i == 0 {
+            buf.push(' ');
+            buf.push_str(roc_parse::keyword::WHERE)
+        } else {
+            buf.push(',');
+        }
+        buf.push(' ');
         buf.push_str(var);
-        buf.push_str(" has");
+        buf.push(' ');
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
                 buf.push_str(" &");
@@ -820,7 +831,7 @@ fn write_content<'a>(
                     "".to_string()
                 };
                 if env.home == symbol.module_id() {
-                    format!("{}{}", ident_str, disambiguation,)
+                    format!("{ident_str}{disambiguation}",)
                 } else {
                     format!(
                         "{}.{}{}",
@@ -859,6 +870,12 @@ fn write_content<'a>(
 
             buf.push(']');
         }
+        ErasedLambda => {
+            debug_assert!(env.debug.print_lambda_sets);
+
+            // Easy mode 🤠
+            buf.push('?');
+        }
         RangedNumber(range) => {
             buf.push_str("Range(");
             for (i, &var) in range.variable_slice().iter().enumerate() {
@@ -889,7 +906,7 @@ fn write_float<'a>(
         Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
         Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
         _ => write_parens!(write_parens, buf, {
-            buf.push_str("Float ");
+            buf.push_str("Frac ");
             write_content(env, ctx, var, subs, buf, parens, pol);
         }),
     }

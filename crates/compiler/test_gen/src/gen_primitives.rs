@@ -9,7 +9,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocBox, RocList, RocStr};
+use roc_std::{RocBox, RocDec, RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
@@ -20,7 +20,7 @@ fn basic_int() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_float() {
-    assert_evals_to!("1234.0", 1234.0, f64);
+    assert_evals_to!("1234.0f64", 1234.0, f64);
 }
 
 #[test]
@@ -29,7 +29,7 @@ fn branch_first_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                when 1.23 is
+                when 1.23f64 is
                     1.23 -> 12
                     _ -> 34
             "#
@@ -239,12 +239,12 @@ fn gen_large_when_float() {
             r#"
                 foo = \num ->
                     when num is
-                        0.5 -> 200.1
+                        0.5f64 -> 200.1
                         -3.6 -> 111.2 # TODO adding more negative numbers reproduces parsing bugs here
                         3.6 -> 789.5
                         1.7 -> 123.3
                         2.8 -> 456.4
-                        _ -> 1000.6
+                        _ -> 1000.6f64
 
                 foo -3.6
             "#
@@ -314,7 +314,7 @@ fn return_unnamed_fn() {
                 alwaysFloatIdentity = \_ ->
                     (\a -> a)
 
-                (alwaysFloatIdentity 2) 1.23
+                (alwaysFloatIdentity 2) 1.23f64
 
             wrapper {}
             "#
@@ -362,7 +362,7 @@ fn gen_basic_def() {
     assert_evals_to!(
         indoc!(
             r#"
-                float = 1.23
+                float = 1.23f64
 
                 float
             "#
@@ -380,7 +380,7 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                float = 1.23
+                float = 1.23f64
 
                 if float > 3 then answer else answer
             "#
@@ -394,7 +394,7 @@ fn gen_multiple_defs() {
             r#"
                 answer = 42
 
-                float = 1.23
+                float = 1.23f64
 
                 if answer > 3 then float else float
             "#
@@ -564,7 +564,7 @@ fn top_level_constant() {
             r#"
             app "test" provides [main] to "./platform"
 
-            float = 1.2315
+            float = 1.2315f64
 
             main =
                 float + float
@@ -986,6 +986,24 @@ fn undefined_variable() {
                  else
                      y + z
                  "#
+        ),
+        3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = "User crash with message: \"a crash\"")]
+fn a_crash() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            if Bool.true then
+                crash "a crash"
+            else
+                0u64
+            "#
         ),
         3,
         i64
@@ -1808,10 +1826,10 @@ fn unified_empty_closure_bool() {
 
             foo = \{} ->
                 when A is
-                    A -> (\_ -> 1.23)
-                    B -> (\_ -> 1.23)
+                    A -> (\_ -> 1.23f64)
+                    B -> (\_ -> 1.23f64)
 
-            main : Frac *
+            main : F64
             main =
                 (foo {}) 0
             "#
@@ -1833,11 +1851,11 @@ fn unified_empty_closure_byte() {
 
             foo = \{} ->
                 when A is
-                    A -> (\_ -> 1.23)
-                    B -> (\_ -> 1.23)
+                    A -> (\_ -> 1.23f64)
+                    B -> (\_ -> 1.23f64)
                     C -> (\_ -> 1.23)
 
-            main : Frac *
+            main : F64
             main =
                 (foo {}) 0
             "#
@@ -1881,7 +1899,7 @@ fn task_always_twice() {
                         Ok x -> transform x
                         Err e -> fail e
 
-            main : Task {} (Frac *)
+            main : Task {} F64
             main = after (always "foo") (\_ -> always {})
 
             "#
@@ -1940,7 +1958,7 @@ fn alias_of_alias_with_type_arguments() {
                 @Effect inner
 
 
-            main : Task {} (Frac *)
+            main : Task {} F64
             main = always {}
             "#
         ),
@@ -2211,9 +2229,10 @@ fn nullable_eval_cfold() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn nested_switch() {
-    // exposed bug with passing the right symbol/layout down into switch branch generation
-    // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
-    assert_evals_to!(
+    crate::helpers::with_larger_debug_stack(||
+        // exposed bug with passing the right symbol/layout down into switch branch generation
+        // This is also the only test_gen test that exercises Reset/Reuse (as of Aug 2022)
+        assert_evals_to!(
         indoc!(
             r#"
             app "test" provides [main] to "./platform"
@@ -2239,7 +2258,6 @@ fn nested_switch() {
 
                     _ -> e
 
-
             expr : Expr
             expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
 
@@ -2249,7 +2267,7 @@ fn nested_switch() {
         ),
         12,
         i64
-    );
+    ));
 }
 
 #[test]
@@ -3316,6 +3334,26 @@ fn box_num() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_record_2_u64() {
+    assert_evals_to!(
+        "Box.box { x: 1u64, y: 2u64 }",
+        RocBox::new((1u64, 2u64)),
+        RocBox<(u64, u64)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_record_3_u64() {
+    assert_evals_to!(
+        "Box.box { x: 1u64, y: 2u64, z: 3u64 }",
+        RocBox::new((1u64, 2u64, 3u64)),
+        RocBox<(u64, u64, u64)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_str() {
     assert_evals_to!(
         "Box.box \"short\"",
@@ -3368,7 +3406,35 @@ fn box_and_unbox_f32() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn box_and_unbox_record() {
+fn box_and_unbox_record_2_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u64, b: 27u64 })
+            "#
+        ),
+        (15, 27),
+        (u64, u64)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_record_3_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u64, b: 27u64, c: 34u64 })
+            "#
+        ),
+        (15, 27, 34),
+        (u64, u64, u64)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_record_2_u8() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3377,6 +3443,20 @@ fn box_and_unbox_record() {
         ),
         (15, 27),
         (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_record_3_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u8, b: 27u8, c: 34u8 })
+            "#
+        ),
+        (15, 27, 34),
+        (u8, u8, u8)
     )
 }
 
@@ -4442,7 +4522,7 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn reset_recursive_type_wraps_in_named_type() {
     assert_evals_to!(
         indoc!(
@@ -4496,6 +4576,57 @@ fn pass_lambda_set_to_function() {
             "#
         ),
         3 * 3,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn linked_list_trmc() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            LinkedList a : [Nil, Cons a (LinkedList a)]
+
+            repeat : a, Nat -> LinkedList a
+            repeat = \value, n ->
+                when n is
+                    0 -> Nil
+                    _ -> Cons value (repeat value (n - 1))
+
+            length : LinkedList a -> I64
+            length = \list ->
+                when list is
+                    Nil -> 0
+                    Cons _ rest -> 1 + length rest
+
+            main : I64
+            main =
+                repeat "foo" 5
+                    |> length
+            "#
+        ),
+        5,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn many_arguments() {
+    // exhausts all argument registers on x86 and aarch
+    assert_evals_to!(
+        indoc!(
+            r#"
+            fun = \a,b,c,d, e,f,g,h, i ->
+                (a + b + c + d) + (e + f + g + h) + i
+
+            fun 0i64 1 2 3 4 5 6 7 8
+            "#
+        ),
+        1 + 2 + 3 + 4 + 5 + 6 + 7 + 8,
         i64
     );
 }

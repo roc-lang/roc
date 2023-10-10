@@ -27,7 +27,8 @@ name = "host"
 path = "src/main.rs"
 
 [dependencies]
-roc_std = { path = "../../../../roc_std" }
+roc_std = { path = "test_glue/roc_std" }
+roc_app = { path = "test_glue/roc_app" }
 libc = "0.2"
 indoc = "1.0.6"
 
