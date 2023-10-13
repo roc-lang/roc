@@ -193,7 +193,7 @@ pub fn build_zig_host_native(
     if matches!(opt_level, OptLevel::Optimize) {
         zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall", "-fno-strip"]);
     }
 
     zig_cmd
