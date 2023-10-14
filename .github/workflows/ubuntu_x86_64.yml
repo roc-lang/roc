@@ -13,10 +13,10 @@ env:
 jobs:
   test-zig-rust-wasm:
     name: test zig, rust, wasm...
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
+      RUSTC_WRAPPER: /home/big-ci-user/.cargo/bin/sccache
     steps:
       - uses: actions/checkout@v3
 
@@ -25,7 +25,7 @@ jobs:
 
       - name: Update PATH to use zig 11
         run: |
-          echo "PATH=/home/small-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
       
       - run: zig version
 
