@@ -954,7 +954,6 @@ pub enum LoadingProblem<'a> {
     ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
 
-    MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
 
@@ -964,6 +963,19 @@ pub enum LoadingProblem<'a> {
     ImportCycle(PathBuf, Vec<ModuleId>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
+    ChannelProblem(ChannelProblem),
+}
+
+#[derive(Debug)]
+pub enum ChannelProblem {
+    FailedToEnqueueTask,
+    FailedToSendRootMsg,
+    FailedToSendWorkerShutdownMsg,
+    ChannelDisconnected,
+    FailedToSendManyMsg,
+    FailedToSendFinishedSpecializationsMsg,
+    FailedToSendTaskMsg,
+    FailedToSendFinishedTypeCheckingMsg,
 }
 
 pub enum Phases {
@@ -984,9 +996,9 @@ fn enqueue_task<'a>(
     injector.push(task);
 
     for listener in listeners {
-        listener
-            .send(WorkerMsg::TaskAdded)
-            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        listener.send(WorkerMsg::TaskAdded).map_err(|_| {
+            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask)
+        })?;
     }
 
     Ok(())
@@ -1325,7 +1337,7 @@ pub fn load_single_threaded<'a>(
 
     msg_tx
         .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
 
     let number_of_workers = 1;
     let mut state = State::new(
@@ -1575,7 +1587,9 @@ fn state_thread_step<'a>(
         }
         Err(err) => match err {
             crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
-            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::MsgChannelDied),
+            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::ChannelProblem(
+                ChannelProblem::ChannelDisconnected,
+            )),
         },
     }
 }
@@ -1647,7 +1661,7 @@ fn load_multi_threaded<'a>(
     let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
 
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
@@ -1744,7 +1758,9 @@ fn load_multi_threaded<'a>(
                         )
                     });
 
-                res_join_handle.unwrap();
+                res_join_handle.unwrap_or_else(|_| {
+                    panic!("Join handle panicked!");
+                });
             }
 
             // We've now distributed one worker queue to each thread.
@@ -1760,9 +1776,11 @@ fn load_multi_threaded<'a>(
             macro_rules! shut_down_worker_threads {
                 () => {
                     for listener in worker_listeners {
-                        listener
-                            .send(WorkerMsg::Shutdown)
-                            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                        listener.send(WorkerMsg::Shutdown).map_err(|_| {
+                            LoadingProblem::ChannelProblem(
+                                ChannelProblem::FailedToSendWorkerShutdownMsg,
+                            )
+                        })?;
                     }
                 };
             }
@@ -1787,6 +1805,14 @@ fn load_multi_threaded<'a>(
                     Ok(ControlFlow::Continue(new_state)) => {
                         state = new_state;
                         continue;
+                    }
+                    Err(LoadingProblem::ChannelProblem(problem)) => {
+                        // Note: shut_down_worker_threads! results in the system
+                        // looping indefinitely (possibly on a deadlock?) when
+                        // we hit one of these problems due to a panic (e.g. in mono).
+                        eprintln!("{:?}", problem);
+
+                        std::process::exit(101);
                     }
                     Err(e) => {
                         shut_down_worker_threads!();
@@ -1843,8 +1869,8 @@ fn worker_task_step<'a>(
 
                         match result {
                             Ok(()) => {}
-                            Err(LoadingProblem::MsgChannelDied) => {
-                                panic!("Msg channel closed unexpectedly.")
+                            Err(LoadingProblem::ChannelProblem(problem)) => {
+                                panic!("Channel problem: {:?}", problem);
                             }
                             Err(LoadingProblem::ParsingFailed(problem)) => {
                                 msg_tx.send(Msg::FailedToParse(problem)).unwrap();
@@ -1942,8 +1968,8 @@ fn worker_task<'a>(
 
                     match result {
                         Ok(()) => {}
-                        Err(LoadingProblem::MsgChannelDied) => {
-                            panic!("Msg channel closed unexpectedly.")
+                        Err(LoadingProblem::ChannelProblem(problem)) => {
+                            panic!("Channel problem: {:?}", problem);
                         }
                         Err(LoadingProblem::ParsingFailed(problem)) => {
                             msg_tx.send(Msg::FailedToParse(problem)).unwrap();
@@ -2086,9 +2112,9 @@ fn update<'a>(
         Many(messages) => {
             // enqueue all these message
             for msg in messages {
-                msg_tx
-                    .send(msg)
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                msg_tx.send(msg).map_err(|_| {
+                    LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendManyMsg)
+                })?;
             }
 
             Ok(state)
@@ -2552,7 +2578,11 @@ fn update<'a>(
                         #[cfg(debug_assertions)]
                         checkmate,
                     })
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                    .map_err(|_| {
+                        LoadingProblem::ChannelProblem(
+                            ChannelProblem::FailedToSendFinishedTypeCheckingMsg,
+                        )
+                    })?;
 
                 // bookkeeping
                 state.declarations_by_id.insert(module_id, decls);
@@ -2874,7 +2904,11 @@ fn update<'a>(
                             exposed_to_host: state.exposed_to_host.clone(),
                             module_expectations,
                         })
-                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                        .map_err(|_| {
+                            LoadingProblem::ChannelProblem(
+                                ChannelProblem::FailedToSendFinishedSpecializationsMsg,
+                            )
+                        })?;
 
                     Ok(state)
                 }
@@ -6308,7 +6342,7 @@ fn run_task<'a>(
 
     msg_tx
         .send(msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendTaskMsg))?;
 
     Ok(())
 }
