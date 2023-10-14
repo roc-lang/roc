@@ -42,11 +42,11 @@ pub(crate) fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
         .join("debug-wasm-test.html");
     let debug_wasm_test_str = debug_wasm_test_path.to_str().unwrap();
 
-    println!("");
+    println!();
     println!("Wrote wasm file to\n\t{final_wasm_str}");
     println!("Go to the Roc Wasm Debug tool in your browser\n\tfile://{debug_wasm_test_str}");
     println!("Or analyse the generated code\n\twasm-objdump -dx {final_wasm_str}");
-    println!("");
+    println!();
 }
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
