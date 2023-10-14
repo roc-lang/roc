@@ -36,7 +36,10 @@ pub(crate) fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
     // Get the absolute path to our HTML debug tool.
     // Use the fact that Cargo runs tests from the root of the crate
     let test_gen_dir = std::env::current_dir().unwrap();
-    let debug_wasm_test_path = test_gen_dir.join("src").join("helpers").join("debug-wasm-test.html");
+    let debug_wasm_test_path = test_gen_dir
+        .join("src")
+        .join("helpers")
+        .join("debug-wasm-test.html");
     let debug_wasm_test_str = debug_wasm_test_path.to_str().unwrap();
 
     println!("");
