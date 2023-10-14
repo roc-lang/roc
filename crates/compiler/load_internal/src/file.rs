@@ -1042,7 +1042,7 @@ pub fn load_and_typecheck_str<'a>(
         roc_cache_dir,
         load_config,
     )? {
-        Monomorphized(_) => unreachable!(""),
+        Monomorphized(_) => unreachable!(),
         TypeChecked(module) => Ok(module),
     }
 }
@@ -1719,8 +1719,8 @@ fn load_multi_threaded<'a>(
     // Get a reference to the completed stealers, so we can send that
     // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
     let stealers = stealers.into_bump_slice();
-
     let it = worker_arenas.iter_mut();
+
     {
         thread::scope(|thread_scope| {
             let mut worker_listeners =
