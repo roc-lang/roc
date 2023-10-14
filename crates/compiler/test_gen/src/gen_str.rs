@@ -2144,3 +2144,63 @@ fn release_excess_capacity_empty() {
         |value: RocStr| (value.capacity(), value)
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_positive() {
+    assert_evals_to!(
+        r#"
+        Str.contains "foobarbaz" "bar"
+        "#,
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_negative() {
+    assert_evals_to!(
+        r#"
+        Str.contains "apple" "orange"
+        "#,
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_empty_positive() {
+    assert_evals_to!(
+        r#"
+        Str.contains "anything" ""
+        "#,
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_empty_negative() {
+    assert_evals_to!(
+        r#"
+        Str.contains "" "anything"
+        "#,
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_self() {
+    assert_evals_to!(
+        r#"
+        Str.contains "self" "self"
+        "#,
+        true,
+        bool
+    );
+}
