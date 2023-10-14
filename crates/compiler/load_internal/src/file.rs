@@ -1776,11 +1776,13 @@ fn load_multi_threaded<'a>(
             macro_rules! shut_down_worker_threads {
                 () => {
                     for listener in worker_listeners {
-                        listener.send(WorkerMsg::Shutdown).map_err(|_| {
-                            LoadingProblem::ChannelProblem(
-                                ChannelProblem::FailedToSendWorkerShutdownMsg,
-                            )
-                        })?;
+                        // We intentionally don't propagate this Result, because even if
+                        // shutting down a worker failed (which can happen if a a panic
+                        // occurred on that thread), we want to continue shutting down
+                        // the others regardless.
+                        if listener.send(WorkerMsg::Shutdown).is_err() {
+                            log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
+                        }
                     }
                 };
             }
