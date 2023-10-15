@@ -135,6 +135,9 @@ pub fn report_problems(
         }
     }
 
+    debug_assert!(can_problems.is_empty() && type_problems.is_empty(), "After reporting problems, there were {:?} can_problems and {:?} type_problems that could not be reported because they did not have corresponding entries in `sources`.", can_problems.len(), type_problems.len());
+    debug_assert_eq!(errors.len() + warnings.len(), total_problems);
+
     let problems_reported;
 
     // Only print warnings if there are no errors
