@@ -968,12 +968,7 @@ pub enum LoadingProblem<'a> {
 
 #[derive(Debug)]
 pub enum ChannelProblem {
-    FailedToEnqueueTask {
-        can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-        type_problems: MutMap<ModuleId, Vec<TypeError>>,
-        sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
-        interns: Interns,
-    },
+    FailedToEnqueueTask(Box<PanicReportInfo>),
     FailedToSendRootMsg,
     FailedToSendWorkerShutdownMsg,
     ChannelDisconnected,
@@ -981,6 +976,14 @@ pub enum ChannelProblem {
     FailedToSendFinishedSpecializationsMsg,
     FailedToSendTaskMsg,
     FailedToSendFinishedTypeCheckingMsg,
+}
+
+#[derive(Debug)]
+pub struct PanicReportInfo {
+    can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+    type_problems: MutMap<ModuleId, Vec<TypeError>>,
+    sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
+    interns: Interns,
 }
 
 pub enum Phases {
@@ -1003,29 +1006,28 @@ fn enqueue_task<'a>(
 
     for listener in listeners {
         listener.send(WorkerMsg::TaskAdded).map_err(|_| {
-            let module_ids = { (&*state.arc_modules).lock().clone() }.into_module_ids();
+            let module_ids = { (*state.arc_modules).lock().clone() }.into_module_ids();
 
             let interns = Interns {
                 module_ids,
                 all_ident_ids: state.constrained_ident_ids.clone(),
             };
 
-            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask {
-                can_problems: state.module_cache.can_problems.clone(),
-                type_problems: state.module_cache.type_problems.clone(),
-                interns,
-                sources: state
-                    .module_cache
-                    .sources
-                    .iter()
-                    .map(|(key, (path, str_ref))| {
-                        (
-                            key.clone(),
-                            (path.clone(), str_ref.to_string().into_boxed_str()),
-                        )
-                    })
-                    .collect(),
-            })
+            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(Box::new(
+                PanicReportInfo {
+                    can_problems: state.module_cache.can_problems.clone(),
+                    type_problems: state.module_cache.type_problems.clone(),
+                    interns,
+                    sources: state
+                        .module_cache
+                        .sources
+                        .iter()
+                        .map(|(key, (path, str_ref))| {
+                            (*key, (path.clone(), str_ref.to_string().into_boxed_str()))
+                        })
+                        .collect(),
+                },
+            )))
         })?;
     }
 
@@ -1841,12 +1843,16 @@ fn load_multi_threaded<'a>(
                         state = new_state;
                         continue;
                     }
-                    Err(LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask {
-                        can_problems,
-                        type_problems,
-                        sources,
-                        interns,
-                    })) => {
+                    Err(LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(
+                        info,
+                    ))) => {
+                        let PanicReportInfo {
+                            can_problems,
+                            type_problems,
+                            sources,
+                            interns,
+                        } = *info;
+
                         // Record these for later.
                         can_problems_recorded = can_problems;
                         type_problems_recorded = type_problems;
@@ -1856,7 +1862,7 @@ fn load_multi_threaded<'a>(
                         shut_down_worker_threads!();
 
                         return Err(LoadingProblem::ChannelProblem(
-                            ChannelProblem::FailedToEnqueueTask {
+                            ChannelProblem::FailedToEnqueueTask(Box::new(PanicReportInfo {
                                 // This return value never gets used, so don't bother
                                 // cloning these in order to be able to return them.
                                 // Really, anything could go here.
@@ -1864,7 +1870,7 @@ fn load_multi_threaded<'a>(
                                 type_problems: Default::default(),
                                 sources: Default::default(),
                                 interns: Default::default(),
-                            },
+                            })),
                         ));
                     }
                     Err(e) => {
@@ -2078,7 +2084,7 @@ fn start_tasks<'a>(
         let tasks = start_phase(module_id, phase, arena, state);
 
         for task in tasks {
-            enqueue_task(injector, worker_listeners, task, &state)?
+            enqueue_task(injector, worker_listeners, task, state)?
         }
     }
 
