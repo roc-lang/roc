@@ -1882,13 +1882,15 @@ fn load_multi_threaded<'a>(
             // that there was a compiler crash.
             //
             // Unfortunately, this often has no information to report if there's a panic in mono.
-            report_problems(
-                &sources_recorded,
-                &mut interns_recorded,
-                &mut can_problems_recorded,
-                &mut type_problems_recorded,
-            )
-            .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
+            // Consequently, the following ends up being more misleading than helpful.
+            //
+            // roc_reporting::cli::report_problems(
+            //     &sources_recorded,
+            //     &mut interns_recorded,
+            //     &mut can_problems_recorded,
+            //     &mut type_problems_recorded,
+            // )
+            // .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
 
             Err(LoadingProblem::FormattedReport(
                 "\n\nThere was an unrecoverable error in the Roc compiler. Try using the `roc check` command; that may give a more helpful error report.\n\n".to_string(),
