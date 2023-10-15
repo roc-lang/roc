@@ -834,16 +834,16 @@ mod tests {
     fn readonly_list_is_sendsafe() {
         let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
         unsafe { x.set_readonly() };
-        assert_eq!(x.is_readonly(), true);
+        assert!(x.is_readonly());
 
         let y = x.clone();
         let z = y.clone();
 
         let safe_x = SendSafeRocList::from(x);
         let new_x = RocList::from(safe_x);
-        assert_eq!(new_x.is_readonly(), true);
-        assert_eq!(y.is_readonly(), true);
-        assert_eq!(z.is_readonly(), true);
+        assert!(new_x.is_readonly());
+        assert!(y.is_readonly());
+        assert!(z.is_readonly());
         assert_eq!(new_x.as_slice(), &[1, 2, 3, 4, 5]);
 
         let ptr = new_x.ptr_to_allocation();
