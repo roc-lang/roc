@@ -325,7 +325,9 @@ impl RocStr {
                 }
             }
             RocStrInnerRef::SmallString(small_str) => {
-                let mut bytes = small_str.bytes;
+                let mut bytes = [0; size_of::<RocList<u8>>()];
+                let mut it = small_str.bytes.iter();
+                bytes = bytes.map(|_| it.next().copied().unwrap_or_default());
 
                 // Even if the small string is at capacity, there will be room to write
                 // a terminator in the byte that's used to store the length.
@@ -380,9 +382,7 @@ impl RocStr {
         self.with_terminator(terminator, |dest_ptr: *mut u16, str_slice: &str| {
             // Translate UTF-8 source bytes into UTF-16 and write them into the destination.
             for (index, wchar) in str_slice.encode_utf16().enumerate() {
-                unsafe {
-                    *(dest_ptr.add(index)) = wchar;
-                }
+                unsafe { std::ptr::write_unaligned(dest_ptr.add(index), wchar) };
             }
 
             func(dest_ptr, str_slice.len())
@@ -467,7 +467,7 @@ impl RocStr {
         use core::mem::align_of;
 
         let terminate = |alloc_ptr: *mut E, str_slice: &str| unsafe {
-            *(alloc_ptr.add(str_slice.len())) = terminator;
+            std::ptr::write_unaligned(alloc_ptr.add(str_slice.len()), terminator);
 
             func(alloc_ptr, str_slice)
         };
@@ -548,7 +548,8 @@ impl RocStr {
                 let available_bytes = size_of::<SmallString>();
 
                 if needed_bytes < available_bytes {
-                    terminate(small_str.bytes.as_ptr() as *mut E, self.as_str())
+                    let mut bytes = small_str.bytes;
+                    terminate(&mut bytes as *mut u8 as *mut E, self.as_str())
                 } else {
                     fallback(self.as_str())
                 }

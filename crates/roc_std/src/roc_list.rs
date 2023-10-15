@@ -829,4 +829,30 @@ mod tests {
         drop(a);
         drop(b);
     }
+
+    #[test]
+    fn readonly_list_is_sendsafe() {
+        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
+        unsafe { x.set_readonly() };
+        assert_eq!(x.is_readonly(), true);
+
+        let y = x.clone();
+        let z = y.clone();
+
+        let safe_x = SendSafeRocList::from(x);
+        let new_x = RocList::from(safe_x);
+        assert_eq!(new_x.is_readonly(), true);
+        assert_eq!(y.is_readonly(), true);
+        assert_eq!(z.is_readonly(), true);
+        assert_eq!(new_x.as_slice(), &[1, 2, 3, 4, 5]);
+
+        let ptr = new_x.ptr_to_allocation();
+
+        drop(y);
+        drop(z);
+        drop(new_x);
+
+        // free the underlying memory
+        unsafe { crate::roc_dealloc(ptr, std::mem::align_of::<usize>() as u32) }
+    }
 }
