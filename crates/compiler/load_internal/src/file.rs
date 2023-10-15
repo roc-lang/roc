@@ -968,7 +968,12 @@ pub enum LoadingProblem<'a> {
 
 #[derive(Debug)]
 pub enum ChannelProblem {
-    FailedToEnqueueTask,
+    FailedToEnqueueTask {
+        can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+        type_problems: MutMap<ModuleId, Vec<TypeError>>,
+        sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
+        interns: Interns,
+    },
     FailedToSendRootMsg,
     FailedToSendWorkerShutdownMsg,
     ChannelDisconnected,
@@ -992,12 +997,35 @@ fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
     task: BuildTask<'a>,
+    state: &State<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
         listener.send(WorkerMsg::TaskAdded).map_err(|_| {
-            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask)
+            let module_ids = { (&*state.arc_modules).lock().clone() }.into_module_ids();
+
+            let interns = Interns {
+                module_ids,
+                all_ident_ids: state.constrained_ident_ids.clone(),
+            };
+
+            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask {
+                can_problems: state.module_cache.can_problems.clone(),
+                type_problems: state.module_cache.type_problems.clone(),
+                interns,
+                sources: state
+                    .module_cache
+                    .sources
+                    .iter()
+                    .map(|(key, (path, str_ref))| {
+                        (
+                            key.clone(),
+                            (path.clone(), str_ref.to_string().into_boxed_str()),
+                        )
+                    })
+                    .collect(),
+            })
         })?;
     }
 
@@ -1721,8 +1749,13 @@ fn load_multi_threaded<'a>(
     let stealers = stealers.into_bump_slice();
     let it = worker_arenas.iter_mut();
 
+    let mut can_problems_recorded = MutMap::default();
+    let mut type_problems_recorded = MutMap::default();
+    let mut sources_recorded = MutMap::default();
+    let mut interns_recorded = Interns::default();
+
     {
-        thread::scope(|thread_scope| {
+        let thread_result = thread::scope(|thread_scope| {
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
@@ -1808,13 +1841,31 @@ fn load_multi_threaded<'a>(
                         state = new_state;
                         continue;
                     }
-                    Err(LoadingProblem::ChannelProblem(problem)) => {
-                        // Note: shut_down_worker_threads! results in the system
-                        // looping indefinitely (possibly on a deadlock?) when
-                        // we hit one of these problems due to a panic (e.g. in mono).
-                        eprintln!("{:?}", problem);
+                    Err(LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask {
+                        can_problems,
+                        type_problems,
+                        sources,
+                        interns,
+                    })) => {
+                        // Record these for later.
+                        can_problems_recorded = can_problems;
+                        type_problems_recorded = type_problems;
+                        sources_recorded = sources;
+                        interns_recorded = interns;
 
-                        std::process::exit(101);
+                        shut_down_worker_threads!();
+
+                        return Err(LoadingProblem::ChannelProblem(
+                            ChannelProblem::FailedToEnqueueTask {
+                                // This return value never gets used, so don't bother
+                                // cloning these in order to be able to return them.
+                                // Really, anything could go here.
+                                can_problems: Default::default(),
+                                type_problems: Default::default(),
+                                sources: Default::default(),
+                                interns: Default::default(),
+                            },
+                        ));
                     }
                     Err(e) => {
                         shut_down_worker_threads!();
@@ -1823,9 +1874,27 @@ fn load_multi_threaded<'a>(
                     }
                 }
             }
+        });
+
+        thread_result.unwrap_or_else(|_| {
+            // This most likely means a panic occurred in one of the threads.
+            // Therefore, print all the error info we've accumulated, and note afterwards
+            // that there was a compiler crash.
+            //
+            // Unfortunately, this often has no information to report if there's a panic in mono.
+            report_problems(
+                &sources_recorded,
+                &mut interns_recorded,
+                &mut can_problems_recorded,
+                &mut type_problems_recorded,
+            )
+            .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
+
+            Err(LoadingProblem::FormattedReport(
+                "\n\nThere was an unrecoverable error in the Roc compiler. Try using the `roc check` command; that may give a more helpful error report.\n\n".to_string(),
+            ))
         })
     }
-    .unwrap()
 }
 
 fn worker_task_step<'a>(
@@ -2004,8 +2073,10 @@ fn start_tasks<'a>(
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
-        for task in start_phase(module_id, phase, arena, state) {
-            enqueue_task(injector, worker_listeners, task)?
+        let tasks = start_phase(module_id, phase, arena, state);
+
+        for task in tasks {
+            enqueue_task(injector, worker_listeners, task, &state)?
         }
     }
 
