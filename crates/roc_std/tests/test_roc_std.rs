@@ -341,22 +341,22 @@ mod test_roc_std {
         let x = RocStr::from("short");
         let y = x.clone();
         let z = y.clone();
-        assert_eq!(x.is_unique(), true);
-        assert_eq!(y.is_unique(), true);
-        assert_eq!(z.is_unique(), true);
+        assert!(x.is_unique());
+        assert!(y.is_unique());
+        assert!(z.is_unique());
 
         let safe_x = SendSafeRocStr::from(x);
         let new_x = RocStr::from(safe_x);
-        assert_eq!(new_x.is_unique(), true);
-        assert_eq!(y.is_unique(), true);
-        assert_eq!(z.is_unique(), true);
+        assert!(new_x.is_unique());
+        assert!(y.is_unique(),);
+        assert!(z.is_unique(),);
         assert_eq!(new_x.as_str(), "short");
     }
 
     #[test]
     fn empty_list_is_unique() {
         let roc_list = RocList::<RocStr>::empty();
-        assert_eq!(roc_list.is_unique(), true);
+        assert!(roc_list.is_unique());
     }
 }
 
@@ -401,7 +401,7 @@ mod with_terminator {
                 let items: Vec<u16> = bytes
                     .chunks(2)
                     .map(|c| c.try_into().unwrap())
-                    .map(|c| u16::from_ne_bytes(c))
+                    .map(u16::from_ne_bytes)
                     .collect();
 
                 // Verify that it's nul-terminated
