@@ -223,22 +223,6 @@ pub struct ExposedToHost {
     pub getters: Vec<Symbol>,
 }
 
-impl<'a> MonomorphizedModule<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
-
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
-
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
-    }
-}
-
 #[derive(Debug)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
