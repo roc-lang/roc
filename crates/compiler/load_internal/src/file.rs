@@ -1949,7 +1949,7 @@ fn worker_task_step<'a>(
                         match result {
                             Ok(()) => {}
                             Err(LoadingProblem::ChannelProblem(problem)) => {
-                                panic!("Channel problem: {:?}", problem);
+                                panic!("Channel problem: {problem:?}");
                             }
                             Err(LoadingProblem::ParsingFailed(problem)) => {
                                 msg_tx.send(Msg::FailedToParse(problem)).unwrap();
@@ -2048,7 +2048,7 @@ fn worker_task<'a>(
                     match result {
                         Ok(()) => {}
                         Err(LoadingProblem::ChannelProblem(problem)) => {
-                            panic!("Channel problem: {:?}", problem);
+                            panic!("Channel problem: {problem:?}");
                         }
                         Err(LoadingProblem::ParsingFailed(problem)) => {
                             msg_tx.send(Msg::FailedToParse(problem)).unwrap();
