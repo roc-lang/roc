@@ -240,6 +240,8 @@ where
             EntryPoint::Single(SingleEntryPoint {
                 symbol: entry_point_symbol,
                 layout: entry_point_layout,
+                arguments_layout: _,
+                return_layout: _,
             }) => {
                 // the entry point wrapper
                 let roc_main_bytes = func_name_bytes_help(

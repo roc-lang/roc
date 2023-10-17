@@ -1391,7 +1391,14 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
     }
 
     let cmd_str = command_string.to_str().unwrap();
-    let cmd_output = command.output().unwrap();
+    let cmd_dir = command.get_current_dir().map(|p| p.to_path_buf());
+    command
+        .current_dir("/home/folkertdev/roc/roc/crates/glue/tests/fixtures/record-to-task-record/");
+    dbg!(&command);
+    let cmd_output = match command.output() {
+        Ok(output) => output,
+        Err(e) => panic!("command `{command_string:?}` in dir {cmd_dir:?} caused error {e:?}"),
+    };
     let max_flaky_fail_count = 10;
 
     if !cmd_output.status.success() {

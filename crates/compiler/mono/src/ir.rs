@@ -134,6 +134,9 @@ pub enum OptLevel {
 pub struct SingleEntryPoint<'a> {
     pub symbol: Symbol,
     pub layout: ProcLayout<'a>,
+    /// Big struct containing all of the arguments
+    pub arguments_layout: InLayout<'a>,
+    pub return_layout: InLayout<'a>,
 }
 
 #[derive(Debug, Clone, Copy)]

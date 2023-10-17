@@ -11,7 +11,7 @@ use roc_load::{
     EntryPoint, ExecutionMode, ExpectMetadata, FunctionKind, LoadConfig, LoadMonomorphizedError,
     LoadedModule, LoadingProblem, MonomorphizedModule, Threading,
 };
-use roc_mono::ir::{OptLevel, SingleEntryPoint};
+use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::{
     cli::{report_problems, Problems},
@@ -221,9 +221,9 @@ fn gen_from_mono_module_llvm<'a>(
         } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let entry = exposed_to_host[0];
 
-            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
+            roc_mono::ir::EntryPoint::Single(entry)
         }
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };

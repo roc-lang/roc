@@ -1108,11 +1108,15 @@ fn promote_to_main_function<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
-    symbol: Symbol,
-    top_level: ProcLayout<'a>,
+    entry_point: SingleEntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    let it = top_level.arguments.iter().copied();
-    let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, Niche::NONE, top_level.result);
+    let it = entry_point.layout.arguments.iter().copied();
+    let bytes = roc_alias_analysis::func_name_bytes_help(
+        entry_point.symbol,
+        it,
+        Niche::NONE,
+        entry_point.return_layout,
+    );
     let func_name = FuncName(&bytes);
     let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
@@ -1124,7 +1128,8 @@ fn promote_to_main_function<'a, 'ctx>(
     );
 
     // NOTE fake layout; it is only used for debug prints
-    let roc_main_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
+    let roc_main_fn =
+        function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), entry_point.symbol);
 
     let main_fn_name = "$Test.main";
 
@@ -1134,8 +1139,8 @@ fn promote_to_main_function<'a, 'ctx>(
         layout_interner,
         main_fn_name,
         roc_main_fn,
-        top_level.arguments,
-        top_level.result,
+        entry_point.layout.arguments,
+        entry_point.layout.result,
         main_fn_name,
     );
 
@@ -4297,6 +4302,146 @@ fn expose_function_to_host<'a, 'ctx>(
     );
 }
 
+fn expose_function_to_host_help_c_abi_generic_v3<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    roc_function: FunctionValue<'ctx>,
+    entry_point: SingleEntryPoint<'a>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    // NOTE we ingore env.mode here
+
+    // STEP 1: turn `f : a,b,c -> d` into `f : a,b,c, &d -> {}`
+    // let mut argument_types = roc_function.get_type().get_param_types();
+    let arguments_type = basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(entry_point.arguments_layout),
+    )
+    .ptr_type(AddressSpace::default());
+
+    let argument_types = match roc_function.get_type().get_return_type() {
+        None => {
+            // this function already returns by-pointer
+            let output_type = roc_function.get_type().get_param_types().pop().unwrap();
+            [output_type, arguments_type.into()]
+        }
+        Some(return_type) => {
+            let output_type = return_type.ptr_type(AddressSpace::default());
+            [output_type.into(), arguments_type.into()]
+        }
+    };
+
+    // This is not actually a function that returns a value but then became
+    // return-by-pointer do to the calling convention. Instead, here we
+    // explicitly are forcing the passing of values via the first parameter
+    // pointer, since they are generic and hence opaque to anything outside roc.
+    let c_function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
+
+    let c_function = add_func(
+        env.context,
+        env.module,
+        c_function_name,
+        c_function_spec,
+        Linkage::External,
+    );
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, c_function);
+
+    // drop the first argument, which is the pointer we write the result into
+    let args_vector = c_function.get_params();
+    let mut args = args_vector.as_slice();
+
+    // drop the output parameter
+    args = &args[1..];
+
+    let mut arguments_for_call = Vec::with_capacity_in(args.len(), env.arena);
+
+    let it = args.iter().zip(roc_function.get_type().get_param_types());
+    for (arg, fastcc_type) in it {
+        let arg_type = arg.get_type();
+        if arg_type == fastcc_type {
+            // the C and Fast calling conventions agree
+            arguments_for_call.push(*arg);
+        } else {
+            // not pretty, but seems to cover all our current cases
+            if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
+                let loaded =
+                    env.builder
+                        .new_build_load(fastcc_type, arg.into_pointer_value(), "load_arg");
+                arguments_for_call.push(loaded);
+            } else {
+                arguments_for_call.push(*arg);
+            }
+        }
+    }
+
+    let arguments_for_call = &arguments_for_call.into_bump_slice();
+
+    let call_result = if env.mode.returns_roc_result() {
+        debug_assert_eq!(args.len(), roc_function.get_params().len());
+
+        let roc_wrapper_function = make_exception_catcher(
+            env,
+            layout_interner,
+            roc_function,
+            entry_point.return_layout,
+        );
+        debug_assert_eq!(
+            arguments_for_call.len(),
+            roc_wrapper_function.get_params().len()
+        );
+
+        builder.position_at_end(entry);
+
+        let wrapped_layout = roc_call_result_layout(env.arena, entry_point.return_layout);
+        call_direct_roc_function(
+            env,
+            layout_interner,
+            roc_function,
+            wrapped_layout,
+            arguments_for_call,
+        )
+    } else {
+        call_direct_roc_function(
+            env,
+            layout_interner,
+            roc_function,
+            layout_interner.get_repr(entry_point.return_layout),
+            arguments_for_call,
+        )
+    };
+
+    let output_arg_index = 0;
+
+    let output_arg = c_function
+        .get_nth_param(output_arg_index as u32)
+        .unwrap()
+        .into_pointer_value();
+
+    store_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(entry_point.return_layout),
+        output_arg,
+        call_result,
+    );
+    builder.build_return(None);
+
+    c_function
+}
+
 fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -4854,6 +4999,95 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
             env.builder.new_build_return(None);
         }
     }
+
+    c_function
+}
+
+fn expose_function_to_host_help_c_abi_v3<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    ident_string: &str,
+    roc_function: FunctionValue<'ctx>,
+    entry_point: SingleEntryPoint<'a>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
+            return expose_function_to_host_help_c_abi_gen_test(
+                env,
+                layout_interner,
+                ident_string,
+                roc_function,
+                entry_point.layout.arguments,
+                entry_point.layout.result,
+                c_function_name,
+            )
+        }
+
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {}
+    }
+
+    // a generic version that writes the result into a passed *u8 pointer
+    expose_function_to_host_help_c_abi_generic_v3(
+        env,
+        layout_interner,
+        roc_function,
+        entry_point,
+        &format!("{c_function_name}_generic"),
+    );
+
+    // TODO
+    let c_function = expose_function_to_host_help_c_abi_v2(
+        env,
+        layout_interner,
+        roc_function,
+        entry_point.layout.arguments,
+        entry_point.layout.result,
+        c_function_name,
+    );
+
+    // STEP 3: build a {} -> u64 function that gives the size of the return type
+    let size_function_spec = FunctionSpec::cconv(
+        env,
+        CCReturn::Return,
+        Some(env.context.i64_type().as_basic_type_enum()),
+        &[],
+    );
+    let size_function_name: String = format!("{c_function_name}_size");
+
+    let size_function = add_func(
+        env.context,
+        env.module,
+        size_function_name.as_str(),
+        size_function_spec,
+        Linkage::External,
+    );
+
+    let subprogram = env.new_subprogram(&size_function_name);
+    size_function.set_subprogram(subprogram);
+
+    let entry = env.context.append_basic_block(size_function, "entry");
+
+    env.builder.position_at_end(entry);
+
+    debug_info_init!(env, size_function);
+
+    let return_type = match env.mode {
+        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
+            roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+        }
+
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
+            basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(entry_point.return_layout),
+            )
+        }
+    };
+
+    let size: BasicValueEnum = return_type.size_of().unwrap().into();
+    env.builder.build_return(Some(&size));
 
     c_function
 }
@@ -5517,13 +5751,7 @@ pub fn build_procedures_return_main<'a, 'ctx>(
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
-    promote_to_main_function(
-        env,
-        layout_interner,
-        mod_solutions,
-        entry_point.symbol,
-        entry_point.layout,
-    )
+    promote_to_main_function(env, layout_interner, mod_solutions, entry_point)
 }
 
 pub fn build_procedures_expose_expects<'a>(

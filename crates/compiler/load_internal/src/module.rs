@@ -11,7 +11,9 @@ use roc_module::ident::Ident;
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, PQModuleName, PackageQualified, Symbol,
 };
-use roc_mono::ir::{GlueLayouts, HostExposedLambdaSets, LambdaSetId, Proc, ProcLayout, ProcsBase};
+use roc_mono::ir::{
+    GlueLayouts, HostExposedLambdaSets, LambdaSetId, Proc, ProcLayout, ProcsBase, SingleEntryPoint,
+};
 use roc_mono::layout::{LayoutCache, STLayoutInterner};
 use roc_parse::ast::{CommentOrNewline, Defs, TypeAnnotation, ValueDef};
 use roc_parse::header::{HeaderType, PackageName};
@@ -203,7 +205,7 @@ pub struct ParsedModule<'a> {
 #[derive(Debug)]
 pub enum EntryPoint<'a> {
     Executable {
-        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
+        exposed_to_host: &'a [SingleEntryPoint<'a>],
         platform_path: PathBuf,
     },
     Test,

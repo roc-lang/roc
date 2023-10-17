@@ -39,10 +39,11 @@ use roc_module::symbol::{
 };
 use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, GlueLayouts, HostExposedLambdaSets, PartialProc,
-    Proc, ProcLayout, Procs, ProcsBase, UpdateModeIds, UsageTrackingMap,
+    Proc, ProcLayout, Procs, ProcsBase, SingleEntryPoint, UpdateModeIds, UsageTrackingMap,
 };
 use roc_mono::layout::{
-    GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
+    GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche,
+    STLayoutInterner,
 };
 use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
@@ -3118,7 +3119,7 @@ fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
-    layout_interner: STLayoutInterner<'a>,
+    mut layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
     module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
@@ -3179,7 +3180,18 @@ fn finish_specialization<'a>(
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            let arguments_layout = layout_interner.insert_direct_no_semantic(
+                                roc_mono::layout::LayoutRepr::Struct(proc_layout.arguments),
+                            );
+
+                            let entry = SingleEntryPoint {
+                                symbol,
+                                layout: proc_layout,
+                                arguments_layout,
+                                return_layout: proc_layout.result,
+                            };
+
+                            buf.push(entry);
                         }
 
                         buf.into_bump_slice()
@@ -3199,7 +3211,18 @@ fn finish_specialization<'a>(
                             let proc_layout =
                                 proc_layout_for(state.procedures.keys().copied(), symbol);
 
-                            buf.push((symbol, proc_layout));
+                            let arguments_layout = layout_interner.insert_direct_no_semantic(
+                                roc_mono::layout::LayoutRepr::Struct(proc_layout.arguments),
+                            );
+
+                            let entry = SingleEntryPoint {
+                                symbol,
+                                layout: proc_layout,
+                                arguments_layout,
+                                return_layout: proc_layout.result,
+                            };
+
+                            buf.push(entry);
                         }
 
                         buf.into_bump_slice()
