@@ -2159,19 +2159,19 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
                 getNumber =
                     { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
-                            
-                    when result is 
-                        Ok val -> 
-                            when Str.toI64 val is 
+
+                    when result is
+                        Ok val ->
+                            when Str.toI64 val is
                                 Ok number ->
                                     Ok {val : number, input : rest}
                                 Err InvalidNumStr ->
                                     Err (ParsingFailure "not a number")
 
-                        Err _ -> 
+                        Err _ ->
                             Err (ParsingFailure "not a number")
 
-                main = 
+                main =
                     getNumber |> Result.map .val |> Result.withDefault 0
                 "###
             ),
@@ -2179,4 +2179,101 @@ fn issue_4772_weakened_monomorphic_destructure() {
             i64
         )
     })
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn inspect_bool() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.inspect Bool.true,
+                Inspect.inspect Bool.false,
+            ] |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from("Bool.true, Bool.false"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn inspect_num() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.inspect 42,             # Num *
+                Inspect.inspect 0x5,            # Int *
+                Inspect.inspect (0.1 + 0.2),    # Frac *
+                Inspect.inspect 1u8,            # U8
+                Inspect.inspect 2i8,            # I8
+                Inspect.inspect 3u16,           # U16
+                Inspect.inspect 4i16,           # I16
+                Inspect.inspect 5u32,           # U32
+                Inspect.inspect 6i32,           # I32
+                Inspect.inspect 7u64,           # U64
+                Inspect.inspect 8i64,           # I64
+                Inspect.inspect 9u128,          # U128
+                Inspect.inspect 10i128,         # I128
+                Inspect.inspect 1.1f32,         # F32
+                Inspect.inspect 2.2f64,         # F64
+                Inspect.inspect (1.1dec + 2.2), # Dec
+            ] |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from("42, 5, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1.1, 2.2, 3.3"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn inspect_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.inspect [],               # List *
+                Inspect.inspect [0, 1, 2],        # List (Num *)
+                Inspect.inspect [1, 0x2, 3],      # List (Int *)
+                Inspect.inspect [0.1 + 0.2, 0.4], # List (Frac *)
+                Inspect.inspect [1u8, 2u8],       # List U8
+                Inspect.inspect ["foo"],       # List Str
+            ] |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from("[], [0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn inspect_str() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.inspect "",
+                Inspect.inspect "a small string",
+                Inspect.inspect "an extraordinarily long string - so long it's on the heap!",
+            ] |> Str.joinWith ", "
+            "#
+        ),
+        RocStr::from(
+            r#""", "a small string", "an extraordinarily long string - so long it's on the heap!""#
+        ),
+        RocStr
+    );
 }

@@ -183,7 +183,7 @@ impl FlatInspectable {
         use FlatInspectable::*;
 
         match symbol {
-            Symbol::BOOL_BOOL => Some(Immediate(Symbol::ENCODE_BOOL)),
+            Symbol::BOOL_BOOL => Some(Immediate(Symbol::INSPECT_BOOL)),
             Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => Some(Immediate(Symbol::INSPECT_U8)),
             Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => Some(Immediate(Symbol::INSPECT_U16)),
             Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => Some(Immediate(Symbol::INSPECT_U32)),
