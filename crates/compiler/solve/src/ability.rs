@@ -386,6 +386,7 @@ impl ObligationCache {
             DeriveDecoding::ABILITY => DeriveDecoding::is_derivable_builtin_opaque(opaque),
             DeriveEq::ABILITY => DeriveEq::is_derivable_builtin_opaque(opaque),
             DeriveHash::ABILITY => DeriveHash::is_derivable_builtin_opaque(opaque),
+            DeriveInspect::ABILITY => DeriveInspect::is_derivable_builtin_opaque(opaque),
             _ => false,
         };
 
@@ -848,6 +849,111 @@ trait DerivableVisitor {
         }
 
         Ok(())
+    }
+}
+
+struct DeriveInspect;
+impl DerivableVisitor for DeriveInspect {
+    const ABILITY: Symbol = Symbol::INSPECT_INSPECT;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_INSPECT;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if matches!(
+            symbol,
+            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
+        ) {
+            Ok(Descend(true))
+        } else {
+            Err(NotDerivable {
+                var,
+                context: NotDerivableContext::NoContext,
+            })
+        }
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        _subs: &Subs,
+        _var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            if is_builtin_nat_alias(symbol) {
+                Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Encode(NotDerivableEncode::Nat),
+                })
+            } else {
+                Ok(Descend(false))
+            }
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
     }
 }
 
