@@ -177,13 +177,13 @@ pub enum FormatProblem {
 }
 
 pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
-    let ast = arena.alloc(parse_all(&arena, &src).unwrap_or_else(|e| {
+    let ast = arena.alloc(parse_all(arena, src).unwrap_or_else(|e| {
         user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
     }));
-    let mut buf = Buf::new_in(&arena);
+    let mut buf = Buf::new_in(arena);
     fmt_all(&mut buf, ast);
 
-    let reparsed_ast = match arena.alloc(parse_all(&arena, buf.as_str())) {
+    let reparsed_ast = match arena.alloc(parse_all(arena, buf.as_str())) {
         Ok(ast) => ast,
         Err(e) => {
             return Err(FormatProblem::ParsingFailed {
@@ -193,8 +193,8 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
         }
     };
 
-    let ast_normalized = ast.remove_spaces(&arena);
-    let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
+    let ast_normalized = ast.remove_spaces(arena);
+    let reparsed_ast_normalized = reparsed_ast.remove_spaces(arena);
 
     // HACK!
     // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
@@ -210,7 +210,7 @@ pub fn format_src(arena: &Bump, src: &str) -> Result<String, FormatProblem> {
     }
 
     // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
-    let mut reformatted_buf = Buf::new_in(&arena);
+    let mut reformatted_buf = Buf::new_in(arena);
 
     fmt_all(&mut reformatted_buf, reparsed_ast);
 
