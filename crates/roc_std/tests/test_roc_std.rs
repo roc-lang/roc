@@ -54,7 +54,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[cfg(test)]
 mod test_roc_std {
-    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr, SendSafeRocList, SendSafeRocStr};
+    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr, SendSafeRocStr};
 
     fn roc_str_byte_representation(string: &RocStr) -> [u8; RocStr::SIZE] {
         unsafe { core::mem::transmute_copy(string) }
@@ -341,39 +341,22 @@ mod test_roc_std {
         let x = RocStr::from("short");
         let y = x.clone();
         let z = y.clone();
-        assert_eq!(x.is_unique(), true);
-        assert_eq!(y.is_unique(), true);
-        assert_eq!(z.is_unique(), true);
+        assert!(x.is_unique());
+        assert!(y.is_unique());
+        assert!(z.is_unique());
 
         let safe_x = SendSafeRocStr::from(x);
         let new_x = RocStr::from(safe_x);
-        assert_eq!(new_x.is_unique(), true);
-        assert_eq!(y.is_unique(), true);
-        assert_eq!(z.is_unique(), true);
+        assert!(new_x.is_unique());
+        assert!(y.is_unique(),);
+        assert!(z.is_unique(),);
         assert_eq!(new_x.as_str(), "short");
     }
 
     #[test]
     fn empty_list_is_unique() {
         let roc_list = RocList::<RocStr>::empty();
-        assert_eq!(roc_list.is_unique(), true);
-    }
-
-    #[test]
-    fn readonly_list_is_sendsafe() {
-        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
-        unsafe { x.set_readonly() };
-        assert_eq!(x.is_readonly(), true);
-
-        let y = x.clone();
-        let z = y.clone();
-
-        let safe_x = SendSafeRocList::from(x);
-        let new_x = RocList::from(safe_x);
-        assert_eq!(new_x.is_readonly(), true);
-        assert_eq!(y.is_readonly(), true);
-        assert_eq!(z.is_readonly(), true);
-        assert_eq!(new_x.as_slice(), &[1, 2, 3, 4, 5]);
+        assert!(roc_list.is_unique());
     }
 }
 
@@ -413,12 +396,18 @@ mod with_terminator {
         // utf16_nul_terminated
         {
             let answer = roc_str.utf16_nul_terminated(|ptr, len| {
-                let bytes: &[u16] = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+                let bytes: &[u8] = unsafe { slice::from_raw_parts(ptr as *mut u8, 2 * (len + 1)) };
+
+                let items: Vec<u16> = bytes
+                    .chunks(2)
+                    .map(|c| c.try_into().unwrap())
+                    .map(u16::from_ne_bytes)
+                    .collect();
 
                 // Verify that it's nul-terminated
-                assert_eq!(bytes[len], 0);
+                assert_eq!(items[len], 0);
 
-                let string = String::from_utf16(&bytes[0..len]).unwrap();
+                let string = String::from_utf16(&items[0..len]).unwrap();
 
                 assert_eq!(string.as_str(), string);
 

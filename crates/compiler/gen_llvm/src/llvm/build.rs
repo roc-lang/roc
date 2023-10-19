@@ -5910,8 +5910,18 @@ fn to_cc_type<'a, 'ctx>(
     layout_interner: &STLayoutInterner<'a>,
     layout: InLayout<'a>,
 ) -> BasicTypeEnum<'ctx> {
-    match layout_interner.runtime_representation(layout) {
+    let layout_repr = layout_interner.runtime_representation(layout);
+    match layout_repr {
         LayoutRepr::Builtin(builtin) => to_cc_type_builtin(env, &builtin),
+        LayoutRepr::Struct(_) => {
+            let stack_type = basic_type_from_layout(env, layout_interner, layout_repr);
+
+            if layout_repr.is_passed_by_reference(layout_interner) {
+                stack_type.ptr_type(AddressSpace::default()).into()
+            } else {
+                stack_type
+            }
+        }
         _ => {
             // TODO this is almost certainly incorrect for bigger structs
             basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
