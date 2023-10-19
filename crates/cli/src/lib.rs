@@ -150,6 +150,12 @@ pub fn build_app() -> Command {
         .args_conflicts_with_subcommands(true)
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
+            .arg(Arg::new(FLAG_OUTPUT)
+                .long(FLAG_OUTPUT)
+                .help("The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash).")
+                .value_parser(value_parser!(OsString))
+                .required(false)
+            )
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -537,6 +543,7 @@ pub fn build(
     subcommands: &[String],
     config: BuildConfig,
     triple: Triple,
+    out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
@@ -725,6 +732,7 @@ pub fn build(
         wasm_dev_stack_bytes,
         roc_cache_dir,
         load_config,
+        out_path,
     );
 
     match res_binary_path {

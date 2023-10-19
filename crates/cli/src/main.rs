@@ -48,6 +48,7 @@ fn main() -> io::Result<()> {
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
+                    None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
@@ -62,6 +63,7 @@ fn main() -> io::Result<()> {
                     &subcommands,
                     BuildConfig::BuildAndRun,
                     Triple::host(),
+                    None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
@@ -87,6 +89,7 @@ fn main() -> io::Result<()> {
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
+                    None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
@@ -140,12 +143,16 @@ fn main() -> io::Result<()> {
                 (false, true) => LinkType::None,
                 (false, false) => LinkType::Executable,
             };
+            let out_path = matches
+                .get_one::<OsString>(FLAG_OUTPUT)
+                .map(OsString::as_ref);
 
             Ok(build(
                 matches,
                 &subcommands,
                 BuildConfig::BuildOnly,
                 target.to_triple(),
+                out_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 link_type,
             )?)
