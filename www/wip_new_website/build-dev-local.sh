@@ -5,11 +5,9 @@
 # NOTE run `bash www/build.sh` to cache local copy of fonts, and repl assets etc 
 
 rm -rf dist/
-mkdir dist
-mkdir dist/wip
+mkdir -p dist/wip
 cp -r ../build/wip/* dist/wip/
 roc run main.roc -- content/ dist/wip/
-cp -r static/* dist/wip/
 cp -r ../build/fonts/ dist/fonts/
 
 simple-http-server -p 8080 --nocache --index -- dist/ 
