@@ -96,6 +96,7 @@ mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 # For WIP site
 echo 'Building WIP site...'
 $roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip/
+cp -r www/wip_new_website/static/* www/build/wip/
 
 # cleanup
 rm -rf roc_nightly roc_releases.json

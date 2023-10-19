@@ -9,5 +9,6 @@ mkdir -p dist/wip
 cp -r ../build/wip/* dist/wip/
 roc run main.roc -- content/ dist/wip/
 cp -r ../build/fonts/ dist/fonts/
+cp -r static/* dist/wip/
 
 simple-http-server -p 8080 --nocache --index -- dist/ 
