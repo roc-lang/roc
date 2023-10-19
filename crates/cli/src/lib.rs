@@ -63,6 +63,7 @@ pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
+pub const FLAG_OUTPUT: &str = "output";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -71,6 +72,7 @@ pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 const VERSION: &str = include_str!("../../../version.txt");
+const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
 
 pub fn build_app() -> Command {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
@@ -276,6 +278,13 @@ pub fn build_app() -> Command {
         .subcommand(
             Command::new(CMD_DOCS)
                 .about("Generate documentation for a Roc package")
+                .arg(Arg::new(FLAG_OUTPUT)
+                    .long(FLAG_OUTPUT)
+                    .help("Output directory for the generated documentation files.")
+                    .value_parser(value_parser!(OsString))
+                    .required(false)
+                    .default_value(DEFAULT_GENERATED_DOCS_DIR),
+                )
                 .arg(Arg::new(ROC_FILE)
                     .help("The package's main .roc file")
                     .value_parser(value_parser!(PathBuf))

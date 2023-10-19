@@ -17,12 +17,9 @@ use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const BUILD_DIR: &str = "./generated-docs";
-
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
-pub fn generate_docs_html(root_file: PathBuf) {
-    let build_dir = Path::new(BUILD_DIR);
+pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     let loaded_module = load_module_for_docs(root_file);
 
     // TODO get these from the platform's source file rather than hardcoding them!

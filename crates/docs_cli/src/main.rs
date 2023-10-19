@@ -20,7 +20,10 @@ fn main() -> io::Result<()> {
         .get_matches();
 
     // Populate roc_files
-    generate_docs_html(matches.get_one::<PathBuf>(ROC_FILE).unwrap().to_owned());
+    generate_docs_html(
+        matches.get_one::<PathBuf>(ROC_FILE).unwrap().to_owned(),
+        &PathBuf::from("./generated-docs"),
+    );
 
     Ok(())
 }
