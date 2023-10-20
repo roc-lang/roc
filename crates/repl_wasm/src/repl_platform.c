@@ -52,8 +52,11 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
+extern void send_panic_msg_to_js(void *ptr, unsigned int alignment);
+
 void roc_panic(void *ptr, unsigned int alignment)
 {
+    send_panic_msg_to_js(ptr, alignment);
 #if ENABLE_PRINTF
     char *msg = (char *)ptr;
     fprintf(stderr,

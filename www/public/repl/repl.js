@@ -165,11 +165,37 @@ async function processInputQueue() {
 // Callbacks to JS from Rust
 // ----------------------------------------------------------------------------
 
+var ROC_PANIC_INFO = null;
+
+function send_panic_msg_to_js(rocstr_ptr, tag_id) {
+    const { memory } = repl.app.exports;
+    const memoryBuffer = new Uint8Array(memory.buffer);
+
+    const rocStrBytes = new Uint8Array(memory.buffer, rocstr_ptr, 12);
+
+    const strPtr = rocStrBytes[0] | (rocStrBytes[1] << 8) | (rocStrBytes[2] << 16) | (rocStrBytes[3] << 24);
+    const strLen = rocStrBytes[4] | (rocStrBytes[5] << 8) | (rocStrBytes[6] << 16) | (rocStrBytes[7] << 24);
+
+    const stringBytes = new Uint8Array(memory.buffer, strPtr, strLen);
+    const decoder = new TextDecoder('utf-8');
+    const decodedString = decoder.decode(stringBytes);
+
+    ROC_PANIC_INFO = {
+        msg: decodedString,
+        tag_id: tag_id,
+    };
+}
+
 // Load Wasm code into the browser's virtual machine, so we can run it later.
 // This operation is async, so we call it before entering any code shared
 // with the command-line REPL, which is sync.
 async function js_create_app(wasm_module_bytes) {
-  const { instance } = await WebAssembly.instantiate(wasm_module_bytes);
+  const { instance } = await WebAssembly.instantiate(wasm_module_bytes, {
+    env: {
+        send_panic_msg_to_js: send_panic_msg_to_js,
+    }
+  });
+
   // Keep the instance alive so we can run it later from shared REPL code
   repl.app = instance;
 }
@@ -180,11 +206,39 @@ function js_run_app() {
 
   // Run the user code, and remember the result address
   // We'll pass it to Rust in the next callback
-  repl.result_addr = wrapper();
+  try {
+      repl.result_addr = wrapper();
+  } catch (e) {
+    // an exception could be that roc_panic was invoked,
+    // or some other crash (likely a compiler bug)
+    if (ROC_PANIC_INFO === null) {
+      throw e;
+    } else {
+      // when roc_panic set an error message, display it
+      const { msg, tag_id } = ROC_PANIC_INFO;
+      ROC_PANIC_INFO = null;
+
+      console.error(format_roc_panig_message(msg, tag_id));
+    }
+  }
 
   // Tell Rust how much space to reserve for its copy of the app's memory buffer.
   // We couldn't know that size until we actually ran the app.
   return memory.buffer.byteLength;
+}
+
+function format_roc_panig_message(msg, tag) {
+  switch (tag) {
+    case 0: {
+      return `Roc failed with message: "${msg}"`;
+    }
+    case 1: {
+      return `User crash with message: "${msg}"`;
+    }
+    default: {
+      return `Got an invalid panic tag: "${tag}"`;
+    }
+  }
 }
 
 // After Rust has allocated space for the app's memory buffer,
