@@ -167,22 +167,33 @@ async function processInputQueue() {
 
 var ROC_PANIC_INFO = null;
 
-function send_panic_msg_to_js(rocstr_ptr, tag_id) {
+function send_panic_msg_to_js(rocstr_ptr, panic_tag) {
     const { memory } = repl.app.exports;
-    const memoryBuffer = new Uint8Array(memory.buffer);
 
-    const rocStrBytes = new Uint8Array(memory.buffer, rocstr_ptr, 12);
+    const rocStrBytes = new Int8Array(memory.buffer, rocstr_ptr, 12);
+    const finalByte = rocStrBytes[11]
 
-    const strPtr = rocStrBytes[0] | (rocStrBytes[1] << 8) | (rocStrBytes[2] << 16) | (rocStrBytes[3] << 24);
-    const strLen = rocStrBytes[4] | (rocStrBytes[5] << 8) | (rocStrBytes[6] << 16) | (rocStrBytes[7] << 24);
+    let stringBytes = "";
+    if (finalByte < 0) {
+        // small string
+        const length = finalByte ^ 0b1000_0000;
+        stringBytes = new Uint8Array(memory.buffer, rocstr_ptr, length);
+    } else {
+        // big string
+        const rocStrWords = new Uint32Array(memory.buffer, rocstr_ptr, 3);
+        const [ptr, len, _cap] = rocStrWords;
 
-    const stringBytes = new Uint8Array(memory.buffer, strPtr, strLen);
-    const decoder = new TextDecoder('utf-8');
-    const decodedString = decoder.decode(stringBytes);
+        const SEAMLESS_SLICE_BIT = 1 << 31;
+        const length = len & (~SEAMLESS_SLICE_BIT);
+
+        stringBytes = new Uint8Array(memory.buffer, ptr, length);
+    }
+
+    const decodedString = repl.textDecoder.decode(stringBytes);
 
     ROC_PANIC_INFO = {
         msg: decodedString,
-        tag_id: tag_id,
+        panic_tag: panic_tag,
     };
 }
 
@@ -215,10 +226,10 @@ function js_run_app() {
       throw e;
     } else {
       // when roc_panic set an error message, display it
-      const { msg, tag_id } = ROC_PANIC_INFO;
+      const { msg, panic_tag } = ROC_PANIC_INFO;
       ROC_PANIC_INFO = null;
 
-      console.error(format_roc_panig_message(msg, tag_id));
+      console.error(format_roc_panic_message(msg, panic_tag));
     }
   }
 
@@ -227,8 +238,8 @@ function js_run_app() {
   return memory.buffer.byteLength;
 }
 
-function format_roc_panig_message(msg, tag) {
-  switch (tag) {
+function format_roc_panic_message(msg, panic_tag) {
+  switch (panic_tag) {
     case 0: {
       return `Roc failed with message: "${msg}"`;
     }
@@ -236,7 +247,7 @@ function format_roc_panig_message(msg, tag) {
       return `User crash with message: "${msg}"`;
     }
     default: {
-      return `Got an invalid panic tag: "${tag}"`;
+      return `Got an invalid panic tag: "${panic_tag}"`;
     }
   }
 }
