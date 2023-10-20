@@ -155,7 +155,6 @@ mod cli_run {
     fn check_output_with_stdin(
         file: &Path,
         stdin: &[&str],
-        executable_filename: &str,
         flags: &[&str],
         roc_app_args: &[String],
         extra_env: &[(&str, &str)],
@@ -209,12 +208,11 @@ mod cli_run {
                         &[],
                     );
 
+                    let file_ext = if cfg!(windows) { "exe " } else { "" };
+
                     if matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND {
-                        let mut valgrind_args = vec![file
-                            .with_file_name(executable_filename)
-                            .to_str()
-                            .unwrap()
-                            .to_string()];
+                        let mut valgrind_args =
+                            vec![file.with_extension(file_ext).to_str().unwrap().to_string()];
                         valgrind_args.extend(roc_app_args.iter().cloned());
                         let (valgrind_out, raw_xml) =
                             run_with_valgrind(stdin.iter().copied(), &valgrind_args);
@@ -255,7 +253,7 @@ mod cli_run {
                         valgrind_out
                     } else {
                         run_cmd(
-                            file.with_file_name(executable_filename).to_str().unwrap(),
+                            file.with_extension(file_ext).to_str().unwrap(),
                             stdin.iter().copied(),
                             roc_app_args,
                             extra_env.iter().copied(),
@@ -335,14 +333,12 @@ mod cli_run {
     fn test_roc_app_slim(
         dir_name: &str,
         roc_filename: &str,
-        executable_filename: &str,
         expected_ending: &str,
         use_valgrind: UseValgrind,
     ) {
         test_roc_app(
             dir_name,
             roc_filename,
-            executable_filename,
             &[],
             &[],
             &[],
@@ -356,7 +352,6 @@ mod cli_run {
     fn test_roc_app(
         dir_name: &str,
         roc_filename: &str,
-        executable_filename: &str,
         stdin: &[&str],
         args: &[Arg],
         extra_env: &[(&str, &str)],
@@ -386,7 +381,13 @@ mod cli_run {
         // workaround for surgical linker issue, see PR #3990
         let mut custom_flags: Vec<&str> = Vec::new();
 
-        match executable_filename {
+        match file_name
+            .with_extension("")
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+        {
             "form" | "hello-gui" | "breakout" | "libhello" | "inspect-gui" => {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
@@ -422,7 +423,6 @@ mod cli_run {
         check_output_with_stdin(
             &file_name,
             stdin,
-            executable_filename,
             &custom_flags,
             &roc_app_args,
             extra_env,
@@ -438,7 +438,6 @@ mod cli_run {
         check_output_with_stdin(
             &file_name,
             stdin,
-            executable_filename,
             &custom_flags,
             &roc_app_args,
             extra_env,
@@ -453,7 +452,6 @@ mod cli_run {
             check_output_with_stdin(
                 &file_name,
                 stdin,
-                executable_filename,
                 &[LINKER_FLAG, "legacy"],
                 &roc_app_args,
                 extra_env,
@@ -471,7 +469,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples",
             "helloWorld.roc",
-            "helloWorld",
             "Hello, World!\n",
             UseValgrind::Yes,
         )
@@ -484,7 +481,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples",
             "helloWorldNoURL.roc",
-            "helloWorld",
             "Hello, World!\n",
             UseValgrind::Yes,
         )
@@ -502,7 +498,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/platform-switching",
             "main.roc",
-            "rocLovesPlatforms",
             &("Which platform am I running on now?".to_string() + LINE_ENDING),
             UseValgrind::Yes,
         )
@@ -518,7 +513,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/platform-switching",
             "rocLovesRust.roc",
-            "rocLovesRust",
             "Roc <3 Rust!\n",
             UseValgrind::Yes,
         )
@@ -532,7 +526,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/platform-switching",
             "rocLovesZig.roc",
-            "rocLovesZig",
             "Roc <3 Zig!\n",
             UseValgrind::Yes,
         )
@@ -543,7 +536,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/platform-switching",
             "rocLovesWebAssembly.roc",
-            "rocLovesWebAssembly",
             "Roc <3 Web Assembly!\n",
             UseValgrind::Yes,
         )
@@ -554,7 +546,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/platform-switching",
             "rocLovesSwift.roc",
-            "rocLovesSwift",
             "Roc <3 Swift!\n",
             UseValgrind::Yes,
         )
@@ -568,7 +559,6 @@ mod cli_run {
         test_roc_app(
             "crates/cli_testing_examples/expects",
             "expects.roc",
-            "expects-test",
             &[],
             &[],
             &[],
@@ -599,7 +589,6 @@ mod cli_run {
         test_roc_app(
             "crates/cli_testing_examples/expects",
             "expects.roc",
-            "expects-test",
             &[],
             &[],
             &[],
@@ -636,13 +625,7 @@ mod cli_run {
         ignore = "this platform is broken, and `roc run --lib` is missing on windows"
     )]
     fn ruby_interop() {
-        test_roc_app_slim(
-            "examples/ruby-interop",
-            "main.roc",
-            "libhello",
-            "",
-            UseValgrind::Yes,
-        )
+        test_roc_app_slim("examples/ruby-interop", "main.roc", "", UseValgrind::Yes)
     }
 
     #[test]
@@ -654,7 +637,6 @@ mod cli_run {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
             "fibonacci.roc",
-            "fibonacci",
             "",
             UseValgrind::Yes,
         )
@@ -662,13 +644,7 @@ mod cli_run {
 
     #[test]
     fn hello_gui() {
-        test_roc_app_slim(
-            "examples/gui",
-            "helloBROKEN.roc",
-            "hello-gui",
-            "",
-            UseValgrind::No,
-        )
+        test_roc_app_slim("examples/gui", "helloBROKEN.roc", "", UseValgrind::No)
     }
 
     #[cfg_attr(windows, ignore)] // flaky error; issue #5024
@@ -678,7 +654,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/gui/breakout",
             "breakoutBROKEN.roc",
-            "breakout",
             "",
             UseValgrind::No,
         )
@@ -690,7 +665,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/gui/breakout",
             "hello-guiBROKEN.roc",
-            "hello-gui",
             "",
             UseValgrind::No,
         )
@@ -702,7 +676,6 @@ mod cli_run {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
             "quicksort.roc",
-            "quicksort",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
             UseValgrind::Yes,
         )
@@ -715,7 +688,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli",
             "args.roc",
-            "args",
             &[],
             &[
                 Arg::PlainText("log"),
@@ -765,7 +737,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli",
             "effects.roc",
-            "effects",
             &["hi there!"],
             &[],
             &[],
@@ -782,7 +753,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli",
             "tui.roc",
-            "tui",
             &["foo\n"], // NOTE: adding more lines leads to memory leaks
             &[],
             &[],
@@ -798,7 +768,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli/false-interpreter",
             "False.roc",
-            "false",
             &[],
             &[Arg::ExamplePath("examples/sqrt.false")],
             &[],
@@ -810,13 +779,7 @@ mod cli_run {
 
     #[test]
     fn swift_ui() {
-        test_roc_app_slim(
-            "examples/swiftui",
-            "main.roc",
-            "swiftui",
-            "",
-            UseValgrind::No,
-        )
+        test_roc_app_slim("examples/swiftui", "main.roc", "", UseValgrind::No)
     }
 
     #[test]
@@ -825,7 +788,6 @@ mod cli_run {
         test_roc_app(
             "examples/static-site-gen",
             "static-site.roc",
-            "static-site",
             &[],
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
@@ -842,7 +804,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli",
             "env.roc",
-            "env",
             &[],
             &[],
             &[
@@ -865,7 +826,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli",
             "ingested-file.roc",
-            "ingested-file",
             &[],
             &[],
             &[],
@@ -898,7 +858,6 @@ mod cli_run {
         test_roc_app(
             "examples/cli",
             "ingested-file-bytes.roc",
-            "ingested-file-bytes",
             &[],
             &[],
             &[],
@@ -915,7 +874,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/parser/examples",
             "parse-movies-csv.roc",
-            "example",
             "Parse success!\n",
             UseValgrind::No,
         )
@@ -928,7 +886,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples/parser/examples",
             "letter-counts.roc",
-            "example",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
@@ -946,7 +903,6 @@ mod cli_run {
         test_roc_app_slim(
             "examples",
             "inspect-logging.roc",
-            "inspect-logging",
             r#"{people: [{firstName: "John", lastName: "Smith", age: 27, hasBeard: true, favoriteColor: Blue}, {firstName: "Debby", lastName: "Johnson", age: 47, hasBeard: false, favoriteColor: Green}, {firstName: "Jane", lastName: "Doe", age: 33, hasBeard: false, favoriteColor: (RGB (255, 255, 0))}], friends: [{2}, {2}, {0, 1}]}
 "#,
             UseValgrind::Yes,
@@ -955,13 +911,7 @@ mod cli_run {
 
     #[test]
     fn inspect_gui() {
-        test_roc_app_slim(
-            "examples",
-            "inspect-gui.roc",
-            "inspect-gui",
-            "",
-            UseValgrind::No,
-        )
+        test_roc_app_slim("examples", "inspect-gui.roc", "", UseValgrind::No)
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
@@ -978,7 +928,6 @@ mod cli_run {
 
         fn test_benchmark(
             roc_filename: &str,
-            executable_filename: &str,
             stdin: &[&str],
             expected_ending: &str,
             use_valgrind: UseValgrind,
@@ -1005,32 +954,19 @@ mod cli_run {
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
-            check_output_regular(
-                &file_name,
-                stdin,
-                executable_filename,
-                expected_ending,
-                use_valgrind,
-            );
+            check_output_regular(&file_name, stdin, expected_ending, use_valgrind);
 
             #[cfg(feature = "wasm32-cli-run")]
-            check_output_wasm(&file_name, stdin, executable_filename, expected_ending);
+            check_output_wasm(&file_name, stdin, expected_ending);
 
             #[cfg(feature = "i386-cli-run")]
-            check_output_i386(
-                &file_name,
-                stdin,
-                executable_filename,
-                expected_ending,
-                use_valgrind,
-            );
+            check_output_i386(&file_name, stdin, expected_ending, use_valgrind);
         }
 
         #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
         fn check_output_regular(
             file_name: &Path,
             stdin: &[&str],
-            executable_filename: &str,
             expected_ending: &str,
             use_valgrind: UseValgrind,
         ) {
@@ -1041,7 +977,6 @@ mod cli_run {
                 check_output_with_stdin(
                     file_name,
                     stdin,
-                    executable_filename,
                     &[],
                     &[],
                     &[],
@@ -1061,7 +996,6 @@ mod cli_run {
                 check_output_with_stdin(
                     file_name,
                     stdin,
-                    executable_filename,
                     &[PREBUILT_PLATFORM],
                     &[],
                     &[],
@@ -1074,7 +1008,6 @@ mod cli_run {
             check_output_with_stdin(
                 file_name,
                 stdin,
-                executable_filename,
                 &[PREBUILT_PLATFORM, OPTIMIZE_FLAG],
                 &[],
                 &[],
@@ -1085,35 +1018,17 @@ mod cli_run {
         }
 
         #[cfg(feature = "wasm32-cli-run")]
-        fn check_output_wasm(
-            file_name: &Path,
-            stdin: &[&str],
-            executable_filename: &str,
-            expected_ending: &str,
-        ) {
+        fn check_output_wasm(file_name: &Path, stdin: &[&str], expected_ending: &str) {
             // Check with and without optimizations
-            check_wasm_output_with_stdin(
-                file_name,
-                stdin,
-                executable_filename,
-                &[],
-                expected_ending,
-            );
+            check_wasm_output_with_stdin(file_name, stdin, &[], expected_ending);
 
-            check_wasm_output_with_stdin(
-                file_name,
-                stdin,
-                executable_filename,
-                &[OPTIMIZE_FLAG],
-                expected_ending,
-            );
+            check_wasm_output_with_stdin(file_name, stdin, &[OPTIMIZE_FLAG], expected_ending);
         }
 
         #[cfg(feature = "wasm32-cli-run")]
         fn check_wasm_output_with_stdin(
             file: &Path,
             stdin: &[&str],
-            executable_filename: &str,
             flags: &[&str],
             expected_ending: &str,
         ) {
@@ -1137,10 +1052,7 @@ mod cli_run {
                 compile_out.stdout
             );
 
-            let mut path = file.with_file_name(executable_filename);
-            path.set_extension("wasm");
-
-            let stdout = crate::run_wasm(&path, stdin);
+            let stdout = crate::run_wasm(file.with_extension("wasm"), stdin);
 
             if !stdout.ends_with(expected_ending) {
                 panic!(
@@ -1154,7 +1066,6 @@ mod cli_run {
         fn check_output_i386(
             file_name: &Path,
             stdin: &[&str],
-            executable_filename: &str,
             expected_ending: &str,
             use_valgrind: UseValgrind,
         ) {
@@ -1163,7 +1074,6 @@ mod cli_run {
             check_output_with_stdin(
                 &file_name,
                 stdin,
-                executable_filename,
                 &[concatcp!(TARGET_FLAG, "=x86_32")],
                 &[],
                 &[],
@@ -1175,7 +1085,6 @@ mod cli_run {
             check_output_with_stdin(
                 &file_name,
                 stdin,
-                executable_filename,
                 &[concatcp!(TARGET_FLAG, "=x86_32"), OPTIMIZE_FLAG],
                 &[],
                 &[],
@@ -1188,13 +1097,13 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("NQueens.roc", "nqueens", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark("NQueens.roc", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("CFold.roc", "cfold", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("CFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -1202,7 +1111,6 @@ mod cli_run {
         fn deriv() {
             test_benchmark(
                 "Deriv.roc",
-                "deriv",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
@@ -1212,13 +1120,7 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark(
-                "RBTreeCk.roc",
-                "rbtree-ck",
-                &["100"],
-                "10\n",
-                UseValgrind::Yes,
-            )
+            test_benchmark("RBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -1226,7 +1128,6 @@ mod cli_run {
         fn rbtree_insert() {
             test_benchmark(
                 "RBTreeInsert.roc",
-                "rbtree-insert",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
@@ -1239,7 +1140,6 @@ mod cli_run {
         fn rbtree_del() {
             test_benchmark(
                 "RBTreeDel.roc",
-                "rbtree-del",
                 &["420"],
                 &[],
                 "30\n",
@@ -1250,13 +1150,7 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark(
-                "TestAStar.roc",
-                "test-astar",
-                &[],
-                "True\n",
-                UseValgrind::No,
-            )
+            test_benchmark("TestAStar.roc", &[], "True\n", UseValgrind::No)
         }
 
         #[test]
@@ -1264,7 +1158,6 @@ mod cli_run {
         fn base64() {
             test_benchmark(
                 "TestBase64.roc",
-                "test-base64",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,
@@ -1274,26 +1167,19 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("Closure.roc", "closure", &[], "", UseValgrind::No)
+            test_benchmark("Closure.roc", &[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark(
-                "Issue2279.roc",
-                "issue2279",
-                &[],
-                "Hello, world!\n",
-                UseValgrind::Yes,
-            )
+            test_benchmark("Issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
                 "QuicksortApp.roc",
-                "quicksortapp",
                 &[],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,
@@ -1308,7 +1194,6 @@ mod cli_run {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
             &[],
-            "multi-dep-str",
             &[],
             &[],
             &[],
@@ -1325,7 +1210,6 @@ mod cli_run {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
             &[],
-            "multi-dep-str",
             &[OPTIMIZE_FLAG],
             &[],
             &[],
@@ -1342,7 +1226,6 @@ mod cli_run {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
             &[],
-            "multi-dep-thunk",
             &[],
             &[],
             &[],
@@ -1362,7 +1245,6 @@ mod cli_run {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
             &[],
-            "multi-dep-thunk",
             &[OPTIMIZE_FLAG],
             &[],
             &[],
@@ -1379,7 +1261,6 @@ mod cli_run {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
             &[],
-            "packages-test",
             &[],
             &[],
             &[],
@@ -1396,7 +1277,6 @@ mod cli_run {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
             &[],
-            "packages-test",
             &[OPTIMIZE_FLAG],
             &[],
             &[],
