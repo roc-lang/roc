@@ -6,5 +6,6 @@ dynhost
 *.rh
 
 helloWorld
+helloWorldNoURL
 inspect-gui
 inspect-logging
