@@ -855,7 +855,8 @@ fn build_loaded_file<'a>(
 
                     let last = path.as_os_str().encode_wide().last();
 
-                    last == Some('/') || last == Some('\\');
+                    last == Some(0x002f)// UTF-16 slash
+                        || last == Some(0x005c) // UTF-16 backslash
                 }
             };
 
