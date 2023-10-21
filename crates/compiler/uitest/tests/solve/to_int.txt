@@ -7,7 +7,6 @@ entry =
         toI32: Num.toI32,
         toI64: Num.toI64,
         toI128: Num.toI128,
-        toNat: Num.toNat,
         toU8: Num.toU8,
         toU16: Num.toU16,
         toU32: Num.toU32,

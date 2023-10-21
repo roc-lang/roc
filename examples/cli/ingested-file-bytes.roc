@@ -9,7 +9,7 @@ app "ingested-file-bytes"
 main =
     # Due to how ownCode is used, it will be a List U8.
     ownCode
-    |> List.map Num.toNat
+    |> List.map Num.toU64
     |> List.sum
     |> Num.toStr
     |> Stdout.line
