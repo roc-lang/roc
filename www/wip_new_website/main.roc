@@ -13,7 +13,7 @@ pageData =
     |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
     |> Dict.insert "home.html" { title: "Roc Lang", description: "The Roc programming language" }
     |> Dict.insert "install.html" { title: "Install", description: "Getting started with the Roc programming language" }
-    |> Dict.insert "sponsor.html" { title: "Sponsor", description: "Sponsor Roc" }
+    |> Dict.insert "donate.html" { title: "Donate", description: "Sponsor Roc" }
     |> Dict.insert "tutorial.html" { title: "Tutorial", description: "The Roc tutorial" }
 
 getPage : Str -> {title : Str, description : Str}
@@ -75,8 +75,8 @@ viewNavbar =
                 a [href "/wip/tutorial.html"] [text "tutorial"],
                 a [href "/wip/install.html"] [text "install"],
                 a [href "/wip/community.html"] [text "community"],
-                a [href "/wip/sponsor.html"] [text "sponsor"],
-                a [href "/wip//docs.html"] [text "docs"],
+                a [href "/wip/docs.html"] [text "docs"],
+                a [href "/wip/donate.html"] [text "donate"],
             ],
         ],
     ]

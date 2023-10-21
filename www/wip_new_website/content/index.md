@@ -1,5 +1,5 @@
 <style>
-/* Hide the "home" link on the homepage, so we don't have two big Roc logos (one redundant).
+/* Hide the "home" link on the homepage, so we don't render a second Roc logo next to the big one.
 Do this without taking it out of the layout (which would reposition the other nav links
 due to their relying on justify-content: space-between to effectively right-align them). */
 #nav-home-link {
@@ -7,20 +7,22 @@ due to their relying on justify-content: space-between to effectively right-alig
 }
 </style>
 
-<h1 id="homepage-h1">Roc</h1>
+<div role="presentation" id="homepage-intro-box">
+  <h1 id="homepage-h1">Roc</h1>
+  <img id="homepage-logo" src="/logo.svg" alt="The Roc logo, a purple origami bird made of six triangles">
+  <p id="homepage-tagline">A fast, friendly, functional language.</p>
 
-<p id="tagline">A fast, friendly, functional language.</p>
+  <!-- This exact sample was chosen for several reasons:
 
-<!-- This exact sample was chosen for several reasons:
-
-1. It's plausible to figure out what it's doing even if you don't know the language yet.
-2. It uses a higher-order function, giving a functional first impression.
-3. It shows some things not found in most mainstream languages, e.g. function calls without parens, lambda syntax.
-4. It shows some things not found in most FP languages, e.g. string interpolation, passing a lambda without `<|` or `$`
-5. It's horizontally small enough that it can be read on mobile without a scroll bar or shrinking the font size.
--->
-<pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
-    <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+  1. It's plausible to figure out what it's doing even if you don't know the language yet.
+  2. It uses a higher-order function, giving a functional first impression.
+  3. It shows some things not found in most mainstream languages, e.g. function calls without parens, lambda syntax.
+  4. It shows some things not found in most FP languages, e.g. string interpolation, passing a lambda without `<|` or `$`
+  5. It's horizontally small enough that it can be read on mobile without a scroll bar or shrinking the font size.
+  -->
+  <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
+      <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+</div>
 
 <p><b>Fast</b> - Roc code is designed to build fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
 <p><b>Friendly</b></p>
