@@ -30,7 +30,7 @@ interface Dict
         Result.{ Result },
         List,
         Str,
-        Num.{ Nat, U64, U8, I8 },
+        Num.{ U64, U8, I8 },
         Hash.{ Hasher, Hash },
     ]
 
@@ -97,9 +97,9 @@ Dict k v := {
     # TODO: Change remove to use tombstones. Store the tombstones in a bitmap.
     # TODO: define Eq and Hash that are unordered. Only if value implements hash/eq?
     metadata : List I8,
-    dataIndices : List Nat,
+    dataIndices : List U64,
     data : List (k, v),
-    size : Nat,
+    size : U64,
 } where k implements Hash & Eq
     implements [
         Eq {
@@ -147,7 +147,7 @@ empty = \{} ->
 ##
 ## capacityOfDict = Dict.capacity foodDict
 ## ```
-capacity : Dict * * -> Nat
+capacity : Dict * * -> U64
 capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
@@ -156,7 +156,7 @@ capacity = \@Dict { dataIndices } ->
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Dict * *
+withCapacity : U64 -> Dict * *
 withCapacity = \_ ->
     # TODO: power of 2 * 8 and actual implementation
     empty {}
@@ -195,7 +195,7 @@ fromList = \data ->
 ##     |> Dict.len
 ##     |> Bool.isEq 3
 ## ```
-len : Dict * * -> Nat
+len : Dict * * -> U64
 len = \@Dict { size } ->
     size
 
@@ -600,7 +600,7 @@ removeAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
-swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v where k implements Hash & Eq
+swapAndUpdateDataIndex : Dict k v, U64, U64 -> Dict k v where k implements Hash & Eq
 swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
     (key, _) = listGetUnsafe data lastIndex
     hashKey =
@@ -647,7 +647,7 @@ insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value,
         size,
     }
 
-nextEmptyOrDeletedHelper : List I8, Probe, Nat -> Nat
+nextEmptyOrDeletedHelper : List I8, Probe, U64 -> U64
 nextEmptyOrDeletedHelper = \metadata, probe, offset ->
     # For inserting, we can use deleted indices.
     index = Num.addWrap (mul8 probe.slotIndex) offset
@@ -664,7 +664,7 @@ nextEmptyOrDeletedHelper = \metadata, probe, offset ->
 
 # TODO: investigate if this needs to be split into more specific helper functions.
 # There is a chance that returning specific sub-info like the value would be faster.
-findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] where k implements Hash & Eq
+findIndexHelper : List I8, List U64, List (k, v), I8, k, Probe, U64 -> Result U64 [NotFound] where k implements Hash & Eq
 findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
     # For finding a value, we must search past all deleted element tombstones.
     index = Num.addWrap (mul8 probe.slotIndex) offset
@@ -722,7 +722,7 @@ rehash = \@Dict { metadata, dataIndices, data, size } ->
 
     rehashHelper newDict metadata dataIndices data 0
 
-rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v where k implements Hash & Eq
+rehashHelper : Dict k v, List I8, List U64, List (k, v), U64 -> Dict k v where k implements Hash & Eq
 rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
     when List.get oldMetadata index is
         Ok md ->
@@ -743,7 +743,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
             # Walked entire list, complete now.
             dict
 
-insertForRehash : Dict k v, k, Nat -> Dict k v where k implements Hash & Eq
+insertForRehash : Dict k v, k, U64 -> Dict k v where k implements Hash & Eq
 insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -770,12 +770,12 @@ deletedSlot = -2
 # We still will use slots of 8 even though this version has no true slots.
 # We just move an element at a time.
 # Thus, the true index is slotIndex * 8 + offset.
-Probe : { slotIndex : Nat, probeI : Nat, mask : Nat }
+Probe : { slotIndex : U64, probeI : U64, mask : U64 }
 
-newProbe : U64, Nat -> Probe
+newProbe : U64, U64 -> Probe
 newProbe = \h1Key, slots ->
     mask = Num.subSaturated slots 1
-    slotIndex = Num.bitwiseAnd (Num.toNat h1Key) mask
+    slotIndex = Num.bitwiseAnd (Num.toU64 h1Key) mask
 
     { slotIndex, probeI: 1, mask }
 
@@ -996,7 +996,7 @@ expect
     |> len
     |> Bool.isEq 0
 
-# Makes sure a Dict with Nat keys works
+# Makes sure a Dict with U64 keys works
 expect
     empty {}
     |> insert 7nat "Testing"
@@ -1024,7 +1024,7 @@ LowLevelHasher := { initializedSeed : U64, state : U64 } implements [
 
 # unsafe primitive that does not perform a bounds check
 # TODO hide behind an InternalList.roc module
-listGetUnsafe : List a, Nat -> a
+listGetUnsafe : List a, U64 -> a
 
 # Returns a application specific pseudo random seed for Dict.
 # This avoids trivial DOS attacks.
@@ -1139,7 +1139,7 @@ addBytes = \@LowLevelHasher { initializedSeed, state }, list ->
 
     combineState (@LowLevelHasher { initializedSeed, state }) { a: abs.a, b: abs.b, seed: abs.seed, length: Num.toU64 length }
 
-hashBytesHelper48 : U64, U64, U64, List U8, Nat, Nat -> { a : U64, b : U64, seed : U64 }
+hashBytesHelper48 : U64, U64, U64, List U8, U64, U64 -> { a : U64, b : U64, seed : U64 }
 hashBytesHelper48 = \seed, see1, see2, list, index, remaining ->
     newSeed = wymix (Num.bitwiseXor (wyr8 list index) wyp1) (Num.bitwiseXor (wyr8 list (Num.addWrap index 8)) seed)
     newSee1 = wymix (Num.bitwiseXor (wyr8 list (Num.addWrap index 16)) wyp2) (Num.bitwiseXor (wyr8 list (Num.addWrap index 24)) see1)
@@ -1158,7 +1158,7 @@ hashBytesHelper48 = \seed, see1, see2, list, index, remaining ->
 
         { a: wyr8 list (Num.subWrap newRemaining 16 |> Num.addWrap newIndex), b: wyr8 list (Num.subWrap newRemaining 8 |> Num.addWrap newIndex), seed: finalSeed }
 
-hashBytesHelper16 : U64, List U8, Nat, Nat -> { a : U64, b : U64, seed : U64 }
+hashBytesHelper16 : U64, List U8, U64, U64 -> { a : U64, b : U64, seed : U64 }
 hashBytesHelper16 = \seed, list, index, remaining ->
     newSeed = wymix (Num.bitwiseXor (wyr8 list index) wyp1) (Num.bitwiseXor (wyr8 list (Num.addWrap index 8)) seed)
     newRemaining = Num.subWrap remaining 16
@@ -1195,7 +1195,7 @@ wymum = \a, b ->
     { lower, upper }
 
 # Get the next 8 bytes as a U64
-wyr8 : List U8, Nat -> U64
+wyr8 : List U8, U64 -> U64
 wyr8 = \list, index ->
     # With seamless slices and Num.fromBytes, this should be possible to make faster and nicer.
     # It would also deal with the fact that on big endian systems we want to invert the order here.
@@ -1216,7 +1216,7 @@ wyr8 = \list, index ->
     Num.bitwiseOr (Num.bitwiseOr a b) (Num.bitwiseOr c d)
 
 # Get the next 4 bytes as a U64 with some shifting.
-wyr4 : List U8, Nat -> U64
+wyr4 : List U8, U64 -> U64
 wyr4 = \list, index ->
     p1 = listGetUnsafe list index |> Num.toU64
     p2 = listGetUnsafe list (Num.addWrap index 1) |> Num.toU64
@@ -1229,7 +1229,7 @@ wyr4 = \list, index ->
 
 # Get the next K bytes with some shifting.
 # K must be 3 or less.
-wyr3 : List U8, Nat, Nat -> U64
+wyr3 : List U8, U64, U64 -> U64
 wyr3 = \list, index, k ->
     # ((uint64_t)p[0])<<16)|(((uint64_t)p[k>>1])<<8)|p[k-1]
     p1 = listGetUnsafe list index |> Num.toU64
