@@ -121,7 +121,7 @@ string : Parser CSVField Str
 string = ParserStr.anyString
 
 ## Parse a u64 number from a CSV field
-u64 : Parser CSVField Nat
+u64 : Parser CSVField U64
 u64 =
     string
     |> map

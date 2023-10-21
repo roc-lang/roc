@@ -36,7 +36,7 @@ Url := Str
 ## There is no `Url.withCapacity` because it's better to reserve extra capacity
 ## on a [Str] first, and then pass that string to [Url.fromStr]. This function will make use
 ## of the extra capacity.
-reserve : Url, Nat -> Url
+reserve : Url, U64 -> Url
 reserve = \@Url str, cap ->
     @Url (Str.reserve str cap)
 
@@ -56,7 +56,7 @@ reserve = \@Url str, cap ->
 ##     Url.fromStr "https://this is not a valid URL, not at all!"
 ##     # https://this is not a valid URL, not at all!
 ##
-## Naturally, passing invalid URLs to functions that need valid ones will tend to result in errors.
+## U64urally, passing invalid URLs to functions that need valid ones will tend to result in errors.
 fromStr : Str -> Url
 fromStr = \str -> @Url str
 
@@ -215,7 +215,7 @@ percentEncode = \input ->
                     # This needs encoding in a path
                     suffix =
                         Str.toUtf8 percentEncoded
-                        |> List.sublist { len: 3, start: 3 * Num.toNat byte }
+                        |> List.sublist { len: 3, start: 3 * Num.toU64 byte }
                         |> Str.fromUtf8
                         |> Result.withDefault "" # This will never fail
 
@@ -420,7 +420,7 @@ hasFragment = \@Url urlStr ->
     Str.toUtf8 urlStr
     |> List.contains (Num.toU8 '#')
 
-strWithCapacity : Nat -> Str
+strWithCapacity : U64 -> Str
 strWithCapacity = \cap ->
     Str.reserve "" cap
 

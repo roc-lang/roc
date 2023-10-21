@@ -131,7 +131,7 @@ initClientAppHelp = \json, app ->
 # In Roc, we maintain a matching List of virtual DOM nodes with the same indices.
 # They are both initialised separately, but use the same indexing algorithm.
 # (We *could* pass this data in as JSON from the HTML file, but it would roughly double the size of that HTML file!)
-indexNodes : { nodes : List RenderedNode, siblingIds : List Nat }, Html state -> { nodes : List RenderedNode, siblingIds : List Nat }
+indexNodes : { nodes : List RenderedNode, siblingIds : List U64 }, Html state -> { nodes : List RenderedNode, siblingIds : List U64 }
 indexNodes = \{ nodes, siblingIds }, unrendered ->
     when unrendered is
         Text content ->
@@ -667,11 +667,11 @@ expect
     html =
         Element "a" 43 [HtmlAttr "href" "https://www.roc-lang.org/"] [Text "Roc"]
 
-    actual : { nodes : List RenderedNode, siblingIds : List Nat }
+    actual : { nodes : List RenderedNode, siblingIds : List U64 }
     actual =
         indexNodes { nodes: [], siblingIds: [] } html
 
-    expected : { nodes : List RenderedNode, siblingIds : List Nat }
+    expected : { nodes : List RenderedNode, siblingIds : List U64 }
     expected = {
         nodes: [
             RenderedText "Roc",

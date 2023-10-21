@@ -29,8 +29,8 @@ hosted Effect
     generates Effect with [after, always, map]
 
 # TODO: private types
-NodeId : Nat
-HandlerId : Nat
+NodeId : U64
+HandlerId : U64
 
 # TODO: make these tag unions to avoid encoding/decoding standard names
 # but for now, this is much easier to code and debug!

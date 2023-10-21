@@ -123,7 +123,7 @@ interface Html
     ]
     imports [Html.Attributes]
 
-Node : [Text Str, Element Str Nat (List Attribute) (List Node)]
+Node : [Text Str, Element Str U64 (List Attribute) (List Node)]
 
 Attribute : Html.Attributes.Attribute
 
@@ -157,7 +157,7 @@ element = \tagName ->
         Element tagName totalSize attrs children
 
 # internal helper
-nodeSize : Node -> Nat
+nodeSize : Node -> U64
 nodeSize = \node ->
     when node is
         Text content ->

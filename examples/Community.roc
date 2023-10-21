@@ -13,7 +13,7 @@ interface Community
 
 Community := {
     people : List Person,
-    friends : List (Set Nat),
+    friends : List (Set U64),
 }
     implements [
         Inspect {
