@@ -68,13 +68,12 @@ viewNavbar : Html.Node
 viewNavbar =
     div [id "top-bar"] [
         nav [] [
-            a [href "/wip/index.html", title "The Roc Programming Language"] [
+            a [id "nav-home-link", href "/wip/index.html", title "The Roc Programming Language"] [
                 rocLogo
             ],
             div [id "top-bar-links"] [
                 a [href "/wip/tutorial.html"] [text "tutorial"],
                 a [href "/wip/install.html"] [text "install"],
-                a [href "#todo-link-to-examples-site"] [text "examples"],
                 a [href "/wip/community.html"] [text "community"],
                 a [href "/wip/sponsor.html"] [text "sponsor"],
                 a [href "/wip//docs.html"] [text "docs"],

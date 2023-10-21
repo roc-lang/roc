@@ -48,9 +48,10 @@ body {
 footer {
     width: 100%;
     color: var(--text-color);
-    padding: 20px;
     text-align: center;
     font-size: var(--font-size-normal);
+    padding: 20px;
+    box-sizing: border-box;
 }
 
 #footer {
@@ -115,13 +116,14 @@ h3 {
     margin: 0 auto;
     display: flex;
     justify-content: space-between;
+    padding-right: 9px;
 }
 
-#top-bar .home-link {
+#nav-home-link {
     display: flex;
     color: var(--top-bar-fg);
     font-size: 1.8rem;
-    padding: 10px;
+    padding: 4px;
 }
 
 #top-bar-links {
@@ -313,6 +315,7 @@ li {
     #top-bar-links label {
         padding: 12px 8px;
         margin: 0;
+        font-size: 14px;
     }
 }
 

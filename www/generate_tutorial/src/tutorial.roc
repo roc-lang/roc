@@ -2,7 +2,7 @@ app "roc-tutorial"
     packages { pf: "../../../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ html, head, body, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
-        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, class, title, charset, src },
+        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, class, title, charset, src, role },
     ]
     provides [transformFileContent] to pf
 
@@ -36,9 +36,9 @@ view = \htmlContent ->
 
 viewNavbar : Html.Node
 viewNavbar =
-    div [id "top-bar"] [
+    div [id "top-bar", role "presentation"] [
         nav [] [
-            a [class "home-link", href "/", title "The Roc Programming Language"] [text "roc"],
+            a [id "nav-home-link", href "/", title "The Roc Programming Language"] [text "roc"],
             div [id "top-bar-links"] [
                 a [href "/tutorial"] [text "tutorial"],
                 a [href "https://github.com/roc-lang/roc/tree/main/getting_started"] [text "install"],

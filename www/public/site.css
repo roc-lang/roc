@@ -88,7 +88,7 @@ li {
     justify-content: space-between;
 }
 
-#top-bar .home-link {
+#nav-home-link {
     display: flex;
     color: var(--top-bar-fg);
     font-size: 1.8rem;

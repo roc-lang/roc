@@ -1,3 +1,12 @@
+<style>
+/* Hide the "home" link on the homepage, so we don't have two big Roc logos (one redundant).
+Do this without taking it out of the layout (which would reposition the other nav links
+due to their relying on justify-content: space-between to effectively right-align them). */
+#nav-home-link {
+  visibility: hidden; padding: 0; width: 0; height: 0;
+}
+</style>
+
 <h1 id="homepage-h1">Roc</h1>
 
 <p id="tagline">A fast, friendly, functional language.</p>
