@@ -151,8 +151,6 @@ interface Num
         toU64Checked,
         toU128,
         toU128Checked,
-        toNat,
-        toNatChecked,
         toF32,
         toF32Checked,
         toF64,
@@ -1419,23 +1417,6 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
-## Since [Nat] has a different maximum number depending on the system you're building
-## for, this may give a different answer on different systems.
-##
-## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
-## `Num.maxU32`. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
-## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
-##
-## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
-## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to `Num.maxU64`, and 9_000_000_000 is lower than `Num.maxU64`.
-##
-## To convert a [Frac] to a [Nat], first call either `Num.round`, `Num.ceil`, or `Num.floor`
-## on it, then call this on the resulting [Int].
-toNat : Int * -> Nat
-
 ## Converts a [Num] to an [F32]. If the given number can't be precisely represented in an [F32],
 ## the returned number may be different from the given number.
 toF32 : Num * -> F32
@@ -1457,6 +1438,5 @@ toU16Checked : Int * -> Result U16 [OutOfBounds]
 toU32Checked : Int * -> Result U32 [OutOfBounds]
 toU64Checked : Int * -> Result U64 [OutOfBounds]
 toU128Checked : Int * -> Result U128 [OutOfBounds]
-toNatChecked : Int * -> Result Nat [OutOfBounds]
 toF32Checked : Num * -> Result F32 [OutOfBounds]
 toF64Checked : Num * -> Result F64 [OutOfBounds]
