@@ -1,3 +1,5 @@
+<link rel="stylesheet" href="/wip/repl.css" />
+
 <style>
 /* Hide the "home" link on the homepage, so we don't render a second Roc logo next to the big one.
 Do this without taking it out of the layout (which would reposition the other nav links
@@ -24,20 +26,40 @@ due to their relying on justify-content: space-between to effectively right-alig
       <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
 </div>
 
-<p><b>Fast</b> - Roc code is designed to build fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>. Like <a href="https://rust-lang.org">Rust</a> and <a href="https://clang.llvm.org/">clang</a>, it compiles to unboxed data structures using monomorphization and LLVM for optimizations.</p>
-<p><b>Friendly</b></p>
-<p><b>Functional</b></p>
+<section class="home-goals-container">
+    <div class="home-goals-column">
+        <div class="home-goals-content">
+            <h3 class="home-goals-title"><span class="icon" role="presentation">★</span> Fast</h3>
+            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>.</p>
+            <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
+        </div>
+    </div>
+    <div class="home-goals-column">
+        <div class="home-goals-content">
+            <h3 class="home-goals-title"><span class="icon" role="presentation">★</span> Friendly</h3>
+            <p class="home-goals-description">Roc ships one user-friendly executable which includes a helpful compiler, testing, formatting, and a <a href="/repl">REPL</a>.</p>
+            <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
+        </div>
+    </div>
+    <div class="home-goals-column">
+        <div class="home-goals-content">
+            <h3 class="home-goals-title"><span class="icon" role="presentation">★</span> Functional</h3>
+            <p class="home-goals-description">
+             Roc is a designed to have a small number of simple primitives. It's a single-paradigm <a href="https://en.wikipedia.org/wiki/Functional_programming">functional</a> language.</p>
+            <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
+        </div>
+    </div>
+</section>
 
 ## Try Roc
 
-<link rel="stylesheet" href="/wip/repl.css" />
 <div id="repl">
 <code class="history">
   <div id="help-text"></div>
   <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
 </code>
 <section id="source-input-wrapper">
-  <textarea rows="5" autofocus id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+  <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
     disabled></textarea>
 </section>
 </div>
