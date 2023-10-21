@@ -1307,10 +1307,10 @@ define_builtins! {
         17 STR_TRIM: "trim"
         18 STR_TRIM_START: "trimStart"
         19 STR_TRIM_END: "trimEnd"
-        20 STR_TO_DEC: "toDec"
-        21 STR_TO_F64: "toF64"
-        22 STR_TO_F32: "toF32"
-        23 STR_TO_NAT: "toNat"
+        20 STR_CONTAINS: "contains"
+        21 STR_TO_DEC: "toDec"
+        22 STR_TO_F64: "toF64"
+        23 STR_TO_F32: "toF32"
         24 STR_TO_U128: "toU128"
         25 STR_TO_I128: "toI128"
         26 STR_TO_U64: "toU64"
@@ -1346,7 +1346,6 @@ define_builtins! {
         56 STR_IS_VALID_SCALAR: "isValidScalar"
         57 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
         58 STR_WALK_UTF8: "walkUtf8"
-        59 STR_CONTAINS: "contains"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias

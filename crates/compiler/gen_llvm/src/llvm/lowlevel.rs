@@ -444,8 +444,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrRepeat => {
-            // Str.repeat : Str, Nat -> Str
-            arguments!(string, count);
+            // Str.repeat : Str, U64 -> Str
+            arguments!(string, count_u64);
+
+            let count = env
+                .builder
+                .build_bitcast(count_u64, env.ptr_int(), "count_u64_to_usize");
 
             call_str_bitcode_fn(
                 env,
@@ -495,7 +499,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             BasicValueEnum::IntValue(is_zero)
         }
         StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Nat
+            // Str.countGraphemes : Str -> U64
             arguments!(string);
 
             call_str_bitcode_fn(
@@ -507,8 +511,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrGetScalarUnsafe => {
-            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
-            arguments!(string, index);
+            // Str.getScalarUnsafe : Str, U64 -> { bytesParsed : U64, scalar : U32 }
+            arguments!(string, index_u64);
+
+            let index = env
+                .builder
+                .build_bitcast(index_u64, env.ptr_int(), "index_u64_to_usize");
 
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
@@ -572,7 +580,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             }
         }
         StrCountUtf8Bytes => {
-            // Str.countUtf8Bytes : Str -> Nat
+            // Str.countUtf8Bytes : Str -> U64
             arguments!(string);
 
             call_str_bitcode_fn(
@@ -584,14 +592,22 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrGetCapacity => {
-            // Str.capacity : Str -> Nat
+            // Str.capacity : Str -> U64
             arguments!(string);
 
             call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
         }
         StrSubstringUnsafe => {
-            // Str.substringUnsafe : Str, Nat, Nat -> Str
-            arguments!(string, start, length);
+            // Str.substringUnsafe : Str, U64, U64 -> Str
+            arguments!(string, start_u64, length_u64);
+
+            let start = env
+                .builder
+                .build_bitcast(start_u64, env.ptr_int(), "start_u64_to_usize");
+
+            let length =
+                env.builder
+                    .build_bitcast(length_u64, env.ptr_int(), "length_u64_to_usize");
 
             call_str_bitcode_fn(
                 env,
@@ -602,8 +618,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrReserve => {
-            // Str.reserve : Str, Nat -> Str
-            arguments!(string, capacity);
+            // Str.reserve : Str, U64 -> Str
+            arguments!(string, capacity_u64);
+
+            let capacity =
+                env.builder
+                    .build_bitcast(capacity_u64, env.ptr_int(), "capacity_u64_to_usize");
 
             call_str_bitcode_fn(
                 env,
@@ -668,8 +688,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrWithCapacity => {
-            // Str.withCapacity : Nat -> Str
-            arguments!(str_len);
+            // Str.withCapacity : U64 -> Str
+            arguments!(str_len_u64);
+
+            let str_len =
+                env.builder
+                    .build_bitcast(str_len_u64, env.ptr_int(), "str_len_u64_to_usize");
 
             call_str_bitcode_fn(
                 env,
@@ -843,8 +867,12 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrGetUnsafe => {
-            // Str.getUnsafe : Str, Nat -> u8
-            arguments!(wrapper_struct, elem_index);
+            // Str.getUnsafe : Str, U64 -> u8
+            arguments!(wrapper_struct, elem_index_u64);
+
+            let elem_index =
+                env.builder
+                    .build_bitcast(elem_index_u64, env.ptr_int(), "elem_index_u64_to_usize");
 
             call_str_bitcode_fn(
                 env,
@@ -855,26 +883,36 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListGetUnsafe => {
-            // List.getUnsafe : List elem, Nat -> elem
-            arguments_with_layouts!((wrapper_struct, list_layout), (element_index, _l));
+            // List.getUnsafe : List elem, U64 -> elem
+            arguments_with_layouts!((wrapper_struct, list_layout), (elem_index_u64, _l));
+
+            let elem_index = env
+                .builder
+                .build_bitcast(elem_index_u64, env.ptr_int(), "elem_index_u64_to_usize")
+                .into_int_value();
 
             list_get_unsafe(
                 env,
                 layout_interner,
                 list_element_layout!(layout_interner, list_layout),
-                element_index.into_int_value(),
+                elem_index,
                 wrapper_struct.into_struct_value(),
             )
         }
         ListReplaceUnsafe => {
-            arguments_with_layouts!((list, _l1), (index, _l2), (element, element_layout));
+            arguments_with_layouts!((list, _l1), (index_u64, _l2), (element, element_layout));
+
+            let index = env
+                .builder
+                .build_bitcast(index_u64, env.ptr_int(), "index_u64_to_usize")
+                .into_int_value();
 
             list_replace_unsafe(
                 env,
                 layout_interner,
                 layout_ids,
                 list,
-                index.into_int_value(),
+                index,
                 element,
                 element_layout,
                 update_mode,
