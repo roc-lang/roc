@@ -2518,7 +2518,7 @@ impl<'a> Layout<'a> {
                 }
             }
 
-            RangedNumber(range) => Self::layout_from_ranged_number(env, range),
+            RangedNumber(range) => Self::layout_from_ranged_number(range),
 
             Error => cacheable(Err(LayoutProblem::Erroneous)),
         }
@@ -2539,18 +2539,12 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn layout_from_ranged_number(
-        env: &mut Env<'a, '_>,
-        range: NumericRange,
-    ) -> Cacheable<LayoutResult<'a>> {
+    fn layout_from_ranged_number(range: NumericRange) -> Cacheable<LayoutResult<'a>> {
         // We don't pass the range down because `RangedNumber`s are somewhat rare, they only
         // appear due to number literals, so no need to increase parameter list sizes.
         let num_layout = range.default_compilation_width();
 
-        cacheable(Ok(Layout::int_literal_width_to_int(
-            num_layout,
-            env.target_info,
-        )))
+        cacheable(Ok(Layout::int_literal_width_to_int(num_layout)))
     }
 
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
@@ -3028,10 +3022,7 @@ impl<'a> Layout<'a> {
         Layout::DEC
     }
 
-    pub fn int_literal_width_to_int(
-        width: roc_types::num::IntLitWidth,
-        target_info: TargetInfo,
-    ) -> InLayout<'a> {
+    pub fn int_literal_width_to_int(width: roc_types::num::IntLitWidth) -> InLayout<'a> {
         use roc_types::num::IntLitWidth::*;
         match width {
             U8 => Layout::U8,
@@ -3229,7 +3220,6 @@ fn layout_from_flat_type<'a>(
 
     let arena = env.arena;
     let subs = env.subs;
-    let target_info = env.target_info;
 
     match flat_type {
         Apply(symbol, args) => {
@@ -3300,7 +3290,7 @@ fn layout_from_flat_type<'a>(
                     let var = args[0];
                     let content = subs.get_content_without_compacting(var);
 
-                    layout_from_num_content(content, target_info)
+                    layout_from_num_content(content)
                 }
 
                 Symbol::STR_STR => cacheable(Ok(Layout::STR)),
@@ -4534,10 +4524,7 @@ pub fn ext_var_is_empty_tag_union(_: &Subs, _: TagExt) -> bool {
     unreachable!();
 }
 
-fn layout_from_num_content<'a>(
-    content: &Content,
-    target_info: TargetInfo,
-) -> Cacheable<LayoutResult<'a>> {
+fn layout_from_num_content<'a>(content: &Content) -> Cacheable<LayoutResult<'a>> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
