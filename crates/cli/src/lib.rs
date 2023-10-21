@@ -1065,14 +1065,20 @@ fn roc_dev_native(
 
             std::process::exit(1)
         }
-        1.. => {
+        pid @ 1.. => {
             let sigchld = Arc::new(AtomicBool::new(false));
             signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
                 .unwrap();
 
-            loop {
+            let exit_code = loop {
                 match memory.wait_for_child(sigchld.clone()) {
-                    ChildProcessMsg::Terminate => break,
+                    ChildProcessMsg::Terminate => {
+                        let mut status = 0;
+                        let options = 0;
+                        unsafe { libc::waitpid(pid, &mut status, options) };
+
+                        break status;
+                    }
                     ChildProcessMsg::Expect => {
                         roc_repl_expect::run::render_expects_in_memory(
                             &mut writer,
@@ -1100,9 +1106,9 @@ fn roc_dev_native(
                         memory.reset();
                     }
                 }
-            }
+            };
 
-            std::process::exit(0)
+            std::process::exit(exit_code)
         }
         _ => unreachable!(),
     }
