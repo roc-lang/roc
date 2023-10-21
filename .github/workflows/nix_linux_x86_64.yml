@@ -17,8 +17,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
-        with:
-          clean: "true"
           
       - name: test building default.nix
         run: nix-build 

@@ -17,14 +17,14 @@ nix develop
 # make the roc command available 
 export PATH="$(pwd)/target/release/:$PATH"
 cd www/wip_new_website
-roc build.roc
+bash build-dev-local.sh
 ```
 
 Open http://0.0.0.0:8080/wip in your browser.
 
 ## After you've made a change
 
-In the terminal where `roc build.roc` is running:
+In the terminal where the web server is running:
 1. kill the server with Ctrl+C
-2. run `roc build.roc`
+2. re-run the build script 
 3. refresh the page in your browser

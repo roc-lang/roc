@@ -149,10 +149,10 @@ lazy_static! {
     ///   inst   # instantiate the given generic instance
     /// ```
     static ref RE_TYPE_QUERY: Regex =
-        Regex::new(r#"(?P<where>\^+)(?:\{(?P<directives>.*?)\})?"#).unwrap();
+        Regex::new(r"(?P<where>\^+)(?:\{(?P<directives>.*?)\})?").unwrap();
 
     static ref RE_DIRECTIVE : Regex =
-        Regex::new(r#"(?:-(?P<sub>\d+))|(?P<inst>inst)"#).unwrap();
+        Regex::new(r"(?:-(?P<sub>\d+))|(?P<inst>inst)").unwrap();
 }
 
 /// Markers of nested query lines, that should be skipped.

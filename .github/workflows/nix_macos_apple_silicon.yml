@@ -17,8 +17,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
-        with:
-          clean: "true"
 
       - name: check formatting with rustfmt
         run: nix develop -c cargo fmt --all -- --check
@@ -27,7 +25,7 @@ jobs:
         run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
 
       - name: check code style with clippy --release
-        run: cargo clippy --workspace --tests --release -- --deny warnings
+        run: nix develop -c cargo clippy --workspace --tests --release -- --deny warnings
 
       - name: test building default.nix
         run: nix-build
@@ -42,7 +40,7 @@ jobs:
         run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
 
       - name: test aarch64 dev backend
-        run: nix develop -c cargo nextest-gen-dev --locked --release --no-fail-fast -E 'test(gen_num) + test(gen_records)'
+        run: nix develop -c cargo nextest-gen-dev --locked --release --no-fail-fast
 
       # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
       - name: execute llvm wasm tests with --release

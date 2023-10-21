@@ -77,8 +77,8 @@ roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Expr, 10 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Stmt, 13 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 12 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 5 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
@@ -198,7 +198,7 @@ impl<'a> PartialProcs<'a> {
     pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
         debug_assert_eq!(self.symbols.len(), self.partial_procs.len());
 
-        self.symbols.into_iter().zip(self.partial_procs.into_iter())
+        self.symbols.into_iter().zip(self.partial_procs)
     }
 }
 
@@ -541,7 +541,7 @@ impl<'a> ExternalSpecializations<'a> {
             self.storage.into_storage_subs(),
             self.symbol_or_lambda
                 .into_iter()
-                .zip(self.types_to_specialize.into_iter()),
+                .zip(self.types_to_specialize),
         )
     }
 
@@ -656,8 +656,8 @@ impl<'a> Specialized<'a> {
     fn into_iter_assert_done(self) -> impl Iterator<Item = (Symbol, ProcLayout<'a>, Proc<'a>)> {
         self.symbols
             .into_iter()
-            .zip(self.proc_layouts.into_iter())
-            .zip(self.procedures.into_iter())
+            .zip(self.proc_layouts)
+            .zip(self.procedures)
             .filter_map(|((s, l), in_progress)| {
                 if let Symbol::REMOVED_SPECIALIZATION = s {
                     None

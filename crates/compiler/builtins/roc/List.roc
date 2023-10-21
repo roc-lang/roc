@@ -67,6 +67,7 @@ interface List
         releaseExcessCapacity,
         walkBackwardsUntil,
         countIf,
+        chunksOf,
     ]
     imports [
         Bool.{ Bool, Eq },
@@ -1196,6 +1197,26 @@ splitLast = \list, delimiter ->
             Ok { before, after }
 
         Err NotFound -> Err NotFound
+
+## Splits the list into many chunks, each of which is length of the given chunk
+## size. The last chunk will be shorter if the list does not evenly divide by the
+## chunk size. If the provided list is empty or if the chunk size is 0 then the
+## result is an empty list.
+chunksOf : List a, Nat -> List (List a)
+chunksOf = \list, chunkSize ->
+    if chunkSize == 0 || List.isEmpty list then
+        []
+    else
+        chunkCapacity = Num.divCeil (List.len list) chunkSize
+        chunksOfHelp list chunkSize (List.withCapacity chunkCapacity)
+
+chunksOfHelp : List a, Nat, List (List a) -> List (List a)
+chunksOfHelp = \listRest, chunkSize, chunks ->
+    if List.isEmpty listRest then
+        chunks
+    else
+        { before, others } = List.split listRest chunkSize
+        chunksOfHelp others chunkSize (List.append chunks before)
 
 ## Like [List.map], except the transformation function returns a [Result].
 ## If that function ever returns `Err`, [mapTry] immediately returns that `Err`.

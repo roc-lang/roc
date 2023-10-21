@@ -701,7 +701,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
     let mut my_tag_id = TagId(num_tags as TagIdIntType);
 
     let mut alternatives = Vec::with_capacity(num_tags);
-    let alternatives_iter = sorted_tags.into_iter().chain(opt_openness_tag.into_iter());
+    let alternatives_iter = sorted_tags.into_iter().chain(opt_openness_tag);
 
     let mut index = 0;
     for (tag, args) in alternatives_iter {

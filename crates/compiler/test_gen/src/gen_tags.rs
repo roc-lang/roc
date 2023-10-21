@@ -1381,7 +1381,7 @@ fn issue_2445() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn issue_2458() {
     assert_evals_to!(
         indoc!(

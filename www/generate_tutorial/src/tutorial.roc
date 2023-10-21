@@ -43,7 +43,7 @@ viewNavbar =
                 a [href "/tutorial"] [text "tutorial"],
                 a [href "https://github.com/roc-lang/roc/tree/main/getting_started"] [text "install"],
                 a [href "/repl"] [text "repl"],
-                a [href "/builtins/Bool"] [text "docs"],
+                a [href "/builtins"] [text "docs"],
             ],
         ],
     ]

@@ -868,7 +868,7 @@ fn str_clone() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn nested_recursive_literal() {
     assert_evals_to!(
         indoc!(
@@ -1160,7 +1160,7 @@ fn str_trim_large_to_small_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
@@ -1180,7 +1180,7 @@ fn str_trim_large_to_large_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1200,7 +1200,7 @@ fn str_trim_large_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1253,7 +1253,7 @@ fn str_trim_start_large_to_small_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_start_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
@@ -1273,7 +1273,7 @@ fn str_trim_start_large_to_large_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_start_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1293,7 +1293,7 @@ fn str_trim_start_large_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_start_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1346,7 +1346,7 @@ fn str_trim_end_large_to_small_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_end_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
@@ -1366,7 +1366,7 @@ fn str_trim_end_large_to_large_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_end_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1386,7 +1386,7 @@ fn str_trim_end_large_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_trim_end_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
@@ -1417,7 +1417,7 @@ fn str_to_nat() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_i128() {
     assert_evals_to!(
         indoc!(
@@ -1431,7 +1431,7 @@ fn str_to_i128() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_u128() {
     assert_evals_to!(
         indoc!(
@@ -1473,7 +1473,7 @@ fn str_to_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_i32() {
     assert_evals_to!(
         indoc!(
@@ -1487,7 +1487,7 @@ fn str_to_i32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_u32() {
     assert_evals_to!(
         indoc!(
@@ -1501,7 +1501,7 @@ fn str_to_u32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_i16() {
     assert_evals_to!(
         indoc!(
@@ -1515,7 +1515,7 @@ fn str_to_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_u16() {
     assert_evals_to!(
         indoc!(
@@ -1529,7 +1529,7 @@ fn str_to_u16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_i8() {
     assert_evals_to!(
         indoc!(
@@ -1543,7 +1543,7 @@ fn str_to_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_u8() {
     assert_evals_to!(
         indoc!(
@@ -1557,7 +1557,7 @@ fn str_to_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_f64() {
     assert_evals_to!(
         indoc!(
@@ -1574,7 +1574,7 @@ fn str_to_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_f32() {
     assert_evals_to!(
         indoc!(
@@ -1591,7 +1591,7 @@ fn str_to_f32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_to_dec() {
     use roc_std::RocDec;
 
@@ -1910,7 +1910,7 @@ fn str_walk_utf8_with_index() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn str_append_scalar() {
     assert_evals_to!(
         indoc!(
@@ -1938,7 +1938,7 @@ fn str_walk_scalars() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm-wasm"))]
+#[cfg(feature = "gen-llvm-wasm")]
 fn llvm_wasm_str_layout() {
     assert_evals_to!(
         indoc!(
@@ -1954,7 +1954,7 @@ fn llvm_wasm_str_layout() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm-wasm"))]
+#[cfg(feature = "gen-llvm-wasm")]
 fn llvm_wasm_str_layout_small() {
     // exposed an error in using bitcast instead of zextend
     assert_evals_to!(
@@ -2142,5 +2142,65 @@ fn release_excess_capacity_empty() {
         (RocStr::empty().capacity(), RocStr::empty()),
         RocStr,
         |value: RocStr| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_positive() {
+    assert_evals_to!(
+        r#"
+        Str.contains "foobarbaz" "bar"
+        "#,
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_negative() {
+    assert_evals_to!(
+        r#"
+        Str.contains "apple" "orange"
+        "#,
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_empty_positive() {
+    assert_evals_to!(
+        r#"
+        Str.contains "anything" ""
+        "#,
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_empty_negative() {
+    assert_evals_to!(
+        r#"
+        Str.contains "" "anything"
+        "#,
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_contains_self() {
+    assert_evals_to!(
+        r#"
+        Str.contains "self" "self"
+        "#,
+        true,
+        bool
     );
 }

@@ -2715,7 +2715,7 @@ impl VariableSubsSlice {
     {
         let start = subs.variables.len() as u32;
 
-        subs.variables.extend(input.into_iter());
+        subs.variables.extend(input);
 
         let length = (subs.variables.len() as u32 - start) as u16;
 
@@ -2939,7 +2939,7 @@ where
         &self,
     ) -> impl Iterator<Item = (SubsIndex<L>, SubsIndex<VariableSubsSlice>)> + ExactSizeIterator
     {
-        self.labels().into_iter().zip(self.variables().into_iter())
+        self.labels().into_iter().zip(self.variables())
     }
 
     /// Iterator over (Tag, &[Variable]) pairs obtained by
@@ -3323,10 +3323,7 @@ impl RecordFields {
         let range2 = helper(self.variables_start);
         let range3 = helper(self.field_types_start);
 
-        let it = range1
-            .into_iter()
-            .zip(range2.into_iter())
-            .zip(range3.into_iter());
+        let it = range1.into_iter().zip(range2).zip(range3);
 
         it.map(|((i1, i2), i3)| (SubsIndex::new(i1), SubsIndex::new(i2), SubsIndex::new(i3)))
     }
@@ -3407,7 +3404,7 @@ impl TupleElems {
         let range1 = helper(self.elem_index_start);
         let range2 = helper(self.variables_start);
 
-        let it = range1.into_iter().zip(range2.into_iter());
+        let it = range1.into_iter().zip(range2);
 
         it.map(|(i1, i2)| (SubsIndex::new(i1), SubsIndex::new(i2)))
     }
@@ -4733,10 +4730,7 @@ impl StorageSubs {
             (self_offsets.symbol_names + offsets.symbol_names) as usize
         );
 
-        move |v| {
-            let offsets = offsets;
-            Self::offset_variable(&offsets, v)
-        }
+        move |v| Self::offset_variable(&offsets, v)
     }
 
     fn offset_flat_type(offsets: &StorageSubsOffsets, flat_type: &FlatType) -> FlatType {

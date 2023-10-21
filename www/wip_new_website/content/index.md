@@ -39,64 +39,34 @@
 <p><b>Friendly</b></p>
 <p><b>Functional</b></p>
 
-## REPL
+## Try Roc
 
-> TODO only show this if you have JavaScript enabled!
-
-You can get a quick taste of Roc in this WebAssembly Read-Eval-Print Loop (REPL). Try entering 0.1 + 0.2 here:
-
-<input placeholder="Try writing 0.1 + 0.2 and pressing Enter" style="width:600px">
-
+<link rel="stylesheet" href="/wip/repl.css" />
+<div id="repl">
 <code class="history">
-<div id="help-text"></div>
-<div id="history-text"><div id="loading-message">Loading Roc compiler as a WebAssembly module…please wait!</div></div>
+  <div id="help-text"></div>
+  <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
 </code>
 <section id="source-input-wrapper">
-<textarea rows="5" autofocus id="source-input"
-placeholder="You can enter Roc code here after the compiler is loaded!" disabled></textarea>
+  <textarea rows="5" autofocus id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+    disabled></textarea>
 </section>
+</div>
+<script type="module" src="/wip/repl.js"></script>
+</div>
 
-Roc code can compile to WebAssembly, so this REPL runs completely in your browser. No network connection required!
+## Examples
+
+We have developed a number of smaller code [examples](https://github.com/roc-lang/examples) which demonstrate how to use Roc. These cover a range of topics from basic syntax to more advanced features such as random number generation and using the popular `Task` feature.
 
 ## Use cases
 
-Roc is a new language, and its ecosystem is very small. It currently has the most mature support for these use cases:
-
-- Web servers ([tutorial on making a webserver in Roc](...))
-- Command-Line Interfaces ([tutorial on making a CLI in Roc](...))
-- Embedding Roc into other languages ([tutorial on calling Roc code from other languages](...))
-
-There are many other use cases the ecosystem can potentially expand into in the future, but these are the best-supported
-ones today.
-
-## Example
-
-```elixir
-# Hover over anything here to see an explanation
-main =
-    cacheUserInfo (Path.fromStr "url.txt")
-    |> Task.onErr handleErr
-
-cacheUserInfo = \filename -> # Defining a function
-    url <- File.readUtf8 filename |> Task.await
-    { username, email } <- Http.get url Json.codec |> Task.await
-
-    File.writeUtf8 "\(username).txt" email
-
-handleErr = \err ->
-    when err is
-        FileReadErr path _ -> Stderr.line "Error reading \(Path.display path)"
-        FileWriteErr path _ -> Stderr.line "Error writing \(Path.display path)"
-        HttpErr url _ -> Stderr.line "Error getting \(url)"
-```
-
-> TODO maybe make some notes about the above code, e.g. it uses basic-cli and Luke's JSON package,
-> this is demonstrating how type annotations are optional; this code is 100% type-checked even though
-> there are no types mentioned anywhere. That also includes the JSON decoding, which is done via
-> type inference, and which is not specific to JSON (or any particular encoding).
-
-There are [more examples](https://github.com/roc-lang/examples) of full Roc programs,
-and also a [tutorial](/tutorial) which takes you through building your first Roc application.
+-   Tools & Scripts
+-   Web (coming soon)
+-   Networking & Servers (coming soon)
+-   Graphical (coming soon)
+-   Scientific (coming soon)
+-   Embedded (coming soon)
 
 ## Platforms & Applications
 
@@ -112,5 +82,3 @@ If you'd like to learn more about Roc check out one of these videos:
 *   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
 *   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
 *   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language)
-
-<script src="/repl/repl.js"></script>

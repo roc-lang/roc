@@ -149,19 +149,24 @@ pub fn target_machine(
 
     init_arch(target);
 
-    // We used to have a problem that LLVM 12 would not compile our programs without a large code model.
-    // The reason was not totally clear to us, but one guess is a few special-cases in
-    //   llvm/lib/Target/AArch64/AArch64ISelLowering.cpp (instructions)
-    //   llvm/lib/Target/AArch64/AArch64Subtarget.cpp (GoT tables)
-    // Revisit when upgrading to LLVM 13.
-    //
-    // Most recently, we seem to only see this problem on macOS ARM64; removing this
-    // failed macOS CI here: https://github.com/roc-lang/roc/pull/5644
-    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
-    let code_model = CodeModel::Large;
-
-    #[cfg(not(all(target_arch = "aarch64", target_os = "macos")))]
-    let code_model = CodeModel::Default;
+    let code_model = match target {
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => {
+            // We used to have a problem that LLVM 12 would not compile our programs without a large code model.
+            // The reason was not totally clear to us, but one guess is a few special-cases in
+            //   llvm/lib/Target/AArch64/AArch64ISelLowering.cpp (instructions)
+            //   llvm/lib/Target/AArch64/AArch64Subtarget.cpp (GoT tables)
+            // Revisit when upgrading to LLVM 13.
+            //
+            // Most recently, we seem to only see this problem on macOS ARM64; removing this
+            // failed macOS CI here: https://github.com/roc-lang/roc/pull/5644
+            CodeModel::Large
+        }
+        _ => CodeModel::Default,
+    };
 
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),

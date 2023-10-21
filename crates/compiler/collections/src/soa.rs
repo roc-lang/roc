@@ -21,10 +21,7 @@ impl<T> std::hash::Hash for Index<T> {
 
 impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 
@@ -70,11 +67,7 @@ pub struct Slice<T> {
 
 impl<T> Clone for Slice<T> {
     fn clone(&self) -> Self {
-        Self {
-            start: self.start,
-            length: self.length,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 
@@ -151,10 +144,7 @@ pub struct EitherIndex<T, U> {
 
 impl<T, U> Clone for EitherIndex<T, U> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 

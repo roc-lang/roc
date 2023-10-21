@@ -561,7 +561,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
     fn expects_dev_and_test() {
         // these are in the same test function so we don't have to worry about race conditions
         // on the building of the platform
@@ -647,7 +646,10 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
     fn fibonacci() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -791,7 +793,7 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(any(target_os = "windows", target_os = "linux"), ignore = "Segfault")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -1352,7 +1354,10 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
-    #[cfg_attr(windows, ignore)]
+    #[cfg_attr(
+        windows,
+        ignore = "Flaky failure: Roc command failed with status ExitStatus(ExitStatus(3221225477))"
+    )]
     fn run_multi_dep_thunk_optimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),

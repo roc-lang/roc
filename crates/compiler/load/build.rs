@@ -105,7 +105,6 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     };
 
     let problems = report_problems(
-        module.total_problems(),
         &module.sources,
         &module.interns,
         &mut module.can_problems,

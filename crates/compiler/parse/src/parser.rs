@@ -1634,6 +1634,7 @@ macro_rules! word1_check_indent {
 macro_rules! map {
     ($parser:expr, $transform:expr) => {
         move |arena, state, min_indent| {
+            #[allow(clippy::redundant_closure_call)]
             $parser
                 .parse(arena, state, min_indent)
                 .map(|(progress, output, next_state)| (progress, $transform(output), next_state))
@@ -1645,6 +1646,7 @@ macro_rules! map {
 macro_rules! map_with_arena {
     ($parser:expr, $transform:expr) => {
         move |arena, state, min_indent| {
+            #[allow(clippy::redundant_closure_call)]
             $parser
                 .parse(arena, state, min_indent)
                 .map(|(progress, output, next_state)| {

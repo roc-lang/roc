@@ -41,7 +41,6 @@ pub struct CodeGenTiming {
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems(
-        loaded.total_problems(),
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -51,7 +50,6 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Proble
 
 pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> Problems {
     report_problems(
-        loaded.total_problems(),
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,

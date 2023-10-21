@@ -3334,6 +3334,26 @@ fn box_num() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_record_2_u64() {
+    assert_evals_to!(
+        "Box.box { x: 1u64, y: 2u64 }",
+        RocBox::new((1u64, 2u64)),
+        RocBox<(u64, u64)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_record_3_u64() {
+    assert_evals_to!(
+        "Box.box { x: 1u64, y: 2u64, z: 3u64 }",
+        RocBox::new((1u64, 2u64, 3u64)),
+        RocBox<(u64, u64, u64)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_str() {
     assert_evals_to!(
         "Box.box \"short\"",
@@ -3386,7 +3406,35 @@ fn box_and_unbox_f32() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn box_and_unbox_record() {
+fn box_and_unbox_record_2_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u64, b: 27u64 })
+            "#
+        ),
+        (15, 27),
+        (u64, u64)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_record_3_u64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u64, b: 27u64, c: 34u64 })
+            "#
+        ),
+        (15, 27, 34),
+        (u64, u64, u64)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_record_2_u8() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3395,6 +3443,20 @@ fn box_and_unbox_record() {
         ),
         (15, 27),
         (u8, u8)
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_record_3_u8() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Box.unbox (Box.box { a: 15u8, b: 27u8, c: 34u8 })
+            "#
+        ),
+        (15, 27, 34),
+        (u8, u8, u8)
     )
 }
 
@@ -4460,7 +4522,7 @@ fn layout_cache_structure_with_multiple_recursive_structures() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn reset_recursive_type_wraps_in_named_type() {
     assert_evals_to!(
         indoc!(
@@ -4547,6 +4609,24 @@ fn linked_list_trmc() {
             "#
         ),
         5,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn many_arguments() {
+    // exhausts all argument registers on x86 and aarch
+    assert_evals_to!(
+        indoc!(
+            r#"
+            fun = \a,b,c,d, e,f,g,h, i ->
+                (a + b + c + d) + (e + f + g + h) + i
+
+            fun 0i64 1 2 3 4 5 6 7 8
+            "#
+        ),
+        1 + 2 + 3 + 4 + 5 + 6 + 7 + 8,
         i64
     );
 }

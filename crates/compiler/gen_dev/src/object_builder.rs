@@ -147,7 +147,7 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
         value: 0,
         size: SIZE as u64,
         kind: SymbolKind::Data,
-        scope: SymbolScope::Dynamic,
+        scope: SymbolScope::Linkage,
         weak: false,
         section: SymbolSection::Section(bss_section),
         flags: SymbolFlags::None,
@@ -217,13 +217,69 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
         let relocation = match r {
             Relocation::LinkedData { offset, name } => {
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size: 32,
-                        kind: RelocationKind::GotRelative,
-                        encoding: RelocationEncoding::Generic,
-                        symbol: sym_id,
-                        addend: -4,
+                    if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+                        //     700: 90000001        adrp    x1, 0x0 <std.builtin.default_panic>
+                        //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
+                        let relocation = write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 21,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        };
+
+                        output.add_relocation(text_section, relocation).unwrap();
+
+                        //     704: 91000021        add x1, x1, #0x0
+                        //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
+                        write::Relocation {
+                            offset: offset + proc_offset + 4,
+                            size: 12,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+                        //     4dc: 90000001        adrp    x1, 0x0 <ltmp0>
+                        //      00000000000004dc:  ARM64_RELOC_PAGE21   ___unnamed_6
+                        let relocation = write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::MachO {
+                                value: object::macho::ARM64_RELOC_PAGE21,
+                                relative: true,
+                            },
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        };
+
+                        output.add_relocation(text_section, relocation).unwrap();
+
+                        //     4e0: 91000021        add x1, x1, #0x0
+                        //      00000000000004e0:  ARM64_RELOC_PAGEOFF12    ___unnamed_6
+                        write::Relocation {
+                            offset: offset + proc_offset + 4,
+                            size: 32,
+                            kind: RelocationKind::MachO {
+                                value: object::macho::ARM64_RELOC_PAGEOFF12,
+                                relative: false,
+                            },
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else {
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::GotRelative,
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        }
                     }
                 } else {
                     internal_error!("failed to find data symbol for {:?}", name);
@@ -591,7 +647,7 @@ fn build_object<'a, B: Backend<'a>>(
             // The symbol isn't defined yet and will just be used by other rc procs.
             let section_id = output.add_section(
                 output.segment_name(StandardSegment::Text).to_vec(),
-                format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+                format_symbol_name(sym),
                 SectionKind::Text,
             );
 
@@ -781,7 +837,7 @@ fn build_proc_symbol<'a, B: Backend<'a>>(
 
     let section_id = output.add_section(
         output.segment_name(StandardSegment::Text).to_vec(),
-        format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
+        format_symbol_name(sym),
         SectionKind::Text,
     );
 
@@ -864,14 +920,72 @@ fn build_proc<'a, B: Backend<'a>>(
                 }
             }
             Relocation::LinkedData { offset, name } => {
+                add_undefined_rc_proc(output, name, &rc_proc_names);
+
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    write::Relocation {
-                        offset: offset + proc_offset,
-                        size: 32,
-                        kind: RelocationKind::GotRelative,
-                        encoding: RelocationEncoding::Generic,
-                        symbol: sym_id,
-                        addend: -4,
+                    if cfg!(all(target_arch = "aarch64", target_os = "linux")) {
+                        //     700: 90000001        adrp    x1, 0x0 <std.builtin.default_panic>
+                        //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
+                        let r = write::Relocation {
+                            offset: proc_offset + offset,
+                            size: 21,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        };
+
+                        relocations.push((section_id, r));
+
+                        //     704: 91000021        add x1, x1, #0x0
+                        //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
+                        write::Relocation {
+                            offset: proc_offset + offset + 4,
+                            size: 12,
+                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
+                        //    4ed0: 90000000        adrp    x0, 0x4000 <_std.unicode.utf8Decode4+0x16c>
+                        //      0000000000004ed0:  ARM64_RELOC_PAGE21   ___unnamed_11
+                        let r = write::Relocation {
+                            offset: proc_offset + offset,
+                            size: 21,
+                            kind: RelocationKind::MachO {
+                                value: object::macho::ARM64_RELOC_PAGE21,
+                                relative: true,
+                            },
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        };
+
+                        relocations.push((section_id, r));
+
+                        //  4ed4: 91000000      add x0, x0, #0x0
+                        //      0000000000004ed4:  ARM64_RELOC_PAGEOFF12    ___unnamed_11
+                        write::Relocation {
+                            offset: proc_offset + offset + 4,
+                            size: 12,
+                            kind: RelocationKind::MachO {
+                                value: object::macho::ARM64_RELOC_PAGEOFF12,
+                                relative: false,
+                            },
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: 0,
+                        }
+                    } else {
+                        write::Relocation {
+                            offset: offset + proc_offset,
+                            size: 32,
+                            kind: RelocationKind::GotRelative,
+                            encoding: RelocationEncoding::Generic,
+                            symbol: sym_id,
+                            addend: -4,
+                        }
                     }
                 } else {
                     internal_error!("failed to find data symbol for {:?}", name);
@@ -893,30 +1007,7 @@ fn build_proc<'a, B: Backend<'a>>(
                     output.add_symbol(builtin_symbol);
                 }
 
-                // If the symbol is an undefined reference counting procedure, we need to add it here.
-                if output.symbol_id(name.as_bytes()).is_none() {
-                    for (sym, rc_name) in rc_proc_names.iter() {
-                        if name == rc_name {
-                            let section_id = output.add_section(
-                                output.segment_name(StandardSegment::Text).to_vec(),
-                                format!(".text.{:x}", sym.as_u64()).as_bytes().to_vec(),
-                                SectionKind::Text,
-                            );
-
-                            let rc_symbol = Symbol {
-                                name: name.as_bytes().to_vec(),
-                                value: 0,
-                                size: 0,
-                                kind: SymbolKind::Text,
-                                scope: SymbolScope::Linkage,
-                                weak: false,
-                                section: SymbolSection::Section(section_id),
-                                flags: SymbolFlags::None,
-                            };
-                            output.add_symbol(rc_symbol);
-                        }
-                    }
-                }
+                add_undefined_rc_proc(output, name, &rc_proc_names);
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
                     create_relocation(target_info, sym_id, offset + proc_offset)
@@ -928,4 +1019,42 @@ fn build_proc<'a, B: Backend<'a>>(
         };
         relocations.push((section_id, elfreloc));
     }
+}
+
+fn add_undefined_rc_proc(
+    output: &mut Object<'_>,
+    name: &String,
+    rc_proc_names: &Vec<'_, (symbol::Symbol, String)>,
+) {
+    // If the symbol is an undefined reference counting procedure, we need to add it here.
+    if output.symbol_id(name.as_bytes()).is_none() {
+        for (sym, rc_name) in rc_proc_names.iter() {
+            if name == rc_name {
+                let section_id = output.add_section(
+                    output.segment_name(StandardSegment::Text).to_vec(),
+                    format_symbol_name(*sym),
+                    SectionKind::Text,
+                );
+
+                let rc_symbol = Symbol {
+                    name: name.as_bytes().to_vec(),
+                    value: 0,
+                    size: 0,
+                    kind: SymbolKind::Text,
+                    scope: SymbolScope::Linkage,
+                    weak: false,
+                    section: SymbolSection::Section(section_id),
+                    flags: SymbolFlags::None,
+                };
+                output.add_symbol(rc_symbol);
+            }
+        }
+    }
+}
+
+fn format_symbol_name(sym: roc_module::symbol::Symbol) -> std::vec::Vec<u8> {
+    let name = format!(".text.{:x}", sym.as_u64());
+    let length = Ord::min(name.len(), 16);
+
+    name.as_bytes()[..length].to_vec()
 }

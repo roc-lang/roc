@@ -19,7 +19,7 @@ jobs:
 
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
@@ -41,8 +41,8 @@ jobs:
           cd crates\compiler\builtins\bitcode\
           zig build test
 
-      - name: install rust nightly 1.70.0
-        run: rustup install nightly-2023-04-15
+      - name: install rust nightly 1.71.0
+        run: rustup install nightly-2023-05-28
 
       - name: set up llvm 13
         run: |

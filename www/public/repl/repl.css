@@ -1,17 +1,6 @@
-html {
-  height: 100%;
-}
-
-body {
-  height: 100%;
-}
-
 main {
   display: flex;
   flex-direction: column;
-  max-width: 900px;
-  height: 100%;
-  margin: 0 auto;
 }
 
 h1 {
@@ -84,7 +73,9 @@ li {
 }
 
 #loading-message {
-  margin: 40% 10%;
+  text-align: center;
+  /* approximately match height after loading and printing help message */
+  height: 96px;
 }
 
 .history-item {
@@ -150,4 +141,33 @@ li {
 
 .underline {
   text-decoration: underline;
+}
+
+
+/* Mobile-friendly screen width */
+@media only screen and (max-width: 767px) {
+  h1 {
+    font-size: 24px !important;
+    margin: 0;
+    padding: 16px 0;
+    text-align: center;
+  }
+
+  main {
+    margin: 0;
+    padding: 0;
+    min-height: calc(100vh - var(--top-bar-height));
+  }
+
+  code.history {
+    flex-grow: 1;
+  }
+
+  #source-input {
+    margin: 0
+  }
+
+  #loading-message {
+    margin: 0;
+  }
 }

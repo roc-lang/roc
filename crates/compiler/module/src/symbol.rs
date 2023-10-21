@@ -1346,6 +1346,7 @@ define_builtins! {
         56 STR_IS_VALID_SCALAR: "isValidScalar"
         57 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
         58 STR_WALK_UTF8: "walkUtf8"
+        59 STR_CONTAINS: "contains"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1432,6 +1433,7 @@ define_builtins! {
         81 LIST_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
         82 LIST_UPDATE: "update"
         83 LIST_WALK_WITH_INDEX: "walkWithIndex"
+        84 LIST_CHUNKS_OF: "chunksOf"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

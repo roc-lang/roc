@@ -488,6 +488,38 @@ fn list_split_last() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_chunks_of() {
+    assert_evals_to!(
+        "List.chunksOf [1, 2, 3, 4, 5, 6, 7, 8] 3",
+        RocList::<RocList<i64>>::from_slice(&[
+            RocList::from_slice(&[1, 2, 3]),
+            RocList::from_slice(&[4, 5, 6]),
+            RocList::from_slice(&[7, 8]),
+        ]),
+        RocList<RocList<i64>>
+    );
+
+    assert_evals_to!(
+        "List.chunksOf [1, 2, 3, 4] 5",
+        RocList::<RocList<i64>>::from_slice(&[RocList::from_slice(&[1, 2, 3, 4]),]),
+        RocList<RocList<i64>>
+    );
+
+    assert_evals_to!(
+        "List.chunksOf [1, 2, 3] 0",
+        RocList::<RocList<i64>>::from_slice(&[]),
+        RocList<RocList<i64>>
+    );
+
+    assert_evals_to!(
+        "List.chunksOf [] 5",
+        RocList::<RocList<i64>>::from_slice(&[]),
+        RocList<RocList<i64>>
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop() {
     assert_evals_to!(
@@ -3014,7 +3046,7 @@ fn list_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 fn list_all_empty_with_unknown_element_type() {
     assert_evals_to!("List.all [] (\\_ -> Bool.true)", true, bool);
 }

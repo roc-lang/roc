@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=821c72743ceae44bdd09718d47cab98fd5fd90af";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=676fe5e01b9a41fa14aaa48d87685677664104b1";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -21,7 +21,7 @@
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl }:
-    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" ];
+    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
         overlays = [ (import rust-overlay) ]
@@ -154,7 +154,7 @@
             ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
-            1; # to run the editor with NVIDIA's closed source drivers
+            1; # to run the GUI examples with NVIDIA's closed source drivers
           
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"

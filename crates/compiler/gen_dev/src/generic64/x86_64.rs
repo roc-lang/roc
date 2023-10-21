@@ -531,7 +531,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
 
         // the setlongjmp_buffer
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
-        ASM::mov_reg64_mem64_offset32(buf, RDI, RDI, 0);
 
         // the value to return from the longjmp. It is a pointer to the last 3 words of the setlongjmp_buffer
         // they represent the errore message.
@@ -563,7 +562,7 @@ where
     let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
 
     if size - copied >= 8 {
-        for _ in (0..(size - copied)).step_by(8) {
+        for _ in 0..(size - copied) / 8 {
             ASM::mov_reg64_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg64(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -572,7 +571,7 @@ where
     }
 
     if size - copied >= 4 {
-        for _ in (0..(size - copied)).step_by(4) {
+        for _ in 0..(size - copied) / 4 {
             ASM::mov_reg32_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg32(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -581,7 +580,7 @@ where
     }
 
     if size - copied >= 2 {
-        for _ in (0..(size - copied)).step_by(2) {
+        for _ in 0..(size - copied) / 2 {
             ASM::mov_reg16_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg16(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -590,7 +589,7 @@ where
     }
 
     if size - copied >= 1 {
-        for _ in (0..(size - copied)).step_by(1) {
+        for _ in 0..(size - copied) {
             ASM::mov_reg8_base32(buf, tmp_reg, base_offset + copied as i32);
             ASM::mov_stack32_reg8(buf, stack_offset + copied as i32, tmp_reg);
 
@@ -601,7 +600,7 @@ where
     size
 }
 
-fn copy_to_base_offset<GeneralReg, FloatReg, ASM>(
+pub(crate) fn copy_to_base_offset<GeneralReg, FloatReg, ASM>(
     buf: &mut Vec<'_, u8>,
     dst_base_offset: i32,
     stack_size: u32,
@@ -727,12 +726,14 @@ impl X64_64SystemVStoreArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                let stack_offset = self.tmp_stack_offset;
-
-                let size =
-                    copy_symbol_to_stack_offset(buf, storage_manager, sym, tmp_reg, stack_offset);
-
-                self.tmp_stack_offset += size as i32;
+                let stack_size = layout_interner.stack_size(in_layout);
+                if stack_size <= 8 {
+                    self.store_arg_64bit(buf, storage_manager, sym);
+                } else if stack_size <= 16 {
+                    self.store_arg_128bit(buf, storage_manager, sym);
+                } else {
+                    unreachable!("covered by earlier branch");
+                }
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 let stack_offset = self.tmp_stack_offset;
@@ -794,6 +795,66 @@ impl X64_64SystemVStoreArgs {
 
                 self.tmp_stack_offset += 8;
             }
+        }
+    }
+
+    fn store_arg_64bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        type ASM = X86_64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                ASM::mov_reg64_base32(buf, *reg, offset);
+
+                self.general_i += 1;
+            }
+            None => {
+                // Copy to stack using return reg as buffer.
+                let reg = X86_64GeneralReg::RAX;
+
+                ASM::mov_reg64_base32(buf, reg, offset);
+                ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
+    }
+
+    fn store_arg_128bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut X86_64StorageManager<'a, '_, X86_64SystemV>,
+        sym: Symbol,
+    ) {
+        type ASM = X86_64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+            let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+            let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+            ASM::mov_reg64_base32(buf, reg1, offset);
+            ASM::mov_reg64_base32(buf, reg2, offset + 8);
+
+            self.general_i += 2;
+        } else {
+            // Copy to stack using return reg as buffer.
+            let reg = X86_64GeneralReg::RAX;
+
+            ASM::mov_reg64_base32(buf, reg, offset);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+            ASM::mov_reg64_base32(buf, reg, offset + 8);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+            self.tmp_stack_offset += 16;
         }
     }
 }
@@ -1001,15 +1062,31 @@ impl X64_64SystemVLoadArgs {
                 lambda_set.runtime_representation(),
             ),
             LayoutRepr::Struct { .. } => {
-                // for now, just also store this on the stack
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
+                if stack_size <= 8 {
+                    self.load_arg_general_64bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
+                } else if stack_size <= 16 {
+                    self.load_arg_general_128bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
+                } else {
+                    unreachable!("covered by an earlier branch")
+                }
             }
             LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
+                self.load_arg_general_128bit(buf, storage_manager, layout_interner, sym, in_layout);
             }
             LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
+                self.load_arg_general_128bit(buf, storage_manager, layout_interner, sym, in_layout);
             }
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
                 // for now, just also store this on the stack
@@ -1039,11 +1116,41 @@ impl X64_64SystemVLoadArgs {
         }
     }
 
+    fn load_arg_general_64bit(
+        &mut self,
+        buf: &mut Vec<u8>,
+        storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
+        layout_interner: &mut STLayoutInterner<'_>,
+        sym: Symbol,
+        in_layout: InLayout<'_>,
+    ) {
+        type ASM = X86_64Assembler;
+
+        let reg1 = X86_64SystemV::GENERAL_PARAM_REGS.get(self.general_i);
+
+        match reg1 {
+            Some(reg1) => {
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
+
+                ASM::mov_base32_reg64(buf, offset, *reg1);
+
+                self.general_i += 1;
+            }
+            None => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, 8);
+                self.argument_offset += 8;
+            }
+        }
+    }
+
     fn load_arg_general_128bit(
         &mut self,
         buf: &mut Vec<u8>,
         storage_manager: &mut X86_64StorageManager<'_, '_, X86_64SystemV>,
+        layout_interner: &mut STLayoutInterner<'_>,
         sym: Symbol,
+        in_layout: InLayout<'_>,
     ) {
         type ASM = X86_64Assembler;
 
@@ -1052,7 +1159,8 @@ impl X64_64SystemVLoadArgs {
 
         match (reg1, reg2) {
             (Some(reg1), Some(reg2)) => {
-                let offset = storage_manager.claim_stack_area_with_alignment(sym, 16, 16);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
 
                 ASM::mov_base32_reg64(buf, offset, *reg1);
                 ASM::mov_base32_reg64(buf, offset + 8, *reg2);
@@ -1660,7 +1768,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         // the setlongjmp_buffer
         let env = R8;
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), env);
-        ASM::mov_reg64_mem64_offset32(buf, env, env, 0);
 
         // move the roc_str bytes into the setlongjmp_buffer
         for offset in [0, 8, 16] {
@@ -1931,6 +2038,10 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
             offset: buf.len() as u64 - 4,
             name: fn_name,
         });
+
+        // on X86_64, we actually get a pointer to a pointer
+        // so we just dereference to get just a pointer to the data
+        X86_64Assembler::mov_reg64_mem64_offset32(buf, dst, dst, 0);
     }
 
     #[inline(always)]
