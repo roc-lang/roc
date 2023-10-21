@@ -243,9 +243,7 @@ fn main() -> io::Result<()> {
 
                 match matches.get_many::<OsString>(DIRECTORY_OR_FILES) {
                     Some(os_values) => {
-                        for os_string in os_values {
-                            values.push(os_string.to_owned());
-                        }
+                        values.extend(os_string_values.into_iter().cloned());
                     }
                     None => {
                         let mut os_string_values: Vec<OsString> = Vec::new();
@@ -255,9 +253,7 @@ fn main() -> io::Result<()> {
                             &mut os_string_values,
                         )?;
 
-                        for os_string in os_string_values {
-                            values.push(os_string);
-                        }
+                        values.extend(os_string_values.into_iter().cloned());
                     }
                 }
 
