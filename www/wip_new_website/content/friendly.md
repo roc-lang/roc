@@ -6,18 +6,18 @@ Roc prioritizes being a user-friendly language. This impacts the syntax, semanti
 
 Roc's syntax isn't trivial, but there also isn't much of it to learn. Its design is generally uncluttered and umabiguous. A goal is that you can normally look at a piece of code and quickly get an accurate mental model of what it means, without having to think through several layers of indirection. Here are some examples:
 
-- `user.email` always means the `email` field of a record named `user`. There's no inheritance, subclassing, or proxying to consider, and this will always do the same thing regardless of what's imported (because there are traits or implicits to consider either).
-- `Email.isValid` always refers to a constant (probably a function) named `isValid` in a module named `Email`. (Module names are always capitalized, and variables never are.) Modules are always defined statically and can't be modified at runtime; there's no monkeypatching to consider.
 - `x = combine y z` always declares a new constant `x` (Roc has [no mutable variables, reassignment, or shadowing](/functional)) to be whatever the `combine` function returns when passed the arguments `y` and `z`. (Function calls in Roc don't need parentheses or commas.)
+- `user.email` always accesses the `email` field of a record named `user`. (Roc has no inheritance, subclassing, or proxying.)
+- `Email.isValid` always refers to something named `isValid` exported by a module named `Email`. (Module names are always capitalized, and variables/constants never are.) Modules are always defined statically and can't be modified at runtime; there's no [monkey patching](https://en.wikipedia.org/wiki/Monkey_patch) to consider.
 - `"My name is \(Str.trim name)"` uses *string interpolation* syntax: a backslash inside a string literal, followed by an expression in parentheses. This code is the same as combining the string `"My name is "` with the string returned by the function call `Str.trim name`. Because Roc's string interpolation syntax begins with a backslash (just like other backlash-escapes such as `\n` and `\"`), you can always tell which parts of a string involve special handling: the parts that begin with backslashes. Everything else works as normal.
 
 Roc also ships with a source code formatter that helps you maintain a consistent style with little effort. The `roc format` command neatly formats your source code according to a common style, and it's designed with the time-saving feature of having no configuration options. This feature saves you all the time that would otherwise be spent debating which stylistic tweaks to settle on!
 
 ## Helpful compiler
 
-Roc's compiler is designed to help you out. It does complete type inference across all your code, and the type system is sound. This means you'll never get a runtime type mismatch if everything type-checked (including null exceptions; Roc doesn't have the billion dollar mistake), and you also don't have to write any type annotations for the compiler to be able to infer all the types in your program.
+Roc's compiler is designed to help you out. It does complete type inference across all your code, and the type system is *sound*. This means you'll never get a runtime type mismatch if everything type-checked (including null exceptions; Roc doesn't have the [billion-dollar mistake](https://en.wikipedia.org/wiki/Null_pointer#History)), and you also don't have to write any type annotations for the compiler to be able to infer all the types in your program.
 
-If there is a problem at compile time, the compiler is designed to report it in a helpful way. Here's an example:
+If there's a problem at compile time, the compiler is designed to report it in a helpful way. Here's an example:
 
 ```
 ── TYPE MISMATCH ────────────────── /home/my-roc-project/main.roc ─
