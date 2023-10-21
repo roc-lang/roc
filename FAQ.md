@@ -293,8 +293,8 @@ The way `|>` works in Roc has a second benefit when it comes to higher-order fun
 answer = List.map numbers \num ->
     someFunction
         "some argument"
+        num
         anotherArg
-        someOtherArg
 ```
 
 ```elixir
@@ -312,8 +312,8 @@ This means the first example would have to change from this...
 answer = List.map numbers \num ->
     someFunction
         "some argument"
+        num
         anotherArg
-        someOtherArg
 ```
 
 ...to this:
@@ -324,8 +324,8 @@ answer =
         (\num ->
             someFunction
                 "some argument"
+                num
                 anotherArg
-                someOtherArg
         )
         numbers
 ```
