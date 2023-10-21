@@ -6,7 +6,7 @@ app "example"
     imports [
         parser.ParserCore.{ Parser, map, keep },
         parser.ParserStr.{ RawStr, strFromRaw },
-        parser.ParserCSV.{ CSV, record, field, string, nat, parseStr },
+        parser.ParserCSV.{ CSV, record, field, string, u64, parseStr },
     ]
     provides [main] to pf
 
@@ -43,7 +43,7 @@ MovieInfo := { title : Str, releaseYear : Nat, actors : List Str }
 movieInfoParser =
     record (\title -> \releaseYear -> \actors -> @MovieInfo { title, releaseYear, actors })
     |> keep (field string)
-    |> keep (field nat)
+    |> keep (field u64)
     |> keep (field actorsParser)
 
 actorsParser =

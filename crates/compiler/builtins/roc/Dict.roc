@@ -999,7 +999,7 @@ expect
 # Makes sure a Dict with U64 keys works
 expect
     empty {}
-    |> insert 7nat "Testing"
+    |> insert 7u64 "Testing"
     |> get 7
     |> Bool.isEq (Ok "Testing")
 

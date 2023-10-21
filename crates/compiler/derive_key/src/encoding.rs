@@ -163,7 +163,6 @@ const fn from_builtin_symbol(symbol: Symbol) -> Option<Result<FlatEncodable, Der
         Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Some(Ok(Immediate(Symbol::ENCODE_DEC))),
         Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(Ok(Immediate(Symbol::ENCODE_F32))),
         Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(Ok(Immediate(Symbol::ENCODE_F64))),
-        Symbol::NUM_NAT | Symbol::NUM_NATURAL => Some(Err(DeriveError::Underivable)),
         _ => None,
     }
 }

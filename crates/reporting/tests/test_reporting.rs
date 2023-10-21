@@ -4552,7 +4552,7 @@ mod test_reporting {
 
     I encountered a tab character:
 
-    4│      # comment with a 	
+    4│      # comment with a
                              ^
 
     Tab characters are not allowed, use spaces instead.
@@ -4567,7 +4567,7 @@ mod test_reporting {
 
     I encountered an ASCII control character:
 
-    4│      # comment with a 
+    4│      # comment with a
                              ^
 
     ASCII control characters are not allowed.
@@ -6768,7 +6768,7 @@ In roc, functions are always written as a lambda, like{}
             C a b : a -> D a b
             D a b : { a, b }
 
-            f : C a Num.Nat -> D a Num.Nat
+            f : C a Num.U64 -> D a Num.U64
             f = \c -> c 6
             f
             "#
@@ -7053,7 +7053,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32
         1, "i64",  mismatched_suffix_i64
         1, "i128", mismatched_suffix_i128
-        1, "nat",  mismatched_suffix_nat
         1, "dec",  mismatched_suffix_dec
         1, "f32",  mismatched_suffix_f32
         1, "f64",  mismatched_suffix_f64
@@ -7123,7 +7122,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32_pattern
         1, "i64",  mismatched_suffix_i64_pattern
         1, "i128", mismatched_suffix_i128_pattern
-        1, "nat",  mismatched_suffix_nat_pattern
         1, "dec",  mismatched_suffix_dec_pattern
         1, "f32",  mismatched_suffix_f32_pattern
         1, "f64",  mismatched_suffix_f64_pattern
@@ -8163,7 +8161,7 @@ In roc, functions are always written as a lambda, like{}
         invalid_record_extension_type,
         indoc!(
             r#"
-            f : { x : Num.Nat }[]
+            f : { x : Num.U64 }[]
             f
             "#
         ),
@@ -8172,7 +8170,7 @@ In roc, functions are always written as a lambda, like{}
 
     This record extension type is invalid:
 
-    4│      f : { x : Num.Nat }[]
+    4│      f : { x : Num.U64 }[]
                                ^^
 
     Note: A record extension variable can only contain a type variable or
@@ -11259,7 +11257,7 @@ In roc, functions are always written as a lambda, like{}
         custom_type_conflicts_with_builtin,
         indoc!(
             r#"
-            Nat := [ S Nat, Z ]
+            U64 := [ S U64, Z ]
 
             ""
             "#
@@ -11269,7 +11267,7 @@ In roc, functions are always written as a lambda, like{}
 
     This opaque type has the same name as a builtin:
 
-    4│      Nat := [ S Nat, Z ]
+    4│      U64 := [ S U64, Z ]
             ^^^^^^^^^^^^^^^^^^^
 
     All builtin opaque types are in scope by default, so I need this
@@ -11699,7 +11697,7 @@ In roc, functions are always written as a lambda, like{}
 
     The argument is a Unicode scalar value of type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     But `contains` needs its 2nd argument to be:
 
@@ -11756,7 +11754,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the branch patterns have type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -13526,70 +13524,6 @@ In roc, functions are always written as a lambda, like{}
                         Two -> Two
             "#
         )
-    );
-
-    test_report!(
-        derive_decoding_for_nat,
-        indoc!(
-            r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
-
-            main =
-                myDecoder : Decoder Nat fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
-
-                myDecoder
-            "#
-        ),
-        @r###"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│      myDecoder = decoder
-                        ^^^^^^^
-
-    I can't generate an implementation of the `Decoding` ability for
-
-        Nat
-
-    Note: Decoding to a Nat is not supported. Consider decoding to a
-    fixed-sized unsigned integer, like U64, then converting to a Nat if
-    needed.
-    "###
-    );
-
-    test_report!(
-        derive_encoding_for_nat,
-        indoc!(
-            r#"
-            app "test" imports [] provides [main] to "./platform"
-
-            x : Nat
-
-            main = Encode.toEncoder x
-            "#
-        ),
-        @r###"
-    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│  main = Encode.toEncoder x
-                                ^
-
-    I can't generate an implementation of the `Encoding` ability for
-
-        Int Natural
-
-    In particular, an implementation for
-
-        Natural
-
-    cannot be generated.
-
-    Tip: `Natural` does not implement `Encoding`.
-    "###
     );
 
     test_no_problem!(

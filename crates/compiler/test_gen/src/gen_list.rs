@@ -1017,7 +1017,7 @@ fn list_walk_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat where a implements Eq
+        find : List a, a -> Option U64 where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v
@@ -2415,7 +2415,7 @@ fn gen_swap() {
             app "quicksort" provides [main] to "./platform"
 
 
-            swap : Nat, Nat, List a -> List a
+            swap : U64, U64, List a -> List a
             swap = \i, j, list ->
                 when Pair (List.get list i) (List.get list j) is
                     Pair (Ok atI) (Ok atJ) ->
@@ -2450,7 +2450,7 @@ fn gen_quicksort() {
                     quicksortHelp list 0 (n - 1)
 
 
-                quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+                quicksortHelp : List (Num a), U64, U64 -> List (Num a)
                 quicksortHelp = \list, low, high ->
                     if low < high then
                         when partition low high list is
@@ -2462,7 +2462,7 @@ fn gen_quicksort() {
                         list
 
 
-                swap : Nat, Nat, List a -> List a
+                swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -2473,7 +2473,7 @@ fn gen_quicksort() {
                         _ ->
                             []
 
-                partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+                partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok pivot ->
@@ -2485,7 +2485,7 @@ fn gen_quicksort() {
                             Pair low initialList
 
 
-                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
+                partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -2523,7 +2523,7 @@ fn quicksort() {
                        quicksortHelp list 0 (List.len list - 1)
 
 
-                   quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+                   quicksortHelp : List (Num a), U64, U64 -> List (Num a)
                    quicksortHelp = \list, low, high ->
                        if low < high then
                            when partition low high list is
@@ -2535,7 +2535,7 @@ fn quicksort() {
                            list
 
 
-                   swap : Nat, Nat, List a -> List a
+                   swap : U64, U64, List a -> List a
                    swap = \i, j, list ->
                        when Pair (List.get list i) (List.get list j) is
                            Pair (Ok atI) (Ok atJ) ->
@@ -2546,7 +2546,7 @@ fn quicksort() {
                            _ ->
                                []
 
-                   partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+                   partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
@@ -2558,7 +2558,7 @@ fn quicksort() {
                                Pair low initialList
 
 
-                   partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]
+                   partitionHelp : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
                    partitionHelp = \i, j, list, high, pivot ->
                        # if j < high then
                        if Bool.false then
@@ -2599,7 +2599,7 @@ fn quicksort_singleton() {
                        quicksortHelp list 0 (List.len list - 1)
 
 
-                   quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+                   quicksortHelp : List (Num a), U64, U64 -> List (Num a)
                    quicksortHelp = \list, low, high ->
                        if low < high then
                            when partition low high list is
@@ -2611,7 +2611,7 @@ fn quicksort_singleton() {
                            list
 
 
-                   swap : Nat, Nat, List a -> List a
+                   swap : U64, U64, List a -> List a
                    swap = \i, j, list ->
                        when Pair (List.get list i) (List.get list j) is
                            Pair (Ok atI) (Ok atJ) ->
@@ -2622,7 +2622,7 @@ fn quicksort_singleton() {
                            _ ->
                                []
 
-                   partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+                   partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
                    partition = \low, high, initialList ->
                        when List.get initialList high is
                            Ok pivot ->
@@ -2634,7 +2634,7 @@ fn quicksort_singleton() {
                                Pair low initialList
 
 
-                   partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]
+                   partitionHelp : U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]
                    partitionHelp = \i, j, list, high, pivot ->
                        if j < high then
                            when List.get list j is
@@ -3515,7 +3515,7 @@ fn monomorphized_lists() {
             r#"
             l = \{} -> [1, 2, 3]
 
-            f : List U8, List U16 -> Nat
+            f : List U8, List U16 -> U64
             f = \_, _ -> 18
 
             f (l {}) (l {})
@@ -3756,7 +3756,7 @@ fn list_walk_backwards_implements_position() {
         r#"
         Option a : [Some a, None]
 
-        find : List a, a -> Option Nat where a implements Eq
+        find : List a, a -> Option U64 where a implements Eq
         find = \list, needle ->
             findHelp list needle
                 |> .v

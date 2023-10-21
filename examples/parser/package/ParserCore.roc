@@ -119,12 +119,12 @@ alt = \first, second ->
 ## For instance, the following two are the same:
 ##
 ## >>> const (\x, y, z -> Triple x y z)
-## >>> |> map3 Parser.Str.nat Parser.Str.nat Parser.Str.nat
+## >>> |> map3 Parser.Str.u64 Parser.Str.u64 Parser.Str.u64
 ##
 ## >>> const (\x -> \y -> \z -> Triple x y z)
-## >>> |> keep Parser.Str.nat
-## >>> |> keep Parser.Str.nat
-## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.u64
+## >>> |> keep Parser.Str.u64
+## >>> |> keep Parser.Str.u64
 ##
 ## (And indeed, this is how `map`, `map2`, `map3` etc. are implemented under the hood.)
 ##
@@ -154,11 +154,11 @@ keep = \funParser, valParser ->
 ## some parsed items are not part of the final result
 ##
 ## >>> const (\x -> \y -> \z -> Triple x y z)
-## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.u64
 ## >>> |> skip (codeunit ',')
-## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.u64
 ## >>> |> skip (codeunit ',')
-## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.u64
 ##
 skip : Parser input kept, Parser input skipped -> Parser input kept
 skip = \kept, skipped ->

@@ -637,9 +637,6 @@ fn check_and_merge_valid_range<M: MetaCollector>(
             Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
                 merge_if!(range.contains_int_width(IntLitWidth::I64))
             }
-            Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                merge_if!(range.contains_int_width(IntLitWidth::Nat))
-            }
             Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
                 merge_if!(range.contains_int_width(IntLitWidth::U64))
             }

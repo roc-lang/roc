@@ -932,7 +932,7 @@ fn rigids() {
         r#"
         app "test" provides [main] to "./platform"
 
-        swap : Nat, Nat, List a -> List a
+        swap : U64, U64, List a -> List a
         swap = \i, j, list ->
             when Pair (List.get list i) (List.get list j) is
                 Pair (Ok atI) (Ok atJ) ->
@@ -1147,7 +1147,7 @@ fn monomorphized_ints() {
         main =
             x = 100
 
-            f : U8, U32 -> Nat
+            f : U8, U32 -> U64
             f = \_, _ -> 18
 
             f x x
@@ -1164,7 +1164,7 @@ fn monomorphized_floats() {
         main =
             x = 100.0
 
-            f : F32, F64 -> Nat
+            f : F32, F64 -> U64
             f = \_, _ -> 18
 
             f x x
@@ -1186,10 +1186,10 @@ fn monomorphized_ints_aliased() {
 
             f = \_, _ -> 1
 
-            f1 : U8, U32 -> Nat
+            f1 : U8, U32 -> U64
             f1 = f
 
-            f2 : U32, U8 -> Nat
+            f2 : U32, U8 -> U64
             f2 = f
 
             f1 w1 w2 + f2 w1 w2
@@ -1222,7 +1222,7 @@ fn monomorphized_tag_with_aliased_args() {
             b = Bool.false
             c = Bool.false
             a = A b c
-            f : [A Bool Bool] -> Nat
+            f : [A Bool Bool] -> U64
             f = \_ -> 1
             f a
         "#
@@ -1238,7 +1238,7 @@ fn monomorphized_list() {
         main =
             l = \{} -> [1, 2, 3]
 
-            f : List U8, List U16 -> Nat
+            f : List U8, List U16 -> U64
             f = \_, _ -> 18
 
             f (l {}) (l {})
@@ -2469,8 +2469,8 @@ fn issue_4772_weakened_monomorphic_destructure() {
 #[mono_test]
 fn weakening_avoids_overspecialization() {
     // Without weakening of let-bindings, this program would force two specializations of
-    // `index` - to `Nat` and the default integer type, `I64`. The test is to ensure only one
-    // specialization, that of `Nat`, exists.
+    // `index` - to `U64` and the default integer type, `I64`. The test is to ensure only one
+    // specialization, that of `U64`, exists.
     indoc!(
         r###"
         app "test" provides [main] to "./platform"
@@ -3007,7 +3007,7 @@ fn specialize_after_match() {
 
         LinkedList a : [Cons a (LinkedList a), Nil]
 
-        longestLinkedList : LinkedList a, LinkedList a -> Nat
+        longestLinkedList : LinkedList a, LinkedList a -> U64
         longestLinkedList = \listA, listB -> when listA is
             Nil -> linkedListLength listB
             Cons a aa -> when listB is
@@ -3019,7 +3019,7 @@ fn specialize_after_match() {
                         then lengthA
                         else lengthB
 
-        linkedListLength : LinkedList a -> Nat
+        linkedListLength : LinkedList a -> U64
         linkedListLength = \list -> when list is
             Nil -> 0
             Cons _ rest -> 1 + linkedListLength rest
@@ -3049,7 +3049,7 @@ fn record_update() {
         r#"
         app "test" provides [main] to "./platform"
         main = f {a: [], b: [], c:[]}
-        f : {a: List Nat, b: List Nat, c: List Nat} -> {a: List Nat, b: List Nat, c: List Nat}
+        f : {a: List U64, b: List U64, c: List U64} -> {a: List U64, b: List U64, c: List U64}
         f = \record -> {record & a: List.set record.a 7 7, b: List.set record.b 8 8}
         "#
     )

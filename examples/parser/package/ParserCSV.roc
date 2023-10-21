@@ -9,7 +9,7 @@ interface ParserCSV
         parseStrToCSVRecord,
         field,
         string,
-        nat,
+        u64,
         f64,
     ]
     imports [
@@ -87,7 +87,7 @@ parseCSVRecord = \csvParser, recordFieldsList ->
 ## >>> record (\firstName -> \lastName -> \age -> User {firstName, lastName, age})
 ## >>> |> field string
 ## >>> |> field string
-## >>> |> field nat
+## >>> |> field u64
 ##
 record : a -> Parser CSVRecord a
 record = ParserCore.const
@@ -120,18 +120,18 @@ field = \fieldParser ->
 string : Parser CSVField Str
 string = ParserStr.anyString
 
-## Parse a natural number from a CSV field
-nat : Parser CSVField Nat
-nat =
+## Parse a u64 number from a CSV field
+u64 : Parser CSVField Nat
+u64 =
     string
     |> map
         (\val ->
-            when Str.toNat val is
+            when Str.toU64 val is
                 Ok num ->
                     Ok num
 
                 Err _ ->
-                    Err "\(val) is not a Nat."
+                    Err "\(val) is not a U64."
         )
     |> flatten
 

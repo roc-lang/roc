@@ -1284,8 +1284,6 @@ define_const_var! {
     :pub UNSIGNED64,
     :pub UNSIGNED128,
 
-    :pub NATURAL,
-
     // Integer Signed8 := Signed8
     INTEGER_SIGNED8,
     INTEGER_SIGNED16,
@@ -1298,8 +1296,6 @@ define_const_var! {
     INTEGER_UNSIGNED32,
     INTEGER_UNSIGNED64,
     INTEGER_UNSIGNED128,
-
-    INTEGER_NATURAL,
 
     // Num (Integer Signed8) := Integer Signed8
     NUM_INTEGER_SIGNED8,
@@ -1314,8 +1310,6 @@ define_const_var! {
     NUM_INTEGER_UNSIGNED64,
     NUM_INTEGER_UNSIGNED128,
 
-    NUM_INTEGER_NATURAL,
-
     // I8 : Num (Integer Signed8)
     :pub I8,
     :pub I16,
@@ -1328,8 +1322,6 @@ define_const_var! {
     :pub U32,
     :pub U64,
     :pub U128,
-
-    :pub NAT,
 
     // Binary32 : []
     BINARY32,
@@ -1388,8 +1380,6 @@ impl Variable {
             Symbol::NUM_U32 => Some(Variable::U32),
             Symbol::NUM_U16 => Some(Variable::U16),
             Symbol::NUM_U8 => Some(Variable::U8),
-
-            Symbol::NUM_NAT => Some(Variable::NAT),
 
             Symbol::BOOL_BOOL => Some(Variable::BOOL),
 
@@ -1595,16 +1585,6 @@ fn define_integer_types(subs: &mut Subs) {
         Variable::INTEGER_UNSIGNED8,
         Variable::NUM_INTEGER_UNSIGNED8,
         Variable::U8,
-    );
-
-    integer_type(
-        subs,
-        Symbol::NUM_NATURAL,
-        Symbol::NUM_NAT,
-        Variable::NATURAL,
-        Variable::INTEGER_NATURAL,
-        Variable::NUM_INTEGER_NATURAL,
-        Variable::NAT,
     );
 }
 

@@ -25,11 +25,9 @@ interface Num
         Unsigned32,
         Unsigned16,
         Unsigned8,
-        Nat,
         Dec,
         F32,
         F64,
-        Natural,
         Decimal,
         Binary32,
         Binary64,
@@ -190,9 +188,9 @@ interface Num
 ## a more specific type based on how they're used.
 ##
 ## For example, in `(1 + List.len myList)`, the `1` has the type `Num *` at first,
-## but because `List.len` returns a `Nat`, the `1` ends up changing from
-## `Num *` to the more specific `Nat`, and the expression as a whole
-## ends up having the type `Nat`.
+## but because `List.len` returns a `U64`, the `1` ends up changing from
+## `Num *` to the more specific `U64`, and the expression as a whole
+## ends up having the type `U64`.
 ##
 ## Sometimes number literals don't become more specific. For example,
 ## the `Num.toStr` function has the type `Num * -> Str`. This means that
@@ -214,7 +212,6 @@ interface Num
 ## * `215u8` is a `215` value of type [U8]
 ## * `76.4f32` is a `76.4` value of type [F32]
 ## * `123.45dec` is a `123.45` value of type [Dec]
-## * `12345nat` is a `12345` value of type [Nat]
 ##
 ## In practice, these are rarely needed. It's most common to write
 ## number literals without any suffix.
@@ -324,16 +321,6 @@ Num range := range
 ## | ` (over 340 undecillion)                            0` | [U128]| 16 Bytes |
 ## | ` 340_282_366_920_938_463_463_374_607_431_768_211_455` |       |          |
 ##
-## Roc also has one variable-size integer type: [Nat]. The size of [Nat] is equal
-## to the size of a memory address, which varies by system. For example, when
-## compiling for a 64-bit system, [Nat] is the same as [U64]. When compiling for a
-## 32-bit system, it's the same as [U32].
-##
-## A common use for [Nat] is to store the length ("len" for short) of a
-## collection like a [List]. 64-bit systems can represent longer
-## lists in memory than 32-bit systems, which is why the length of a list
-## is represented as a [Nat] in Roc.
-##
 ## If any operation would result in an [Int] that is either too big
 ## or too small to fit in that range (e.g. calling `Num.maxI32 + 1`),
 ## then the operation will *overflow*. When an overflow occurs, the program will crash.
@@ -423,8 +410,6 @@ Unsigned32 := []
 Unsigned16 := []
 Unsigned8 := []
 
-Natural := []
-
 Integer range := range
 
 I128 : Num (Integer Signed128)
@@ -440,18 +425,6 @@ U64 : Num (Integer Unsigned64)
 U32 : Num (Integer Unsigned32)
 U16 : Num (Integer Unsigned16)
 U8 : Num (Integer Unsigned8)
-
-## A [natural number](https://en.wikipedia.org/wiki/Natural_number) represented
-## as a 64-bit unsigned integer on 64-bit systems, a 32-bit unsigned integer
-## on 32-bit systems, and so on.
-##
-## This system-specific size makes it useful for certain data structure
-## functions like [List.len], because the number of elements many data structures
-## can hold is also system-specific. For example, the maximum number of elements
-## a [List] can hold on a 64-bit system fits in a 64-bit unsigned integer, and
-## on a 32-bit system it fits in 32-bit unsigned integer. This makes [Nat] a
-## good fit for [List.len] regardless of system.
-Nat : Num (Integer Natural)
 
 Decimal := []
 Binary64 := []
@@ -561,12 +534,12 @@ tau = 2 * pi
 toStr : Num * -> Str
 intCast : Int a -> Int b
 
-bytesToU16Lowlevel : List U8, Nat -> U16
-bytesToU32Lowlevel : List U8, Nat -> U32
-bytesToU64Lowlevel : List U8, Nat -> U64
-bytesToU128Lowlevel : List U8, Nat -> U128
+bytesToU16Lowlevel : List U8, U64 -> U16
+bytesToU32Lowlevel : List U8, U64 -> U32
+bytesToU64Lowlevel : List U8, U64 -> U64
+bytesToU128Lowlevel : List U8, U64 -> U128
 
-bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
+bytesToU16 : List U8, U64 -> Result U16 [OutOfBounds]
 bytesToU16 = \bytes, index ->
     # we need at least 1 more byte
     offset = 1
@@ -576,7 +549,7 @@ bytesToU16 = \bytes, index ->
     else
         Err OutOfBounds
 
-bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
+bytesToU32 : List U8, U64 -> Result U32 [OutOfBounds]
 bytesToU32 = \bytes, index ->
     # we need at least 3 more bytes
     offset = 3
@@ -586,7 +559,7 @@ bytesToU32 = \bytes, index ->
     else
         Err OutOfBounds
 
-bytesToU64 : List U8, Nat -> Result U64 [OutOfBounds]
+bytesToU64 : List U8, U64 -> Result U64 [OutOfBounds]
 bytesToU64 = \bytes, index ->
     # we need at least 7 more bytes
     offset = 7
@@ -596,7 +569,7 @@ bytesToU64 = \bytes, index ->
     else
         Err OutOfBounds
 
-bytesToU128 : List U8, Nat -> Result U128 [OutOfBounds]
+bytesToU128 : List U8, U64 -> Result U128 [OutOfBounds]
 bytesToU128 = \bytes, index ->
     # we need at least 15 more bytes
     offset = 15
@@ -1096,7 +1069,7 @@ powInt : Int a, Int a -> Int a
 ##
 ## 8
 ## ```
-countLeadingZeroBits : Int a -> Nat
+countLeadingZeroBits : Int a -> U64
 
 ## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
 ##
@@ -1109,7 +1082,7 @@ countLeadingZeroBits : Int a -> Nat
 ##
 ## 8
 ## ```
-countTrailingZeroBits : Int a -> Nat
+countTrailingZeroBits : Int a -> U64
 
 ## Counts the number of set bits in an integer.
 ##
@@ -1122,7 +1095,7 @@ countTrailingZeroBits : Int a -> Nat
 ##
 ## 0
 ## ```
-countOneBits : Int a -> Nat
+countOneBits : Int a -> U64
 
 addWrap : Int range, Int range -> Int range
 

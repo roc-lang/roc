@@ -270,7 +270,7 @@ fn str_concat() {
 
 #[test]
 fn str_count_graphemes() {
-    expect_success("Str.countGraphemes \"å🤔\"", "2 : Nat");
+    expect_success("Str.countGraphemes \"å🤔\"", "2 : U64");
 }
 
 #[test]

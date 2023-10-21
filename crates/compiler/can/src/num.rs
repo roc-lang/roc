@@ -198,7 +198,6 @@ fn parse_literal_suffix(num_str: &str) -> (Option<ParsedWidth>, &str) {
         "i32",  ParsedWidth::Int(IntLitWidth::I32)
         "i64",  ParsedWidth::Int(IntLitWidth::I64)
         "i128", ParsedWidth::Int(IntLitWidth::I128)
-        "nat",  ParsedWidth::Int(IntLitWidth::Nat)
         "dec",  ParsedWidth::Float(FloatWidth::Dec)
         "f32",  ParsedWidth::Float(FloatWidth::F32)
         "f64",  ParsedWidth::Float(FloatWidth::F64)

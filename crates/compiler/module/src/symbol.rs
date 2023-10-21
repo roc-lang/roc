@@ -1188,8 +1188,8 @@ define_builtins! {
         80 NUM_MUL_SATURATED: "mulSaturated"
         81 NUM_INT: "Int" exposed_type=true
         82 NUM_FRAC: "Frac" exposed_type=true
-        83 NUM_NATURAL: "Natural" exposed_type=true
-        84 NUM_NAT: "Nat" exposed_type=true
+        83 NUM_PI: "pi"
+        84 NUM_TAU: "tau"
         85 NUM_INT_CAST: "intCast"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         87 NUM_DECIMAL: "Decimal" exposed_type=true
@@ -1265,9 +1265,7 @@ define_builtins! {
         157 NUM_IS_INFINITE: "isInfinite"
         158 NUM_IS_FINITE: "isFinite"
         159 NUM_E: "e"
-        160 NUM_PI: "pi"
-        161 NUM_TAU: "tau"
-        162 NUM_BITWISE_NOT: "bitwiseNot"
+        160 NUM_BITWISE_NOT: "bitwiseNot"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1580,13 +1578,12 @@ define_builtins! {
         12 HASH_HASH_I32: "hashI32"
         13 HASH_HASH_I64: "hashI64"
         14 HASH_HASH_I128: "hashI128"
-        15 HASH_HASH_NAT: "hashNat"
-        16 I128_OF_DEC: "i128OfDec"
-        17 HASH_HASH_DEC: "hashDec"
-        18 HASH_COMPLETE: "complete"
-        19 HASH_HASH_STR_BYTES: "hashStrBytes"
-        20 HASH_HASH_LIST: "hashList"
-        21 HASH_HASH_UNORDERED: "hashUnordered"
+        15 I128_OF_DEC: "i128OfDec"
+        16 HASH_HASH_DEC: "hashDec"
+        17 HASH_COMPLETE: "complete"
+        18 HASH_HASH_STR_BYTES: "hashStrBytes"
+        19 HASH_HASH_LIST: "hashList"
+        20 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 INSPECT: "Inspect" => {
         0 INSPECT_INSPECT_ABILITY: "Inspect" exposed_type=true

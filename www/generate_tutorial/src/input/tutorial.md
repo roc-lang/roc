@@ -1233,7 +1233,7 @@ You can give a number literal a more specific type by adding the type you want a
 
 The full list of possible suffixes includes:
 
-`u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `u128`, `i128`, `nat`, `f32`, `f64`, `dec`
+`u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `u128`, `i128`, `f32`, `f64`, `dec`
 
 Integer literals can be written in [hexadecimal](https://en.wikipedia.org/wiki/Hexadecimal) form by prefixing with `0x` followed by hexadecimal characters (`a` - `f` in addition to `0` - `9`). For example, writing `0xfe` is the same as writing `254`. Similarly, the prefix `0b` specifies binary integers. Writing `0b0000_1000` is the same as writing `8`.
 

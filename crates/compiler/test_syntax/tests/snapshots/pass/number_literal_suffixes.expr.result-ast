@@ -121,18 +121,6 @@ Record(
                     Newline,
                 ],
             ),
-            @164-176 SpaceBefore(
-                RequiredValue(
-                    @164-167 "nat",
-                    [],
-                    @170-176 Num(
-                        "123nat",
-                    ),
-                ),
-                [
-                    Newline,
-                ],
-            ),
             @180-192 SpaceBefore(
                 RequiredValue(
                     @180-183 "dec",
@@ -259,18 +247,6 @@ Record(
                     [],
                     @384-392 Num(
                         "-123i128",
-                    ),
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            @396-412 SpaceBefore(
-                RequiredValue(
-                    @396-402 "natNeg",
-                    [],
-                    @405-412 Num(
-                        "-123nat",
                     ),
                 ),
                 [
@@ -421,20 +397,6 @@ Record(
                     [],
                     @633-642 NonBase10Int {
                         string: "101i128",
-                        base: Binary,
-                        is_negative: false,
-                    },
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            @646-663 SpaceBefore(
-                RequiredValue(
-                    @646-652 "natBin",
-                    [],
-                    @655-663 NonBase10Int {
-                        string: "101nat",
                         base: Binary,
                         is_negative: false,
                     },

@@ -93,19 +93,12 @@ pub enum NotDerivableContext {
     Function,
     UnboundVar,
     Opaque(Symbol),
-    Encode(NotDerivableEncode),
     Decode(NotDerivableDecode),
     Eq(NotDerivableEq),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum NotDerivableEncode {
-    Nat,
-}
-
-#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableDecode {
-    Nat,
     OptionalRecordField(Lowercase),
 }
 

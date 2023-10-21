@@ -465,10 +465,10 @@ fn iface_quicksort() {
     expect_types(
         loaded_module,
         hashmap! {
-            "swap" => "Nat, Nat, List a -> List a",
-            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
-            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
-            "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
+            "swap" => "U64, U64, List a -> List a",
+            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
+            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
         },
     );
 }
@@ -481,10 +481,10 @@ fn quicksort_one_def() {
     expect_types(
         loaded_module,
         hashmap! {
-            "swap" => "Nat, Nat, List a -> List a",
-            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
-            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
-            "quicksortHelp" => "List (Num a), Nat, Nat -> List (Num a)",
+            "swap" => "U64, U64, List a -> List a",
+            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
+            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "quicksortHelp" => "List (Num a), U64, U64 -> List (Num a)",
             "quicksort" => "List (Num a) -> List (Num a)",
         },
     );
@@ -498,10 +498,10 @@ fn app_quicksort() {
     expect_types(
         loaded_module,
         hashmap! {
-            "swap" => "Nat, Nat, List a -> List a",
-            "partition" => "Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]",
-            "partitionHelp" => "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
-            "quicksort" => "List (Num a), Nat, Nat -> List (Num a)",
+            "swap" => "U64, U64, List a -> List a",
+            "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
+            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
         },
     );
 }

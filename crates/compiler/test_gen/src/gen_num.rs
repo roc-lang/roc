@@ -19,7 +19,7 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r#"
-            i : Num.Nat
+            i : Num.U64
             i = 1
 
             i
@@ -2399,7 +2399,6 @@ num_conversion_tests! {
         to_f32_from_u32, "15u32", 15.0
         to_f32_from_u64, "15u64", 15.0
         to_f32_from_u128, "15u128", 15.0
-        to_f32_from_nat, "15nat", 15.0
         to_f32_from_f32, "1.5f32", 1.5
         to_f32_from_f64, "1.5f64", 1.5
     )
@@ -2414,7 +2413,6 @@ num_conversion_tests! {
         to_f64_from_u32, "15u32", 15.0
         to_f64_from_u64, "15u64", 15.0
         to_f64_from_u128, "15u128", 15.0
-        to_f64_from_nat, "15nat", 15.0
         to_f64_from_f32, "1.5f32", 1.5
         to_f64_from_f64, "1.5f64", 1.5
     )
@@ -3440,7 +3438,7 @@ fn monomorphized_ints() {
             r#"
             x = 100
 
-            f : U8, U32 -> Nat
+            f : U8, U32 -> U64
             f = \_, _ -> 18
 
             f x x
@@ -3459,7 +3457,7 @@ fn monomorphized_floats() {
             r#"
             x = 100.0
 
-            f : F32, F64 -> Nat
+            f : F32, F64 -> U64
             f = \_, _ -> 18
 
             f x x
@@ -3476,7 +3474,7 @@ fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
             r#"
-            f : U8 -> Nat
+            f : U8 -> U64
             f = \_ -> 9
             x =
                 n = 100
