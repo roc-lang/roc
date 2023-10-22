@@ -1066,7 +1066,6 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-
     "###
     );
 
@@ -1533,7 +1532,7 @@ mod test_reporting {
     5│      x = if Bool.true then 3.14 else 4
                                   ^^^^
 
-    The 1st branch is a fraction of type:
+    This branch is a fraction of type:
 
         Frac *
 
@@ -1543,7 +1542,6 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-
     "###
     );
 
@@ -1579,7 +1577,6 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-
     "###
     );
 
@@ -1612,7 +1609,6 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-
     "###
     );
 
@@ -1934,7 +1930,6 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-
     "###
     );
 
@@ -2492,7 +2487,6 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
-
     "###
     );
 
@@ -4558,7 +4552,7 @@ mod test_reporting {
 
     I encountered a tab character:
 
-    4│      # comment with a
+    4│      # comment with a 	
                              ^
 
     Tab characters are not allowed, use spaces instead.
@@ -4573,7 +4567,7 @@ mod test_reporting {
 
     I encountered an ASCII control character:
 
-    4│      # comment with a
+    4│      # comment with a 
                              ^
 
     ASCII control characters are not allowed.
@@ -11007,7 +11001,7 @@ In roc, functions are always written as a lambda, like{}
     5│      f = if Bool.true then {a: ""} else {a: "b", b: ""}
                                   ^^^^^^^
 
-    The 1st branch is a record of type:
+    This branch is a record of type:
 
         { a : Str }
 
