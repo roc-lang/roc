@@ -46,6 +46,7 @@ body {
     padding: 0;
     width: 100%;
     height: 100%;
+    box-sizing: border-box;
 }
 
 footer {
@@ -111,7 +112,10 @@ h3 {
 #top-bar {
     background-color: var(--gray-bg);
     height: var(--top-bar-height);
+    box-sizing: border-box;
     width: 100%;
+    /* On iPhone SE, without this, we end up with  */
+    min-width: 392px;
 }
 
 #top-bar nav {
@@ -148,6 +152,7 @@ main {
     max-width: var(--body-max-width);
     margin: auto;
     padding: 12px;
+    box-sizing: border-box;
 }
 
 code,
@@ -249,6 +254,7 @@ li {
 
 /* Homepage */
 #homepage-intro-box {
+    position: relative;
     margin: 60px auto;
     width: var(--homepage-intro-box-width);
 }
@@ -296,7 +302,7 @@ li {
 }
 
 /* Mobile-friendly screen width */
-@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+@media only screen and (max-width: 1024px) {
 
     p,
     aside,
@@ -321,9 +327,9 @@ li {
     }
 
     /* Homepage */
+
     #homepage-intro-box {
         margin: 30px auto;
-        position: relative;
     }
 
     #homepage-tagline {
@@ -350,6 +356,14 @@ li {
 
     #homepage-tagline {
         font-size: 16px;
+    }
+
+    .home-goals-container {
+        /* It's unclear why this !important is necessary, since its specificity
+         should theoretically be higher than what it's overriding. In practice,
+         at least in Chrome, removing the !important breaks this. */
+        display: grid !important;
+        grid-template-columns: 1fr;
     }
 
     /* Tutorial */
@@ -400,6 +414,18 @@ li {
     #top-bar-links label {
         padding: 12px 8px;
         margin: 0;
+    }
+}
+
+/* iPhone SE and similar */
+@media only screen and (max-width: 350px) {
+    #homepage-logo {
+        /* The bird runs off the screen unless we shrink it */
+        height: 75px;
+        width: auto;
+        position: absolute;
+        left: 227px;
+        top: -14px;
     }
 }
 
@@ -667,18 +693,11 @@ code .dim {
 /* HOME GOALS */
 
 .home-goals-container {
-    display: grid;
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
     gap: 60px;
     width: 100%;
-}
-
-@media only screen and (min-width: 768px) {
-    .home-goals-container {
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-    }
 }
 
 .home-goals-column {
