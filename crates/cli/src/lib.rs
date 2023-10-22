@@ -35,7 +35,7 @@ use target_lexicon::{Architecture, Triple};
 use tempfile::TempDir;
 
 mod format;
-pub use format::format;
+pub use format::{format_files, format_src, FormatMode};
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -62,6 +62,8 @@ pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
+pub const FLAG_STDIN: &str = "stdin";
+pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
@@ -258,6 +260,20 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false),
             )
+            .arg(
+                Arg::new(FLAG_STDIN)
+                    .long(FLAG_STDIN)
+                    .help("Read file to format from stdin")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_STDOUT)
+                    .long(FLAG_STDOUT)
+                    .help("Print formatted file to stdout")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
@@ -340,11 +356,6 @@ pub enum BuildConfig {
     BuildOnly,
     BuildAndRun,
     BuildAndRunIfNoErrors,
-}
-
-pub enum FormatMode {
-    Format,
-    CheckOnly,
 }
 
 fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
