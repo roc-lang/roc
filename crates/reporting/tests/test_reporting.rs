@@ -1064,8 +1064,8 @@ mod test_reporting {
 
     Every element in a list must have the same type!
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1540,8 +1540,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1575,8 +1575,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1607,8 +1607,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1928,8 +1928,8 @@ mod test_reporting {
 
         { x : Int * }
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -2485,8 +2485,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -4552,7 +4552,7 @@ mod test_reporting {
 
     I encountered a tab character:
 
-    4│      # comment with a 	
+    4│      # comment with a
                              ^
 
     Tab characters are not allowed, use spaces instead.
@@ -4567,7 +4567,7 @@ mod test_reporting {
 
     I encountered an ASCII control character:
 
-    4│      # comment with a 
+    4│      # comment with a
                              ^
 
     ASCII control characters are not allowed.
