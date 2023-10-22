@@ -89,7 +89,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok();
+        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok()
+            && module.linking.find_internal_symbol("__heap_end").is_ok();
 
         // We don't want to import any Memory or Tables
         module.import.imports.retain(|import| {
@@ -211,6 +212,12 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.module
                 .relocate_internal_symbol("__heap_base", stack_heap_boundary)
                 .unwrap();
+            self.module
+                .relocate_internal_symbol(
+                    "__heap_end",
+                    stack_heap_boundary + MemorySection::PAGE_SIZE,
+                )
+                .unwrap();
         }
     }
 
@@ -219,7 +226,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     fn export_globals(&mut self) {
         for (sym_index, sym) in self.module.linking.symbol_table.iter().enumerate() {
             match sym {
-                SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
+                SymInfo::Data(DataSymbol::Imported { name, .. })
+                    if *name != "__heap_base" && *name != "__heap_end" =>
+                {
                     let global_value_addr = self.module.data.end_addr;
                     self.module.data.end_addr += PTR_SIZE;
 
