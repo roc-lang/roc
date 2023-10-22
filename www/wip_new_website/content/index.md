@@ -28,14 +28,14 @@
     <div class="home-goals-column">
         <div class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>.</p>
+            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or <a href="https://webassembly.org/">WebAssembly</a>.</p>
             <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc ships one user-friendly executable which includes a helpful compiler, testing, formatting, and a <a href="/repl">REPL</a>.</p>
+            <p class="home-goals-description">Roc's syntax, semantics, and toolset are designed to feel user-friendly and helpful.</p>
             <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>

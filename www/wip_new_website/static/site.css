@@ -12,6 +12,7 @@
 
     --primary-1: #9b6bf2;
     --primary-2: #7c38f5;
+    --highlight: #1bd6bd;
     --link-color: var(--primary-2);
     --code-link-color: var(--primary-2);
     --text-color: #000;
@@ -263,14 +264,16 @@ li {
 
 #homepage-logo {
     height: 176px;
+    width: auto;
     position: absolute;
-    left: 280px;
+    left: 310px;
     top: 20px;
 }
 
 #first-code-sample {
     width: var(--homepage-intro-box-width);
     margin-top: 60px;
+    line-height: 1.85em;
     color: #fcf9fd;
 }
 
@@ -323,21 +326,26 @@ li {
         position: relative;
     }
 
+    #homepage-tagline {
+        margin-top: 0;
+    }
+
     #homepage-h1 {
         /* TODO remove !important from repl.css (increasing specificity instead), and then this one too. */
         font-size: 48px !important;
-        padding-bottom: 0;
+        padding: 0;
+        margin: 0;
         text-align: left;
     }
 
     #homepage-logo {
-        height: 110px;
-        left: 220px;
-        top: 12px;
+        height: 116px;
+        left: 230px;
+        top: -14px;
     }
 
     #first-code-sample {
-        margin-top: 52px;
+        margin: 64px auto;
     }
 
     #homepage-tagline {
@@ -661,7 +669,7 @@ code .dim {
 .home-goals-container {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 20px;
+    gap: 60px;
     width: 100%;
 }
 
@@ -685,19 +693,20 @@ code .dim {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    background-color: var(--gray-bg);
+    border: 2px solid var(--primary-2);
+    box-shadow: 4px 4px var(--primary-2)
 }
 
 .home-goals-content h3 {
     font-family: inherit;
     text-transform: lowercase;
     color: var(--primary-2);
-    padding-bottom: 16px;
-    border-bottom: 2px solid;
+    padding-bottom: 12px;
+    padding-top: 2px;
 }
 
 .home-goals-content p {
-    font-size: 19px;
+    font-size: 18px;
 }
 
 .home-goals-content>h3 {
@@ -717,12 +726,14 @@ code .dim {
 
 .home-goals-learn-more {
     margin-top: auto;
+    white-space: nowrap;
 }
 
 .home-goals-title {
     padding: 0;
     font-weight: bold;
     margin-bottom: 10px;
+    font-size: 32px;
 }
 
 .home-goals-description {
