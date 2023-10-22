@@ -2638,6 +2638,7 @@ dependencies = [
  "bumpalo",
  "parking_lot",
  "roc_can",
+ "roc_collections",
  "roc_load",
  "roc_module",
  "roc_packaging",

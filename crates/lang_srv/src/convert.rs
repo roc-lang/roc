@@ -116,44 +116,40 @@ pub(crate) mod diag {
                 },
             };
 
-            let msg;
-            match self {
+            let msg = match self {
                 LoadingProblem::FileProblem { filename, error } => {
-                    msg = format!(
+                    format!(
                         "Failed to load {} due to an I/O error: {}",
                         filename.display(),
                         error
-                    );
+                    )
                 }
-                LoadingProblem::ParsingFailed(_) => {
-                    unreachable!("should be formatted before sent back")
+                LoadingProblem::ParsingFailed(fe) => {
+                    let problem = &fe.problem.problem;
+                    format!("Failed to parse Roc source file: {problem:?}")
                 }
                 LoadingProblem::UnexpectedHeader(header) => {
-                    msg = format!("Unexpected header: {}", header);
+                    format!("Unexpected header: {}", header)
                 }
                 LoadingProblem::ChannelProblem(_) => {
-                    msg = "Internal error: message channel died".to_string();
+                    "Internal error: message channel died".to_string()
                 }
                 LoadingProblem::ErrJoiningWorkerThreads => {
-                    msg = "Internal error: analysis worker threads died".to_string();
+                    "Internal error: analysis worker threads died".to_string()
                 }
                 LoadingProblem::TriedToImportAppModule => {
-                    msg = "Attempted to import app module".to_string();
+                    "Attempted to import app module".to_string()
                 }
-                LoadingProblem::FormattedReport(report) => {
-                    msg = report.clone();
-                }
+                LoadingProblem::FormattedReport(report) => report.clone(),
                 LoadingProblem::ImportCycle(_, _) => {
-                    msg = "Circular dependency between modules".to_string();
+                    "Circular dependency between modules".to_string()
                 }
-                LoadingProblem::IncorrectModuleName(_) => {
-                    msg = "Incorrect module name".to_string();
-                }
+                LoadingProblem::IncorrectModuleName(_) => "Incorrect module name".to_string(),
                 LoadingProblem::CouldNotFindCacheDir => {
-                    msg = format!(
+                    format!(
                         "Could not find Roc cache directory {}",
                         roc_packaging::cache::roc_cache_dir().display()
-                    );
+                    )
                 }
             };
 
