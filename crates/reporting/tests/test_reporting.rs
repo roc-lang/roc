@@ -1066,6 +1066,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
+
     "###
     );
 
@@ -1542,6 +1543,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
+
     "###
     );
 
@@ -1577,6 +1579,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
+
     "###
     );
 
@@ -1609,6 +1612,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
+
     "###
     );
 
@@ -1930,6 +1934,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
+
     "###
     );
 
@@ -2487,6 +2492,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.toFrac` and `Num.round`.
+
     "###
     );
 
