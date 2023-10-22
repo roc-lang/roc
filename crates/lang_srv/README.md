@@ -7,12 +7,12 @@ Support for the following LSP features are provided:
 - Inline diagnostics
 - Hover support to get types of values
 - Go-to-definition
-  !(go-to-definition in roc pg)[./img/go-to-definition.mov]
+  ![go-to-definition in roc pg](https://github.com/ayazhafiz/roc/assets/20735482/a0531cbf-db14-4070-a359-fb8e46bf4509)
   - Note that go-to-definition for the builtins does not yet work.
   - Go-to-definition for abilities resolves to their specialization, if one exists.
-    !(go-to-definition in roc pg)[./img/go-to-definition-abilities.mov]
+    ![go-to-definition in roc pg](./img/go-to-definition-abilities.mov)
 - Formatting Roc files on save
-  !(format)[./img/format.mov]
+  ![format](./img/format.mov)
 
 Semantic highlighting will also be added soon. Additional features require
 changes to the compiler infrastructure that are not yet available.
@@ -27,7 +27,7 @@ Note that the language server is a bit naive:
 
 At this time, only from-source installations of the binary are supported.
 
-Follow the (installation from source)[https://github.com/roc-lang/roc/tree/main/getting_started#installation] instructions. Then run
+Follow the [installation from source](https://github.com/roc-lang/roc/tree/main/getting_started#installation) instructions. Then run
 
 ```
 cargo build -p roc_lang_srv --release
