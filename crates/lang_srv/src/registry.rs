@@ -57,7 +57,7 @@ impl Document {
     }
 
     fn line_info(&self) -> &LineInfo {
-        &self.line_info.as_ref().unwrap()
+        self.line_info.as_ref().unwrap()
     }
 
     fn module(&mut self) -> Result<&mut LoadedModule, LoadingProblem<'_>> {
@@ -74,8 +74,8 @@ impl Document {
             fi,
             &self.source,
             src_dir,
-            Default::default(),
             roc_target::TargetInfo::default_x86_64(),
+            roc_load::FunctionKind::LambdaSet,
             roc_reporting::report::RenderTarget::Generic,
             RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
             roc_reporting::report::DEFAULT_PALETTE,
@@ -115,7 +115,7 @@ impl Document {
                 let module_path = self.url.to_file_path().unwrap();
                 let fmt = ProblemFmt {
                     alloc: &alloc,
-                    line_info: &line_info,
+                    line_info,
                     path: &module_path,
                 };
 

@@ -70,6 +70,8 @@ impl TypeError {
             TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
             TypeError::Exhaustive(e) => Some(e.region()),
             TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),
+            TypeError::IngestedFileBadUtf8(_, _) => None,
+            TypeError::IngestedFileUnsupportedType(_, _) => None,
         }
     }
 }

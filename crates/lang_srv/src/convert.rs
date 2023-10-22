@@ -90,6 +90,7 @@ pub(crate) mod diag {
             match self {
                 Severity::RuntimeError => DiagnosticSeverity::ERROR,
                 Severity::Warning => DiagnosticSeverity::WARNING,
+                Severity::Fatal => DiagnosticSeverity::ERROR,
             }
         }
     }
@@ -130,7 +131,7 @@ pub(crate) mod diag {
                 LoadingProblem::UnexpectedHeader(header) => {
                     msg = format!("Unexpected header: {}", header);
                 }
-                LoadingProblem::MsgChannelDied => {
+                LoadingProblem::ChannelProblem(_) => {
                     msg = format!("Internal error: message channel died");
                 }
                 LoadingProblem::ErrJoiningWorkerThreads => {

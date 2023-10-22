@@ -653,9 +653,11 @@ impl RuntimeError {
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
             | RuntimeError::InvalidHexadecimal(region)
+            | RuntimeError::MultipleRecordBuilders(region)
+            | RuntimeError::UnappliedRecordBuilder(region)
             | RuntimeError::InvalidUnicodeCodePt(region) => *region,
             RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
-            RuntimeError::LookupNotInScope(ident, _) => ident.region,
+            RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
             RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,
             RuntimeError::OpaqueNotApplied(ident) => ident.region,
             RuntimeError::CircularDef(cycle) => cycle[0].symbol_region,

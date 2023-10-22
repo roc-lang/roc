@@ -2,9 +2,9 @@
 
 use crate::docs::ModuleDocumentation;
 use crate::module::{
-    ConstrainedModule, EntryPoint, Expectations, ExposedToHost, FoundSpecializationsModule,
-    LateSpecializationsModule, LoadedModule, ModuleHeader, ModuleTiming, MonomorphizedModule,
-    ParsedModule, ToplevelExpects, TypeCheckedModule,
+    CheckedModule, ConstrainedModule, EntryPoint, Expectations, ExposedToHost,
+    FoundSpecializationsModule, LateSpecializationsModule, LoadedModule, ModuleHeader,
+    ModuleTiming, MonomorphizedModule, ParsedModule, ToplevelExpects, TypeCheckedModule,
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
@@ -3320,6 +3320,8 @@ fn finish(
         .collect();
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
+
+    let declarations_by_id = state.declarations_by_id;
 
     roc_checkmate::dump_checkmate!(checkmate);
 
