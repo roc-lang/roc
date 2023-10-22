@@ -3,16 +3,18 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::MutMap;
+use roc_fmt::{Ast, Buf};
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::{LineInfo, Region};
+use roc_parse::parser::SyntaxError;
+use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::subs::Subs;
 use tower_lsp::lsp_types::{
     Diagnostic, GotoDefinitionResponse, Hover, HoverContents, Location, MarkedString, Position,
-    Range, Url,
+    Range, TextEdit, Url,
 };
 
 use crate::convert::{
@@ -55,6 +57,7 @@ impl GlobalAnalysis {
                 let analyzed_document = AnalyzedDocument {
                     url: source_url,
                     line_info,
+                    source,
                     module: None,
                     diagnostics: all_problems,
                 };
@@ -178,6 +181,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         AnalyzedDocument {
             url: Url::from_file_path(path).unwrap(),
             line_info,
+            source: source.into(),
             module: Some(analyzed_module),
             diagnostics,
         }
@@ -234,6 +238,7 @@ struct AnalyzedModule {
 pub(crate) struct AnalyzedDocument {
     url: Url,
     line_info: LineInfo,
+    source: String,
     module: Option<AnalyzedModule>,
     diagnostics: Vec<Diagnostic>,
 }
@@ -264,6 +269,13 @@ impl AnalyzedDocument {
             uri: self.url.clone(),
             range,
         }
+    }
+
+    fn whole_document_range(&self) -> Range {
+        let line_info = self.line_info();
+        let start = Position::new(0, 0);
+        let end = Position::new(line_info.num_lines(), 0);
+        Range::new(start, end)
     }
 
     pub fn diagnostics(&mut self) -> Vec<Diagnostic> {
@@ -320,7 +332,7 @@ impl AnalyzedDocument {
         })
     }
 
-    pub fn goto_definition(&self, symbol: Symbol) -> Option<GotoDefinitionResponse> {
+    pub fn definition(&self, symbol: Symbol) -> Option<GotoDefinitionResponse> {
         let AnalyzedModule { declarations, .. } = self.module()?;
 
         let found_declaration = roc_can::traverse::find_declaration(symbol, declarations)?;
@@ -329,4 +341,44 @@ impl AnalyzedDocument {
 
         Some(GotoDefinitionResponse::Scalar(self.location(range)))
     }
+
+    pub fn format(&self) -> Option<Vec<TextEdit>> {
+        let source = &self.source;
+        let arena = &Bump::new();
+        let ast = parse_all(arena, &self.source).ok()?;
+        let mut buf = Buf::new_in(arena);
+        fmt_all(&mut buf, &ast);
+        let new_source = buf.as_str();
+
+        if source == new_source {
+            None
+        } else {
+            let range = self.whole_document_range();
+            let text_edit = TextEdit::new(range, new_source.to_string());
+            Some(vec![text_edit])
+        }
+    }
+}
+
+fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
+    use roc_parse::{
+        module::{module_defs, parse_header},
+        parser::Parser,
+        state::State,
+    };
+
+    let (module, state) = parse_header(arena, State::new(src.as_bytes()))
+        .map_err(|e| SyntaxError::Header(e.problem))?;
+
+    let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
+
+    Ok(Ast { module, defs })
+}
+
+fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
+    roc_fmt::module::fmt_module(buf, &ast.module);
+
+    roc_fmt::def::fmt_defs(buf, &ast.defs, 0);
+
+    buf.fmt_end_of_file();
 }

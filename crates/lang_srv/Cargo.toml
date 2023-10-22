@@ -10,8 +10,10 @@ path = "src/server.rs"
 [dependencies]
 roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
+roc_fmt = { path = "../compiler/fmt" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
+roc_parse = { path = "../compiler/parse" }
 roc_problem = { path = "../compiler/problem" }
 roc_region = { path = "../compiler/region" }
 roc_reporting = { path = "../reporting" }

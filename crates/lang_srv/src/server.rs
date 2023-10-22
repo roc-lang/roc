@@ -43,11 +43,17 @@ impl RocLs {
                 work_done_progress: None,
             },
         };
+        let document_formatting_provider = DocumentFormattingOptions {
+            work_done_progress_options: WorkDoneProgressOptions {
+                work_done_progress: None,
+            },
+        };
 
         ServerCapabilities {
             text_document_sync: Some(text_document_sync),
             hover_provider: Some(hover_provider),
             definition_provider: Some(OneOf::Right(definition_provider)),
+            document_formatting_provider: Some(OneOf::Right(document_formatting_provider)),
             ..ServerCapabilities::default()
         }
     }
@@ -145,6 +151,16 @@ impl LanguageServer for RocLs {
             self.registry()
                 .goto_definition(&text_document.uri, position)
         })
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let DocumentFormattingParams {
+            text_document,
+            options: _,
+            work_done_progress_params: _,
+        } = params;
+
+        panic_wrapper(|| self.registry().formatting(&text_document.uri))
     }
 }
 

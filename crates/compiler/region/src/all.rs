@@ -406,6 +406,10 @@ impl LineInfo {
         let end = self.convert_line_column(lc_region.end);
         Region::new(start, end)
     }
+
+    pub fn num_lines(&self) -> u32 {
+        self.line_offsets.len() as u32
+    }
 }
 
 #[test]

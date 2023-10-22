@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use roc_module::symbol::ModuleId;
-use tower_lsp::lsp_types::{Diagnostic, GotoDefinitionResponse, Hover, Position, Url};
+use tower_lsp::lsp_types::{Diagnostic, GotoDefinitionResponse, Hover, Position, TextEdit, Url};
 
 use crate::analysis::{AnalyzedDocument, GlobalAnalysis};
 
@@ -67,6 +67,11 @@ impl Registry {
     ) -> Option<GotoDefinitionResponse> {
         let symbol = self.document_by_url(url)?.symbol_at(position)?;
         let def_document = self.document_by_module_id(symbol.module_id())?;
-        def_document.goto_definition(symbol)
+        def_document.definition(symbol)
+    }
+
+    pub fn formatting(&mut self, url: &Url) -> Option<Vec<TextEdit>> {
+        let document = self.document_by_url(url)?;
+        document.format()
     }
 }
