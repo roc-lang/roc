@@ -266,8 +266,8 @@ li {
     height: 176px;
     width: auto;
     position: absolute;
-    left: 310px;
-    top: 20px;
+    left: -200px;
+    top: -100px;
 }
 
 #first-code-sample {
