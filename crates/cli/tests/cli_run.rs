@@ -381,42 +381,42 @@ mod cli_run {
         // workaround for surgical linker issue, see PR #3990
         let mut custom_flags: Vec<&str> = Vec::new();
 
-        match file_name
-            .with_extension("")
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
+        if dir_name.to_ascii_lowercase().contains("webassembly")
+            || roc_filename.to_ascii_lowercase().contains("webassembly")
         {
-            "form" | "hello-gui" | "breakout" | "libhello" | "inspect-gui" => {
-                // Since these require things the build system often doesn't have
-                // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
-                // we do `roc build` on them but don't run them.
-                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[], &[]);
-                return;
-            }
-            "swiftui" | "rocLovesSwift" => {
-                if cfg!(not(target_os = "macos")) {
-                    eprintln!(
-                        "WARNING: skipping testing example {roc_filename} because it only works on MacOS."
-                    );
-                    return;
-                } else {
-                    run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[], &[]);
-                    return;
-                }
-            }
-            "rocLovesWebAssembly" => {
-                // this is a web assembly example, but we don't test with JS at the moment
-                eprintln!(
+            // this is a web assembly example, but we don't test with JS at the moment
+            eprintln!(
                     "WARNING: skipping testing example {roc_filename} because it only works in a browser!"
                 );
+            return;
+        }
+
+        // Only run Swift examples on macOS
+        if dir_name.to_ascii_lowercase().contains("swift")
+            || roc_filename.to_ascii_lowercase().contains("swift")
+        {
+            if cfg!(target_os = "macos") {
+                run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[], &[]);
+                return;
+            } else {
+                eprintln!(
+                        "WARNING: skipping testing example {roc_filename} because it only works on MacOS."
+                    );
                 return;
             }
-            "args" => {
-                custom_flags = vec![LINKER_FLAG, "legacy"];
-            }
-            _ => {}
+        }
+
+        if dir_name.starts_with("examples/gui")
+            || roc_filename.ends_with("gui.roc")
+            || dir_name.ends_with("-interop")
+        {
+            // Since these require things the build system often doesn't have
+            // (e.g. GUIs open a window, interop needs a language installed)
+            // we do `roc build` on them but don't run them.
+            run_roc_on(&file_name, [CMD_BUILD, OPTIMIZE_FLAG], &[], &[], &[]);
+            return;
+        } else if roc_filename == "args.roc" {
+            custom_flags = vec![LINKER_FLAG, "legacy"];
         }
 
         // Check with and without optimizations
@@ -649,7 +649,7 @@ mod cli_run {
 
     #[test]
     fn hello_gui() {
-        test_roc_app_slim("examples/gui", "helloBROKEN.roc", "", UseValgrind::No)
+        test_roc_app_slim("examples/gui", "hello-guiBROKEN.roc", "", UseValgrind::No)
     }
 
     #[cfg_attr(windows, ignore)] // flaky error; issue #5024
