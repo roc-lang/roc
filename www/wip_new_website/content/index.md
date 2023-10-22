@@ -11,7 +11,16 @@ due to their relying on justify-content: space-between to effectively right-alig
 
 <div role="presentation" id="homepage-intro-box">
   <h1 id="homepage-h1">Roc</h1>
-  <img id="homepage-logo" src="/logo.svg" alt="The Roc logo, a purple origami bird made of six triangles">
+  <svg id="homepage-logo" alt="The Roc logo, a purple origami bird made of six triangles" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" fill="#612BDE"/>
+      <path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" fill="#8257E5"/>
+      <path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" fill="#8257E5"/>
+      <path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" fill="#8257E5"/>
+      <path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" fill="#612BDE"/>
+      <path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" fill="#612BDE"/>
+  </svg>
+
+
   <p id="homepage-tagline">A fast, friendly, functional language.</p>
 
   <!-- This exact sample was chosen for several reasons:
@@ -29,23 +38,23 @@ due to their relying on justify-content: space-between to effectively right-alig
 <section class="home-goals-container">
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title"><span class="icon" role="presentation">★</span> Fast</h3>
+            <h3 class="home-goals-title">Fast</h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or to <a href="https://webassembly.org/">WebAssembly</a>.</p>
             <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title"><span class="icon" role="presentation">★</span> Friendly</h3>
+            <h3 class="home-goals-title">Friendly</h3>
             <p class="home-goals-description">Roc ships one user-friendly executable which includes a helpful compiler, testing, formatting, and a <a href="/repl">REPL</a>.</p>
             <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title"><span class="icon" role="presentation">★</span> Functional</h3>
+            <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc is a designed to have a small number of simple primitives. It's a single-paradigm <a href="https://en.wikipedia.org/wiki/Functional_programming">functional</a> language.</p>
+             Roc has a small number of simple language primitives. It's a single-paradigm <a href="https://en.wikipedia.org/wiki/Functional_programming">functional</a> language.</p>
             <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
         </div>
     </div>
