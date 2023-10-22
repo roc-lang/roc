@@ -29,6 +29,7 @@
     --font-size-normal: 1rem;
     --body-max-width: 1024px;
     --top-bar-height: 50px;
+    --homepage-intro-box-width: 328px;
 }
 
 html {
@@ -248,24 +249,27 @@ li {
 /* Homepage */
 #homepage-intro-box {
     margin: 60px auto;
+    width: var(--homepage-intro-box-width);
 }
 
 #homepage-h1 {
     color: #222;
+    font-family: "Merriweather";
     text-shadow: none;
     font-size: 64px;
-    padding-bottom: 0;
+    padding: 0;
+    padding-top: 60px;
 }
 
 #homepage-logo {
     height: 176px;
     position: absolute;
-    left: 312px;
+    left: 280px;
     top: 20px;
 }
 
 #first-code-sample {
-    width: 328px;
+    width: var(--homepage-intro-box-width);
     margin-top: 60px;
     color: #fcf9fd;
 }
@@ -688,10 +692,8 @@ code .dim {
     font-family: inherit;
     text-transform: lowercase;
     color: var(--primary-2);
-}
-
-.home-goals-content .icon {
-    font-size: 0.9em;
+    padding-bottom: 16px;
+    border-bottom: 2px solid;
 }
 
 .home-goals-content p {

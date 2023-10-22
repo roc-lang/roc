@@ -1,14 +1,3 @@
-<link rel="stylesheet" href="/wip/repl.css" />
-
-<style>
-/* Hide the "home" link on the homepage, so we don't render a second Roc logo next to the big one.
-Do this without taking it out of the layout (which would reposition the other nav links
-due to their relying on justify-content: space-between to effectively right-align them). */
-#nav-home-link {
-  visibility: hidden; padding: 0; width: 0; height: 0;
-}
-</style>
-
 <div role="presentation" id="homepage-intro-box">
   <h1 id="homepage-h1">Roc</h1>
   <svg id="homepage-logo" alt="The Roc logo, a purple origami bird made of six triangles" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
