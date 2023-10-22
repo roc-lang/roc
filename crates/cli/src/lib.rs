@@ -35,7 +35,7 @@ use target_lexicon::{Architecture, Triple};
 use tempfile::TempDir;
 
 mod format;
-pub use format::format;
+pub use format::{format_files, format_src, FormatMode};
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -62,6 +62,8 @@ pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
+pub const FLAG_STDIN: &str = "stdin";
+pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
 pub const ROC_FILE: &str = "ROC_FILE";
@@ -266,6 +268,20 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false),
             )
+            .arg(
+                Arg::new(FLAG_STDIN)
+                    .long(FLAG_STDIN)
+                    .help("Read file to format from stdin")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_STDOUT)
+                    .long(FLAG_STDOUT)
+                    .help("Print formatted file to stdout")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
@@ -355,11 +371,6 @@ pub enum BuildConfig {
     BuildOnly,
     BuildAndRun,
     BuildAndRunIfNoErrors,
-}
-
-pub enum FormatMode {
-    Format,
-    CheckOnly,
 }
 
 fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
@@ -1082,14 +1093,20 @@ fn roc_dev_native(
 
             std::process::exit(1)
         }
-        1.. => {
+        pid @ 1.. => {
             let sigchld = Arc::new(AtomicBool::new(false));
             signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
                 .unwrap();
 
-            loop {
+            let exit_code = loop {
                 match memory.wait_for_child(sigchld.clone()) {
-                    ChildProcessMsg::Terminate => break,
+                    ChildProcessMsg::Terminate => {
+                        let mut status = 0;
+                        let options = 0;
+                        unsafe { libc::waitpid(pid, &mut status, options) };
+
+                        break status;
+                    }
                     ChildProcessMsg::Expect => {
                         roc_repl_expect::run::render_expects_in_memory(
                             &mut writer,
@@ -1117,9 +1134,9 @@ fn roc_dev_native(
                         memory.reset();
                     }
                 }
-            }
+            };
 
-            std::process::exit(0)
+            std::process::exit(exit_code)
         }
         _ => unreachable!(),
     }
