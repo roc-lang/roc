@@ -28,19 +28,25 @@ impl RocLs {
     }
 
     pub fn capabilities() -> ServerCapabilities {
-        let text_document_sync = Some(TextDocumentSyncCapability::Options(
+        let text_document_sync = TextDocumentSyncCapability::Options(
             // TODO: later on make this incremental
             TextDocumentSyncOptions {
                 open_close: Some(true),
                 change: Some(TextDocumentSyncKind::FULL),
                 ..TextDocumentSyncOptions::default()
             },
-        ));
-        let hover_provider = Some(HoverProviderCapability::Simple(true));
+        );
+        let hover_provider = HoverProviderCapability::Simple(true);
+        let definition_provider = DefinitionOptions {
+            work_done_progress_options: WorkDoneProgressOptions {
+                work_done_progress: None,
+            },
+        };
 
         ServerCapabilities {
-            text_document_sync,
-            hover_provider,
+            text_document_sync: Some(text_document_sync),
+            hover_provider: Some(hover_provider),
+            definition_provider: Some(OneOf::Right(definition_provider)),
             ..ServerCapabilities::default()
         }
     }
@@ -117,10 +123,34 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        match std::panic::catch_unwind(|| self.registry().hover(&text_document.uri, position)) {
-            Ok(h) => Ok(h),
-            Err(_) => Ok(None),
-        }
+        panic_wrapper(|| self.registry().hover(&text_document.uri, position))
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let GotoDefinitionParams {
+            text_document_position_params:
+                TextDocumentPositionParams {
+                    text_document,
+                    position,
+                },
+            work_done_progress_params: _,
+            partial_result_params: _,
+        } = params;
+
+        panic_wrapper(|| {
+            self.registry()
+                .goto_definition(&text_document.uri, position)
+        })
+    }
+}
+
+fn panic_wrapper<T>(f: impl FnOnce() -> Option<T> + std::panic::UnwindSafe) -> Result<Option<T>> {
+    match std::panic::catch_unwind(f) {
+        Ok(r) => Ok(r),
+        Err(_) => Err(tower_lsp::jsonrpc::Error::internal_error()),
     }
 }
 

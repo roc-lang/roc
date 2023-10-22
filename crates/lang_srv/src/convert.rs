@@ -101,7 +101,7 @@ pub(crate) mod diag {
         fn into_lsp_diagnostic(self, feed: &'a Self::Feed) -> Option<Diagnostic>;
     }
 
-    impl IntoLspDiagnostic<'_> for LoadingProblem<'_> {
+    impl IntoLspDiagnostic<'_> for &LoadingProblem<'_> {
         type Feed = ();
 
         fn into_lsp_diagnostic(self, _feed: &()) -> Option<Diagnostic> {
@@ -132,22 +132,22 @@ pub(crate) mod diag {
                     msg = format!("Unexpected header: {}", header);
                 }
                 LoadingProblem::ChannelProblem(_) => {
-                    msg = format!("Internal error: message channel died");
+                    msg = "Internal error: message channel died".to_string();
                 }
                 LoadingProblem::ErrJoiningWorkerThreads => {
-                    msg = format!("Internal error: analysis worker threads died");
+                    msg = "Internal error: analysis worker threads died".to_string();
                 }
                 LoadingProblem::TriedToImportAppModule => {
-                    msg = format!("Attempted to import app module");
+                    msg = "Attempted to import app module".to_string();
                 }
                 LoadingProblem::FormattedReport(report) => {
-                    msg = report;
+                    msg = report.clone();
                 }
                 LoadingProblem::ImportCycle(_, _) => {
-                    msg = format!("Circular dependency between modules");
+                    msg = "Circular dependency between modules".to_string();
                 }
                 LoadingProblem::IncorrectModuleName(_) => {
-                    msg = format!("Incorrect module name");
+                    msg = "Incorrect module name".to_string();
                 }
                 LoadingProblem::CouldNotFindCacheDir => {
                     msg = format!(
@@ -187,8 +187,8 @@ pub(crate) mod diag {
                 .to_range(fmt.line_info);
 
             let report = roc_reporting::report::can_problem(
-                &fmt.alloc,
-                &fmt.line_info,
+                fmt.alloc,
+                fmt.line_info,
                 fmt.path.to_path_buf(),
                 self,
             );
@@ -222,8 +222,8 @@ pub(crate) mod diag {
                 .to_range(fmt.line_info);
 
             let report = roc_reporting::report::type_problem(
-                &fmt.alloc,
-                &fmt.line_info,
+                fmt.alloc,
+                fmt.line_info,
                 fmt.path.to_path_buf(),
                 self,
             )?;

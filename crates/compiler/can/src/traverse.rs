@@ -703,6 +703,16 @@ pub enum FoundSymbol {
     Symbol(Symbol),
 }
 
+impl FoundSymbol {
+    pub fn implementation_symbol(&self) -> Symbol {
+        match self {
+            FoundSymbol::Specialization(_, sym)
+            | FoundSymbol::AbilityMember(_, sym)
+            | FoundSymbol::Symbol(sym) => *sym,
+        }
+    }
+}
+
 /// Given an ability Foo implements foo : ..., returns (T, foo1) if the symbol at the given region is a
 /// Like [find_type_at], but descends into the narrowest node containing [position].
 pub fn find_closest_type_at(
