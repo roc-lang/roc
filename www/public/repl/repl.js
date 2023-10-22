@@ -1,5 +1,3 @@
-import * as roc_repl_wasm from "./roc_repl_wasm.js";
-
 // The only way we can provide values to wasm_bindgen's generated code is to set globals
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
@@ -10,6 +8,8 @@ console.error = function displayErrorInHistoryPanel(string) {
   const html = `<div class="panic">${string}</div>`;
   updateHistoryEntry(repl.inputHistoryIndex, false, html);
 };
+
+import * as roc_repl_wasm from "./roc_repl_wasm.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
@@ -43,6 +43,7 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
   repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder = "Type some Roc code and press Enter.";
+  repl.elemSourceInput.focus();
   repl.compiler = instance;
 
   // Get help text from the compiler, and display it at top of the history panel
