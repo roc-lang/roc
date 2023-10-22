@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use bumpalo::Bump;
 use roc_load::{LoadedModule, LoadingProblem};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::{LineInfo, Region};
+use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
-use roc_types::subs::Variable;
 use tower_lsp::lsp_types::{Diagnostic, Hover, HoverContents, MarkedString, Position, Range, Url};
 
 use crate::convert::{
@@ -180,25 +179,11 @@ impl Document {
             Some(m) => (&mut m.solved_subs, &m.decls),
             None => match module.declarations_by_id.get(&module.module_id) {
                 Some(decls) => (&mut module.solved, decls),
-                None => {
-                    return Some(Hover {
-                        contents: HoverContents::Scalar(MarkedString::String(format!(
-                            "{:?}",
-                            (module.typechecked.keys().collect::<Vec<_>>())
-                        ))),
-                        range: Some(Range::new(
-                            position,
-                            Position {
-                                line: position.line,
-                                character: position.character + 1,
-                            },
-                        )),
-                    })
-                }
+                None => return missing_hover(module, position),
             },
         };
-        let (region, var) = roc_can::traverse::find_closest_type_at(region, decls)
-            .unwrap_or_else(|| (Region::new(region, region.bump_column(1)), Variable::NULL));
+
+        let (region, var) = roc_can::traverse::find_closest_type_at(region, decls)?;
 
         let subs = subs.inner_mut();
         let snapshot = subs.snapshot();
@@ -218,6 +203,22 @@ impl Document {
             range: Some(range),
         })
     }
+}
+
+fn missing_hover(module: &mut LoadedModule, position: Position) -> Option<Hover> {
+    Some(Hover {
+        contents: HoverContents::Scalar(MarkedString::String(format!(
+            "{:?}",
+            (module.typechecked.keys().collect::<Vec<_>>())
+        ))),
+        range: Some(Range::new(
+            position,
+            Position {
+                line: position.line,
+                character: position.character + 1,
+            },
+        )),
+    })
 }
 
 #[derive(Debug, Default)]
