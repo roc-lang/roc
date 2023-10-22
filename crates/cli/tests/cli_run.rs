@@ -1057,7 +1057,7 @@ mod cli_run {
                 compile_out.stdout
             );
 
-            let stdout = crate::run_wasm(file.with_extension("wasm"), stdin);
+            let stdout = crate::run_wasm(&file.with_extension("wasm"), stdin);
 
             if !stdout.ends_with(expected_ending) {
                 panic!(
