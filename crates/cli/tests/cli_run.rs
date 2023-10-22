@@ -625,7 +625,12 @@ mod cli_run {
         ignore = "this platform is broken, and `roc run --lib` is missing on windows"
     )]
     fn ruby_interop() {
-        test_roc_app_slim("examples/ruby-interop", "main.roc", "", UseValgrind::Yes)
+        test_roc_app_slim(
+            "examples/ruby-interop",
+            "libhello.roc",
+            "",
+            UseValgrind::Yes,
+        )
     }
 
     #[test]
