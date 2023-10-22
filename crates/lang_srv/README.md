@@ -4,15 +4,30 @@ This is a rudimentary language server for supporting basic editor usage in Roc.
 
 Support for the following LSP features are provided:
 
+
+
+
 - Inline diagnostics
 - Hover support to get types of values
 - Go-to-definition
-  ![go-to-definition in roc pg](https://github.com/ayazhafiz/roc/assets/20735482/a0531cbf-db14-4070-a359-fb8e46bf4509)
+  - <details><summary>Example</summary>
+
+    https://github.com/ayazhafiz/roc/assets/20735482/23a57d06-5b70-46f2-b0c4-5836eaec669b
+
+    </details>
   - Note that go-to-definition for the builtins does not yet work.
   - Go-to-definition for abilities resolves to their specialization, if one exists.
-    ![go-to-definition in roc pg](./img/go-to-definition-abilities.mov)
+    - <details><summary>Example</summary>
+
+      https://github.com/ayazhafiz/roc/assets/20735482/1ba98bf9-518b-4c47-b606-a6ce6767566f
+
+      </details>
 - Formatting Roc files on save
-  ![format](./img/format.mov)
+  - <details><summary>Example</summary>
+
+    https://github.com/ayazhafiz/roc/assets/20735482/fbbe4bc1-64af-4c7d-b633-d7761906df11
+
+    </details>
 
 Semantic highlighting will also be added soon. Additional features require
 changes to the compiler infrastructure that are not yet available.
