@@ -13,8 +13,8 @@ roc_builtins = { path = "../compiler/builtins" }
 roc_can = { path = "../compiler/can" }
 roc_collections = { path = "../compiler/collections" }
 roc_error_macros = { path = "../error_macros" }
-roc_gen_llvm= { path = "../compiler/gen_llvm" }
-roc_linker = { path = "../linker"}
+roc_gen_llvm = { path = "../compiler/gen_llvm" }
+roc_linker = { path = "../linker" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_mono = { path = "../compiler/mono" }
@@ -34,6 +34,7 @@ libloading.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 target-lexicon.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 cli_utils = { path = "../cli_utils" }
@@ -41,4 +42,3 @@ dircpy.workspace = true
 
 indoc.workspace = true
 pretty_assertions.workspace = true
-tempfile.workspace = true

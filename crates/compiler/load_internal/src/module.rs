@@ -20,7 +20,6 @@ use roc_solve::module::Solved;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
-use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(target_family = "wasm")]
@@ -163,7 +162,6 @@ pub struct MonomorphizedModule<'a> {
     pub interns: Interns,
     pub subs: Subs,
     pub layout_interner: STLayoutInterner<'a>,
-    pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,

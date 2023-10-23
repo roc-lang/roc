@@ -65,6 +65,7 @@ pub const FLAG_CHECK: &str = "check";
 pub const FLAG_STDIN: &str = "stdin";
 pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
+pub const FLAG_OUTPUT: &str = "output";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -73,6 +74,7 @@ pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 const VERSION: &str = include_str!("../../../version.txt");
+const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
 
 pub fn build_app() -> Command {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
@@ -150,6 +152,12 @@ pub fn build_app() -> Command {
         .args_conflicts_with_subcommands(true)
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
+            .arg(Arg::new(FLAG_OUTPUT)
+                .long(FLAG_OUTPUT)
+                .help("The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash).")
+                .value_parser(value_parser!(OsString))
+                .required(false)
+            )
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -292,6 +300,13 @@ pub fn build_app() -> Command {
         .subcommand(
             Command::new(CMD_DOCS)
                 .about("Generate documentation for a Roc package")
+                .arg(Arg::new(FLAG_OUTPUT)
+                    .long(FLAG_OUTPUT)
+                    .help("Output directory for the generated documentation files.")
+                    .value_parser(value_parser!(OsString))
+                    .required(false)
+                    .default_value(DEFAULT_GENERATED_DOCS_DIR),
+                )
                 .arg(Arg::new(ROC_FILE)
                     .help("The package's main .roc file")
                     .value_parser(value_parser!(PathBuf))
@@ -539,6 +554,7 @@ pub fn build(
     subcommands: &[String],
     config: BuildConfig,
     triple: Triple,
+    out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
@@ -727,6 +743,7 @@ pub fn build(
         wasm_dev_stack_bytes,
         roc_cache_dir,
         load_config,
+        out_path,
     );
 
     match res_binary_path {

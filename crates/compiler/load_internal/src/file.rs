@@ -69,7 +69,6 @@ use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Var
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
-use std::env::current_dir;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -90,9 +89,6 @@ use crate::work::{DepCycle, Dependencies};
 use crate::wasm_instant::{Duration, Instant};
 #[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, Instant};
-
-/// Default name for the binary generated for an app, if an invalid one was specified.
-const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
@@ -697,7 +693,6 @@ struct State<'a> {
     pub opt_platform_shorthand: Option<&'a str>,
     pub platform_data: Option<PlatformData<'a>>,
     pub exposed_types: ExposedByModule,
-    pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
     pub target_info: TargetInfo,
     pub(self) function_kind: FunctionKind,
@@ -785,7 +780,6 @@ impl<'a> State<'a> {
             target_info,
             function_kind,
             platform_data: None,
-            output_path: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
             dependencies,
@@ -2286,7 +2280,6 @@ fn update<'a>(
 
                 match header.header_type {
                     App { to_platform, .. } => {
-                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
                     Package {
@@ -2469,24 +2462,9 @@ fn update<'a>(
                 .sources
                 .insert(parsed.module_id, (parsed.module_path.clone(), parsed.src));
 
-            // If this was an app module, set the output path to be
-            // the module's declared "name".
-            //
-            // e.g. for `app "blah"` we should generate an output file named "blah"
-            if let HeaderType::App { output_name, .. } = &parsed.header_type {
-                match output_name {
-                    StrLiteral::PlainLine(path) => {
-                        state.output_path = Some(path);
-                    }
-                    _ => {
-                        todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
-                    }
-                }
-            }
-
             let module_id = parsed.module_id;
 
-            state.module_cache.parsed.insert(parsed.module_id, parsed);
+            state.module_cache.parsed.insert(module_id, parsed);
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
@@ -3229,7 +3207,6 @@ fn finish_specialization<'a>(
         procedures,
         host_exposed_lambda_sets,
         module_cache,
-        output_path,
         platform_data,
         ..
     } = state;
@@ -3247,12 +3224,6 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-
-    let output_path = match output_path {
-        Some(path_str) => Path::new(path_str).into(),
-        None => current_dir().unwrap().join(DEFAULT_APP_OUTPUT_PATH).into(),
-    };
-
     let uses_prebuilt_platform = match platform_data {
         Some(data) => data.is_prebuilt,
         // If there's no platform data (e.g. because we're building an interface module)
@@ -3263,7 +3234,6 @@ fn finish_specialization<'a>(
     Ok(MonomorphizedModule {
         can_problems,
         type_problems,
-        output_path,
         expectations: module_expectations,
         exposed_to_host,
         module_id,

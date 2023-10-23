@@ -17,7 +17,7 @@ use roc_reporting::{
     cli::{report_problems, Problems},
     report::{RenderTarget, DEFAULT_PALETTE},
 };
-use roc_target::TargetInfo;
+use roc_target::{OperatingSystem, TargetInfo};
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
@@ -773,6 +773,7 @@ pub fn build_file<'a>(
     wasm_dev_stack_bytes: Option<u32>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
+    out_path: Option<&Path>,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
 
@@ -793,6 +794,7 @@ pub fn build_file<'a>(
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
+        out_path,
     )
 }
 
@@ -809,6 +811,7 @@ fn build_loaded_file<'a>(
     wasm_dev_stack_bytes: Option<u32>,
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
+    out_path: Option<&Path>,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let operating_system = roc_target::OperatingSystem::from(target.operating_system);
 
@@ -834,12 +837,41 @@ fn build_loaded_file<'a>(
     // even if the --prebuilt-platform CLI flag wasn't set.
     let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
 
-    let cwd = app_module_path.parent().unwrap();
-    let mut output_exe_path = cwd.join(&*loaded.output_path);
+    let mut output_exe_path = match out_path {
+        Some(path) => {
+            // true iff the path ends with a directory separator,
+            // e.g. '/' on UNIX, '/' or '\\' on Windows
+            let ends_with_sep = {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
 
-    if let Some(extension) = operating_system.executable_file_ext() {
-        output_exe_path.set_extension(extension);
-    }
+                    path.as_os_str().as_bytes().ends_with(&[b'/'])
+                }
+
+                #[cfg(windows)]
+                {
+                    use std::os::windows::ffi::OsStrExt;
+
+                    let last = path.as_os_str().encode_wide().last();
+
+                    last == Some(0x002f)// UTF-16 slash
+                        || last == Some(0x005c) // UTF-16 backslash
+                }
+            };
+
+            // If you specified a path that ends in in a directory separator, then
+            // use that directory, but use the app module's filename for the filename.
+            if ends_with_sep {
+                let filename = app_module_path.file_name().unwrap_or_default();
+
+                with_executable_extension(&path.join(filename), operating_system)
+            } else {
+                path.to_path_buf()
+            }
+        }
+        None => with_executable_extension(&app_module_path, operating_system),
+    };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
     let rebuild_thread = if matches!(link_type, LinkType::Dylib | LinkType::None) {
@@ -1322,5 +1354,10 @@ pub fn build_str_test<'a>(
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
+        None,
     )
+}
+
+fn with_executable_extension(path: &Path, os: OperatingSystem) -> PathBuf {
+    path.with_extension(os.executable_file_ext().unwrap_or_default())
 }

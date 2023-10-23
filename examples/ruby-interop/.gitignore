@@ -1,5 +1,8 @@
 libhello
-libhello.*
+libhello.o
+libhello.dylib
+libhello.so
+libhello.so.*
 *.log
 Makefile
 *.bundle
