@@ -176,7 +176,10 @@ function send_panic_msg_to_js(rocstr_ptr, panic_tag) {
     let stringBytes = "";
     if (finalByte < 0) {
         // small string
-        const length = finalByte ^ 0b1000_0000;
+
+        // bitwise ops on negative JS numbers are weird. This clears the bit that we
+        // use to indicate a small string. In rust it's `finalByte as u8 ^ 0b1000_0000`
+        const length = finalByte + 128;
         stringBytes = new Uint8Array(memory.buffer, rocstr_ptr, length);
     } else {
         // big string
