@@ -12,6 +12,7 @@
 
     --primary-1: #9b6bf2;
     --primary-2: #7c38f5;
+    --highlight: #1bd6bd;
     --link-color: var(--primary-2);
     --code-link-color: var(--primary-2);
     --text-color: #000;
@@ -27,6 +28,9 @@
     --sidebar-width: 280px;
 
     --font-size-normal: 1rem;
+    --body-max-width: 1024px;
+    --top-bar-height: 50px;
+    --homepage-intro-box-width: 328px;
 }
 
 html {
@@ -40,18 +44,22 @@ html,
 body {
     margin: 0;
     padding: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
 }
 
 footer {
     width: 100%;
     color: var(--text-color);
-    padding: 20px;
     text-align: center;
     font-size: var(--font-size-normal);
+    padding: 20px;
+    box-sizing: border-box;
 }
 
 #footer {
-    max-width: 1024px;
+    max-width: var(--body-max-width);
     margin: 0 auto;
 }
 
@@ -76,7 +84,10 @@ li {
     margin-bottom: 0.5rem;
 }
 
-h1, h2, h3, h4 {
+h1,
+h2,
+h3,
+h4 {
     font-family: "Permanent Marker";
     padding-left: 12px;
 }
@@ -100,22 +111,26 @@ h3 {
 
 #top-bar {
     background-color: var(--gray-bg);
+    height: var(--top-bar-height);
+    box-sizing: border-box;
     width: 100%;
-    height: 50px;
+    /* On iPhone SE, without this, we end up with  */
+    min-width: 392px;
 }
 
 #top-bar nav {
-    max-width: 1024px;
+    max-width: var(--body-max-width);
     margin: 0 auto;
     display: flex;
     justify-content: space-between;
+    padding-right: 9px;
 }
 
-#top-bar .home-link {
+#nav-home-link {
     display: flex;
     color: var(--top-bar-fg);
     font-size: 1.8rem;
-    padding: 10px;
+    padding: 4px;
 }
 
 #top-bar-links {
@@ -128,15 +143,16 @@ h3 {
     color: var(--top-bar-fg);
     font-size: var(--font-size-normal);
     display: block;
-    height: 40px;
+    height: var(--top-bar-height);
     padding: 12px 16px;
     margin: 0 2px;
 }
 
 main {
-    max-width: 1024px;
+    max-width: var(--body-max-width);
     margin: auto;
     padding: 12px;
+    box-sizing: border-box;
 }
 
 code,
@@ -181,7 +197,7 @@ pre {
     white-space: pre;
 }
 
-pre > samp {
+pre>samp {
     overflow-x: auto;
     display: block;
 }
@@ -236,8 +252,58 @@ li {
     line-height: 1.85rem;
 }
 
+/* Homepage */
+#homepage-intro-box {
+    position: relative;
+    margin: 60px auto;
+    width: var(--homepage-intro-box-width);
+}
+
+#homepage-h1 {
+    color: #222;
+    font-family: "Merriweather";
+    text-shadow: none;
+    font-size: 64px;
+    padding: 0;
+    padding-top: 60px;
+}
+
+#homepage-logo {
+    height: 176px;
+    width: auto;
+    position: absolute;
+    left: -200px;
+    top: -100px;
+}
+
+#first-code-sample {
+    width: var(--homepage-intro-box-width);
+    margin-top: 60px;
+    line-height: 1.85em;
+    color: #fcf9fd;
+}
+
+#first-code-sample .kw,
+#first-code-sample .punctuation {
+    color: #9c7cea;
+}
+
+#first-code-sample,
+#first-code-sample .code-snippet {
+    background-color: #202746;
+}
+
+#first-code-sample .string {
+    color: #1bd6bd;
+}
+
+#homepage-tagline {
+    font-size: 20px;
+}
+
 /* Mobile-friendly screen width */
-@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+@media only screen and (max-width: 1024px) {
+
     p,
     aside,
     li,
@@ -260,12 +326,54 @@ li {
         white-space: normal;
     }
 
+    /* Homepage */
+
+    #homepage-intro-box {
+        margin: 30px auto;
+    }
+
+    #homepage-tagline {
+        margin-top: 0;
+    }
+
+    #homepage-h1 {
+        /* TODO remove !important from repl.css (increasing specificity instead), and then this one too. */
+        font-size: 48px !important;
+        padding: 0;
+        margin: 0;
+        text-align: left;
+    }
+
+    #homepage-logo {
+        height: 116px;
+        left: 230px;
+        top: -14px;
+    }
+
+    #first-code-sample {
+        margin: 64px auto;
+    }
+
+    #homepage-tagline {
+        font-size: 16px;
+    }
+
+    .home-goals-container {
+        /* It's unclear why this !important is necessary, since its specificity
+         should theoretically be higher than what it's overriding. In practice,
+         at least in Chrome, removing the !important breaks this. */
+        display: grid !important;
+        grid-template-columns: 1fr;
+    }
+
+    /* Tutorial */
+
     #tutorial-toc-toggle-label,
     #close-tutorial-toc {
         display: block;
     }
 
-    #tutorial-toc-toggle:checked + #tutorial-toc {
+    #tutorial-toc-toggle:checked+#tutorial-toc {
         display: block;
     }
 
@@ -309,49 +417,119 @@ li {
     }
 }
 
+/* iPhone SE and similar */
+@media only screen and (max-width: 350px) {
+    #homepage-logo {
+        /* The bird runs off the screen unless we shrink it */
+        height: 75px;
+        width: auto;
+        position: absolute;
+        left: 227px;
+        top: -14px;
+    }
+}
+
 @font-face {
     font-family: "Permanent Marker";
     font-style: normal;
     font-weight: 400;
-    src:
-        url("/fonts/PermanentMarker.woff2") format("woff2"),
-        url("/fonts/PermanentMarker.ttf") format("truetype");
+    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2") format("woff2"),
+        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff") format("woff");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+        U+2215, U+FEFF, U+FFFD;
 }
 
+/* latin-ext */
 @font-face {
     font-family: "Merriweather";
     font-style: normal;
     font-weight: 400;
-    src:
-        url("/fonts/Merriweather.woff2") format("woff2"),
-        url("/fonts/Merriweather.ttf") format("truetype");
+    src: url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff") format("woff");
+    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
+        U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* latin */
+@font-face {
+    font-family: "Merriweather";
+    font-style: normal;
+    font-weight: 400;
+    src: url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff") format("woff");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+        U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
 @font-face {
     font-family: "Merriweather Sans";
     font-style: normal;
     font-weight: 400;
-    src:
-        url("/fonts/MerriweatherSans.woff2") format("woff2"),
-        url("/fonts/MerriweatherSans.ttf") format("truetype");
+    src: url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff") format("woff");
+    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
+        U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* latin */
+@font-face {
+    font-family: "Merriweather Sans";
+    font-style: normal;
+    font-weight: 400;
+    src: url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff2") format("woff2"),
+        url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff") format("woff");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+        U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
 @font-face {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
-    src:
-        url("/fonts/Lato.woff2") format("woff2"),
-        url("/fonts/Lato.ttf") format("truetype");
+    src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff") format("woff");
+    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
+        U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* latin */
+@font-face {
+    font-family: "Lato";
+    font-style: normal;
+    font-weight: 400;
+    src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2") format("woff2"),
+        url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff") format("woff");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+        U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
 @font-face {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
-    src:
-        url("/fonts/SourceCodePro.woff2") format("woff2"),
-        url("/fonts/SourceCodePro.ttf") format("truetype");
+    src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2") format("woff2"),
+        url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff") format("woff");
+    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
+        U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* latin */
+@font-face {
+    font-family: "Source Code Pro";
+    font-style: normal;
+    font-weight: 400;
+    src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2") format("woff2"),
+        url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff") format("woff");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+        U+2215, U+FEFF, U+FFFD;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -376,6 +554,10 @@ li {
         --logo-solid: #8f8f8f;
         --faded-color: #bbbbbb;
         --gray: #6e6e6e;
+    }
+
+    #homepage-h1 {
+        color: #fcf9fd;
     }
 
     h3 {
@@ -511,25 +693,18 @@ code .dim {
 /* HOME GOALS */
 
 .home-goals-container {
-    display: grid;
-    grid-template-columns: 1fr;
-    gap: 20px;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 60px;
     width: 100%;
-}
-
-@media only screen and (min-width: 768px) {
-    .home-goals-container {
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-    }
 }
 
 .home-goals-column {
     display: flex;
     flex-direction: column;
-    flex: 1;  
-    width: 100%; 
+    flex: 1;
+    width: 100%;
 }
 
 .home-goals-content {
@@ -537,10 +712,23 @@ code .dim {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    background-color: var(--gray-bg);
+    border: 2px solid var(--primary-2);
+    box-shadow: 4px 4px var(--primary-2)
 }
 
-.home-goals-content > h3 {
+.home-goals-content h3 {
+    font-family: inherit;
+    text-transform: lowercase;
+    color: var(--primary-2);
+    padding-bottom: 12px;
+    padding-top: 2px;
+}
+
+.home-goals-content p {
+    font-size: 18px;
+}
+
+.home-goals-content>h3 {
     margin: 0;
 }
 
@@ -549,6 +737,7 @@ code .dim {
     .home-goals-column {
         margin-bottom: 0;
     }
+
     .home-goals-column:last-child {
         margin-right: 0;
     }
@@ -556,16 +745,17 @@ code .dim {
 
 .home-goals-learn-more {
     margin-top: auto;
+    white-space: nowrap;
 }
 
 .home-goals-title {
     padding: 0;
     font-weight: bold;
     margin-bottom: 10px;
+    font-size: 32px;
 }
 
 .home-goals-description {
-    font-size: 14px;
     line-height: 1.5;
-    margin-bottom: 10px;
+    margin-bottom: 2em;
 }

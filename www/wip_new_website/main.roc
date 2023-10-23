@@ -11,12 +11,12 @@ pageData =
     |> Dict.insert "community.html" { title: "Community", description: "The Roc community" }
     |> Dict.insert "design_goals.html" { title: "Design Goals", description: "Roc's design goals" }
     |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
-    |> Dict.insert "home.html" { title: "Roc Lang", description: "The Roc programming language" }
+    |> Dict.insert "home.html" { title: "Roc", description: "The Roc programming language" }
     |> Dict.insert "install.html" { title: "Install", description: "Getting started with the Roc programming language" }
-    |> Dict.insert "sponsor.html" { title: "Sponsor", description: "Sponsor Roc" }
+    |> Dict.insert "donate.html" { title: "Donate", description: "Sponsor Roc" }
     |> Dict.insert "tutorial.html" { title: "Tutorial", description: "The Roc tutorial" }
 
-getPage : Str -> {title : Str, description : Str}
+getPage : Str -> { title : Str, description : Str }
 getPage = \current ->
     Dict.get pageData current
     |> Result.withDefault { title: "", description: ""}
@@ -42,13 +42,14 @@ view = \page, htmlContent ->
             meta [name "description", content (getDescription page)] [],
             meta [name "viewport", content "width=device-width"] [],
             link [rel "stylesheet", href "/wip/site.css"] [],
+            link [rel "stylesheet", href "/wip/repl.css"] [],
             link [rel "icon", href "/favicon.svg"] [],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
             link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"] [],
         ],
         body [] [
-            viewNavbar,
+            viewNavbar page,
             main [] [
                 text htmlContent,
             ],
@@ -63,20 +64,19 @@ view = \page, htmlContent ->
         # script [src "/site.js"] [],
     ]
 
-viewNavbar : Html.Node
-viewNavbar =
+viewNavbar : Str -> Html.Node
+viewNavbar = \page ->
+    logo = if page == "index.html" then [] else [rocLogo]
+
     div [id "top-bar"] [
         nav [] [
-            a [href "/wip/index.html", title "The Roc Programming Language"] [
-                rocLogo
-            ],
+            a [id "nav-home-link", href "/wip/index.html", title "The Roc Programming Language"] logo,
             div [id "top-bar-links"] [
                 a [href "/wip/tutorial.html"] [text "tutorial"],
                 a [href "/wip/install.html"] [text "install"],
-                a [href "#todo-link-to-examples-site"] [text "examples"],
                 a [href "/wip/community.html"] [text "community"],
-                a [href "/wip/sponsor.html"] [text "sponsor"],
-                a [href "/wip//docs.html"] [text "docs"],
+                a [href "/wip/docs.html"] [text "docs"],
+                a [href "/wip/donate.html"] [text "donate"],
             ],
         ],
     ]
