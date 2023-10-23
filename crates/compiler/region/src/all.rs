@@ -30,6 +30,10 @@ impl Region {
         self.start == self.end
     }
 
+    pub const fn len(&self) -> u32 {
+        self.end.offset - self.start.offset
+    }
+
     pub fn span_across(start: &Region, end: &Region) -> Self {
         Region {
             start: start.start,

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use roc_module::symbol::ModuleId;
-use tower_lsp::lsp_types::{Diagnostic, GotoDefinitionResponse, Hover, Position, TextEdit, Url};
+use tower_lsp::lsp_types::{
+    Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult, TextEdit, Url,
+};
 
 use crate::analysis::{AnalyzedDocument, GlobalAnalysis};
 
@@ -73,5 +75,10 @@ impl Registry {
     pub fn formatting(&mut self, url: &Url) -> Option<Vec<TextEdit>> {
         let document = self.document_by_url(url)?;
         document.format()
+    }
+
+    pub fn semantic_tokens(&mut self, url: &Url) -> Option<SemanticTokensResult> {
+        let document = self.document_by_url(url)?;
+        document.semantic_tokens()
     }
 }

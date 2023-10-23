@@ -1,3 +1,4 @@
+use analysis::HIGHLIGHT_TOKENS_LEGEND;
 use parking_lot::{Mutex, MutexGuard};
 use registry::{DocumentChange, Registry};
 use tower_lsp::jsonrpc::Result;
@@ -48,12 +49,25 @@ impl RocLs {
                 work_done_progress: None,
             },
         };
+        let semantic_tokens_provider =
+            SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
+                work_done_progress_options: WorkDoneProgressOptions {
+                    work_done_progress: None,
+                },
+                legend: SemanticTokensLegend {
+                    token_types: HIGHLIGHT_TOKENS_LEGEND.into(),
+                    token_modifiers: vec![],
+                },
+                range: None,
+                full: Some(SemanticTokensFullOptions::Bool(true)),
+            });
 
         ServerCapabilities {
             text_document_sync: Some(text_document_sync),
             hover_provider: Some(hover_provider),
             definition_provider: Some(OneOf::Right(definition_provider)),
             document_formatting_provider: Some(OneOf::Right(document_formatting_provider)),
+            semantic_tokens_provider: Some(semantic_tokens_provider),
             ..ServerCapabilities::default()
         }
     }
@@ -161,6 +175,19 @@ impl LanguageServer for RocLs {
         } = params;
 
         panic_wrapper(|| self.registry().formatting(&text_document.uri))
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        let SemanticTokensParams {
+            text_document,
+            work_done_progress_params: _,
+            partial_result_params: _,
+        } = params;
+
+        panic_wrapper(|| self.registry().semantic_tokens(&text_document.uri))
     }
 }
 

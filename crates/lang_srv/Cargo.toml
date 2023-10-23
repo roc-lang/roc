@@ -27,3 +27,4 @@ bumpalo = { version = "3.8.0", features = ["collections"] }
 tower-lsp = "0.17.0"
 tokio = { version = "1.20.1", features = [ "rt", "rt-multi-thread", "macros", "io-std" ] }
 parking_lot = "0.12.1"
+bitflags = "2.4.1"
