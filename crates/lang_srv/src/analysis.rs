@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use bumpalo::Bump;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
@@ -96,6 +99,7 @@ impl GlobalAnalysis {
 
         let mut builder = AnalyzedDocumentBuilder {
             interns: &interns,
+            module_id_to_url: module_id_to_url_from_sources(&sources),
             can_problems: &mut can_problems,
             type_problems: &mut type_problems,
             declarations_by_id: &mut declarations_by_id,
@@ -126,6 +130,26 @@ fn _find_parent_git_repo(path: &Path) -> Option<&Path> {
     }
 }
 
+fn module_id_to_url_from_sources(sources: &MutMap<ModuleId, (PathBuf, Box<str>)>) -> ModuleIdToUrl {
+    sources
+        .iter()
+        .map(|(module_id, (path, _))| {
+            let url = path_to_url(path);
+            (*module_id, url)
+        })
+        .collect()
+}
+
+fn path_to_url(path: &Path) -> Url {
+    if path.is_relative() {
+        // Make it <tmpdir>/path
+        let tmpdir = std::env::temp_dir();
+        Url::from_file_path(tmpdir.join(path)).unwrap()
+    } else {
+        Url::from_file_path(path).unwrap()
+    }
+}
+
 struct RootModule {
     module_id: ModuleId,
     subs: Subs,
@@ -134,6 +158,7 @@ struct RootModule {
 
 struct AnalyzedDocumentBuilder<'a> {
     interns: &'a Interns,
+    module_id_to_url: ModuleIdToUrl,
     can_problems: &'a mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: &'a mut MutMap<ModuleId, Vec<TypeError>>,
     declarations_by_id: &'a mut MutMap<ModuleId, Declarations>,
@@ -158,7 +183,6 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             declarations = m.decls;
         } else {
             let rm = self.root_module.take().unwrap();
-            assert!(rm.module_id == module_id);
             subs = rm.subs;
             abilities = rm.abilities_store;
             declarations = self.declarations_by_id.remove(&module_id).unwrap();
@@ -170,21 +194,14 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             declarations,
             module_id,
             interns: self.interns.clone(),
+            module_id_to_url: self.module_id_to_url.clone(),
         };
 
         let line_info = LineInfo::new(&source);
         let diagnostics = self.build_diagnostics(&path, &source, &line_info, module_id);
 
-        let path = if path.is_relative() {
-            // Make it <tmpdir>/path
-            let tmpdir = std::env::temp_dir();
-            tmpdir.join(path)
-        } else {
-            path
-        };
-
         AnalyzedDocument {
-            url: Url::from_file_path(path).unwrap(),
+            url: path_to_url(&path),
             line_info,
             source: source.into(),
             module: Some(analyzed_module),
@@ -230,6 +247,8 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
     }
 }
 
+type ModuleIdToUrl = HashMap<ModuleId, Url>;
+
 #[derive(Debug)]
 struct AnalyzedModule {
     module_id: ModuleId,
@@ -237,6 +256,9 @@ struct AnalyzedModule {
     subs: Subs,
     abilities: AbilitiesStore,
     declarations: Declarations,
+    // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
+    // one module may not be true global to the language server.
+    module_id_to_url: ModuleIdToUrl,
 }
 
 #[derive(Debug)]
@@ -376,5 +398,9 @@ impl AnalyzedDocument {
             result_id: None,
             data,
         }))
+    }
+
+    pub(crate) fn module_url(&self, module_id: ModuleId) -> Option<Url> {
+        self.module()?.module_id_to_url.get(&module_id).cloned()
     }
 }

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use roc_module::symbol::ModuleId;
 use tower_lsp::lsp_types::{
     Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult, TextEdit, Url,
 };
@@ -15,7 +14,6 @@ pub(crate) enum DocumentChange {
 #[derive(Debug, Default)]
 pub(crate) struct Registry {
     documents: HashMap<Url, AnalyzedDocument>,
-    module_id_to_url: HashMap<ModuleId, Url>,
 }
 
 impl Registry {
@@ -29,11 +27,7 @@ impl Registry {
                 // re-evaluate all dependents!
                 for document in documents {
                     let url = document.url().clone();
-                    let module_id = document.module_id();
                     self.documents.insert(url.clone(), document);
-                    if let Some(module_id) = module_id {
-                        self.module_id_to_url.insert(module_id, url);
-                    }
                 }
             }
             DocumentChange::Closed(_url) => {
@@ -43,11 +37,6 @@ impl Registry {
     }
 
     fn document_by_url(&mut self, url: &Url) -> Option<&mut AnalyzedDocument> {
-        self.documents.get_mut(url)
-    }
-
-    fn document_by_module_id(&mut self, module_id: ModuleId) -> Option<&mut AnalyzedDocument> {
-        let url = self.module_id_to_url.get(&module_id)?;
         self.documents.get_mut(url)
     }
 
@@ -67,8 +56,10 @@ impl Registry {
         url: &Url,
         position: Position,
     ) -> Option<GotoDefinitionResponse> {
-        let symbol = self.document_by_url(url)?.symbol_at(position)?;
-        let def_document = self.document_by_module_id(symbol.module_id())?;
+        let document = self.document_by_url(url)?;
+        let symbol = document.symbol_at(position)?;
+        let def_document_url = document.module_url(symbol.module_id())?;
+        let def_document = self.document_by_url(&def_document_url)?;
         def_document.definition(symbol)
     }
 
