@@ -1385,8 +1385,13 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
         command_string.push(arg);
     }
 
+    command.current_dir(std::env::current_dir().unwrap());
+
     let cmd_str = command_string.to_str().unwrap();
-    let cmd_output = command.output().unwrap();
+    let cmd_output = match command.output() {
+        Ok(v) => v,
+        Err(e) => panic!("`{command_string:?}` failed with {e}"),
+    };
     let max_flaky_fail_count = 10;
 
     if !cmd_output.status.success() {
