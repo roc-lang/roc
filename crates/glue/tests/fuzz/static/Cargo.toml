@@ -11,6 +11,10 @@ name = "host"
 path = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
 
+[[bin]]
+name = "host"
+path = "src/main.rs"
+
 [dependencies]
 roc_std = { path = "glue/roc_std", features = ["std"] }
 roc_app = { path = "glue/roc_app" }
