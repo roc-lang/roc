@@ -9,7 +9,6 @@ name: Nightly Release macOS Apple Silicon
 env:
   RUST_BACKTRACE: 1
   LLVM_SYS_160_PREFIX: /opt/homebrew/opt/llvm@16
-  ROC_ZIG: /Users/m1ci/Downloads/zig-macos-aarch64-0.11.0/zig
 
 jobs:
   test-and-build:
@@ -18,10 +17,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
-
-      - name: Update PATH to use zig 11
-        run: |
-          echo "PATH=$ROC_ZIG:$PATH" >> $GITHUB_ENV
       
       - run: zig version
 
