@@ -6,6 +6,9 @@ on:
 
 name: Nightly Release macOS x86_64
 
+env:
+  LLVM_SYS_160_PREFIX: /usr/local/opt/llvm@16
+
 jobs:
   test-build-upload:
     name: build, test, package and upload nightly release
