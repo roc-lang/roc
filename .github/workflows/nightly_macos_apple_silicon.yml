@@ -6,6 +6,10 @@ on:
 
 name: Nightly Release macOS Apple Silicon
 
+env:
+  RUST_BACKTRACE: 1
+  LLVM_SYS_160_PREFIX: /opt/homebrew/opt/llvm@16
+
 jobs:
   test-and-build:
     name: Rust tests, build and package nightly release

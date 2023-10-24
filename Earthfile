@@ -10,7 +10,6 @@ install-other-libs:
     FROM +prep-debian
     RUN apt -y install wget git
     RUN apt -y install libunwind-dev pkg-config zlib1g-dev
-    RUN apt -y install libpolly-16-dev # required by llvm-sys crate
     RUN apt -y install unzip # for www/build.sh
 
 install-zig-llvm:
@@ -30,6 +29,7 @@ install-zig-llvm:
     RUN ln -s /usr/bin/clang-16 /usr/bin/clang
     # use lld as linker
     RUN ln -s /usr/bin/lld-16 /usr/bin/ld.lld
+    RUN apt -y install libpolly-16-dev # required by llvm-sys crate
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
