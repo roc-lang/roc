@@ -12,7 +12,12 @@ let
   actualRustVersion = pkgs.rustc;
   rustVersionsMatch = pkgs.lib.strings.hasSuffix desiredRustVersion actualRustVersion;
 
-  llvmPkgs = pkgs.llvmPackages_13;
+  # When updating the zig or llvm version, make sure they stay in sync.
+  # Also update in flake.nix (TODO: maybe we can use nix code to sync this)
+  zigPkg = pkgs.zig_0_11;
+  llvmPkgs = pkgs.llvmPackages_16;
+  llvmVersion = builtins.splitVersion llvmPkgs.release_version;
+  llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
   # nix does not store libs in /usr/lib or /lib
   glibcPath =
     if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
@@ -42,13 +47,15 @@ in
       lockFile = ./Cargo.lock;
       outputHashes = {
         "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
-        "inkwell-0.1.0" = "sha256-1kpvY3naS33B99nuu5ZYhb7mdddAyG+DkbUl/RG1Ptg=";
+        "inkwell-0.2.0" = "sha256-VhTapYGonoSQ4hnDoLl4AAgj0BppAhPNA+UPuAJSuAU=";
         "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
         "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
       };
     };
 
-    LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
+    shellHook = ''
+      export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
+    '';
 
     # required for zig
     XDG_CACHE_HOME =
@@ -70,7 +77,7 @@ in
       llvmPkgs.clang
       llvmPkgs.llvm.dev
       llvmPkgs.bintools-unwrapped # contains lld      
-      zig_0_9
+      zigPkg
     ]);
 
     buildInputs = (with pkgs;

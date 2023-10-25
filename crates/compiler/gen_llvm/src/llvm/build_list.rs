@@ -44,7 +44,7 @@ pub(crate) fn list_symbol_to_c_abi<'a, 'ctx>(
     let list_alloca = create_entry_block_alloca(env, parent, list_type.into(), "list_alloca");
 
     let list = scope.load_symbol(&symbol);
-    env.builder.build_store(list_alloca, list);
+    env.builder.new_build_store(list_alloca, list);
 
     list_alloca
 }
@@ -69,7 +69,7 @@ fn pass_element_as_opaque<'a, 'ctx>(
         basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
     let element_ptr = env
         .builder
-        .build_alloca(element_type, "element_to_pass_as_opaque");
+        .new_build_alloca(element_type, "element_to_pass_as_opaque");
     store_roc_value(
         env,
         layout_interner,
@@ -79,7 +79,7 @@ fn pass_element_as_opaque<'a, 'ctx>(
     );
 
     env.builder
-        .build_pointer_cast(
+        .new_build_pointer_cast(
             element_ptr,
             env.context.i8_type().ptr_type(AddressSpace::default()),
             "pass_element_as_opaque",
@@ -102,7 +102,7 @@ pub(crate) fn pass_as_opaque<'ctx>(
     ptr: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     env.builder
-        .build_pointer_cast(
+        .new_build_pointer_cast(
             ptr,
             env.context.i8_type().ptr_type(AddressSpace::default()),
             "pass_as_opaque",
@@ -338,7 +338,7 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     );
     let element_ptr = env
         .builder
-        .build_alloca(element_type, "output_element_as_opaque");
+        .new_build_alloca(element_type, "output_element_as_opaque");
 
     // Assume the bounds have already been checked earlier
     // (e.g. by List.replace or List.set, which wrap List.#replaceUnsafe)
@@ -420,7 +420,7 @@ fn bounds_check_comparison<'ctx>(
     // to avoid misprediction. (In practice this should usually pass,
     // and CPUs generally default to predicting that a forward jump
     // shouldn't be taken; that is, they predict "else" won't be taken.)
-    builder.build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
+    builder.new_build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
 /// List.len : List * -> Nat
@@ -749,14 +749,14 @@ where
     let zero = env.ptr_int().const_zero();
 
     // allocate a stack slot for the current index
-    let index_alloca = builder.build_alloca(env.ptr_int(), index_name);
-    builder.build_store(index_alloca, zero);
+    let index_alloca = builder.new_build_alloca(env.ptr_int(), index_name);
+    builder.new_build_store(index_alloca, zero);
 
     let loop_bb = ctx.append_basic_block(parent, "loop");
     let after_loop_bb = ctx.append_basic_block(parent, "after_loop");
 
     let loop_end_cond = bounds_check_comparison(builder, zero, end);
-    builder.build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
+    builder.new_build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
 
     {
         builder.position_at_end(loop_bb);
@@ -764,8 +764,8 @@ where
         let current_index = builder
             .new_build_load(env.ptr_int(), index_alloca, "index")
             .into_int_value();
-        let next_index = builder.build_int_add(current_index, one, "next_index");
-        builder.build_store(index_alloca, next_index);
+        let next_index = builder.new_build_int_add(current_index, one, "next_index");
+        builder.new_build_store(index_alloca, next_index);
 
         // The body of the loop
         loop_fn(layout_interner, current_index);
@@ -773,7 +773,7 @@ where
         // #index < end
         let loop_end_cond = bounds_check_comparison(builder, next_index, end);
 
-        builder.build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
+        builder.new_build_conditional_branch(loop_end_cond, loop_bb, after_loop_bb);
     }
 
     builder.position_at_end(after_loop_bb);
@@ -831,7 +831,7 @@ pub(crate) fn allocate_list<'a, 'ctx>(
     let elem_bytes = layout_interner.stack_size(elem_layout) as u64;
     let bytes_per_element = len_type.const_int(elem_bytes, false);
     let number_of_data_bytes =
-        builder.build_int_mul(bytes_per_element, number_of_elements, "data_length");
+        builder.new_build_int_mul(bytes_per_element, number_of_elements, "data_length");
 
     let basic_type =
         basic_type_from_layout(env, layout_interner, layout_interner.get_repr(elem_layout));

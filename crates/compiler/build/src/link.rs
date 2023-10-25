@@ -163,10 +163,10 @@ pub fn build_zig_host_native(
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={emit_bin}"),
-        "--pkg-begin",
+        "--mod",
+        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+        "--deps",
         "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
         // include libc
         "-lc",
         // cross-compile?
@@ -193,7 +193,7 @@ pub fn build_zig_host_native(
     if matches!(opt_level, OptLevel::Optimize) {
         zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall", "-fno-strip"]);
     }
 
     zig_cmd
@@ -235,10 +235,10 @@ pub fn build_zig_host_native(
     zig_cmd.args(&[
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
-        "--pkg-begin",
+        "--mod",
+        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+        "--deps",
         "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
@@ -282,10 +282,10 @@ pub fn build_zig_host_wasm32(
             "build-obj",
             zig_host_src,
             emit_bin,
-            "--pkg-begin",
+            "--mod",
+            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+            "--deps",
             "glue",
-            find_zig_glue_path().to_str().unwrap(),
-            "--pkg-end",
             // include the zig runtime
             // "-fcompiler-rt",
             // include libc
@@ -295,7 +295,7 @@ pub fn build_zig_host_wasm32(
             "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
             "-fPIC",
-            "--strip",
+            "-fstrip",
         ]);
 
     if matches!(opt_level, OptLevel::Optimize) {
@@ -1184,7 +1184,7 @@ fn get_macos_version() -> String {
     full_version_string
         .trim_end()
         .split('.')
-        .take(2)
+        .take(3)
         .collect::<Vec<&str>>()
         .join(".")
 }
@@ -1208,11 +1208,11 @@ fn link_wasm32(
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",
-            "--pkg-begin",
+            "--mod",
+            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+            "--deps",
             "glue",
-            find_zig_glue_path().to_str().unwrap(),
-            "--pkg-end",
-            "--strip",
+            "-fstrip",
             "-O",
             "ReleaseSmall",
             // useful for debugging
@@ -1239,11 +1239,10 @@ fn link_windows(
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
                     "native",
-                    "--pkg-begin",
+                    "--mod",
+                    &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+                    "--deps",
                     "glue",
-                    find_zig_glue_path().to_str().unwrap(),
-                    "--pkg-end",
-                    "--strip",
                     "-O",
                     "Debug",
                     "-dynamic",

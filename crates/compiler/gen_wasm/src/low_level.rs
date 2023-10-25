@@ -10,7 +10,7 @@ use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, Un
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
 use crate::PTR_TYPE;
 use roc_wasm_module::{Align, LocalId, ValueType};
@@ -135,41 +135,19 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool, bool) {
+    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool) {
         backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
             &WasmLayout::new(backend.layout_interner, self.ret_layout),
-            CallConv::Zig,
         )
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a, '_>, name: &'a str) {
-        let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
+        let (num_wasm_args, has_return_val) = self.load_args(backend);
         backend.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val);
-
-        if ret_zig_packed_struct {
-            match self.ret_storage {
-                StoredValue::StackMemory {
-                    size,
-                    alignment_bytes,
-                    ..
-                } => {
-                    // The address of the return value was already loaded before the call
-                    let align = Align::from(alignment_bytes);
-                    if size > 4 {
-                        backend.code_builder.i64_store(align, 0);
-                    } else {
-                        backend.code_builder.i32_store(align, 0);
-                    }
-                }
-                _ => {
-                    internal_error!("Zig packed struct should always be stored to StackMemory")
-                }
-            }
-        }
     }
 
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
@@ -263,7 +241,7 @@ impl<'a> LowLevelCall<'a> {
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
                     output: *FromUtf8Result   i32
-                    arg: RocList              i64, i32
+                    arg: RocList              i32
                     start                     i32
                     count                     i32
                     update_mode: UpdateMode   i32
@@ -276,10 +254,9 @@ impl<'a> LowLevelCall<'a> {
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 5, false);
             }
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
@@ -424,7 +401,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load all the arguments for Zig
                 //    (List return pointer)  i32
-                //    list: RocList,         i64, i32
+                //    list: RocList,         i32
                 //    alignment: u32,        i32
                 //    index: usize,          i32
                 //    element: Opaque,       i32
@@ -439,9 +416,9 @@ impl<'a> LowLevelCall<'a> {
                     code_builder.i32_add();
                 }
 
-                backend.storage.load_symbol_zig(code_builder, list);
+                backend.storage.load_symbols(code_builder, &[list]);
                 code_builder.i32_const(elem_alignment as i32);
-                backend.storage.load_symbol_zig(code_builder, index);
+                backend.storage.load_symbols(code_builder, &[index]);
 
                 code_builder.get_local(new_elem_local);
                 if new_elem_offset > 0 {
@@ -458,7 +435,7 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 7, false);
             }
             ListWithCapacity => {
                 // List.withCapacity : Nat -> List elem
@@ -487,8 +464,8 @@ impl<'a> LowLevelCall<'a> {
                 // List.concat : List elem, List elem -> List elem
                 // Zig arguments          Wasm types
                 //  (return pointer)       i32
-                //  list_a: RocList        i64, i32
-                //  list_b: RocList        i64, i32
+                //  list_a: RocList        i32
+                //  list_b: RocList        i32
                 //  alignment: u32         i32
                 //  element_width: usize   i32
 
@@ -499,7 +476,6 @@ impl<'a> LowLevelCall<'a> {
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 // Load monomorphization constants
@@ -510,7 +486,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 5, false);
             }
 
             ListReserve => {
@@ -526,7 +502,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  spare: usize               i32
                 //  element_width: usize       i32
@@ -539,7 +515,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -552,7 +527,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 6, false);
             }
 
             ListReleaseExcessCapacity => {
@@ -567,7 +542,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element_width: usize       i32
                 //  update_mode: UpdateMode    i32
@@ -579,7 +554,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -590,7 +564,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.call_host_fn_after_loading_args(
                     bitcode::LIST_RELEASE_EXCESS_CAPACITY,
-                    6,
+                    5,
                     false,
                 );
             }
@@ -608,7 +582,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
 
@@ -619,7 +593,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.get_local(elem_local);
@@ -630,7 +603,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 3, false);
             }
             ListPrepend => {
                 // List.prepend : List elem, elem -> List elem
@@ -647,7 +620,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
@@ -659,7 +632,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -671,7 +643,7 @@ impl<'a> LowLevelCall<'a> {
                 }
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 5, false);
             }
             ListSublist => {
                 // As a low-level, record is destructured
@@ -699,7 +671,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
                 //  start: usize,              i32
@@ -712,7 +684,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -722,7 +693,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[start, len]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 7, false);
             }
             ListDropAt => {
                 // List.dropAt : List elem, Nat -> List elem
@@ -747,7 +718,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  element_width: usize,      i32
                 //  alignment: u32,            i32
                 //  drop_index: usize,         i32
@@ -760,7 +731,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_width as i32);
@@ -770,7 +740,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[drop_index]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 5, false);
             }
             ListSwap => {
                 // List.swap : List elem, Nat, Nat -> List elem
@@ -785,7 +755,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
                 //  index_1: usize,            i32
@@ -799,7 +769,6 @@ impl<'a> LowLevelCall<'a> {
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -809,7 +778,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[index_1, index_2]);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 7, false);
             }
 
             // Num
@@ -2720,7 +2689,7 @@ pub fn call_higher_order_lowlevel<'a>(
             let cb = &mut backend.code_builder;
 
             // (return pointer)      i32
-            // input: RocList,       i64, i32
+            // input: RocList,       i32
             // caller: CompareFn,    i32
             // data: Opaque,         i32
             // inc_n_data: IncN,     i32
@@ -2728,8 +2697,7 @@ pub fn call_higher_order_lowlevel<'a>(
             // alignment: u32,       i32
             // element_width: usize, i32
 
-            backend.storage.load_symbols(cb, &[return_sym]);
-            backend.storage.load_symbol_zig(cb, *xs);
+            backend.storage.load_symbols(cb, &[return_sym, *xs]);
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
                 backend
@@ -2745,7 +2713,7 @@ pub fn call_higher_order_lowlevel<'a>(
             cb.i32_const(alignment as i32);
             cb.i32_const(element_width as i32);
 
-            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 9, false);
+            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 8, false);
         }
     }
 }
@@ -2788,11 +2756,11 @@ fn list_map_n<'a>(
 
     let cb = &mut backend.code_builder;
 
-    backend.storage.load_symbols(cb, &[return_sym]);
+    let mut args_vec = Vec::with_capacity_in(arg_symbols.len() + 1, backend.env.arena);
+    args_vec.push(return_sym);
+    args_vec.extend_from_slice(arg_symbols);
+    backend.storage.load_symbols(cb, &args_vec);
 
-    for s in arg_symbols {
-        backend.storage.load_symbol_zig(cb, *s);
-    }
     cb.i32_const(wrapper_fn_ptr);
     if closure_data_exists {
         backend.storage.load_symbols(cb, &[captured_environment]);
@@ -2821,9 +2789,9 @@ fn list_map_n<'a>(
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
-        7 + arg_elem_layouts.len() * 4
-    } else {
         7 + arg_elem_layouts.len() * 3
+    } else {
+        9
     };
 
     let has_return_val = false;

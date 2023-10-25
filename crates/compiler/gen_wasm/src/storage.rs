@@ -7,7 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, STLayoutInterner};
 
 use crate::code_builder::{CodeBuilder, VmSymbolState};
-use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
+use crate::layout::{stack_memory_arg_types, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::{copy_memory, CopyMemoryConfig, PTR_TYPE};
 use roc_wasm_module::{round_up_to_alignment, Align, LocalId, ValueType};
 
@@ -59,7 +59,7 @@ pub enum StoredValue {
 impl StoredValue {
     /// Value types to pass to Wasm functions
     /// One Roc value can become 0, 1, or 2 Wasm arguments
-    pub fn arg_types(&self, conv: CallConv) -> &'static [ValueType] {
+    pub fn arg_types(&self) -> &'static [ValueType] {
         use ValueType::*;
         match self {
             // Simple numbers: 1 Roc argument => 1 Wasm argument
@@ -72,7 +72,7 @@ impl StoredValue {
                 }
             }
             // Stack memory values: 1 Roc argument => 0-2 Wasm arguments
-            Self::StackMemory { size, format, .. } => conv.stack_memory_arg_types(*size, *format),
+            Self::StackMemory { size, format, .. } => stack_memory_arg_types(*size, *format),
         }
     }
 }
@@ -249,7 +249,7 @@ impl<'a> Storage<'a> {
                     use StackMemoryFormat::*;
 
                     self.arg_types
-                        .extend_from_slice(CallConv::C.stack_memory_arg_types(size, format));
+                        .extend_from_slice(stack_memory_arg_types(size, format));
 
                     let location = match format {
                         Int128 | Decimal => {
@@ -397,47 +397,6 @@ impl<'a> Storage<'a> {
         }
     }
 
-    // TODO: expose something higher level instead, shared among higher-order calls
-    pub fn load_symbol_zig(&mut self, code_builder: &mut CodeBuilder, arg: Symbol) {
-        if let StoredValue::StackMemory {
-            location,
-            size,
-            alignment_bytes,
-            format: StackMemoryFormat::DataStructure,
-        } = self.get(&arg)
-        {
-            if *size == 0 {
-                // do nothing
-            } else if *size > 16 {
-                self.load_symbol_ccc(code_builder, arg);
-            } else {
-                let (local_id, offset) = location.local_and_offset(self.stack_frame_pointer);
-                code_builder.get_local(local_id);
-                let align = Align::from(*alignment_bytes);
-
-                if *size == 1 {
-                    code_builder.i32_load8_u(align, offset);
-                } else if *size == 2 {
-                    code_builder.i32_load16_u(align, offset);
-                } else if *size <= 4 {
-                    code_builder.i32_load(align, offset);
-                } else if *size <= 8 {
-                    code_builder.i64_load(align, offset);
-                } else if *size <= 12 {
-                    code_builder.i64_load(align, offset);
-                    code_builder.get_local(local_id);
-                    code_builder.i32_load(align, offset + 8);
-                } else {
-                    code_builder.i64_load(align, offset);
-                    code_builder.get_local(local_id);
-                    code_builder.i64_load(align, offset + 8);
-                }
-            }
-        } else {
-            self.load_symbol_ccc(code_builder, arg);
-        }
-    }
-
     /// stack memory values are returned by pointer. e.g. a roc function
     ///
     /// add : I128, I128 -> I128
@@ -492,14 +451,13 @@ impl<'a> Storage<'a> {
         arguments: &[Symbol],
         return_symbol: Symbol,
         return_layout: &WasmLayout,
-        call_conv: CallConv,
-    ) -> (usize, bool, bool) {
+    ) -> (usize, bool) {
         use ReturnMethod::*;
 
         let mut num_wasm_args = 0;
         let mut symbols_to_load = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
 
-        let return_method = return_layout.return_method(call_conv);
+        let return_method = return_layout.return_method();
         let has_return_val = match return_method {
             Primitive(..) => true,
             NoReturnValue => false,
@@ -508,19 +466,11 @@ impl<'a> Storage<'a> {
                 symbols_to_load.push(return_symbol);
                 false
             }
-            ZigPackedStruct => {
-                // Workaround for Zig's incorrect implementation of the C calling convention.
-                // We need to copy the packed struct into the stack frame
-                // Load the address before the call so that afterward, it will be 2nd on the value stack,
-                // ready for the store instruction.
-                symbols_to_load.push(return_symbol);
-                true
-            }
         };
 
         for arg in arguments {
             let stored = self.symbol_storage_map.get(arg).unwrap();
-            let arg_types = stored.arg_types(call_conv);
+            let arg_types = stored.arg_types();
             num_wasm_args += arg_types.len();
             match arg_types.len() {
                 0 => {}
@@ -533,23 +483,16 @@ impl<'a> Storage<'a> {
         // If the symbols were already at the top of the stack, do nothing!
         // Should be common for simple cases, due to the structure of the Mono IR
         if !code_builder.verify_stack_match(&symbols_to_load) {
-            if matches!(return_method, WriteToPointerArg | ZigPackedStruct) {
+            if matches!(return_method, WriteToPointerArg) {
                 self.load_return_address_ccc(code_builder, return_symbol);
             };
 
             for arg in arguments {
-                match call_conv {
-                    CallConv::C => self.load_symbol_ccc(code_builder, *arg),
-                    CallConv::Zig => self.load_symbol_zig(code_builder, *arg),
-                }
+                self.load_symbol_ccc(code_builder, *arg);
             }
         }
 
-        (
-            num_wasm_args,
-            has_return_val,
-            return_method == ZigPackedStruct,
-        )
+        (num_wasm_args, has_return_val)
     }
 
     /// Generate code to copy a StoredValue to an arbitrary memory location

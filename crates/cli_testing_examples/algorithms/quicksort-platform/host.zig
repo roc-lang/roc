@@ -37,7 +37,7 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
-    return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
@@ -46,14 +46,14 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
-    free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
 export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     const stderr = std.io.getStdErr().writer();
-    const msg = @ptrCast([*:0]const u8, c_ptr);
+    const msg = @as([*:0]const u8, @ptrCast(c_ptr));
     stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
     std.process.exit(0);
 }
@@ -111,8 +111,8 @@ pub export fn main() u8 {
 
     var numbers = raw_numbers[1..];
 
-    for (numbers) |_, i| {
-        numbers[i] = @mod(@intCast(i64, i), 12);
+    for (numbers, 0..) |_, i| {
+        numbers[i] = @mod(@as(i64, @intCast(i)), 12);
     }
 
     var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS, .capacity = NUM_NUMS };
@@ -123,13 +123,13 @@ pub export fn main() u8 {
     const callresult: RocList = roc__mainForHost_1_exposed(roc_list);
 
     // stdout the result
-    const length = std.math.min(20, callresult.length);
+    const length = @min(20, callresult.length);
     var result = callresult.elements[0..length];
 
     const nanos = timer.read();
-    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
+    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
-    for (result) |x, i| {
+    for (result, 0..) |x, i| {
         if (i == 0) {
             stdout.print("[{}, ", .{x}) catch unreachable;
         } else if (i == length - 1) {
@@ -146,5 +146,5 @@ pub export fn main() u8 {
 }
 
 fn to_seconds(tms: std.os.timespec) f64 {
-    return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
+    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }

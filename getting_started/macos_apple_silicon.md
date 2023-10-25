@@ -22,10 +22,10 @@ which includes the Roc compiler and some helpful utilities.
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
-1. Install llvm 13:
+1. Install llvm 16:
 
     ```sh
-    brew install llvm@13
+    brew install llvm@16
     ```
 
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
@@ -48,7 +48,7 @@ you'll need to install one or more of these platform languages too.
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. If you'd like to use Zig-based platforms: download [zig 0.9.1](https://ziglang.org/download/0.9.1/zig-macos-aarch64-0.9.1.tar.xz), extract the archive and add `export PATH=$PATH:~/path/to/zig` to your shell startup script (.profile, .zshrc, …). Note: zig 0.9.1 is not available on homebrew.
+1. If you'd like to use Zig-based platforms: download [zig 0.11.0](https://ziglang.org/download/0.11.0/zig-macos-aarch64-0.11.0.tar.xz), extract the archive and add `export PATH=$PATH:~/path/to/zig` to your shell startup script (.profile, .zshrc, …). Note: zig 0.11.0 is currently available on homebrew, but future update may remove it.
 
 1. Run examples:
 

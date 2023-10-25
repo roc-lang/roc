@@ -1,9 +1,13 @@
 on:
+#  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *' # 9=9am utc+0
 
 name: Nightly Release macOS x86_64
+
+env:
+  LLVM_SYS_160_PREFIX: /usr/local/opt/llvm@16
 
 jobs:
   test-build-upload:
@@ -12,6 +16,12 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v3
+
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+      
+      - run: zig version
           
       - name: write version to file
         run: ./ci/write_version.sh

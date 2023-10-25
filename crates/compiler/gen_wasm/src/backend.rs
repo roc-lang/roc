@@ -27,7 +27,7 @@ use roc_wasm_module::{
 };
 
 use crate::code_builder::CodeBuilder;
-use crate::layout::{CallConv, ReturnMethod, WasmLayout};
+use crate::layout::{ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
 use crate::{
@@ -89,7 +89,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok();
+        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok()
+            && module.linking.find_internal_symbol("__heap_end").is_ok();
 
         // We don't want to import any Memory or Tables
         module.import.imports.retain(|import| {
@@ -98,6 +99,10 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 ImportDesc::Mem { .. } | ImportDesc::Table { .. }
             )
         });
+
+        // Relocate calls from host to app
+        // This will change function indices in the host, so we need to do it before get_host_function_lookup
+        module.link_host_to_app_calls(env.arena, host_to_app_map);
 
         let host_lookup = module.get_host_function_lookup(env.arena);
 
@@ -109,7 +114,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             )
         }
 
-        module.link_host_to_app_calls(env.arena, host_to_app_map);
         let import_fn_count = module.import.function_count();
         let host_function_count = import_fn_count
             + module.code.dead_import_dummy_count as usize
@@ -208,6 +212,12 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             self.module
                 .relocate_internal_symbol("__heap_base", stack_heap_boundary)
                 .unwrap();
+            self.module
+                .relocate_internal_symbol(
+                    "__heap_end",
+                    stack_heap_boundary + MemorySection::PAGE_SIZE,
+                )
+                .unwrap();
         }
     }
 
@@ -216,7 +226,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     fn export_globals(&mut self) {
         for (sym_index, sym) in self.module.linking.symbol_table.iter().enumerate() {
             match sym {
-                SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
+                SymInfo::Data(DataSymbol::Imported { name, .. })
+                    if *name != "__heap_base" && *name != "__heap_end" =>
+                {
                     let global_value_addr = self.module.data.end_addr;
                     self.module.data.end_addr += PTR_SIZE;
 
@@ -296,6 +308,24 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     /// If the host has a `main` function then we need to insert a `_start` to call it.
     /// This is something linkers do, and this backend is also a linker!
     fn maybe_call_host_main(&mut self) {
+        const START: &str = "_start";
+
+        // If _start exists, just export it. Trust it to call main.
+        if let Ok(start_sym_index) = self.module.linking.find_internal_symbol(START) {
+            let start_fn_index = match self.module.linking.symbol_table[start_sym_index] {
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
+                _ => panic!("linker symbol `{START}` is not a function"),
+            };
+            self.module.export.append(Export {
+                name: START,
+                ty: ExportType::Func,
+                index: start_fn_index,
+            });
+            return;
+        }
+
+        // _start doesn't exist. Check for a `main` and create a _start that calls it.
+        // Note: if `main` is prefixed with some other module name, we won't find it!
         let main_symbol_index = match self.module.linking.find_internal_symbol("main") {
             Ok(x) => x,
             Err(_) => return,
@@ -307,21 +337,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 return;
             }
         };
-
-        const START: &str = "_start";
-
-        if let Ok(sym_index) = self.module.linking.find_internal_symbol(START) {
-            let fn_index = match self.module.linking.symbol_table[sym_index] {
-                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { index, .. }) => index,
-                _ => panic!("linker symbol `{START}` is not a function"),
-            };
-            self.module.export.append(Export {
-                name: START,
-                ty: ExportType::Func,
-                index: fn_index,
-            });
-            return;
-        }
 
         self.module.add_function_signature(Signature {
             param_types: bumpalo::vec![in self.env.arena],
@@ -411,15 +426,12 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         use ReturnMethod::*;
         let ret_layout = WasmLayout::new(self.layout_interner, proc.ret_layout);
 
-        let ret_type = match ret_layout.return_method(CallConv::C) {
+        let ret_type = match ret_layout.return_method() {
             Primitive(ty, _) => Some(ty),
             NoReturnValue => None,
             WriteToPointerArg => {
                 self.storage.arg_types.push(PTR_TYPE);
                 None
-            }
-            ZigPackedStruct => {
-                internal_error!("C calling convention does not return Zig packed structs")
             }
         };
 
@@ -514,7 +526,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         let mut n_inner_wasm_args = 0;
-        let ret_type_and_size = match inner_ret_layout.return_method(CallConv::C) {
+        let ret_type_and_size = match inner_ret_layout.return_method() {
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::Primitive(ty, size) => {
                 // If the inner function returns a primitive, load the address to store it at
@@ -528,7 +540,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 n_inner_wasm_args += 1;
                 None
             }
-            x => internal_error!("A Roc function should never use ReturnMethod {:?}", x),
         };
 
         // Load all the arguments for the inner function
@@ -857,8 +868,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         let is_bool = matches!(cond_layout, Layout::BOOL);
-        let cond_type =
-            WasmLayout::new(self.layout_interner, cond_layout).arg_types(CallConv::C)[0];
+        let cond_type = WasmLayout::new(self.layout_interner, cond_layout).arg_types()[0];
 
         // then, we jump whenever the value under scrutiny is equal to the value of a branch
         for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -1349,16 +1359,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             } => {
                 let name = foreign_symbol.as_str();
                 let wasm_layout = WasmLayout::new(self.layout_interner, *ret_layout);
-                let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
-                    self.storage.load_symbols_for_call(
-                        self.env.arena,
-                        &mut self.code_builder,
-                        arguments,
-                        ret_sym,
-                        &wasm_layout,
-                        CallConv::C,
-                    );
-                debug_assert!(!ret_zig_packed_struct); // only true in another place where we use the same helper fn
+                let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
+                    self.env.arena,
+                    &mut self.code_builder,
+                    arguments,
+                    ret_sym,
+                    &wasm_layout,
+                );
                 self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
             }
         }
@@ -1382,16 +1389,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
         }
 
-        let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
-            self.storage.load_symbols_for_call(
-                self.env.arena,
-                &mut self.code_builder,
-                arguments,
-                ret_sym,
-                &wasm_layout,
-                CallConv::C,
-            );
-        debug_assert!(!ret_zig_packed_struct);
+        let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
+            self.env.arena,
+            &mut self.code_builder,
+            arguments,
+            ret_sym,
+            &wasm_layout,
+        );
 
         let roc_proc_index = self
             .proc_lookup

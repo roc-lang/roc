@@ -1,9 +1,14 @@
 on:
+#  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
 
 name: Nightly Release macOS Apple Silicon
+
+env:
+  RUST_BACKTRACE: 1
+  LLVM_SYS_160_PREFIX: /opt/homebrew/opt/llvm@16
 
 jobs:
   test-and-build:
@@ -12,8 +17,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
-      - name: zig version
-        run: zig version
+      
+      - run: zig version
+
       - name: llvm version
         run: llc --version | grep LLVM
 

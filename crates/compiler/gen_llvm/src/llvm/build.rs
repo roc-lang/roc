@@ -13,6 +13,7 @@ use crate::llvm::{erased, fn_ptr};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::debug_info::{
@@ -22,15 +23,16 @@ use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::passes::{PassManager, PassManagerBuilder};
 use inkwell::types::{
-    AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType, StructType,
+    AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatMathType, FunctionType,
+    IntMathType, IntType, PointerMathType, StructType,
 };
 use inkwell::values::{
-    BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
-    StructValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FloatMathValue,
+    FunctionValue, InstructionOpcode, InstructionValue, IntMathValue, IntValue, PhiValue,
+    PointerMathValue, PointerValue, StructValue,
 };
-use inkwell::values::{BasicValueEnum, CallableValue};
-use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};
+use inkwell::{FloatPredicate, OptimizationLevel};
 use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
@@ -70,7 +72,15 @@ pub(crate) trait BuilderExt<'ctx> {
         ptr: PointerValue<'ctx>,
         index: u32,
         name: &str,
-    ) -> Result<PointerValue<'ctx>, ()>;
+    ) -> PointerValue<'ctx>;
+
+    fn new_build_alloca<T: BasicType<'ctx>>(&self, ty: T, name: &str) -> PointerValue<'ctx>;
+
+    fn new_build_store<V: BasicValue<'ctx>>(
+        &self,
+        ptr: PointerValue<'ctx>,
+        value: V,
+    ) -> InstructionValue<'ctx>;
 
     fn new_build_load(
         &self,
@@ -86,6 +96,205 @@ pub(crate) trait BuilderExt<'ctx> {
         ordered_indexes: &[IntValue<'ctx>],
         name: &str,
     ) -> PointerValue<'ctx>;
+
+    fn new_build_cast<T: BasicType<'ctx>, V: BasicValue<'ctx>>(
+        &self,
+        op: InstructionOpcode,
+        from_value: V,
+        to_type: T,
+        name: &str,
+    ) -> BasicValueEnum<'ctx>;
+
+    fn new_build_bitcast<T, V>(&self, val: V, ty: T, name: &str) -> BasicValueEnum<'ctx>
+    where
+        T: BasicType<'ctx>,
+        V: BasicValue<'ctx>;
+
+    fn new_build_pointer_cast<T: PointerMathValue<'ctx>>(
+        &self,
+        from: T,
+        to: T::BaseType,
+        name: &str,
+    ) -> T;
+
+    fn new_build_int_cast<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        int_type: T::BaseType,
+        name: &str,
+    ) -> T;
+
+    fn new_build_int_cast_sign_flag<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        int_type: T::BaseType,
+        is_signed: bool,
+        name: &str,
+    ) -> T;
+
+    fn new_build_float_cast<T: FloatMathValue<'ctx>>(
+        &self,
+        float: T,
+        float_type: T::BaseType,
+        name: &str,
+    ) -> T;
+
+    fn new_build_call(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> CallSiteValue<'ctx>;
+
+    fn new_build_indirect_call(
+        &self,
+        function_type: FunctionType<'ctx>,
+        function_pointer: PointerValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> CallSiteValue<'ctx>;
+
+    fn new_build_ptr_to_int<T: PointerMathValue<'ctx>>(
+        &self,
+        ptr: T,
+        int_type: <T::BaseType as PointerMathType<'ctx>>::PtrConvType,
+        name: &str,
+    ) -> <<T::BaseType as PointerMathType<'ctx>>::PtrConvType as IntMathType<'ctx>>::ValueType;
+
+    fn new_build_int_to_ptr<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        ptr_type: <T::BaseType as IntMathType<'ctx>>::PtrConvType,
+        name: &str,
+    ) -> <<T::BaseType as IntMathType<'ctx>>::PtrConvType as PointerMathType<'ctx>>::ValueType;
+
+    fn new_build_is_null<T: PointerMathValue<'ctx>>(
+        &self,
+        ptr: T,
+        name: &str,
+    ) -> <<T::BaseType as PointerMathType<'ctx>>::PtrConvType as IntMathType<'ctx>>::ValueType;
+
+    fn new_build_is_not_null<T: PointerMathValue<'ctx>>(
+        &self,
+        ptr: T,
+        name: &str,
+    ) -> <<T::BaseType as PointerMathType<'ctx>>::PtrConvType as IntMathType<'ctx>>::ValueType;
+
+    fn new_build_phi<T: BasicType<'ctx>>(&self, type_: T, name: &str) -> PhiValue<'ctx>;
+
+    fn new_build_select<BV: BasicValue<'ctx>, IMV: IntMathValue<'ctx>>(
+        &self,
+        condition: IMV,
+        then: BV,
+        else_: BV,
+        name: &str,
+    ) -> BasicValueEnum<'ctx>;
+
+    fn new_build_and<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_or<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_xor<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_not<T: IntMathValue<'ctx>>(&self, value: T, name: &str) -> T;
+
+    fn new_build_int_neg<T: IntMathValue<'ctx>>(&self, value: T, name: &str) -> T;
+
+    fn new_build_int_add<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_sub<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_mul<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_signed_rem<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_unsigned_rem<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_signed_div<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_unsigned_div<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_compare<T: IntMathValue<'ctx>>(
+        &self,
+        op: IntPredicate,
+        lhs: T,
+        rhs: T,
+        name: &str,
+    ) -> <T::BaseType as IntMathType<'ctx>>::ValueType;
+
+    fn new_build_float_neg<T: FloatMathValue<'ctx>>(&self, value: T, name: &str) -> T;
+
+    fn new_build_float_add<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_float_sub<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_float_mul<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_float_div<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_float_compare<T: FloatMathValue<'ctx>>(
+        &self,
+        op: FloatPredicate,
+        lhs: T,
+        rhs: T,
+        name: &str,
+    ) -> <<T::BaseType as FloatMathType<'ctx>>::MathConvType as IntMathType<'ctx>>::ValueType;
+
+    fn new_build_right_shift<T: IntMathValue<'ctx>>(
+        &self,
+        lhs: T,
+        rhs: T,
+        sign_extend: bool,
+        name: &str,
+    ) -> T;
+
+    fn new_build_left_shift<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T;
+
+    fn new_build_int_z_extend<T: IntMathValue<'ctx>>(
+        &self,
+        int_value: T,
+        int_type: T::BaseType,
+        name: &str,
+    ) -> T;
+
+    fn new_build_signed_int_to_float<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        float_type: <T::BaseType as IntMathType<'ctx>>::MathConvType,
+        name: &str,
+    ) -> <<T::BaseType as IntMathType<'ctx>>::MathConvType as FloatMathType<'ctx>>::ValueType;
+
+    fn new_build_unsigned_int_to_float<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        float_type: <T::BaseType as IntMathType<'ctx>>::MathConvType,
+        name: &str,
+    ) -> <<T::BaseType as IntMathType<'ctx>>::MathConvType as FloatMathType<'ctx>>::ValueType;
+
+    fn new_build_return(&self, value: Option<&dyn BasicValue<'ctx>>) -> InstructionValue<'ctx>;
+
+    fn new_build_switch(
+        &self,
+        value: IntValue<'ctx>,
+        else_block: BasicBlock<'ctx>,
+        cases: &[(IntValue<'ctx>, BasicBlock<'ctx>)],
+    ) -> InstructionValue<'ctx>;
+
+    fn new_build_conditional_branch(
+        &self,
+        comparison: IntValue<'ctx>,
+        then_block: BasicBlock<'ctx>,
+        else_block: BasicBlock<'ctx>,
+    ) -> InstructionValue<'ctx>;
+
+    fn new_build_unconditional_branch(
+        &self,
+        destination_block: BasicBlock<'ctx>,
+    ) -> InstructionValue<'ctx>;
+
+    fn new_build_unreachable(&self) -> InstructionValue<'ctx>;
+
+    fn new_build_free(&self, ptr: PointerValue<'ctx>) -> InstructionValue<'ctx>;
 }
 
 impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
@@ -95,12 +304,25 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ptr: PointerValue<'ctx>,
         index: u32,
         name: &str,
-    ) -> Result<PointerValue<'ctx>, ()> {
-        debug_assert_eq!(
-            ptr.get_type().get_element_type().into_struct_type(),
-            struct_type
-        );
-        self.build_struct_gep(ptr, index, name)
+    ) -> PointerValue<'ctx> {
+        // debug_assert_eq!(
+        //     ptr.get_type().get_element_type().into_struct_type(),
+        //     struct_type
+        // );
+        self.build_struct_gep(struct_type, ptr, index, name)
+            .unwrap()
+    }
+
+    fn new_build_alloca<T: BasicType<'ctx>>(&self, ty: T, name: &str) -> PointerValue<'ctx> {
+        self.build_alloca(ty, name).unwrap()
+    }
+
+    fn new_build_store<V: BasicValue<'ctx>>(
+        &self,
+        ptr: PointerValue<'ctx>,
+        value: V,
+    ) -> InstructionValue<'ctx> {
+        self.build_store(ptr, value).unwrap()
     }
 
     fn new_build_load(
@@ -109,11 +331,11 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ptr: PointerValue<'ctx>,
         name: &str,
     ) -> BasicValueEnum<'ctx> {
-        debug_assert_eq!(
-            ptr.get_type().get_element_type(),
-            element_type.as_any_type_enum()
-        );
-        self.build_load(ptr, name)
+        // debug_assert_eq!(
+        //     ptr.get_type().get_element_type(),
+        //     element_type.as_any_type_enum()
+        // );
+        self.build_load(element_type, ptr, name).unwrap()
     }
 
     unsafe fn new_build_in_bounds_gep(
@@ -123,12 +345,306 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ordered_indexes: &[IntValue<'ctx>],
         name: &str,
     ) -> PointerValue<'ctx> {
-        debug_assert_eq!(
-            ptr.get_type().get_element_type(),
-            element_type.as_any_type_enum()
-        );
+        // debug_assert_eq!(
+        //     ptr.get_type().get_element_type(),
+        //     element_type.as_any_type_enum()
+        // );
 
-        self.build_in_bounds_gep(ptr, ordered_indexes, name)
+        self.build_in_bounds_gep(element_type, ptr, ordered_indexes, name)
+            .unwrap()
+    }
+
+    fn new_build_cast<T: BasicType<'ctx>, V: BasicValue<'ctx>>(
+        &self,
+        op: InstructionOpcode,
+        from_value: V,
+        to_type: T,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        self.build_cast(op, from_value, to_type, name).unwrap()
+    }
+
+    fn new_build_bitcast<T, V>(&self, val: V, ty: T, name: &str) -> BasicValueEnum<'ctx>
+    where
+        T: BasicType<'ctx>,
+        V: BasicValue<'ctx>,
+    {
+        self.build_bitcast(val, ty, name).unwrap()
+    }
+
+    fn new_build_pointer_cast<T: PointerMathValue<'ctx>>(
+        &self,
+        from: T,
+        to: T::BaseType,
+        name: &str,
+    ) -> T {
+        self.build_pointer_cast(from, to, name).unwrap()
+    }
+
+    fn new_build_int_cast<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        int_type: T::BaseType,
+        name: &str,
+    ) -> T {
+        self.build_int_cast(int, int_type, name).unwrap()
+    }
+
+    fn new_build_int_cast_sign_flag<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        int_type: T::BaseType,
+        is_signed: bool,
+        name: &str,
+    ) -> T {
+        self.build_int_cast_sign_flag(int, int_type, is_signed, name)
+            .unwrap()
+    }
+
+    fn new_build_float_cast<T: FloatMathValue<'ctx>>(
+        &self,
+        float: T,
+        float_type: T::BaseType,
+        name: &str,
+    ) -> T {
+        self.build_float_cast(float, float_type, name).unwrap()
+    }
+
+    fn new_build_call(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> CallSiteValue<'ctx> {
+        self.build_call(function, args, name).unwrap()
+    }
+
+    fn new_build_indirect_call(
+        &self,
+        function_type: FunctionType<'ctx>,
+        function_pointer: PointerValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> CallSiteValue<'ctx> {
+        self.build_indirect_call(function_type, function_pointer, args, name)
+            .unwrap()
+    }
+
+    fn new_build_ptr_to_int<T: PointerMathValue<'ctx>>(
+        &self,
+        ptr: T,
+        int_type: <T::BaseType as PointerMathType<'ctx>>::PtrConvType,
+        name: &str,
+    ) -> <<T::BaseType as PointerMathType<'ctx>>::PtrConvType as IntMathType<'ctx>>::ValueType {
+        self.build_ptr_to_int(ptr, int_type, name).unwrap()
+    }
+
+    fn new_build_int_to_ptr<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        ptr_type: <T::BaseType as IntMathType<'ctx>>::PtrConvType,
+        name: &str,
+    ) -> <<T::BaseType as IntMathType<'ctx>>::PtrConvType as PointerMathType<'ctx>>::ValueType {
+        self.build_int_to_ptr(int, ptr_type, name).unwrap()
+    }
+
+    fn new_build_is_null<T: PointerMathValue<'ctx>>(
+        &self,
+        ptr: T,
+        name: &str,
+    ) -> <<T::BaseType as PointerMathType<'ctx>>::PtrConvType as IntMathType<'ctx>>::ValueType {
+        self.build_is_null(ptr, name).unwrap()
+    }
+
+    fn new_build_is_not_null<T: PointerMathValue<'ctx>>(
+        &self,
+        ptr: T,
+        name: &str,
+    ) -> <<T::BaseType as PointerMathType<'ctx>>::PtrConvType as IntMathType<'ctx>>::ValueType {
+        self.build_is_not_null(ptr, name).unwrap()
+    }
+
+    fn new_build_phi<T: BasicType<'ctx>>(&self, type_: T, name: &str) -> PhiValue<'ctx> {
+        self.build_phi(type_, name).unwrap()
+    }
+
+    fn new_build_select<BV: BasicValue<'ctx>, IMV: IntMathValue<'ctx>>(
+        &self,
+        condition: IMV,
+        then: BV,
+        else_: BV,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        self.build_select(condition, then, else_, name).unwrap()
+    }
+
+    fn new_build_and<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_and(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_or<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_or(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_xor<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_xor(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_not<T: IntMathValue<'ctx>>(&self, value: T, name: &str) -> T {
+        self.build_not(value, name).unwrap()
+    }
+
+    fn new_build_int_neg<T: IntMathValue<'ctx>>(&self, value: T, name: &str) -> T {
+        self.build_int_neg(value, name).unwrap()
+    }
+
+    fn new_build_int_add<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_add(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_sub<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_sub(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_mul<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_mul(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_signed_rem<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_signed_rem(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_unsigned_rem<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_unsigned_rem(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_signed_div<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_signed_div(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_unsigned_div<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_int_unsigned_div(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_compare<T: IntMathValue<'ctx>>(
+        &self,
+        op: IntPredicate,
+        lhs: T,
+        rhs: T,
+        name: &str,
+    ) -> <T::BaseType as IntMathType<'ctx>>::ValueType {
+        self.build_int_compare(op, lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_float_neg<T: FloatMathValue<'ctx>>(&self, value: T, name: &str) -> T {
+        self.build_float_neg(value, name).unwrap()
+    }
+
+    fn new_build_float_add<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_float_add(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_float_sub<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_float_sub(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_float_mul<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_float_mul(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_float_div<T: FloatMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_float_div(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_float_compare<T: FloatMathValue<'ctx>>(
+        &self,
+        op: FloatPredicate,
+        lhs: T,
+        rhs: T,
+        name: &str,
+    ) -> <<T::BaseType as FloatMathType<'ctx>>::MathConvType as IntMathType<'ctx>>::ValueType {
+        self.build_float_compare(op, lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_right_shift<T: IntMathValue<'ctx>>(
+        &self,
+        lhs: T,
+        rhs: T,
+        sign_extend: bool,
+        name: &str,
+    ) -> T {
+        self.build_right_shift(lhs, rhs, sign_extend, name).unwrap()
+    }
+
+    fn new_build_left_shift<T: IntMathValue<'ctx>>(&self, lhs: T, rhs: T, name: &str) -> T {
+        self.build_left_shift(lhs, rhs, name).unwrap()
+    }
+
+    fn new_build_int_z_extend<T: IntMathValue<'ctx>>(
+        &self,
+        int_value: T,
+        int_type: T::BaseType,
+        name: &str,
+    ) -> T {
+        self.build_int_z_extend(int_value, int_type, name).unwrap()
+    }
+
+    fn new_build_signed_int_to_float<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        float_type: <T::BaseType as IntMathType<'ctx>>::MathConvType,
+        name: &str,
+    ) -> <<T::BaseType as IntMathType<'ctx>>::MathConvType as FloatMathType<'ctx>>::ValueType {
+        self.build_signed_int_to_float(int, float_type, name)
+            .unwrap()
+    }
+
+    fn new_build_unsigned_int_to_float<T: IntMathValue<'ctx>>(
+        &self,
+        int: T,
+        float_type: <T::BaseType as IntMathType<'ctx>>::MathConvType,
+        name: &str,
+    ) -> <<T::BaseType as IntMathType<'ctx>>::MathConvType as FloatMathType<'ctx>>::ValueType {
+        self.build_unsigned_int_to_float(int, float_type, name)
+            .unwrap()
+    }
+
+    fn new_build_return(&self, value: Option<&dyn BasicValue<'ctx>>) -> InstructionValue<'ctx> {
+        self.build_return(value).unwrap()
+    }
+
+    fn new_build_switch(
+        &self,
+        value: IntValue<'ctx>,
+        else_block: BasicBlock<'ctx>,
+        cases: &[(IntValue<'ctx>, BasicBlock<'ctx>)],
+    ) -> InstructionValue<'ctx> {
+        self.build_switch(value, else_block, cases).unwrap()
+    }
+
+    fn new_build_conditional_branch(
+        &self,
+        comparison: IntValue<'ctx>,
+        then_block: BasicBlock<'ctx>,
+        else_block: BasicBlock<'ctx>,
+    ) -> InstructionValue<'ctx> {
+        self.build_conditional_branch(comparison, then_block, else_block)
+            .unwrap()
+    }
+
+    fn new_build_unconditional_branch(
+        &self,
+        destination_block: BasicBlock<'ctx>,
+    ) -> InstructionValue<'ctx> {
+        self.build_unconditional_branch(destination_block).unwrap()
+    }
+
+    fn new_build_unreachable(&self) -> InstructionValue<'ctx> {
+        self.build_unreachable().unwrap()
+    }
+
+    fn new_build_free(&self, ptr: PointerValue<'ctx>) -> InstructionValue<'ctx> {
+        self.build_free(ptr).unwrap()
     }
 }
 
@@ -276,7 +792,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
         let call = self
             .builder
-            .build_call(fn_val, arg_vals.into_bump_slice(), "call");
+            .new_build_call(fn_val, arg_vals.into_bump_slice(), "call");
 
         call.set_call_convention(fn_val.get_call_conventions());
 
@@ -321,7 +837,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     ) -> PointerValue<'ctx> {
         let function = self.module.get_function("roc_alloc").unwrap();
         let alignment = self.alignment_const(alignment);
-        let call = self.builder.build_call(
+        let call = self.builder.new_build_call(
             function,
             &[number_of_bytes.into(), alignment.into()],
             "roc_alloc",
@@ -341,7 +857,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let alignment = self.alignment_const(alignment);
         let call =
             self.builder
-                .build_call(function, &[ptr.into(), alignment.into()], "roc_dealloc");
+                .new_build_call(function, &[ptr.into(), alignment.into()], "roc_dealloc");
 
         call.set_call_convention(C_CALL_CONV);
 
@@ -386,8 +902,8 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
                 // we need to pass the message by reference, but we currently hold the value.
                 let alloca = env
                     .builder
-                    .build_alloca(message.get_type(), "alloca_panic_msg");
-                env.builder.build_store(alloca, message);
+                    .new_build_alloca(message.get_type(), "alloca_panic_msg");
+                env.builder.new_build_store(alloca, message);
                 alloca.into()
             }
             PtrWidth::Bytes8 => {
@@ -398,7 +914,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
         let call = self
             .builder
-            .build_call(function, &[msg.into(), tag_id.into()], "roc_panic");
+            .new_build_call(function, &[msg.into(), tag_id.into()], "roc_panic");
 
         call.set_call_convention(C_CALL_CONV);
     }
@@ -467,42 +983,42 @@ pub fn module_from_builtins<'ctx>(
     // In the build script for the builtins module, we compile the builtins into LLVM bitcode
 
     let bitcode_bytes: &[u8] = if target == &target_lexicon::Triple::host() {
-        include_bytes!("../../../builtins/bitcode/builtins-host.bc")
+        include_bytes!("../../../builtins/bitcode/zig-out/builtins-host.bc")
     } else {
         match target {
             Triple {
                 architecture: Architecture::Wasm32,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-wasm32.bc")
+                include_bytes!("../../../builtins/bitcode/zig-out/builtins-wasm32.bc")
             }
             Triple {
                 architecture: Architecture::X86_32(_),
                 operating_system: OperatingSystem::Linux,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-i386.bc")
+                include_bytes!("../../../builtins/bitcode/zig-out/builtins-x86.bc")
             }
             Triple {
                 architecture: Architecture::X86_64,
                 operating_system: OperatingSystem::Linux,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-x86_64.bc")
+                include_bytes!("../../../builtins/bitcode/zig-out/builtins-x86_64.bc")
             }
             Triple {
                 architecture: Architecture::Aarch64(Aarch64Architecture::Aarch64),
                 operating_system: OperatingSystem::Linux,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-aarch64.bc")
+                include_bytes!("../../../builtins/bitcode/zig-out/builtins-aarch64.bc")
             }
             Triple {
                 architecture: Architecture::X86_64,
                 operating_system: OperatingSystem::Windows,
                 ..
             } => {
-                include_bytes!("../../../builtins/bitcode/builtins-windows-x86_64.bc")
+                include_bytes!("../../../builtins/bitcode/zig-out/builtins-windows-x86_64.bc")
             }
             _ => panic!("The zig builtins are not currently built for this target: {target:?}"),
         }
@@ -569,7 +1085,9 @@ pub fn construct_optimization_passes<'a>(
         fpm.add_licm_pass();
 
         // turn invoke into call
-        mpm.add_prune_eh_pass();
+        // TODO: is this pass needed. It theoretically prunes unused exception handling info.
+        // This seems unrelated to the comment above. It also seems to be missing in llvm-16.
+        // mpm.add_prune_eh_pass();
 
         // remove unused global values (often the `_wrapper` can be removed)
         mpm.add_global_dce_pass();
@@ -703,7 +1221,8 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         let number_of_bytes = env.ptr_int().const_int(size as _, false);
         let void_ptr = env.call_alloc(number_of_bytes, alignment);
 
-        let ptr = builder.build_pointer_cast(void_ptr, output_type.into_pointer_type(), "cast_ptr");
+        let ptr =
+            builder.new_build_pointer_cast(void_ptr, output_type.into_pointer_type(), "cast_ptr");
 
         store_roc_value(
             env,
@@ -713,7 +1232,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
             roc_main_fn_result,
         );
 
-        builder.build_return(Some(&ptr));
+        builder.new_build_return(Some(&ptr));
 
         c_function
     };
@@ -832,7 +1351,7 @@ fn const_str_alloca_ptr<'ctx>(
 
     let alloca = create_entry_block_alloca(env, parent, typ.into(), "const_str_store");
 
-    env.builder.build_store(alloca, value);
+    env.builder.new_build_store(alloca, value);
 
     alloca
 }
@@ -860,7 +1379,7 @@ fn small_str_ptr_width_8<'ctx>(
 
     let address_space = AddressSpace::default();
     let ptr_type = env.context.i8_type().ptr_type(address_space);
-    let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
+    let ptr = env.builder.new_build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
     const_str_alloca_ptr(env, parent, ptr, len, cap)
 }
@@ -884,7 +1403,7 @@ fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> St
 
     let address_space = AddressSpace::default();
     let ptr_type = env.context.i8_type().ptr_type(address_space);
-    let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
+    let ptr = env.builder.new_build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
     struct_from_fields(
         env,
@@ -1020,7 +1539,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
 {
     let struct_ptr = env
         .builder
-        .build_bitcast(
+        .new_build_bitcast(
             input_pointer,
             struct_type.ptr_type(AddressSpace::default()),
             "struct_ptr",
@@ -1029,10 +1548,12 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
 
     // Insert field exprs into struct_val
     for (index, (field_layout, field_value)) in values {
-        let field_ptr = env
-            .builder
-            .new_build_struct_gep(struct_type, struct_ptr, index as u32, "field_struct_gep")
-            .unwrap();
+        let field_ptr = env.builder.new_build_struct_gep(
+            struct_type,
+            struct_ptr,
+            index as u32,
+            "field_struct_gep",
+        );
 
         store_roc_value(
             env,
@@ -1148,14 +1669,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let check_if_unique = ctx.append_basic_block(parent, "check_if_unique");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
-            env.builder.build_unconditional_branch(check_if_null);
+            env.builder.new_build_unconditional_branch(check_if_null);
 
             env.builder.position_at_end(check_if_null);
 
-            env.builder.build_conditional_branch(
+            env.builder.new_build_conditional_branch(
                 // have llvm optimizations clean this up
                 if layout_interner.is_nullable(layout) {
-                    env.builder.build_is_null(tag_ptr, "is_tag_null")
+                    env.builder.new_build_is_null(tag_ptr, "is_tag_null")
                 } else {
                     env.context.bool_type().const_int(false as _, false)
                 },
@@ -1183,7 +1704,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             };
 
             env.builder
-                .build_conditional_branch(is_unique, then_block, else_block);
+                .new_build_conditional_branch(is_unique, then_block, else_block);
 
             {
                 // reset, when used on a unique reference, eagerly decrements the components of the
@@ -1191,26 +1712,26 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 env.builder.position_at_end(then_block);
 
                 let reset_function = build_reset(env, layout_interner, layout_ids, union_layout);
-                let call = env
-                    .builder
-                    .build_call(reset_function, &[tag_ptr.into()], "call_reset");
+                let call =
+                    env.builder
+                        .new_build_call(reset_function, &[tag_ptr.into()], "call_reset");
 
                 call.set_call_convention(FAST_CALL_CONV);
 
                 let _ = call.try_as_basic_value();
 
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_unconditional_branch(cont_block);
             }
             {
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(else_block);
                 refcount_ptr.decrement(env, layout_interner, layout_interner.get_repr(layout));
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_unconditional_branch(cont_block);
             }
             {
                 env.builder.position_at_end(cont_block);
-                let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
+                let phi = env.builder.new_build_phi(tag_ptr.get_type(), "branch");
 
                 let null_ptr = tag_ptr.get_type().const_null();
                 phi.add_incoming(&[
@@ -1240,14 +1761,14 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let check_if_unique = ctx.append_basic_block(parent, "check_if_unique");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
-            env.builder.build_unconditional_branch(check_if_null);
+            env.builder.new_build_unconditional_branch(check_if_null);
 
             env.builder.position_at_end(check_if_null);
 
-            env.builder.build_conditional_branch(
+            env.builder.new_build_conditional_branch(
                 // have llvm optimizations clean this up
                 if layout_interner.is_nullable(layout) {
-                    env.builder.build_is_null(tag_ptr, "is_tag_null")
+                    env.builder.new_build_is_null(tag_ptr, "is_tag_null")
                 } else {
                     env.context.bool_type().const_int(false as _, false)
                 },
@@ -1282,18 +1803,18 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let parent_block = env.builder.get_insert_block().unwrap();
 
             env.builder
-                .build_conditional_branch(is_unique, cont_block, not_unique_block);
+                .new_build_conditional_branch(is_unique, cont_block, not_unique_block);
 
             {
                 // If reset is used on a shared, non-reusable reference, it behaves
                 // like dec and returns NULL, which instructs reuse to behave like ctor
                 env.builder.position_at_end(not_unique_block);
                 refcount_ptr.decrement(env, layout_interner, layout_interner.get_repr(layout));
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_unconditional_branch(cont_block);
             }
             {
                 env.builder.position_at_end(cont_block);
-                let phi = env.builder.build_phi(tag_ptr.get_type(), "branch");
+                let phi = env.builder.new_build_phi(tag_ptr.get_type(), "branch");
 
                 let null_ptr = tag_ptr.get_type().const_null();
                 phi.add_incoming(&[
@@ -1344,36 +1865,30 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     let struct_layout = LayoutRepr::struct_(field_layouts);
                     let struct_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
-                    let opaque_data_ptr = env
-                        .builder
-                        .new_build_struct_gep(
-                            basic_type_from_layout(
-                                env,
-                                layout_interner,
-                                layout_interner.get_repr(structure_layout),
-                            )
-                            .into_struct_type(),
-                            argument.into_pointer_value(),
-                            RocUnion::TAG_DATA_INDEX,
-                            "get_opaque_data_ptr",
+                    let opaque_data_ptr = env.builder.new_build_struct_gep(
+                        basic_type_from_layout(
+                            env,
+                            layout_interner,
+                            layout_interner.get_repr(structure_layout),
                         )
-                        .unwrap();
+                        .into_struct_type(),
+                        argument.into_pointer_value(),
+                        RocUnion::TAG_DATA_INDEX,
+                        "get_opaque_data_ptr",
+                    );
 
-                    let data_ptr = env.builder.build_pointer_cast(
+                    let data_ptr = env.builder.new_build_pointer_cast(
                         opaque_data_ptr,
                         struct_type.ptr_type(AddressSpace::default()),
                         "to_data_pointer",
                     );
 
-                    let element_ptr = env
-                        .builder
-                        .new_build_struct_gep(
-                            struct_type.into_struct_type(),
-                            data_ptr,
-                            *index as _,
-                            "get_opaque_data_ptr",
-                        )
-                        .unwrap();
+                    let element_ptr = env.builder.new_build_struct_gep(
+                        struct_type.into_struct_type(),
+                        data_ptr,
+                        *index as _,
+                        "get_opaque_data_ptr",
+                    );
 
                     load_roc_value(
                         env,
@@ -1613,7 +2128,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             let ptr = entry_block_alloca_zerofill(env, element_type, "stack_value");
 
             if let Some(initializer) = initializer {
-                env.builder.build_store(ptr, scope.load_symbol(initializer));
+                env.builder
+                    .new_build_store(ptr, scope.load_symbol(initializer));
             }
 
             ptr.into()
@@ -1654,14 +2170,12 @@ fn build_wrapped_tag<'a, 'ctx>(
     let struct_type = env.context.struct_type(&field_types, false);
 
     if union_layout.stores_tag_id_as_data(env.target_info) {
-        let tag_id_ptr = builder
-            .new_build_struct_gep(
-                union_struct_type,
-                raw_data_ptr,
-                RocUnion::TAG_ID_INDEX,
-                "tag_id_index",
-            )
-            .unwrap();
+        let tag_id_ptr = builder.new_build_struct_gep(
+            union_struct_type,
+            raw_data_ptr,
+            RocUnion::TAG_ID_INDEX,
+            "tag_id_index",
+        );
 
         let tag_id_type = basic_type_from_layout(
             env,
@@ -1671,16 +2185,14 @@ fn build_wrapped_tag<'a, 'ctx>(
         .into_int_type();
 
         env.builder
-            .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
+            .new_build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
-        let opaque_struct_ptr = builder
-            .new_build_struct_gep(
-                union_struct_type,
-                raw_data_ptr,
-                RocUnion::TAG_DATA_INDEX,
-                "tag_data_index",
-            )
-            .unwrap();
+        let opaque_struct_ptr = builder.new_build_struct_gep(
+            union_struct_type,
+            raw_data_ptr,
+            RocUnion::TAG_DATA_INDEX,
+            "tag_data_index",
+        );
 
         struct_pointer_from_fields(
             env,
@@ -1730,7 +2242,7 @@ fn build_tag_field_value<'a, 'ctx>(
 
         // we store recursive pointers as `i64*`
         env.builder
-            .build_pointer_cast(
+            .new_build_pointer_cast(
                 value.into_pointer_value(),
                 env.context.i64_type().ptr_type(AddressSpace::default()),
                 "cast_recursive_pointer",
@@ -1806,7 +2318,7 @@ fn build_tag<'a, 'ctx>(
 
             let tag_alloca = env
                 .builder
-                .build_alloca(roc_union.struct_type(), "tag_alloca");
+                .new_build_alloca(roc_union.struct_type(), "tag_alloca");
 
             roc_union.write_struct_data(
                 env,
@@ -1956,7 +2468,7 @@ fn tag_pointer_set_tag_id<'ctx>(
 
     let tag_id_intval = env.ptr_int().const_int(tag_id as u64, false);
 
-    let cast_pointer = env.builder.build_pointer_cast(
+    let cast_pointer = env.builder.new_build_pointer_cast(
         pointer,
         env.context.i8_type().ptr_type(AddressSpace::default()),
         "cast_to_i8_ptr",
@@ -1973,7 +2485,7 @@ fn tag_pointer_set_tag_id<'ctx>(
     };
 
     env.builder
-        .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
+        .new_build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
 pub fn tag_pointer_tag_id_bits_and_mask(target_info: TargetInfo) -> (u64, u64) {
@@ -1990,13 +2502,13 @@ pub fn tag_pointer_read_tag_id<'ctx>(
     let (_, mask) = tag_pointer_tag_id_bits_and_mask(env.target_info);
     let ptr_int = env.ptr_int();
 
-    let as_int = env.builder.build_ptr_to_int(pointer, ptr_int, "to_int");
+    let as_int = env.builder.new_build_ptr_to_int(pointer, ptr_int, "to_int");
     let mask_intval = env.ptr_int().const_int(mask, false);
 
-    let masked = env.builder.build_and(as_int, mask_intval, "mask");
+    let masked = env.builder.new_build_and(as_int, mask_intval, "mask");
 
     env.builder
-        .build_int_cast_sign_flag(masked, env.context.i8_type(), false, "to_u8")
+        .new_build_int_cast_sign_flag(masked, env.context.i8_type(), false, "to_u8")
 }
 
 pub fn tag_pointer_clear_tag_id<'ctx>(
@@ -2007,15 +2519,15 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
 
     let as_int = env
         .builder
-        .build_ptr_to_int(pointer, env.ptr_int(), "to_int");
+        .new_build_ptr_to_int(pointer, env.ptr_int(), "to_int");
 
     let mask = env.ptr_int().const_int(tag_id_bits_mask, false);
 
-    let current_tag_id = env.builder.build_and(as_int, mask, "masked");
+    let current_tag_id = env.builder.new_build_and(as_int, mask, "masked");
 
-    let index = env.builder.build_int_neg(current_tag_id, "index");
+    let index = env.builder.new_build_int_neg(current_tag_id, "index");
 
-    let cast_pointer = env.builder.build_pointer_cast(
+    let cast_pointer = env.builder.new_build_pointer_cast(
         pointer,
         env.context.i8_type().ptr_type(AddressSpace::default()),
         "cast_to_i8_ptr",
@@ -2031,7 +2543,7 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
     };
 
     env.builder
-        .build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
+        .new_build_pointer_cast(indexed_pointer, pointer.get_type(), "cast_from_i8_ptr")
 }
 
 fn allocate_tag<'a, 'ctx>(
@@ -2045,14 +2557,14 @@ fn allocate_tag<'a, 'ctx>(
     match reuse_allocation {
         Some(ptr) => {
             // check if its a null pointer
-            let is_null_ptr = env.builder.build_is_null(ptr, "is_null_ptr");
+            let is_null_ptr = env.builder.new_build_is_null(ptr, "is_null_ptr");
             let ctx = env.context;
             let then_block = ctx.append_basic_block(parent, "then_allocate_fresh");
             let else_block = ctx.append_basic_block(parent, "else_reuse");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
             env.builder
-                .build_conditional_branch(is_null_ptr, then_block, else_block);
+                .new_build_conditional_branch(is_null_ptr, then_block, else_block);
 
             let raw_ptr = {
                 env.builder.position_at_end(then_block);
@@ -2062,7 +2574,7 @@ fn allocate_tag<'a, 'ctx>(
                     *union_layout,
                     tags,
                 );
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_unconditional_branch(cont_block);
                 raw_ptr
             };
 
@@ -2071,14 +2583,14 @@ fn allocate_tag<'a, 'ctx>(
 
                 let cleared = tag_pointer_clear_tag_id(env, ptr);
 
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_unconditional_branch(cont_block);
 
                 cleared
             };
 
             {
                 env.builder.position_at_end(cont_block);
-                let phi = env.builder.build_phi(raw_ptr.get_type(), "branch");
+                let phi = env.builder.new_build_phi(raw_ptr.get_type(), "branch");
 
                 phi.add_incoming(&[(&raw_ptr, then_block), (&reuse_ptr, else_block)]);
 
@@ -2130,23 +2642,23 @@ pub fn get_tag_id<'a, 'ctx>(
         UnionLayout::NonNullableUnwrapped(_) => tag_id_int_type.const_zero(),
         UnionLayout::NullableWrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
-            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+            let is_null = env.builder.new_build_is_null(argument_ptr, "is_null");
 
             let ctx = env.context;
             let then_block = ctx.append_basic_block(parent, "then");
             let else_block = ctx.append_basic_block(parent, "else");
             let cont_block = ctx.append_basic_block(parent, "cont");
 
-            let result = builder.build_alloca(tag_id_int_type, "result");
+            let result = builder.new_build_alloca(tag_id_int_type, "result");
 
             env.builder
-                .build_conditional_branch(is_null, then_block, else_block);
+                .new_build_conditional_branch(is_null, then_block, else_block);
 
             {
                 env.builder.position_at_end(then_block);
                 let tag_id = tag_id_int_type.const_int(*nullable_id as u64, false);
-                env.builder.build_store(result, tag_id);
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_store(result, tag_id);
+                env.builder.new_build_unconditional_branch(cont_block);
             }
 
             {
@@ -2157,8 +2669,8 @@ pub fn get_tag_id<'a, 'ctx>(
                 } else {
                     tag_pointer_read_tag_id(env, argument_ptr)
                 };
-                env.builder.build_store(result, tag_id);
-                env.builder.build_unconditional_branch(cont_block);
+                env.builder.new_build_store(result, tag_id);
+                env.builder.new_build_unconditional_branch(cont_block);
             }
 
             env.builder.position_at_end(cont_block);
@@ -2169,13 +2681,13 @@ pub fn get_tag_id<'a, 'ctx>(
         }
         UnionLayout::NullableUnwrapped { nullable_id, .. } => {
             let argument_ptr = argument.into_pointer_value();
-            let is_null = env.builder.build_is_null(argument_ptr, "is_null");
+            let is_null = env.builder.new_build_is_null(argument_ptr, "is_null");
 
             let then_value = tag_id_int_type.const_int(*nullable_id as u64, false);
             let else_value = tag_id_int_type.const_int(!*nullable_id as u64, false);
 
             env.builder
-                .build_select(is_null, then_value, else_value, "select_tag_id")
+                .new_build_select(is_null, then_value, else_value, "select_tag_id")
                 .into_int_value()
         }
     }
@@ -2231,20 +2743,18 @@ fn union_field_ptr_at_index_help<'a, 'ctx>(
         }
     };
 
-    let data_ptr = env.builder.build_pointer_cast(
+    let data_ptr = env.builder.new_build_pointer_cast(
         value,
         struct_type.ptr_type(AddressSpace::default()),
         "cast_lookup_at_index_ptr",
     );
 
-    builder
-        .new_build_struct_gep(
-            struct_type,
-            data_ptr,
-            index as u32,
-            "at_index_struct_gep_data",
-        )
-        .unwrap()
+    builder.new_build_struct_gep(
+        struct_type,
+        data_ptr,
+        index as u32,
+        "at_index_struct_gep_data",
+    )
 }
 
 fn union_field_ptr_at_index<'a, 'ctx>(
@@ -2330,7 +2840,7 @@ pub fn allocate_with_refcount<'a, 'ctx>(
     let data_ptr = reserve_with_refcount(env, layout_interner, layout);
 
     // store the value in the pointer
-    env.builder.build_store(data_ptr, value);
+    env.builder.new_build_store(data_ptr, value);
 
     data_ptr
 }
@@ -2354,7 +2864,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let ptr_type = value_type.ptr_type(AddressSpace::default());
 
     env.builder
-        .build_pointer_cast(ptr, ptr_type, "alloc_cast_to_desired")
+        .new_build_pointer_cast(ptr, ptr_type, "alloc_cast_to_desired")
 }
 
 fn list_literal<'a, 'ctx>(
@@ -2502,7 +3012,7 @@ fn list_literal<'a, 'ctx>(
                     builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
                 };
 
-                builder.build_store(elem_ptr, val);
+                builder.new_build_store(elem_ptr, val);
             }
 
             super::build_list::store_list(env, ptr, list_length_intval).into()
@@ -2570,7 +3080,7 @@ pub fn use_roc_value<'a, 'ctx>(
             name,
         );
 
-        env.builder.build_store(alloca, source);
+        env.builder.new_build_store(alloca, source);
 
         alloca.into()
     } else {
@@ -2588,9 +3098,11 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
     let target_type =
         basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
             .ptr_type(AddressSpace::default());
-    let destination =
-        env.builder
-            .build_pointer_cast(opaque_destination, target_type, "store_roc_value_opaque");
+    let destination = env.builder.new_build_pointer_cast(
+        opaque_destination,
+        target_type,
+        "store_roc_value_opaque",
+    );
 
     store_roc_value(
         env,
@@ -2619,16 +3131,7 @@ pub fn store_roc_value<'a, 'ctx>(
             value.into_pointer_value(),
         );
     } else {
-        let destination_type = destination
-            .get_type()
-            .get_element_type()
-            .try_into()
-            .unwrap();
-
-        let value =
-            cast_if_necessary_for_opaque_recursive_pointers(env.builder, value, destination_type);
-
-        env.builder.build_store(destination, value);
+        env.builder.new_build_store(destination, value);
     }
 }
 
@@ -2773,7 +3276,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                         basic_type
                     };
 
-                    let phi_node = env.builder.build_phi(phi_type, "joinpointarg");
+                    let phi_node = env.builder.new_build_phi(phi_type, "joinpointarg");
                     joinpoint_args.push(phi_node);
                 }
 
@@ -2836,7 +3339,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 phi_value.add_incoming(&[(&value, current_block)]);
             }
 
-            builder.build_unconditional_branch(*cont_block);
+            builder.new_build_unconditional_branch(*cont_block);
 
             // This doesn't currently do anything
             context.i64_type().const_zero().into()
@@ -2917,10 +3420,12 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                                 let then_block = env.context.append_basic_block(parent, "then");
                                 let done_block = env.context.append_basic_block(parent, "done");
 
-                                let condition =
-                                    env.builder.build_is_not_null(value_ptr, "box_is_not_null");
-                                env.builder
-                                    .build_conditional_branch(condition, then_block, done_block);
+                                let condition = env
+                                    .builder
+                                    .new_build_is_not_null(value_ptr, "box_is_not_null");
+                                env.builder.new_build_conditional_branch(
+                                    condition, then_block, done_block,
+                                );
 
                                 {
                                     env.builder.position_at_end(then_block);
@@ -2932,7 +3437,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                                         layout_interner.get_repr(layout),
                                     );
 
-                                    env.builder.build_unconditional_branch(done_block);
+                                    env.builder.new_build_unconditional_branch(done_block);
                                 }
 
                                 env.builder.position_at_end(done_block);
@@ -2959,7 +3464,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 Free(symbol) => {
                     // unconditionally deallocate the symbol
                     let (value, layout) = scope.load_symbol_and_layout(symbol);
-                    let alignment = layout_interner.alignment_bytes(layout);
+                    let alignment = layout_interner.allocation_alignment_bytes(layout);
 
                     debug_assert!(value.is_pointer_value());
                     let value = value.into_pointer_value();
@@ -3038,7 +3543,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
             let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
 
-            let condition = bd.build_int_compare(
+            let condition = bd.new_build_int_compare(
                 IntPredicate::EQ,
                 cond.into_int_value(),
                 context.bool_type().const_int(1, false),
@@ -3048,7 +3553,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
 
-            bd.build_conditional_branch(condition, then_block, throw_block);
+            bd.new_build_conditional_branch(condition, then_block, throw_block);
 
             if env.mode.runs_expects() {
                 bd.position_at_end(throw_block);
@@ -3073,7 +3578,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             crate::llvm::expect::notify_parent_expect(env, &shared_memory);
                         }
 
-                        bd.build_unconditional_branch(then_block);
+                        bd.new_build_unconditional_branch(then_block);
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
@@ -3082,7 +3587,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 }
             } else {
                 bd.position_at_end(throw_block);
-                bd.build_unconditional_branch(then_block);
+                bd.new_build_unconditional_branch(then_block);
             }
 
             bd.position_at_end(then_block);
@@ -3110,7 +3615,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
             let (cond, _cond_layout) = scope.load_symbol_and_layout(cond_symbol);
 
-            let condition = bd.build_int_compare(
+            let condition = bd.new_build_int_compare(
                 IntPredicate::EQ,
                 cond.into_int_value(),
                 context.bool_type().const_int(1, false),
@@ -3120,7 +3625,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             let then_block = context.append_basic_block(parent, "then_block");
             let throw_block = context.append_basic_block(parent, "throw_block");
 
-            bd.build_conditional_branch(condition, then_block, throw_block);
+            bd.new_build_conditional_branch(condition, then_block, throw_block);
 
             if env.mode.runs_expects() {
                 bd.position_at_end(throw_block);
@@ -3141,7 +3646,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             variables,
                         );
 
-                        bd.build_unconditional_branch(then_block);
+                        bd.new_build_unconditional_branch(then_block);
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
@@ -3150,7 +3655,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                 }
             } else {
                 bd.position_at_end(throw_block);
-                bd.build_unconditional_branch(then_block);
+                bd.new_build_unconditional_branch(then_block);
             }
 
             bd.position_at_end(then_block);
@@ -3187,7 +3692,7 @@ fn build_return<'a, 'ctx>(
         RocReturn::Return => {
             if let Some(block) = env.builder.get_insert_block() {
                 if block.get_terminator().is_none() {
-                    env.builder.build_return(Some(&value));
+                    env.builder.new_build_return(Some(&value));
                 }
             }
         }
@@ -3234,17 +3739,17 @@ fn build_return<'a, 'ctx>(
                     value.into_pointer_value(),
                 );
             } else {
-                env.builder.build_store(destination, value);
+                env.builder.new_build_store(destination, value);
             }
 
             if let Some(block) = env.builder.get_insert_block() {
                 match block.get_terminator() {
                     None => {
-                        env.builder.build_return(None);
+                        env.builder.new_build_return(None);
                     }
                     Some(terminator) => {
                         terminator.remove_from_basic_block();
-                        env.builder.build_return(None);
+                        env.builder.new_build_return(None);
                     }
                 }
             }
@@ -3342,7 +3847,7 @@ pub fn complex_bitcast<'ctx>(
         // it seems like a bitcast only works on integers and pointers
         // and crucially does not work not on arrays
         return builder
-            .build_pointer_cast(
+            .new_build_pointer_cast(
                 from_value.into_pointer_value(),
                 to_type.into_pointer_type(),
                 name,
@@ -3369,7 +3874,7 @@ pub fn complex_bitcast_check_size<'ctx>(
         // and crucially does not work not on arrays
         return env
             .builder
-            .build_pointer_cast(
+            .new_build_pointer_cast(
                 from_value.into_pointer_value(),
                 to_type.into_pointer_type(),
                 name,
@@ -3386,7 +3891,7 @@ pub fn complex_bitcast_check_size<'ctx>(
     let from_size = from_value.get_type().size_of().unwrap();
     let to_size = to_type.size_of().unwrap();
 
-    let condition = env.builder.build_int_compare(
+    let condition = env.builder.new_build_int_compare(
         IntPredicate::UGT,
         from_size,
         to_size,
@@ -3394,25 +3899,25 @@ pub fn complex_bitcast_check_size<'ctx>(
     );
 
     env.builder
-        .build_conditional_branch(condition, then_block, else_block);
+        .new_build_conditional_branch(condition, then_block, else_block);
 
     let then_answer = {
         env.builder.position_at_end(then_block);
         let result = complex_bitcast_from_bigger_than_to(env.builder, from_value, to_type, name);
-        env.builder.build_unconditional_branch(cont_block);
+        env.builder.new_build_unconditional_branch(cont_block);
         result
     };
 
     let else_answer = {
         env.builder.position_at_end(else_block);
         let result = complex_bitcast_to_bigger_than_from(env.builder, from_value, to_type, name);
-        env.builder.build_unconditional_branch(cont_block);
+        env.builder.new_build_unconditional_branch(cont_block);
         result
     };
 
     env.builder.position_at_end(cont_block);
 
-    let result = env.builder.build_phi(then_answer.get_type(), "answer");
+    let result = env.builder.new_build_phi(then_answer.get_type(), "answer");
 
     result.add_incoming(&[(&then_answer, then_block), (&else_answer, else_block)]);
 
@@ -3426,11 +3931,11 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
     name: &str,
 ) -> BasicValueEnum<'ctx> {
     // store the value in memory
-    let argument_pointer = builder.build_alloca(from_value.get_type(), "cast_alloca");
-    builder.build_store(argument_pointer, from_value);
+    let argument_pointer = builder.new_build_alloca(from_value.get_type(), "cast_alloca");
+    builder.new_build_store(argument_pointer, from_value);
 
     // then read it back as a different type
-    let to_type_pointer = builder.build_pointer_cast(
+    let to_type_pointer = builder.new_build_pointer_cast(
         argument_pointer,
         to_type.ptr_type(inkwell::AddressSpace::default()),
         name,
@@ -3448,10 +3953,10 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
     // reserve space in memory with the return type. This way, if the return type is bigger
     // than the input type, we don't access invalid memory when later taking a pointer to
     // the cast value
-    let storage = builder.build_alloca(to_type, "cast_alloca");
+    let storage = builder.new_build_alloca(to_type, "cast_alloca");
 
     // then cast the pointer to our desired type
-    let from_type_pointer = builder.build_pointer_cast(
+    let from_type_pointer = builder.new_build_pointer_cast(
         storage,
         from_value
             .get_type()
@@ -3460,7 +3965,7 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
     );
 
     // store the value in memory
-    builder.build_store(from_type_pointer, from_value);
+    builder.new_build_store(from_type_pointer, from_value);
 
     // then read it back as a different type
     builder.new_build_load(to_type, storage, "cast_value")
@@ -3480,15 +3985,12 @@ fn get_tag_id_wrapped<'a, 'ctx>(
         layout_interner.get_repr(union_layout.tag_id_layout()),
     );
 
-    let tag_id_ptr = env
-        .builder
-        .new_build_struct_gep(
-            union_struct_type,
-            from_value,
-            RocUnion::TAG_ID_INDEX,
-            "tag_id_ptr",
-        )
-        .unwrap();
+    let tag_id_ptr = env.builder.new_build_struct_gep(
+        union_struct_type,
+        from_value,
+        RocUnion::TAG_ID_INDEX,
+        "tag_id_ptr",
+    );
 
     env.builder
         .new_build_load(tag_id_type, tag_id_ptr, "load_tag_id")
@@ -3590,7 +4092,7 @@ fn build_switch_ir<'a, 'ctx>(
             };
 
             builder
-                .build_bitcast(cond_value, int_type, "")
+                .new_build_bitcast(cond_value, int_type, "")
                 .into_int_value()
         }
         LayoutRepr::Union(variant) => {
@@ -3611,7 +4113,7 @@ fn build_switch_ir<'a, 'ctx>(
                 let then_block = context.append_basic_block(parent, "then_block");
                 let else_block = context.append_basic_block(parent, "else_block");
 
-                builder.build_conditional_branch(cond, then_block, else_block);
+                builder.new_build_conditional_branch(cond, then_block, else_block);
 
                 {
                     builder.position_at_end(then_block);
@@ -3627,7 +4129,7 @@ fn build_switch_ir<'a, 'ctx>(
                     );
 
                     if then_block.get_terminator().is_none() {
-                        builder.build_unconditional_branch(cont_block);
+                        builder.new_build_unconditional_branch(cont_block);
                         incoming.push((branch_val, then_block));
                     }
                 }
@@ -3646,7 +4148,7 @@ fn build_switch_ir<'a, 'ctx>(
                     );
 
                     if else_block.get_terminator().is_none() {
-                        builder.build_unconditional_branch(cont_block);
+                        builder.new_build_unconditional_branch(cont_block);
                         incoming.push((branch_val, else_block));
                     }
                 }
@@ -3684,7 +4186,7 @@ fn build_switch_ir<'a, 'ctx>(
             cases.push((int_val, block));
         }
 
-        builder.build_switch(cond, default_block, &cases);
+        builder.new_build_switch(cond, default_block, &cases);
 
         for ((_, _, branch_expr), (_, block)) in branches.iter().zip(cases) {
             builder.position_at_end(block);
@@ -3700,7 +4202,7 @@ fn build_switch_ir<'a, 'ctx>(
             );
 
             if block.get_terminator().is_none() {
-                builder.build_unconditional_branch(cont_block);
+                builder.new_build_unconditional_branch(cont_block);
                 incoming.push((branch_val, block));
             }
         }
@@ -3719,7 +4221,7 @@ fn build_switch_ir<'a, 'ctx>(
         );
 
         if default_block.get_terminator().is_none() {
-            builder.build_unconditional_branch(cont_block);
+            builder.new_build_unconditional_branch(cont_block);
             incoming.push((default_val, default_block));
         }
     }
@@ -3734,7 +4236,7 @@ fn build_switch_ir<'a, 'ctx>(
     } else {
         builder.position_at_end(cont_block);
 
-        let phi = builder.build_phi(ret_type, "branch");
+        let phi = builder.new_build_phi(ret_type, "branch");
 
         for (branch_val, block) in incoming {
             phi.add_incoming(&[(&Into::<BasicValueEnum>::into(branch_val), block)]);
@@ -3759,7 +4261,7 @@ pub fn create_entry_block_alloca<'ctx>(
         None => builder.position_at_end(entry),
     }
 
-    builder.build_alloca(basic_type, name)
+    builder.new_build_alloca(basic_type, name)
 }
 
 fn expose_function_to_host<'a, 'ctx>(
@@ -3871,7 +4373,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
             // not pretty, but seems to cover all our current cases
             if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
                 // bitcast the ptr
-                let fastcc_ptr = env.builder.build_pointer_cast(
+                let fastcc_ptr = env.builder.new_build_pointer_cast(
                     arg.into_pointer_value(),
                     fastcc_type.ptr_type(AddressSpace::default()),
                     "bitcast_arg",
@@ -3882,7 +4384,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
                     .new_build_load(fastcc_type, fastcc_ptr, "load_arg");
                 arguments_for_call.push(loaded);
             } else {
-                let as_cc_type = env.builder.build_pointer_cast(
+                let as_cc_type = env.builder.new_build_pointer_cast(
                     arg.into_pointer_value(),
                     fastcc_type.into_pointer_type(),
                     "to_cc_type_ptr",
@@ -3938,7 +4440,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         output_arg,
         call_result,
     );
-    builder.build_return(None);
+    builder.new_build_return(None);
 
     c_function
 }
@@ -4078,7 +4580,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
         output_arg,
         call_result,
     );
-    builder.build_return(None);
+    builder.new_build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     let size_function_spec = FunctionSpec::cconv(
@@ -4108,7 +4610,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     debug_info_init!(env, size_function);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
-    builder.build_return(Some(&size));
+    builder.new_build_return(Some(&size));
 
     c_function
 }
@@ -4290,7 +4792,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                         c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
                     }
                     // bitcast the ptr
-                    let fastcc_ptr = env.builder.build_pointer_cast(
+                    let fastcc_ptr = env.builder.new_build_pointer_cast(
                         arg.into_pointer_value(),
                         fastcc_type.ptr_type(AddressSpace::default()),
                         "bitcast_arg",
@@ -4317,7 +4819,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
     match cc_return {
         CCReturn::Return => match roc_return {
             RocReturn::Return => {
-                env.builder.build_return(Some(&value));
+                env.builder.new_build_return(Some(&value));
             }
             RocReturn::ByPointer => {
                 let loaded = env.builder.new_build_load(
@@ -4325,14 +4827,14 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                     value.into_pointer_value(),
                     "load_result",
                 );
-                env.builder.build_return(Some(&loaded));
+                env.builder.new_build_return(Some(&loaded));
             }
         },
         CCReturn::ByPointer => {
             let out_ptr = c_function.get_nth_param(0).unwrap().into_pointer_value();
             match roc_return {
                 RocReturn::Return => {
-                    env.builder.build_store(out_ptr, value);
+                    env.builder.new_build_store(out_ptr, value);
                 }
                 RocReturn::ByPointer => {
                     // TODO: ideally, in this case, we should pass the C return pointer directly
@@ -4343,13 +4845,13 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                         value.into_pointer_value(),
                         "load_roc_result",
                     );
-                    env.builder.build_store(out_ptr, value);
+                    env.builder.new_build_store(out_ptr, value);
                 }
             }
-            env.builder.build_return(None);
+            env.builder.new_build_return(None);
         }
         CCReturn::Void => {
-            env.builder.build_return(None);
+            env.builder.new_build_return(None);
         }
     }
 
@@ -4441,7 +4943,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
-    env.builder.build_return(Some(&size));
+    env.builder.new_build_return(Some(&size));
 
     c_function
 }
@@ -4471,7 +4973,7 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
 
     global.set_initializer(&type_.const_zero());
 
-    env.builder.build_pointer_cast(
+    env.builder.new_build_pointer_cast(
         global.as_pointer_value(),
         env.context.i32_type().ptr_type(AddressSpace::default()),
         "cast_sjlj_buffer",
@@ -4493,7 +4995,7 @@ pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> 
             .ptr_type(AddressSpace::default())
             .array_type(5);
 
-        let jmp_buf_i8p_arr = env.builder.build_pointer_cast(
+        let jmp_buf_i8p_arr = env.builder.new_build_pointer_cast(
             jmp_buf,
             buf_type.ptr_type(AddressSpace::default()),
             "jmp_buf [5 x i8*]",
@@ -4515,7 +5017,7 @@ pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> 
                 "frame address index",
             )
         };
-        env.builder.build_store(fa, frame_address);
+        env.builder.new_build_store(fa, frame_address);
 
         // LLVM says that the target implementation of the setjmp intrinsic will put the
         // destination address at index 1, and that the remaining three words are for ad-hoc target
@@ -4530,11 +5032,11 @@ pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> 
             )
         };
         let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
-        env.builder.build_store(ss, stack_save);
+        env.builder.new_build_store(ss, stack_save);
 
         let jmp_buf_i8p = env
             .builder
-            .build_pointer_cast(
+            .new_build_pointer_cast(
                 jmp_buf,
                 env.context.i8_type().ptr_type(AddressSpace::default()),
                 "jmp_buf i8*",
@@ -4595,14 +5097,14 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
         RocReturn::from_layout(layout_interner, layout)
     };
     let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
-    let result_alloca = builder.build_alloca(call_result_type, "result");
+    let result_alloca = builder.new_build_alloca(call_result_type, "result");
 
     let then_block = context.append_basic_block(parent, "then_block");
     let catch_block = context.append_basic_block(parent, "catch_block");
     let cont_block = context.append_basic_block(parent, "cont_block");
 
     let panicked_u32 = build_setjmp_call(env);
-    let panicked_bool = env.builder.build_int_compare(
+    let panicked_bool = env.builder.new_build_int_compare(
         IntPredicate::NE,
         panicked_u32.into_int_value(),
         panicked_u32.get_type().into_int_type().const_zero(),
@@ -4610,7 +5112,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
     );
 
     env.builder
-        .build_conditional_branch(panicked_bool, catch_block, then_block);
+        .new_build_conditional_branch(panicked_bool, catch_block, then_block);
 
     // all went well
     {
@@ -4627,9 +5129,9 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
         let return_value =
             make_good_roc_result(env, layout_interner, roc_return_layout, call_result);
 
-        builder.build_store(result_alloca, return_value);
+        builder.new_build_store(result_alloca, return_value);
 
-        env.builder.build_unconditional_branch(cont_block);
+        env.builder.new_build_unconditional_branch(cont_block);
     }
 
     // something went wrong
@@ -4656,9 +5158,9 @@ fn set_jump_and_catch_long_jump<'a, 'ctx>(
             v3
         };
 
-        builder.build_store(result_alloca, return_value);
+        builder.new_build_store(result_alloca, return_value);
 
-        env.builder.build_unconditional_branch(cont_block);
+        env.builder.new_build_unconditional_branch(cont_block);
     }
 
     env.builder.position_at_end(cont_block);
@@ -5494,7 +5996,7 @@ fn build_closure_caller<'a, 'ctx>(
             return_layout,
         );
 
-        builder.build_store(output, call_result);
+        builder.new_build_store(output, call_result);
     } else {
         let call_result = call_direct_roc_function(
             env,
@@ -5513,11 +6015,11 @@ fn build_closure_caller<'a, 'ctx>(
                 call_result.into_pointer_value(),
             );
         } else {
-            builder.build_store(output, call_result);
+            builder.new_build_store(output, call_result);
         }
     };
 
-    builder.build_return(None);
+    builder.new_build_return(None);
 
     // STEP 3: build a {} -> u64 function that gives the size of the return type
     build_host_exposed_alias_size_help(env, def_name, alias_symbol, Some("result"), result_type);
@@ -5579,7 +6081,7 @@ fn build_host_exposed_alias_size_help<'a, 'ctx>(
     builder.position_at_end(entry);
 
     let size: BasicValueEnum = basic_type.size_of().unwrap().into();
-    builder.build_return(Some(&size));
+    builder.new_build_return(Some(&size));
 }
 
 fn build_proc<'a, 'ctx>(
@@ -5621,7 +6123,7 @@ fn build_proc<'a, 'ctx>(
     // only add a return if codegen did not already add one
     if let Some(block) = builder.get_insert_block() {
         if block.get_terminator().is_none() {
-            builder.build_return(Some(&body));
+            builder.new_build_return(Some(&body));
         }
     }
 }
@@ -5695,11 +6197,10 @@ fn roc_call_erased_with_args<'a, 'ctx>(
     let function_ptr_type = function_type.ptr_type(AddressSpace::default());
 
     let function_pointer = fn_ptr::cast_to_function_ptr_type(env, pointer, function_ptr_type);
-    let callable_function_pointer = CallableValue::try_from(function_pointer).unwrap();
 
     let build_call = |arguments: &[BasicMetadataValueEnum<'ctx>]| {
         env.builder
-            .build_call(callable_function_pointer, arguments, "call")
+            .new_build_indirect_call(function_type, function_pointer, arguments, "call")
     };
 
     call_roc_function_help(
@@ -5722,7 +6223,7 @@ pub(crate) fn call_direct_roc_function<'a, 'ctx>(
     let function_type = roc_function.get_type();
 
     let build_call = |arguments: &[BasicMetadataValueEnum<'ctx>]| {
-        env.builder.build_call(roc_function, arguments, "call")
+        env.builder.new_build_call(roc_function, arguments, "call")
     };
     debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
 
@@ -5754,7 +6255,7 @@ fn call_roc_function_help<'a, 'ctx>(
             arguments.pop();
 
             let result_type = basic_type_from_layout(env, layout_interner, result_layout);
-            let result_alloca = env.builder.build_alloca(result_type, "result_value");
+            let result_alloca = env.builder.new_build_alloca(result_type, "result_value");
 
             arguments.push(result_alloca.into());
 
@@ -5858,7 +6359,7 @@ pub(crate) fn roc_function_call<'a, 'ctx>(
 
     let closure_data_ptr = env
         .builder
-        .build_alloca(closure_data_type, "closure_data_ptr");
+        .new_build_alloca(closure_data_type, "closure_data_ptr");
 
     store_roc_value(
         env,
@@ -6224,7 +6725,7 @@ fn build_foreign_symbol<'a, 'ctx>(
                     Vec::with_capacity_in(fastcc_parameters.len() + 1, env.arena);
 
                 let return_pointer = match roc_return {
-                    RocReturn::Return => env.builder.build_alloca(return_type, "return_value"),
+                    RocReturn::Return => env.builder.new_build_alloca(return_type, "return_value"),
                     RocReturn::ByPointer => fastcc_parameters.pop().unwrap().into_pointer_value(),
                 };
 
@@ -6242,11 +6743,12 @@ fn build_foreign_symbol<'a, 'ctx>(
                             // we need to pass this value by-reference; put it into an alloca
                             // and bitcast the reference
 
-                            let param_alloca =
-                                env.builder.build_alloca(param.get_type(), "param_alloca");
-                            env.builder.build_store(param_alloca, param);
+                            let param_alloca = env
+                                .builder
+                                .new_build_alloca(param.get_type(), "param_alloca");
+                            env.builder.new_build_store(param_alloca, param);
 
-                            let as_cc_type = env.builder.build_pointer_cast(
+                            let as_cc_type = env.builder.new_build_pointer_cast(
                                 param_alloca,
                                 cc_type.into_pointer_type(),
                                 "to_cc_type_ptr",
@@ -6258,7 +6760,7 @@ fn build_foreign_symbol<'a, 'ctx>(
                             // eprintln!("Fastcc type: {:?}", param.get_type());
                             // todo!("C <-> Fastcc interaction that we haven't seen before")
 
-                            let as_cc_type = env.builder.build_pointer_cast(
+                            let as_cc_type = env.builder.new_build_pointer_cast(
                                 param.into_pointer_value(),
                                 cc_type.into_pointer_type(),
                                 "to_cc_type_ptr",
@@ -6268,7 +6770,9 @@ fn build_foreign_symbol<'a, 'ctx>(
                     }
                 }
 
-                let call = env.builder.build_call(cc_function, &cc_arguments, "tmp");
+                let call = env
+                    .builder
+                    .new_build_call(cc_function, &cc_arguments, "tmp");
                 call.set_call_convention(C_CALL_CONV);
 
                 match roc_return {
@@ -6284,13 +6788,13 @@ fn build_foreign_symbol<'a, 'ctx>(
                             CCReturn::Void => return_type.const_zero(),
                         };
 
-                        builder.build_return(Some(&return_value));
+                        builder.new_build_return(Some(&return_value));
                     }
                     RocReturn::ByPointer => {
                         match cc_return {
                             CCReturn::Return => {
                                 let result = call.try_as_basic_value().left().unwrap();
-                                env.builder.build_store(return_pointer, result);
+                                env.builder.new_build_store(return_pointer, result);
                             }
 
                             CCReturn::ByPointer | CCReturn::Void => {
@@ -6298,7 +6802,7 @@ fn build_foreign_symbol<'a, 'ctx>(
                             }
                         }
 
-                        builder.build_return(None);
+                        builder.new_build_return(None);
                     }
                 }
             }
@@ -6324,7 +6828,7 @@ fn define_global_str_literal_ptr<'ctx>(
 ) -> PointerValue<'ctx> {
     let global = define_global_str_literal(env, message);
 
-    let ptr = env.builder.build_pointer_cast(
+    let ptr = env.builder.new_build_pointer_cast(
         global.as_pointer_value(),
         env.context.i8_type().ptr_type(AddressSpace::default()),
         "to_opaque",
@@ -6410,7 +6914,7 @@ pub(crate) fn throw_internal_exception<'ctx>(
 
     env.call_panic(env, str, CrashTag::Roc);
 
-    builder.build_unreachable();
+    builder.new_build_unreachable();
 }
 
 pub(crate) fn throw_exception<'a, 'ctx>(
@@ -6423,7 +6927,7 @@ pub(crate) fn throw_exception<'a, 'ctx>(
 
     env.call_panic(env, msg_val, tag);
 
-    env.builder.build_unreachable();
+    env.builder.new_build_unreachable();
 }
 
 fn get_foreign_symbol<'ctx>(

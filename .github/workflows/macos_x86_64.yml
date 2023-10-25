@@ -19,6 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: set LLVM_SYS_160_PREFIX
+        run: echo "LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)" >> $GITHUB_ENV
+
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+    
+      - run: zig version
+
       - name: test_gen llvm tests
         run: cargo nextest-gen-llvm --release --no-fail-fast --locked -E "package(test_gen) - test(gen_str::str_append_scalar)"
 

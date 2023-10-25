@@ -33,7 +33,7 @@ fn main() {
         generate_bc_file(&bitcode_path, "ir-wasm32", "builtins-wasm32");
     }
 
-    generate_bc_file(&bitcode_path, "ir-i386", "builtins-i386");
+    generate_bc_file(&bitcode_path, "ir-x86", "builtins-x86");
     generate_bc_file(&bitcode_path, "ir-x86_64", "builtins-x86_64");
     generate_bc_file(&bitcode_path, "ir-aarch64", "builtins-aarch64");
     generate_bc_file(
@@ -58,13 +58,13 @@ fn main() {
 }
 
 fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
-    let mut ll_path = bitcode_path.join(file_name);
+    let mut ll_path = bitcode_path.join("zig-out").join(file_name);
     ll_path.set_extension("ll");
     let dest_ir_host = ll_path.to_str().expect("Invalid dest ir path");
 
     println!("Compiling host ir to: {dest_ir_host}");
 
-    let mut bc_path = bitcode_path.join(file_name);
+    let mut bc_path = bitcode_path.join("zig-out").join(file_name);
     bc_path.set_extension("bc");
     let dest_bc_64bit = bc_path.to_str().expect("Invalid dest bc path");
     println!("Compiling 64-bit bitcode to: {dest_bc_64bit}");
