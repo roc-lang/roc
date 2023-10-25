@@ -202,12 +202,12 @@ impl<'a> ImportDispatcher for TestDispatcher<'a> {
             self.wasi.dispatch(function_name, arguments, memory)
         } else if module_name == "env" && function_name == "send_panic_msg_to_rust" {
             let msg_ptr = arguments[0].expect_i32().unwrap();
-            let tag = arguments[1].expect_i32().unwrap();
+            let panic_tag = arguments[1].expect_i32().unwrap();
             let roc_msg = RocStr::decode(memory, msg_ptr as _);
-            let msg = match tag {
-                0 => format!(r#"Roc failed with message: "{}""#, roc_msg),
-                1 => format!(r#"User crash with message: "{}""#, roc_msg),
-                tag => format!(r#"Got an invald panic tag: "{}""#, tag),
+            let msg = match panic_tag {
+                0 => format!(r#"Roc failed with message: "{roc_msg}""#),
+                1 => format!(r#"User crash with message: "{roc_msg}""#),
+                tag => format!(r#"Got an invald panic tag: "{panic_tag}""#),
             };
             panic!("{}", msg)
         } else {
