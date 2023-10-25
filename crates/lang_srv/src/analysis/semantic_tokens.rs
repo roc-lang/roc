@@ -3,6 +3,8 @@ use tower_lsp::lsp_types::SemanticToken;
 
 use super::tokens::Token;
 
+/// Encodes semantic tokens as described in the LSP specification.
+/// See [the sample documentation](https://github.com/microsoft/vscode-extension-samples/blob/5ae1f7787122812dcc84e37427ca90af5ee09f14/semantic-tokens-sample/vscode.proposed.d.ts#L71-L128).
 pub fn arrange_semantic_tokens(
     tokens: impl IntoIterator<Item = Loc<Token>>,
     line_info: &LineInfo,

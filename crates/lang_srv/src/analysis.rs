@@ -79,7 +79,6 @@ impl GlobalAnalysis {
         let mut documents = vec![];
 
         let LoadedModule {
-            module_id,
             interns,
             mut can_problems,
             mut type_problems,
@@ -92,7 +91,6 @@ impl GlobalAnalysis {
         } = module;
 
         let mut root_module = Some(RootModule {
-            module_id,
             subs: solved.into_inner(),
             abilities_store,
         });
@@ -151,7 +149,6 @@ fn path_to_url(path: &Path) -> Url {
 }
 
 struct RootModule {
-    module_id: ModuleId,
     subs: Subs,
     abilities_store: AbilitiesStore,
 }
@@ -273,10 +270,6 @@ pub(crate) struct AnalyzedDocument {
 impl AnalyzedDocument {
     pub fn url(&self) -> &Url {
         &self.url
-    }
-
-    pub fn module_id(&self) -> Option<ModuleId> {
-        self.module.as_ref().map(|m| m.module_id)
     }
 
     fn line_info(&self) -> &LineInfo {

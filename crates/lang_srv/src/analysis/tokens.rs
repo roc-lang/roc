@@ -21,9 +21,12 @@ use roc_region::all::{Loc, Region};
 use tower_lsp::lsp_types::SemanticTokenType;
 
 macro_rules! tokens {
-    ($($token:ident => $lsp_token:literal),* $(,)?) => {
+    ($($(#[$meta:meta])* $token:ident => $lsp_token:literal),* $(,)?) => {
         pub enum Token {
-            $($token),*
+            $(
+                $(#[$meta])*
+                $token
+            ),*
         }
 
         fn _non_redundant_lsp_tokens() {
@@ -47,7 +50,9 @@ tokens! {
     Module => "namespace",
     Type => "type",
     Ability => "interface",
+    #[allow(unused)]
     TypeVariable => "typeParameter",
+    #[allow(unused)]
     Parameter => "parameter",
     Variable => "variable",
     Field => "property",
