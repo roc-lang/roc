@@ -9,6 +9,7 @@ version.workspace = true
 
 [dependencies]
 tempfile.workspace = true
+target-lexicon.workspace = true
 
 [build-dependencies]
 roc_command_utils = { path = "../../../utils/command" }

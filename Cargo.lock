@@ -2222,6 +2222,7 @@ dependencies = [
  "dunce",
  "roc_command_utils",
  "roc_error_macros",
+ "target-lexicon",
  "tempfile",
 ]
 

@@ -464,12 +464,13 @@ pub fn rebuild_host(
         platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
     };
 
-    let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
-    let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
-    let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
+    let env_path = env::var("PATH").unwrap_or_default();
+    let env_home = env::var("HOME").unwrap_or_default();
+    let env_cpath = env::var("CPATH").unwrap_or_default();
 
-    let builtins_host_tempfile =
-        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_tempfile(target)
+        .as_ref()
+        .expect("failed to write host builtins object to tempfile");
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -1231,6 +1232,12 @@ fn link_windows(
 ) -> io::Result<(Child, PathBuf)> {
     match link_type {
         LinkType::Dylib => {
+            #[cfg(windows)]
+            let target = "-native";
+
+            #[cfg(not(windows))]
+            let target = "x86_64-windows-gnu";
+
             let child = zig()
                 .args(["build-lib"])
                 .args(input_paths)
@@ -1238,7 +1245,7 @@ fn link_windows(
                     "-lc",
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
-                    "native",
+                    target,
                     "--pkg-begin",
                     "glue",
                     find_zig_glue_path().to_str().unwrap(),
