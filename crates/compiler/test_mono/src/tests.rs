@@ -237,6 +237,22 @@ fn verify_procedures<'a>(
         panic!("Output changed: resolve conflicts and `git add` the file.");
     }
 }
+#[mono_test]
+fn norbi_no_trmc() {
+    indoc!(
+        r#"
+        ConsList a : [Nil, Cons a (ConsList a)]
+
+        map : ConsList a, (a -> b) -> ConsList b
+        map = \list, f ->
+            when list is
+                Cons x xx -> Cons (f x) (map xx f)
+                Nil -> Nil
+
+        map (Cons 1 (Cons 2 Nil)) Num.neg
+        "#
+    )
+}
 
 #[mono_test]
 fn ir_int_literal() {
