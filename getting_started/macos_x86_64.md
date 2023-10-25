@@ -7,12 +7,10 @@
 In order to develop in Roc, you need to install the Roc CLI,
 which includes the Roc compiler and some helpful utilities.
 
-1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
-
-1. To prevent "roc can't be opened because Apple can't check it...":
+1. 1. Download the latest roc nightly using the terminal:
 
     ```sh
-    xattr -d com.apple.quarantine roc_nightly-macos_x86_64-latest.tar.gz
+    curl -OL roc_nightly-macos_x86_64-latest.tar.gz
     ```
 
 1. Untar the archive:
