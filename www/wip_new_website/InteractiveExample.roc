@@ -3,7 +3,7 @@ interface InteractiveExample
     imports [pf.Html.{ pre, samp }, pf.Html.Attributes.{ class }]
 
 Section : [Desc (List Token) Str, Indent, Outdent, Newline]
-Token : [Kw Str, Ident Str, Str Str, Num Str, Comment Str, ParensAround (List Token)]
+Token : [Kw Str, Ident Str, Str Str, Num Str, Comment Str, Literal Str, ParensAround (List Token), Lambda (List Str)]
 
 view : Html.Node
 view =
@@ -34,11 +34,11 @@ view =
             Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>TODO</p>",
             Outdent,
             Newline,
-            # Desc [Ident "cacheUserInfo", Kw "=", Lambda [Ident "filename"]] "<p>TODO</p>",
-            # Indent,
-            # Desc [Ident "url", Kw "<-", Ident "File.readUtf8", Ident "filename"] "<p>TODO backpassing</p>",
-            # Desc [Kw "|>", Ident "Task.await"] "<p>TODO Task.await</p>",
-            # Newline,
+            Desc [Ident "cacheUserInfo", Kw "=", Lambda ["filename"]] "<p>TODO</p>",
+            Indent,
+            Desc [Ident "url", Kw "<-", Ident "File.readUtf8", Ident "filename"] "<p>TODO backpassing</p>",
+            Desc [Kw "|>", Ident "Task.await"] "<p>TODO Task.await</p>",
+            Newline,
             # Desc [Literal "{", Ident "username", Literal ",", Ident "email", Literal "}", Kw "<-"] "<p>TODO record destructuring and backpassing</p>",
         ]
 
@@ -50,47 +50,53 @@ view =
 
 tokensToStr : List Token -> Str
 tokensToStr = \tokens ->
-    List.walk tokens "" tokenToStr
+    List.walk tokens "" \buf, token ->
+        bufWithSpace =
+            if Str.isEmpty buf then
+                buf
+            else
+                Str.concat buf " "
 
-tokenToStr : Str, Token -> Str
-tokenToStr = \buf, token ->
-    bufWithSpace =
-        if Str.isEmpty buf then
-            buf
-        else
-            Str.concat buf " "
+        when token is
+            ParensAround wrapped ->
+                # Don't put spaces after opening parens or before closing parens
+                bufWithSpace
+                |> Str.concat "<span class=\"kw\">(</span>"
+                |> Str.concat (tokensToStr wrapped)
+                |> Str.concat "<span class=\"kw\">)</span>"
 
-    when token is
-        ParensAround wrapped ->
-            # Don't put spaces after opening parens or before closing parens
-            bufWithSpace
-            |> Str.concat "<span class=\"kw\">(</span>"
-            |> Str.concat (tokensToStr wrapped)
-            |> Str.concat "<span class=\"kw\">)</span>"
+            Lambda args ->
+                # Don't put spaces after opening parens or before closing parens
+                argsWithCommas =
+                    args
+                    |> List.map \ident -> "<span class=\"ident\">\(ident)</span>"
+                    |> Str.joinWith "<span class=\"literal\">,</span> "
 
-        Kw str ->
-            Str.concat bufWithSpace "<span class=\"kw\">\(str)</span>"
+                bufWithSpace
+                |> Str.concat "<span class=\"kw\">\\</span>"
+                |> Str.concat argsWithCommas
+                |> Str.concat "<span class=\"kw\"> -></span>"
 
-        Num str ->
-            Str.concat bufWithSpace "<span class=\"literal\">\(str)</span>"
+            Kw str ->
+                Str.concat bufWithSpace "<span class=\"kw\">\(str)</span>"
 
-        Str str ->
-            Str.concat bufWithSpace "<span class=\"literal\">\(str)</span>"
+            Num str | Str str | Literal str -> # We may render these differently in the future
+                Str.concat bufWithSpace "<span class=\"literal\">\(str)</span>"
 
-        Comment str ->
-            Str.concat bufWithSpace "<span class=\"comment\"># \(str)</span>"
+            Comment str ->
+                Str.concat bufWithSpace "<span class=\"comment\"># \(str)</span>"
 
-        Ident str ->
-            html =
-                List.walk (Str.split str ".") "" \accum, ident ->
-                    identHtml = "<span class=\"ident\">\(ident)</span>"
+            Ident str ->
+                html =
+                    List.walk (Str.split str ".") "" \accum, ident ->
+                        identHtml = "<span class=\"ident\">\(ident)</span>"
 
-                    if Str.isEmpty accum then
-                        identHtml
-                    else
-                        "\(accum)<span class=\"kw\">.</span>\(identHtml)"
+                        if Str.isEmpty accum then
+                            identHtml
+                        else
+                            "\(accum)<span class=\"kw\">.</span>\(identHtml)"
 
-            Str.concat bufWithSpace html
+                Str.concat bufWithSpace html
 
 sectionsToStr : List Section -> Str
 sectionsToStr = \sections ->
