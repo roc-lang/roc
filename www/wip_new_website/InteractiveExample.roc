@@ -3,7 +3,7 @@ interface InteractiveExample
     imports [pf.Html.{ pre, samp }, pf.Html.Attributes.{ class }]
 
 Section : [Desc (List Token) Str, Indent, Outdent, Newline]
-Token : [Kw Str, Ident Str, Str Str, Num Str, Comment Str, ParensAround (List Token), Lambda (List Str)]
+Token : [Kw Str, Ident Str, Str Str, Num Str, Comment Str, ParensAround (List Token)]
 
 view : Html.Node
 view =
@@ -67,18 +67,6 @@ tokenToStr = \buf, token ->
             |> Str.concat "<span class=\"kw\">(</span>"
             |> Str.concat (tokensToStr wrapped)
             |> Str.concat "<span class=\"kw\">)</span>"
-
-        Lambda args ->
-            # Don't put spaces after opening parens or before closing parens
-            argsWithCommas =
-                args
-                |> List.map \ident -> "<span class=\"ident\">\(ident)</span>"
-                |> Str.joinWith "<span class=\"literal\">,</span> "
-
-            bufWithSpace
-            |> Str.concat "<span class=\"kw\">\\</span>"
-            |> Str.concat argsWithCommas
-            |> Str.concat "<span class=\"kw\"> -></span>"
 
         Kw str ->
             Str.concat bufWithSpace "<span class=\"kw\">\(str)</span>"
