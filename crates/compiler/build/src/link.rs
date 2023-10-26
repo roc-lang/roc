@@ -1054,6 +1054,26 @@ fn link_linux(
     Ok((output, output_path))
 }
 
+fn find_macos_sdk_path() -> io::Result<&'static str> {
+    let possiblilities = [
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+    ];
+
+    for path in possiblilities {
+        if Path::new(path).exists() {
+            return Ok(path);
+        }
+    }
+
+    println!("⚠️ ERROR: I couldn't find the macOS SDK path! This may cause problems when linking macOS apps.");
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "Couldn't find macOS SDK path",
+    ))
+}
+
 fn link_macos(
     target: &Triple,
     output_path: PathBuf,
@@ -1104,11 +1124,13 @@ fn link_macos(
         ])
         .args(input_paths);
 
-    let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-    if Path::new(sdk_path).exists() {
-        ld_command.arg(format!("-L{sdk_path}"));
-        ld_command.arg(format!("-L{sdk_path}/swift"));
-    };
+    let sdk_path = find_macos_sdk_path()?;
+
+    let usr_lib_path = format!("{}/usr/lib", sdk_path);
+    let frameworks_path = format!("{}/System/Library/Frameworks", sdk_path);
+
+    ld_command.arg(format!("-L{usr_lib_path}"));
+    ld_command.arg(format!("-L{usr_lib_path}/swift"));
 
     let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
         Ok(flags) => {
@@ -1130,7 +1152,7 @@ fn link_macos(
         "-lpthread",
         // This `-F PATH` flag is needed for `-framework` flags to work
         "-F",
-        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/",
+        &frameworks_path,
         // These frameworks are needed for GUI examples to work
         "-framework",
         "AudioUnit",
