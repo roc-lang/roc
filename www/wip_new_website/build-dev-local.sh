@@ -4,6 +4,12 @@
 
 # NOTE run `bash www/build.sh` to cache local copy of fonts, and repl assets etc
 
+## Get the directory of the currently executing script
+DIR="$(dirname "$0")"
+
+# Change to that directory
+cd "$DIR" || exit
+
 rm -rf dist/
 cp -r ../build dist/
 mkdir -p dist/wip
