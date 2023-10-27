@@ -26,6 +26,7 @@ members = [
   "crates/wasi-libc-sys",
   "crates/wasm_module",
   "crates/wasm_interp",
+  "crates/lang_srv",
 ]
 
 exclude = [

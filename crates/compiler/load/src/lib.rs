@@ -22,7 +22,7 @@ pub use roc_load_internal::file::{
     Threading,
 };
 pub use roc_load_internal::module::{
-    EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
+    CheckedModule, EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
 };
 pub use roc_solve::FunctionKind;
 

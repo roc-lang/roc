@@ -134,7 +134,7 @@ impl<'b> Report<'b> {
     }
 
     /// Render to CI console output, where no colors are available.
-    pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
+    pub fn render_ci(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
         self.pretty(alloc)
