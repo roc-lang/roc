@@ -10,7 +10,7 @@ which includes the Roc compiler and some helpful utilities.
 1. Download the latest roc nightly using the terminal:
 
     ```sh
-    curl -OL roc_nightly-macos_apple_silicon-latest.tar.gz
+    curl -OL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
     ```
 
 1. Untar the archive:
