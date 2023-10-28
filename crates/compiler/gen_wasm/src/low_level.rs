@@ -103,7 +103,6 @@ impl From<&StoredValue> for CodeGenNumType {
     fn from(stored: &StoredValue) -> CodeGenNumType {
         use StoredValue::*;
         match stored {
-            VirtualMachineStack { value_type, .. } => CodeGenNumType::from(*value_type),
             Local { value_type, .. } => CodeGenNumType::from(*value_type),
             StackMemory { format, .. } => CodeGenNumType::from(*format),
         }
@@ -2093,8 +2092,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             Unreachable => match self.ret_storage {
-                StoredValue::VirtualMachineStack { value_type, .. }
-                | StoredValue::Local { value_type, .. } => match value_type {
+                StoredValue::Local { value_type, .. } => match value_type {
                     ValueType::I32 => backend.code_builder.i32_const(0),
                     ValueType::I64 => backend.code_builder.i64_const(0),
                     ValueType::F32 => backend.code_builder.f32_const(0.0),
@@ -2189,7 +2187,7 @@ impl<'a> LowLevelCall<'a> {
         use StoredValue::*;
 
         match backend.storage.get(&self.arguments[0]).to_owned() {
-            VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+            Local { value_type, .. } => {
                 self.load_args(backend);
                 match self.lowlevel {
                     LowLevel::Eq => match value_type {
@@ -2299,7 +2297,7 @@ fn num_is_nan(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2362,7 +2360,7 @@ fn num_is_infinite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2405,7 +2403,7 @@ fn num_is_finite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);

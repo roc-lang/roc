@@ -6,7 +6,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{InLayout, STLayoutInterner};
 
-use crate::code_builder::{CodeBuilder, VmSymbolState};
+use crate::code_builder::CodeBuilder;
 use crate::layout::{stack_memory_arg_types, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::{copy_memory, CopyMemoryConfig, PTR_TYPE};
 use roc_wasm_module::{round_up_to_alignment, Align, LocalId, ValueType};
@@ -33,13 +33,6 @@ impl StackMemoryLocation {
 
 #[derive(Debug, Clone)]
 pub enum StoredValue {
-    /// A value stored implicitly in the VM stack (primitives only)
-    VirtualMachineStack {
-        vm_state: VmSymbolState,
-        value_type: ValueType,
-        size: u32,
-    },
-
     /// A local variable in the Wasm function (primitives only)
     Local {
         local_id: LocalId,
@@ -63,14 +56,12 @@ impl StoredValue {
         use ValueType::*;
         match self {
             // Simple numbers: 1 Roc argument => 1 Wasm argument
-            Self::VirtualMachineStack { value_type, .. } | Self::Local { value_type, .. } => {
-                match value_type {
-                    I32 => &[I32],
-                    I64 => &[I64],
-                    F32 => &[F32],
-                    F64 => &[F64],
-                }
-            }
+            Self::Local { value_type, .. } => match value_type {
+                I32 => &[I32],
+                I64 => &[I64],
+                F32 => &[F32],
+                F64 => &[F64],
+            },
             // Stack memory values: 1 Roc argument => 0-2 Wasm arguments
             Self::StackMemory { size, format, .. } => stack_memory_arg_types(*size, *format),
         }
@@ -178,12 +169,15 @@ impl<'a> Storage<'a> {
         self.symbol_layouts.insert(symbol, layout);
 
         let storage = match wasm_layout {
-            WasmLayout::Primitive(value_type, size) => StoredValue::VirtualMachineStack {
-                vm_state: VmSymbolState::NotYetPushed,
-                value_type,
-                size,
-            },
-
+            WasmLayout::Primitive(value_type, size) => {
+                let local_id = self.get_next_local_id();
+                self.local_types.push(value_type);
+                StoredValue::Local {
+                    local_id,
+                    value_type,
+                    size,
+                }
+            }
             WasmLayout::StackMemory {
                 size,
                 alignment_bytes,
@@ -323,41 +317,6 @@ impl<'a> Storage<'a> {
     fn load_symbol_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
         let storage = self.get(&sym).to_owned();
         match storage {
-            StoredValue::VirtualMachineStack {
-                vm_state,
-                value_type,
-                size,
-            } => {
-                let next_local_id = self.get_next_local_id();
-                let maybe_next_vm_state = code_builder.load_symbol(sym, vm_state, next_local_id);
-                match maybe_next_vm_state {
-                    // The act of loading the value changed the VM state, so update it
-                    Some(next_vm_state) => {
-                        self.symbol_storage_map.insert(
-                            sym,
-                            StoredValue::VirtualMachineStack {
-                                vm_state: next_vm_state,
-                                value_type,
-                                size,
-                            },
-                        );
-                    }
-                    None => {
-                        // Loading the value required creating a new local, because
-                        // it was not in a convenient position in the VM stack.
-                        self.local_types.push(value_type);
-                        self.symbol_storage_map.insert(
-                            sym,
-                            StoredValue::Local {
-                                local_id: next_local_id,
-                                value_type,
-                                size,
-                            },
-                        );
-                    }
-                }
-            }
-
             StoredValue::Local { local_id, .. } => {
                 code_builder.get_local(local_id);
                 code_builder.set_top_symbol(sym);
@@ -409,7 +368,7 @@ impl<'a> Storage<'a> {
     fn load_return_address_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
         let storage = self.get(&sym).to_owned();
         match storage {
-            StoredValue::VirtualMachineStack { .. } | StoredValue::Local { .. } => {
+            StoredValue::Local { .. } => {
                 internal_error!("these storage types are not returned by writing to a pointer")
             }
             StoredValue::StackMemory { location, size, .. } => {
@@ -530,10 +489,7 @@ impl<'a> Storage<'a> {
                 size
             }
 
-            StoredValue::VirtualMachineStack {
-                value_type, size, ..
-            }
-            | StoredValue::Local {
+            StoredValue::Local {
                 value_type, size, ..
             } => {
                 use roc_wasm_module::Align::*;
@@ -604,10 +560,7 @@ impl<'a> Storage<'a> {
                 );
             }
 
-            StoredValue::VirtualMachineStack {
-                value_type, size, ..
-            }
-            | StoredValue::Local {
+            StoredValue::Local {
                 value_type, size, ..
             } => {
                 use roc_wasm_module::Align::*;
@@ -646,31 +599,10 @@ impl<'a> Storage<'a> {
         code_builder: &mut CodeBuilder,
         to: &StoredValue,
         from: &StoredValue,
-        from_symbol: Symbol,
     ) {
         use StoredValue::*;
 
         match (to, from) {
-            (
-                Local {
-                    local_id: to_local_id,
-                    value_type: to_value_type,
-                    size: to_size,
-                },
-                VirtualMachineStack {
-                    value_type: from_value_type,
-                    size: from_size,
-                    ..
-                },
-            ) => {
-                debug_assert!(to_value_type == from_value_type);
-                debug_assert!(to_size == from_size);
-                // Note: load_symbols will not destroy the value, so we can use it again later.
-                // It will leave a Popped marker in the VM stack model in CodeBuilder
-                self.load_symbols(code_builder, &[from_symbol]);
-                code_builder.set_local(*to_local_id);
-            }
-
             (
                 Local {
                     local_id: to_local_id,
@@ -724,41 +656,6 @@ impl<'a> Storage<'a> {
             _ => {
                 internal_error!("Cannot copy storage from {:?} to {:?}", from, to);
             }
-        }
-    }
-
-    /// Ensure a StoredValue has an associated local (which could be the frame pointer!)
-    ///
-    /// This is useful when a value needs to be accessed from a more deeply-nested block.
-    /// In that case we want to make sure it's not just stored in the VM stack, because
-    /// blocks can't access the VM stack from outer blocks, but they can access locals.
-    /// (In the case of structs in stack memory, we just use the stack frame pointer local)
-    pub fn ensure_value_has_local(
-        &mut self,
-        code_builder: &mut CodeBuilder,
-        symbol: Symbol,
-        storage: StoredValue,
-    ) -> StoredValue {
-        if let StoredValue::VirtualMachineStack {
-            vm_state,
-            value_type,
-            size,
-        } = storage
-        {
-            let next_local_id = self.get_next_local_id();
-            code_builder.store_symbol_to_local(symbol, vm_state, next_local_id);
-
-            self.local_types.push(value_type);
-            let new_storage = StoredValue::Local {
-                local_id: next_local_id,
-                value_type,
-                size,
-            };
-
-            self.symbol_storage_map.insert(symbol, new_storage.clone());
-            new_storage
-        } else {
-            storage
         }
     }
 }

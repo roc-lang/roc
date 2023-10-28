@@ -152,6 +152,11 @@ impl<'a> CodeBuilder<'a> {
 
     ***********************************************************/
 
+    pub fn stack_is_empty(&self) -> bool {
+        let block = self.vm_block_stack.last().unwrap();
+        block.value_stack.is_empty()
+    }
+
     fn current_stack(&self) -> &Vec<'a, Symbol> {
         let block = self.vm_block_stack.last().unwrap();
         &block.value_stack

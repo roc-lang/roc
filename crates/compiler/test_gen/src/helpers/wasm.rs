@@ -207,7 +207,7 @@ impl<'a> ImportDispatcher for TestDispatcher<'a> {
             let msg = match panic_tag {
                 0 => format!(r#"Roc failed with message: "{roc_msg}""#),
                 1 => format!(r#"User crash with message: "{roc_msg}""#),
-                tag => format!(r#"Got an invald panic tag: "{panic_tag}""#),
+                _ => format!(r#"Got an invald panic tag: "{panic_tag}""#),
             };
             panic!("{}", msg)
         } else {
