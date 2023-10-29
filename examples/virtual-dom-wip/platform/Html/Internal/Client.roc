@@ -586,7 +586,7 @@ renderAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                         {
                             handlerId: id,
                             newHandlers: List.set handlers id (Ok handler),
-                            newDeletedHandlerCache: List.dropLast deletedHandlerCache,
+                            newDeletedHandlerCache: List.dropLast deletedHandlerCache 1,
                         }
 
                     Err _ ->
@@ -630,7 +630,7 @@ insertNode = \rendered, node ->
             newRendered =
                 { rendered &
                     nodes: List.set rendered.nodes id (Ok node),
-                    deletedNodeCache: List.dropLast rendered.deletedNodeCache,
+                    deletedNodeCache: List.dropLast rendered.deletedNodeCache 1,
                 }
 
             { rendered: newRendered, id }

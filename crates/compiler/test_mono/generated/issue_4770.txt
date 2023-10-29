@@ -6,8 +6,8 @@ procedure Bool.2 ():
     let Bool.24 : Int1 = true;
     ret Bool.24;
 
-procedure List.209 (List.547, List.210, List.208):
-    let List.577 : Int1 = CallByName Test.1 List.210;
+procedure List.208 (List.547, List.209, List.207):
+    let List.577 : Int1 = CallByName Test.1 List.209;
     if List.577 then
         let List.579 : {} = Struct {};
         let List.578 : [C {}, C {}] = TagId(1) List.579;
@@ -23,9 +23,9 @@ procedure List.23 (#Attr.2, #Attr.3, #Attr.4):
     decref #Attr.2;
     ret List.580;
 
-procedure List.56 (List.207, List.208):
+procedure List.56 (List.206, List.207):
     let List.556 : {} = Struct {};
-    let List.548 : [C {}, C {}] = CallByName List.98 List.207 List.556 List.208;
+    let List.548 : [C {}, C {}] = CallByName List.97 List.206 List.556 List.207;
     let List.553 : U8 = 1i64;
     let List.554 : U8 = GetTagId List.548;
     let List.555 : Int1 = lowlevel Eq List.553 List.554;
@@ -54,7 +54,7 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
         if List.563 then
             let List.572 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = CallByName List.66 List.463 List.466;
             inc List.572;
-            let List.564 : [C {}, C {}] = CallByName List.209 List.464 List.572 List.465;
+            let List.564 : [C {}, C {}] = CallByName List.208 List.464 List.572 List.465;
             let List.569 : U8 = 1i64;
             let List.570 : U8 = GetTagId List.564;
             let List.571 : Int1 = lowlevel Eq List.569 List.570;
@@ -75,7 +75,7 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
     in
     jump List.561 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
-procedure List.98 (List.460, List.461, List.462):
+procedure List.97 (List.460, List.461, List.462):
     let List.559 : U64 = 0i64;
     let List.560 : U64 = CallByName List.6 List.460;
     let List.558 : [C {}, C {}] = CallByName List.80 List.460 List.461 List.462 List.559 List.560;

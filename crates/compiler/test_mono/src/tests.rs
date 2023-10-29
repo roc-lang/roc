@@ -2285,7 +2285,7 @@ fn anonymous_closure_in_polymorphic_expression_issue_4717() {
                 if index == 0 then
                     input
                 else
-                    List.drop input index
+                    List.dropFirst input index
 
         main = chompWhile [1u8, 2u8, 3u8]
         "###
@@ -2482,7 +2482,7 @@ fn weakening_avoids_overspecialization() {
             if index == 0 then
                 input
             else
-                List.drop input index
+                List.dropFirst input index
         "###
     )
 }

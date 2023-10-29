@@ -40,7 +40,7 @@ letterParser =
             _ -> Ok Other
 
     valResult
-    |> Result.map \val -> { val, input: List.dropFirst input }
+    |> Result.map \val -> { val, input: List.dropFirst input 1 }
 
 expect
     input = "B"

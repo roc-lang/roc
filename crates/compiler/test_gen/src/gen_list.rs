@@ -521,19 +521,19 @@ fn list_chunks_of() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn list_drop() {
+fn list_drop_first() {
     assert_evals_to!(
-        "List.drop [1,2,3] 2",
+        "List.dropFirst [1,2,3] 2",
         RocList::from_slice(&[3]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.drop [] 1",
+        "List.dropFirst [] 1",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.drop [1,2] 5",
+        "List.dropFirst [1,2] 5",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
@@ -703,18 +703,18 @@ fn list_drop_if_string_eq() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_drop_last() {
     assert_evals_to!(
-        "List.dropLast [1, 2, 3]",
+        "List.dropLast [1, 2, 3] 1",
         RocList::from_slice(&[1, 2]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropLast []",
+        "List.dropLast [] 5",
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
     );
     assert_evals_to!(
-        "List.dropLast [0]",
-        RocList::<i64>::from_slice(&[]),
+        "List.dropLast [0] 0",
+        RocList::<i64>::from_slice(&[0]),
         RocList<i64>
     );
 }
@@ -728,7 +728,7 @@ fn list_drop_last_mutable() {
                list : List I64
                list = [if Bool.true then 4 else 4, 5, 6]
 
-               { newList: List.dropLast list, original: list }
+               { newList: List.dropLast list 1, original: list }
                "#
         ),
         (
@@ -738,26 +738,6 @@ fn list_drop_last_mutable() {
             RocList::from_slice(&[4, 5, 6]),
         ),
         (RocList<i64>, RocList<i64>,)
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn list_drop_first() {
-    assert_evals_to!(
-        "List.dropFirst [1, 2, 3]",
-        RocList::from_slice(&[2, 3]),
-        RocList<i64>
-    );
-    assert_evals_to!(
-        "List.dropFirst []",
-        RocList::<i64>::from_slice(&[]),
-        RocList<i64>
-    );
-    assert_evals_to!(
-        "List.dropFirst [0]",
-        RocList::<i64>::from_slice(&[]),
-        RocList<i64>
     );
 }
 

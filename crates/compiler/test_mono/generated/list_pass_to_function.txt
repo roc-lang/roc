@@ -1,5 +1,5 @@
-procedure List.3 (List.110, List.111, List.112):
-    let List.546 : {List I64, I64} = CallByName List.64 List.110 List.111 List.112;
+procedure List.3 (List.109, List.110, List.111):
+    let List.546 : {List I64, I64} = CallByName List.64 List.109 List.110 List.111;
     let List.545 : List I64 = StructAtIndex 0 List.546;
     ret List.545;
 
@@ -7,14 +7,14 @@ procedure List.6 (#Attr.2):
     let List.552 : U64 = lowlevel ListLen #Attr.2;
     ret List.552;
 
-procedure List.64 (List.107, List.108, List.109):
-    let List.551 : U64 = CallByName List.6 List.107;
-    let List.548 : Int1 = CallByName Num.22 List.108 List.551;
+procedure List.64 (List.106, List.107, List.108):
+    let List.551 : U64 = CallByName List.6 List.106;
+    let List.548 : Int1 = CallByName Num.22 List.107 List.551;
     if List.548 then
-        let List.549 : {List I64, I64} = CallByName List.67 List.107 List.108 List.109;
+        let List.549 : {List I64, I64} = CallByName List.67 List.106 List.107 List.108;
         ret List.549;
     else
-        let List.547 : {List I64, I64} = Struct {List.107, List.109};
+        let List.547 : {List I64, I64} = Struct {List.106, List.108};
         ret List.547;
 
 procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
