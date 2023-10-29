@@ -1565,6 +1565,8 @@ task =
     Stdout.line "You just entered: \(text)"
 ```
 
+## [Backpassing](#backpassing) {#backpassing}
+
 This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ ... ->` is.
 
 Here, we're using backpassing to define two anonymous functions. Here's one of them:
