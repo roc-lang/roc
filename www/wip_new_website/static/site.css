@@ -813,7 +813,7 @@ code .dim {
 .interactive-desc {
     display: none;
     background-color: #ddd;
-    padding: 8px 16px;
+    padding: 0 16px;
     margin-top: 9px;
 }
 

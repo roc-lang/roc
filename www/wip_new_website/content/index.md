@@ -70,7 +70,7 @@ You can try out Roc right now using this read-eval-print loop (REPL), which runs
 
 ## Use Cases
 
-Roc is a very new language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
+Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
 
 Currently these use cases are the best-supported:
 
@@ -89,7 +89,7 @@ You can create your own! Learn about **platforms and applications**...
 ## Larger Example
 
 Here’s a larger example that shows a few different aspects of Roc:
-* File I/O and HTTP
+* File I/O and HTTP requests
 * Pattern matching for error handling
 * JSON deserialization via type inference
 * Common syntax sugar: string interpolation, pipelines, and backpassing
