@@ -35,7 +35,7 @@
     <div class="home-goals-column">
         <div class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc's syntax, semantics, and toolset are designed to feel user-friendly and helpful.</p>
+            <p class="home-goals-description">Roc’s syntax, semantics, and toolset are designed to feel user-friendly and helpful.</p>
             <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>
@@ -43,7 +43,7 @@
         <div class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It's a single-paradigm functional language.</p>
+             Roc has a small number of simple language primitives. It’s a single-paradigm functional language.</p>
             <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
         </div>
     </div>
@@ -111,8 +111,8 @@ TODO provide explanation of platform/application abstraction versus libraries as
 
 If you'd like to learn more about Roc check out one of these videos:
 
-*   [Roc at Handmade Seattle](https://media.handmade-seattle.com/roc-lang) - November 12, 2021 (very low-level explanation of how Roc's compiler makes programs run fast)
-*   [Outperforming Imperative with Pure Functional Languages](https://youtu.be/vzfy4EKwG_Y) - October 1, 2021 (about Roc's runtime performance and optimizer)
+*   [Roc at Handmade Seattle](https://media.handmade-seattle.com/roc-lang) - November 12, 2021 (very low-level explanation of how Roc’s compiler makes programs run fast)
+*   [Outperforming Imperative with Pure Functional Languages](https://youtu.be/vzfy4EKwG_Y) - October 1, 2021 (about Roc’s runtime performance and optimizer)
 *   [A taste of Roc](https://youtu.be/6qzWm_eoUXM) - September 23, 2021 (syntax, application examples)
 *   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
 *   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
