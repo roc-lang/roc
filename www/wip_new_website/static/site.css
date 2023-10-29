@@ -345,6 +345,10 @@ li {
         white-space: normal;
     }
 
+    .nobreak-on-mobile {
+        white-space: nowrap;
+    }
+
     /* Homepage */
 
     #homepage-intro-box {

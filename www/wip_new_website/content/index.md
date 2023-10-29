@@ -28,14 +28,14 @@
     <div class="home-goals-column">
         <div class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or WebAssembly.</p>
+            <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
             <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc’s syntax, semantics, and toolset are designed to feel user-friendly and helpful.</p>
+            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>
@@ -43,13 +43,17 @@
         <div class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It’s a single-paradigm functional language.</p>
+             Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
             <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
         </div>
     </div>
 </section>
 
 ## Try Roc
+
+You can try out Roc right now using this read-eval-print loop (REPL), which runs entirely in this browser in [WebAssembly](https://webassembly.org/).
+
+(You can turn off your network connection and it will keep working!)
 
 <div id="repl">
 <code class="history">
@@ -66,7 +70,9 @@
 
 ## Use Cases
 
-Roc can be used for lots of things, but currently these are the best-supported.
+Roc is a very new language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
+
+Currently these use cases are the best-supported:
 
 ### Command-Line Interfaces (CLIs)
 
