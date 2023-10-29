@@ -17,6 +17,10 @@ if [ -n "$(ls | grep -v "roc_nightly.*tar\.gz"  | grep -v "^ci$")" ]; then
   done
 fi
 
+if [[ "$(uname)" == "Darwin" ]]; then
+    brew install z3 # used by llvm
+fi
+
 # decompress the tar
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
@@ -34,23 +38,8 @@ cd roc_nightly
 # test rust platform
 ./roc examples/platform-switching/rocLovesRust.roc
 
-run_zig_test=true
-# Detect macOS version
-if [[ "$(uname)" == "Darwin" ]]; then
-    macos_version=$(sw_vers -productVersion)
-    major_version=$(echo $macos_version | cut -d. -f1)
-
-    # If macOS 13, then set the flag to skip
-    if [[ $major_version -eq 13 ]]; then
-        echo "Skipping zig test on macOS 13 due to https://github.com/roc-lang/roc/issues/5590..."
-        run_zig_test=false
-    fi
-fi
-
-if $run_zig_test ; then
-    # test zig platform
-    ./roc examples/platform-switching/rocLovesZig.roc
-fi
+# test zig platform
+./roc examples/platform-switching/rocLovesZig.roc
 
 # test C platform
 ./roc examples/platform-switching/rocLovesC.roc
