@@ -4,7 +4,7 @@
     --gray: #717171;
     --orange: #bf5000;
     --green: #0b8400;
-    --cyan: #067c94;
+    --cyan: #1bd6bd;
     --blue: #05006d;
     --violet: #7c38f5;
     --violet-bg: #ece2fd;
@@ -99,24 +99,20 @@ h1,
 h2,
 h3,
 h4 {
-    font-family: "Permanent Marker";
-    padding-left: 12px;
+    font-family: "Neuton";
+    font-weight: normal;
+    color: var(--primary-2);
 }
 
 h1 {
-    color: var(--primary-1);
     font-size: 5rem;
-    text-shadow: 1px 1px 1px #010101;
 }
 
 h2 {
-    color: var(--primary-1);
     font-size: 3rem;
-    text-shadow: 1px 1px 1px #010101;
 }
 
 h3 {
-    color: var(--cyan);
     font-size: 1.5rem;
 }
 
@@ -259,7 +255,7 @@ td:last-child {
 p,
 aside,
 li {
-    font-size: var(--font-size-normal);
+    font-size: 18px;
     line-height: 1.85rem;
 }
 
@@ -272,11 +268,13 @@ li {
 
 #homepage-h1 {
     color: #222;
-    font-family: "Merriweather";
     text-shadow: none;
+    font-family: inherit;
     font-size: 64px;
     padding: 0;
     padding-top: 60px;
+    position: relative;
+    left: -5px;
 }
 
 #homepage-logo {
@@ -290,8 +288,10 @@ li {
 #first-code-sample {
     width: var(--homepage-intro-box-width);
     margin-top: 60px;
+    margin-bottom: 70px;
     line-height: 1.85em;
     color: #fcf9fd;
+    box-shadow: 4px 4px 0px var(--cyan);
 }
 
 #first-code-sample .kw,
@@ -601,6 +601,10 @@ li {
     td {
         border-color: var(--gray);
     }
+
+    #first-code-sample {
+        border: 1px solid var(--cyan);
+    }
 }
 
 /* Comments `#` and Documentation comments `##` */
@@ -715,8 +719,9 @@ code .dim {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    gap: 60px;
+    gap: 54px;
     width: 100%;
+    margin-bottom: 70px;
 }
 
 .home-goals-column {
@@ -731,20 +736,24 @@ code .dim {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    border: 2px solid var(--primary-2);
-    box-shadow: 4px 4px var(--primary-2)
+    border: 1px solid #000;
+    /* box-shadow: 4px 4px var(--border-color); */
+    background-color: var(--cyan);
+    color: black;
 }
 
 .home-goals-content h3 {
     font-family: inherit;
     text-transform: lowercase;
-    color: var(--primary-2);
     padding-bottom: 12px;
     padding-top: 2px;
+    color: white;
+    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
 }
 
-.home-goals-content p {
-    font-size: 18px;
+.home-goals-content a {
+    color: black;
+    text-decoration: underline;
 }
 
 .home-goals-content>h3 {
@@ -786,7 +795,7 @@ code .dim {
     position: relative;
     display: block;
     width: 100%;
-    height: 800px;
+    height: 508px;
     padding-right: 300px;
     cursor: default;
 }

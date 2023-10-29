@@ -28,7 +28,7 @@
     <div class="home-goals-column">
         <div class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or <a href="https://webassembly.org/">WebAssembly</a>.</p>
+            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or WebAssembly.</p>
             <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
@@ -43,7 +43,7 @@
         <div class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It's a single-paradigm <a href="https://en.wikipedia.org/wiki/Functional_programming">functional</a> language.</p>
+             Roc has a small number of simple language primitives. It's a single-paradigm functional language.</p>
             <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
         </div>
     </div>
@@ -64,7 +64,33 @@
 <script type="module" src="/wip/repl.js"></script>
 </div>
 
-## Examples
+## Use Cases
+
+Roc can be used for lots of things, but currently these are the best-supported.
+
+### Command-Line Interfaces (CLIs)
+
+### Web Servers
+
+### Embedding
+
+Calling Roc functions from another language
+
+### Others
+
+You can create your own! Learn about **platforms and applications**...
+
+## Larger Example
+
+Here’s a larger example that shows a few different aspects of Roc:
+* File I/O and HTTP
+* Pattern matching for error handling
+* JSON deserialization via type inference
+* Common syntax sugar: string interpolation, pipelines, and backpassing
+
+The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
+
+<!-- ## More Examples
 
 We have developed a number of smaller code [examples](https://github.com/roc-lang/examples) which demonstrate how to use Roc. These cover a range of topics from basic syntax to more advanced features such as random number generation and using the popular `Task` feature.
 
@@ -90,4 +116,4 @@ If you'd like to learn more about Roc check out one of these videos:
 *   [A taste of Roc](https://youtu.be/6qzWm_eoUXM) - September 23, 2021 (syntax, application examples)
 *   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
 *   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
-*   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language)
+*   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language) -->

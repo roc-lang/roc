@@ -10,14 +10,15 @@ view =
     output =
         # # Select anything here to see an explanation.
         # main =
-        #     cacheUserInfo (Path.fromStr "url.txt")
+        #     Path.fromStr "url.txt"
+        #     |> storeEmail
         #     |> Task.onErr handleErr
         #
-        # cacheUserInfo = \filename ->
+        # storeEmail = \filename ->
         #     url <- File.readUtf8 filename |> Task.await
-        #     { username, email } <- Http.get url Json.codec |> Task.await
+        #     { name, email } <- Http.get url Json.codec |> Task.await
         #
-        #     File.writeUtf8 (Path.fromStr "\(username).txt") email
+        #     File.writeUtf8 (Path.fromStr "\(name).txt") email
         #
         # handleUrl = \err ->
         #     when err is
@@ -25,21 +26,45 @@ view =
         #         FileReadErr path _ -> Stderr.line "Error reading \(Path.display path)"
         #         FileWriteErr path _ -> Stderr.line "Error writing \(Path.display path)"
         sectionsToStr [
-            Desc [Comment "<span class='desktop'>Click anything here to see an explanation.</span><span class='mobile'>Tap anything here to\n# see an explanation.</span>"] "<p>Comments in Roc begin with a <code>#</code> and go to the end of the line.</p>",
+            Desc [Comment "<span class='desktop'>Click anything here to see an explanation.</span><span class='mobile'>Tap anything here to\n# see an explanation.</span>"] "<p><a href=\"/tutorial#comments\">Comments</a> in Roc begin with a <code>#</code> and go to the end of the line.</p>",
             Newline,
-            Desc [Ident "main", Kw "="] "<p>This begins the definition of <code class=\"ident\">main</code>, which is the code our program will run when it starts up.</p><p>In Roc, assignments are always constant, which means writing <code class=\"ident\">main =</code> again in the same scope would give an error.</p><p><a href=\"https://www.roc-lang.org/tutorial#naming-things\">Learn more about naming things</a></p>",
+            Desc [Ident "main", Kw "="] "<p>This begins the definition of <code class=\"ident\">main</code>, which is where our program will begin.</p><p>In Roc, <a href=\"/tutorial#https://www.roc-lang.org/tutorial#naming-things\">assignments are always constant</a>, which means writing <code class=\"ident\">main =</code> again in the same scope would give an error.</p>",
             Indent,
-            Desc [Ident "cacheUserInfo", Str "\"url.txt\""] "<p>This calls the <code class=\"ident\">cacheUserInfo</code> function, passing the string <code class=\"str\">\"url.txt\"</code> as an argument.</p><p>In Roc, function arguments are separated with spaces and/or newlines. Parentheses are only used in nested function calls.</p>",
+            Desc [Ident "Path.fromStr", Str "\"url.txt\""] "<p>This converts the string <code>\"url.txt\"</code> into a <code>Path</code> by passing it to the <code>Path.fromStr</code> function.</p><p>Function arguments are separated with whitespace rather than commas. Parens are only needed in <a href=\"/tutorial#calling-functions\">nested function calls</a>.</p>",
             Newline,
-            Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>TODO</p>",
+            Desc [Kw "|>", Ident "storeEmail"] "<p>The <a href=\"/tutorial#the-pipe-operator\">pipe operator</a> (<code>|></code>) is syntax sugar for passing the previous answer to the next function in the “pipeline.”</p><p>So far this pipeline desugars to:</p><pre><code>storeEmail\n    (Path.fromStr \"url.txt\")</code></pre><p>The next <code>|></code> continues the pipeline.</p>",
+            Newline,
+            Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>If the task returned by the previous step in the pipeline fails, pass its error to <code>handleErr</code>.</p><p>The whole pipeline now desugars to:</p><pre><code>Task.onErr\n    (storeEmail …)\n    handleErr</code></pre><p>It creates a <code>Path</code> from a string, then stores an email based on that path, then handles any errors that happened.</p>",
             Outdent,
             Newline,
-            Desc [Ident "cacheUserInfo", Kw "=", Lambda ["filename"]] "<p>TODO</p>",
+            Desc [Ident "storeEmail", Kw "=", Lambda ["filename"]] "<p>This <a href=\"/tutorial#defining-functions\">defines a function</a> named <code>storeEmail</code>.</p><p>In Roc, functions are ordinary values, so we assign names to them using <code>=</code> like with any other value.</p><p>The <code>\\arg1, arg2 -&gt;</code> syntax begins a function, and the part after <code>-&gt;</code> is the function's body.</p>",
             Indent,
-            Desc [Ident "url", Kw "<-", Ident "File.readUtf8", Ident "filename"] "<p>TODO backpassing</p>",
+            Desc [Ident "url", Kw "<-", Ident "File.readUtf8", Ident "filename", Kw "|>", Ident "Task.await"] "<p>This reads the contents of the file (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p><p>The <code>&lt;-</code> operator does <a href=\"/tutorial#backpassing\">backpassing</a>, which is syntax sugar for defining a function. This whole line desugars to:</p><pre><code>Task.await\n    (File.readUtf8 filename)\n    \\url -&gt;</code></pre><p>The lines after this one form the body of the <code>\\url -&gt;</code> <a href=\"https://en.wikipedia.org/wiki/Callback_(computer_programming)\">callback</a> function, which runs if the file read succeeds.</p>",
+            Newline,
+            Desc [Literal "{", Ident "name", Literal ",", Ident "email", Literal "}"] "<p>This is <a href=\"/tutorial#record-destructuring\">record destructuring</a> syntax.</p><p>It takes ",
+            Desc [Kw "<-", Ident "Http.get", Ident "url", Ident "Json.codec"] "<p>TODO Json.codec, type inference, early error</p>",
             Desc [Kw "|>", Ident "Task.await"] "<p>TODO Task.await</p>",
             Newline,
-            # Desc [Literal "{", Ident "username", Literal ",", Ident "email", Literal "}", Kw "<-"] "<p>TODO record destructuring and backpassing</p>",
+            Desc [Ident "dest", Kw "=", Str "\"\\(name).txt\""] "<p>The <code>\\(name)</code> will be replaced in the string with the contents of <code>name</code>. This is called <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that there's no <code>|> Task.await</code> on this line. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this line is an ordinary assignment, so there's no task to await.</p>",
+            Newline,
+            Desc [Literal "_"] "<p>In Roc, if you don’t want to bother naming something, you can always choose the name <code>_</code>.</p><p>You can name as many things as you like <code>_</code>, even in the same scope, but you can’t reference anything named <code>_</code>.</p><p>So it’s only useful for when you don’t want to choose a name.</p>",
+            Desc [Kw "<-", Ident "File.writeUtf8", Ident "(Path.fromStr dest)", Ident "email", Kw "|>", Ident "Task.await"] "<p>This writes the <code>email</code> string to the file encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>The parentheses here show where the nested call to <code>Path.fromStr</code> begins and ends.</p>",
+            Newline,
+            Desc [Ident "Stdout.line", Str "\"Wrote email to \\(dest)\""] "<p>Note that there’s no <code>|> Task.await</code> here, like there were after earlier tasks.</p><p>That’s because, although <code>Stdout.line</code> does return a <a href=\"/tutorial#tasks\">task</a>, we don’t need to await it because nothing else happens after it.</p>",
+            Outdent,
+            Newline,
+            Desc [Ident "handleErr", Kw "=", Lambda ["err"]] "<p>Like <code>storeEmail</code>, <code>handleErr</code> is also a function.</p><p>Although type annotations are optional everywhere in Roc—because the language has 100% type inference—you could add type annotations to <code>main</code>, <code>storeEmail</code>, and <code>handleErr</code> if you wanted to.</p>",
+            Indent,
+            Desc [Kw "when", Ident "err", Kw "is"] "<p>TODO when</p>",
+            Indent,
+            Desc [Literal "HttpErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
+            Desc [Ident "Stderr.line", Str "\"Error fetching URL \\(url)\""] "<p>TODO</p>",
+            Newline,
+            Desc [Literal "FileReadErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
+            Desc [Ident "Stderr.line", Str "\"Error reading from \\(Path.display path)\""] "<p>TODO</p>",
+            Newline,
+            Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
+            Desc [Ident "Stderr.line", Str "\"Error writing to \\(Path.display path)\""] "<p>TODO</p>",
         ]
 
     pre [] [
@@ -52,7 +77,7 @@ tokensToStr : List Token -> Str
 tokensToStr = \tokens ->
     List.walk tokens "" \buf, token ->
         bufWithSpace =
-            if Str.isEmpty buf then
+            if Str.isEmpty buf || token == Literal "," then
                 buf
             else
                 Str.concat buf " "
