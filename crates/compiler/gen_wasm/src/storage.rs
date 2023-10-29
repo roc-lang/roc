@@ -392,11 +392,6 @@ impl<'a> Storage<'a> {
     /// Avoid calling this method in a loop with one symbol at a time! It will work,
     /// but it generates very inefficient Wasm code.
     pub fn load_symbols(&mut self, code_builder: &mut CodeBuilder, symbols: &[Symbol]) {
-        if code_builder.verify_stack_match(symbols) {
-            // The symbols were already at the top of the stack, do nothing!
-            // This should be quite common due to the structure of the Mono IR
-            return;
-        }
         for sym in symbols.iter() {
             self.load_symbol_ccc(code_builder, *sym);
         }
