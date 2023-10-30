@@ -2,4 +2,4 @@ interface File
     exposes [File]
     imports []
 
-File : { name : List U8, content : Str }
+File : { name : Str, content : Str }
