@@ -1,9 +1,9 @@
 platform "roc-lang/glue"
-    requires {} { makeGlue : List Types -> Result (List File) Str }
-    exposes [Shape, File, Types, TypeId, Target]
+    requires {} { makeGlue : List Module -> Result (List File) Str }
+    exposes [Type, File, Module, TypeId, Target]
     packages {}
-    imports [Types.{ Types }, File.{ File }]
+    imports [Module.{ Module }, File.{ File }]
     provides [makeGlueForHost]
 
-makeGlueForHost : List Types -> Result (List File) Str
+makeGlueForHost : List Module -> Result (List File) Str
 makeGlueForHost = \types -> makeGlue types
