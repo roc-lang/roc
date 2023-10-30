@@ -11,6 +11,8 @@ console.error = function displayErrorInHistoryPanel(string) {
 
 import * as roc_repl_wasm from "./roc_repl_wasm.js";
 
+const isHomepage = document.getElementById("homepage-repl-container") != null;
+
 // ----------------------------------------------------------------------------
 // REPL state
 // ----------------------------------------------------------------------------
@@ -299,6 +301,21 @@ function updateHistoryEntry(index, ok, outputText) {
   const historyItem = repl.elemHistory.children[index];
   historyItem.appendChild(outputElem);
 
-  // Scroll the page to the bottom so you can see the most recent output.
-  window.scrollTo(0, document.body.scrollHeight);
+  if (isHomepage) {
+    // Scroll the input element into view so you can see the most recent output.
+    // Only do this if it's currently out of view though!
+    const bounds = repl.elemSourceInput.getBoundingClientRect();
+    const isInView =
+      bounds.top >= 0 &&
+      bounds.left >= 0 &&
+      bounds.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
+      bounds.right <= (window.innerWidth || document.documentElement.clientWidth);
+
+    if (!isInView) {
+      repl.elemSourceInput.scrollIntoView({ behavior: "instant", block: "end", inline: "nearest" });
+    }
+  } else {
+    // Scroll the page to the bottom so you can see the most recent output.
+    window.scrollTo(0, document.body.scrollHeight);
+  }
 }
