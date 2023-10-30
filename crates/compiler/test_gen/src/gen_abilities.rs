@@ -329,7 +329,7 @@ fn decode() {
 
             u8 = @MDecoder \lst, @Linear {} ->
                     when List.first lst is
-                        Ok n -> { result: Ok n, rest: List.dropFirst lst }
+                        Ok n -> { result: Ok n, rest: List.dropFirst lst 1 }
                         Err _ -> { result: Err TooShort, rest: [] }
 
             MyU8 := U8 implements [MDecoding {decoder}]

@@ -34,20 +34,19 @@ interface List
         walkFromUntil,
         range,
         sortWith,
-        drop,
         swap,
         dropAt,
-        dropLast,
         min,
         max,
         map4,
         mapTry,
         walkTry,
-        dropFirst,
         joinMap,
         any,
         takeFirst,
         takeLast,
+        dropFirst,
+        dropLast,
         findFirst,
         findLast,
         findFirstIndex,
@@ -912,20 +911,6 @@ first = \list ->
         Ok v -> Ok v
         Err _ -> Err ListWasEmpty
 
-## Remove the first element from the list.
-##
-## Returns the new list (with the removed element missing).
-dropFirst : List elem -> List elem
-dropFirst = \list ->
-    List.dropAt list 0
-
-## Remove the last element from the list.
-##
-## Returns the new list (with the removed element missing).
-dropLast : List elem -> List elem
-dropLast = \list ->
-    List.dropAt list (Num.subSaturated (List.len list) 1)
-
 ## Returns the given number of elements from the beginning of the list.
 ## ```
 ## List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
@@ -967,11 +952,18 @@ takeLast = \list, outputLength ->
     List.sublist list { start: Num.subSaturated (List.len list) outputLength, len: outputLength }
 
 ## Drops n elements from the beginning of the list.
-drop : List elem, Nat -> List elem
-drop = \list, n ->
+dropFirst : List elem, Nat -> List elem
+dropFirst = \list, n ->
     remaining = Num.subSaturated (List.len list) n
 
     List.takeLast list remaining
+
+## Drops n elements from the end of the list.
+dropLast : List elem, Nat -> List elem
+dropLast = \list, n ->
+    remaining = Num.subSaturated (List.len list) n
+
+    List.takeFirst list remaining
 
 ## Drops the element at the given index from the list.
 ##
@@ -1121,7 +1113,7 @@ intersperse = \list, sep ->
             |> List.appendUnsafe elem
             |> List.appendUnsafe sep
 
-    List.dropLast newList
+    List.dropLast newList 1
 
 ## Returns `Bool.true` if the first list starts with the second list.
 ##

@@ -28,7 +28,7 @@ Linear := {} implements [MDecoderFormatting {u8}]
 u8 = @MDecoder \lst, @Linear {} ->
 #^^{-1} Linear#u8(11): MDecoder U8 Linear
         when List.first lst is
-            Ok n -> { result: Ok n, rest: List.dropFirst lst }
+            Ok n -> { result: Ok n, rest: List.dropFirst lst 1 }
             Err _ -> { result: Err TooShort, rest: [] }
 
 MyU8 := U8 implements [MDecoding {decoder}]

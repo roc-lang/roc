@@ -2,17 +2,17 @@ procedure Bool.1 ():
     let Bool.24 : Int1 = false;
     ret Bool.24;
 
-procedure List.2 (List.102, List.103):
-    let List.559 : U64 = CallByName List.6 List.102;
-    let List.555 : Int1 = CallByName Num.22 List.103 List.559;
+procedure List.2 (List.101, List.102):
+    let List.559 : U64 = CallByName List.6 List.101;
+    let List.555 : Int1 = CallByName Num.22 List.102 List.559;
     if List.555 then
-        let List.557 : Str = CallByName List.66 List.102 List.103;
+        let List.557 : Str = CallByName List.66 List.101 List.102;
         inc List.557;
-        dec List.102;
+        dec List.101;
         let List.556 : [C {}, C Str] = TagId(1) List.557;
         ret List.556;
     else
-        dec List.102;
+        dec List.101;
         let List.554 : {} = Struct {};
         let List.553 : [C {}, C Str] = TagId(0) List.554;
         ret List.553;
@@ -30,15 +30,15 @@ procedure List.66 (#Attr.2, #Attr.3):
     let List.558 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.558;
 
-procedure List.9 (List.308):
+procedure List.9 (List.307):
     let List.552 : U64 = 0i64;
-    let List.545 : [C {}, C Str] = CallByName List.2 List.308 List.552;
+    let List.545 : [C {}, C Str] = CallByName List.2 List.307 List.552;
     let List.549 : U8 = 1i64;
     let List.550 : U8 = GetTagId List.545;
     let List.551 : Int1 = lowlevel Eq List.549 List.550;
     if List.551 then
-        let List.309 : Str = UnionAtIndex (Id 1) (Index 0) List.545;
-        let List.546 : [C {}, C Str] = TagId(1) List.309;
+        let List.308 : Str = UnionAtIndex (Id 1) (Index 0) List.545;
+        let List.546 : [C {}, C Str] = TagId(1) List.308;
         ret List.546;
     else
         dec List.545;

@@ -437,7 +437,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
                 @Dict {
                     metadata: List.set metadata index deletedSlot,
                     dataIndices,
-                    data: List.dropLast data,
+                    data: List.dropLast data 1,
                     size: Num.subWrap size 1,
                 }
             else
@@ -618,7 +618,7 @@ swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIn
             nextData =
                 data
                 |> List.swap dataIndex lastIndex
-                |> List.dropLast
+                |> List.dropLast 1
 
             @Dict {
                 # Set old metadata as deleted.

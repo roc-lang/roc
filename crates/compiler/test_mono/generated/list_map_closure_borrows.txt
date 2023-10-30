@@ -1,14 +1,14 @@
-procedure List.2 (List.102, List.103):
-    let List.551 : U64 = CallByName List.6 List.102;
-    let List.547 : Int1 = CallByName Num.22 List.103 List.551;
+procedure List.2 (List.101, List.102):
+    let List.551 : U64 = CallByName List.6 List.101;
+    let List.547 : Int1 = CallByName Num.22 List.102 List.551;
     if List.547 then
-        let List.549 : Str = CallByName List.66 List.102 List.103;
+        let List.549 : Str = CallByName List.66 List.101 List.102;
         inc List.549;
-        dec List.102;
+        dec List.101;
         let List.548 : [C {}, C Str] = TagId(1) List.549;
         ret List.548;
     else
-        dec List.102;
+        dec List.101;
         let List.546 : {} = Struct {};
         let List.545 : [C {}, C Str] = TagId(0) List.546;
         ret List.545;
