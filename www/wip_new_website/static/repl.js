@@ -41,9 +41,7 @@ repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
   repl.elemHistory.querySelector("#loading-message").remove();
-  repl.elemSourceInput.disabled = false;
   repl.elemSourceInput.placeholder = "Type some Roc code and press Enter.";
-  repl.elemSourceInput.focus();
   repl.compiler = instance;
 
   // Get help text from the compiler, and display it at top of the history panel

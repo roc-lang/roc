@@ -8,7 +8,7 @@
     --blue: #05006d;
     --violet: #7c38f5;
     --violet-bg: #ece2fd;
-    --magenta: #a20031;
+    --magenta: #ff32cf;
 
     --primary-1: #9b6bf2;
     --primary-2: #7c38f5;
@@ -16,6 +16,7 @@
     --link-color: var(--primary-2);
     --code-link-color: var(--primary-2);
     --text-color: #000;
+    --heading-color: #333;
     --text-hover-color: var(--primary-2);
     --body-bg-color: #ffffff;
     --border-color: #717171;
@@ -31,6 +32,7 @@
     --body-max-width: 1024px;
     --top-bar-height: 50px;
     --homepage-intro-box-width: 328px;
+    --dark-code-bg: #202746;
 }
 
 html {
@@ -99,9 +101,7 @@ h1,
 h2,
 h3,
 h4 {
-    font-family: "Neuton";
-    font-weight: normal;
-    color: var(--primary-2);
+    font-weight: bold;
 }
 
 h1 {
@@ -110,6 +110,10 @@ h1 {
 
 h2 {
     font-size: 3rem;
+    border-bottom: 4px solid var(--cyan);
+    margin: 36px 0;
+    padding: 36px 0;
+    color: var(--heading-color);
 }
 
 h3 {
@@ -209,6 +213,66 @@ pre>samp {
     display: block;
 }
 
+#homepage-repl-container {
+    display: flex;
+    flex-direction: row-reverse;
+}
+
+#homepage-repl-container #repl-description {
+    padding: 0 36px;
+    flex: 1;
+}
+
+#homepage-repl-container #repl-description p:first-of-type {
+    margin-top: 0;
+}
+
+#homepage-repl-container #repl-description a {
+    color: inherit;
+    text-decoration: underline;
+}
+
+#homepage-repl-container #repl-description a:hover {
+    color: var(--primary-1);
+}
+
+#homepage-repl-container #repl {
+    flex: 1;
+    border: 2px solid #444;
+    box-shadow: 4px 4px var(--cyan);
+    font-size: 18px;
+}
+
+#homepage-repl-container #repl, #homepage-repl-container #repl code {
+    color: white;
+    background-color: var(--dark-code-bg);
+}
+
+#homepage-repl-container #source-input {
+    margin-bottom: -5px;
+    font-size: 18px;
+    height: 55px;
+}
+
+#homepage-repl-container #source-input-wrapper {
+    margin-top: 6px;
+}
+
+#homepage-repl-container p {
+    position: relative; /* Needed for the repl arrow's position: absolute */
+}
+
+#homepage-repl-container #repl-arrow {
+    cursor: default;
+    font-weight: bold;
+    color: var(--primary-1);
+    font-size: 60px;
+    position: absolute;
+    top: 0px;
+    left: -64px;
+    text-shadow: 1px 1px 1px #444;
+}
+
 .repl-prompt:before {
     /* Add this using CSS so it isn't selectable, which would be annoying when trying to copy/paste! */
     color: var(--repl-prompt);
@@ -301,7 +365,7 @@ li {
 
 #first-code-sample,
 #first-code-sample .code-snippet {
-    background-color: #202746;
+    background-color: var(--dark-code-bg);
 }
 
 #first-code-sample .string {
@@ -725,7 +789,7 @@ code .dim {
     justify-content: space-between;
     gap: 54px;
     width: 100%;
-    margin-bottom: 70px;
+    margin-bottom: 48px;
 }
 
 .home-goals-column {
@@ -740,8 +804,7 @@ code .dim {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    border: 1px solid #000;
-    /* box-shadow: 4px 4px var(--border-color); */
+    border: 2px solid #000;
     background-color: var(--cyan);
     color: black;
 }
@@ -753,6 +816,8 @@ code .dim {
     padding-top: 2px;
     color: white;
     text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+    letter-spacing: 1px;
+    word-spacing: 3px;
 }
 
 .home-goals-content a {
@@ -785,6 +850,20 @@ code .dim {
     font-weight: bold;
     margin-bottom: 10px;
     font-size: 32px;
+}
+
+.home-goals-title a {
+    color: inherit;
+    text-decoration: none;
+}
+
+.home-goals-title a:hover {
+    color: black;
+    text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+}
+
+.home-goals-learn-more a:hover {
+    text-decoration: none;
 }
 
 .home-goals-description {

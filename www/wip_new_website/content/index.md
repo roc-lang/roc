@@ -27,21 +27,21 @@
 <section class="home-goals-container">
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title">Fast</h3>
+            <h3 class="home-goals-title"><a href="/fast">Fast</a></h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
             <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title">Friendly</h3>
+            <h3 class="home-goals-title"><a href="/friendly">Friendly</a></h3>
             <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title">Functional</h3>
+            <h3 class="home-goals-title"><a href="/functional">Functional</a></h3>
             <p class="home-goals-description">
              Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
             <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
@@ -51,22 +51,24 @@
 
 ## Try Roc
 
-You can try out Roc right now using this read-eval-print loop (REPL), which runs entirely in this browser in [WebAssembly](https://webassembly.org/).
-
-(You can turn off your network connection and it will keep working!)
-
-<div id="repl">
-<code class="history">
-  <div id="help-text"></div>
-  <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
-</code>
-<section id="source-input-wrapper">
-  <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
-    disabled></textarea>
+<section id="homepage-repl-container">
+    <div id="repl-description" role="presentation">
+        <p>You can try out Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
+        <p><code>Shift-Enter</code> adds a newline.</p>
+        <p><span id="repl-arrow">←</span> Try entering <code>0.1 + 0.2</code></p>
+    </div>
+    <div id="repl" role="presentation">
+        <code class="history">
+          <div id="help-text"></div>
+          <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
+        </code>
+        <section id="source-input-wrapper">
+          <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+            onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
+        </section>
+    </div>
+    <script type="module" src="/wip/repl.js"></script>
 </section>
-</div>
-<script type="module" src="/wip/repl.js"></script>
-</div>
 
 ## Use Cases
 

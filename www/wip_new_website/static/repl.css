@@ -39,9 +39,8 @@
 }
 
 #source-input:focus {
-  border: 1px solid var(--cyan);
+  outline: 2px solid var(--primary-1);
   box-sizing: border-box;
-  outline: none;
 }
 
 .history {
@@ -79,7 +78,7 @@
 }
 
 .panic {
-  color: red;
+  color: #ff6666;
 }
 
 .input-line-prefix {
@@ -87,7 +86,7 @@
 }
 
 .color-red {
-  color: red;
+  color: #ff6666;
 }
 
 .color-green {
