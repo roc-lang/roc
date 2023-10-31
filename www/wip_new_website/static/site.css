@@ -4,7 +4,7 @@
     --gray: #717171;
     --orange: #bf5000;
     --green: #0b8400;
-    --light-cyan: #92e7df;
+    --light-cyan: #8af4e6;
     --dark-cyan: #4eefd9;
     --blue: #05006d;
     --violet: #7c38f5;
@@ -787,7 +787,7 @@ code .dim {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    gap: 54px;
+    gap: 48px;
     width: 100%;
     margin-bottom: 48px;
 }
@@ -804,9 +804,8 @@ code .dim {
     display: flex;
     flex-direction: column;
     padding: 20px;
-    border: 2px solid #000;
-    background-color: var(--light-cyan);
-    color: black;
+    border: 4px solid var(--light-cyan);
+    box-shadow: 4px 4px #777;
 }
 
 .home-goals-content h3 {
@@ -819,11 +818,10 @@ code .dim {
     letter-spacing: 1px;
     word-spacing: 3px;
     margin: 0;
-    color: #fff;
 }
 
 .home-goals-content a {
-    color: black;
+    color: inherit;
     text-decoration: underline;
 }
 
@@ -851,7 +849,7 @@ code .dim {
 }
 
 .home-goals-title a {
-    color: inherit;
+    color: var(--light-cyan);
     text-decoration: none;
 }
 
