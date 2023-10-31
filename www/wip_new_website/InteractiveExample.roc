@@ -3,7 +3,17 @@ interface InteractiveExample
     imports [pf.Html.{ pre, samp }, pf.Html.Attributes.{ class }]
 
 Section : [Desc (List Token) Str, Indent, Outdent, Newline]
-Token : [Kw Str, Ident Str, Str Str, Num Str, Comment Str, Literal Str, ParensAround (List Token), Lambda (List Str)]
+Token : [
+    Kw Str,
+    Ident Str,
+    Str Str,
+    Num Str,
+    Comment Str,
+    Literal Str,
+    ParensAround (List Token),
+    Lambda (List Str),
+    StrInterpolation Str Str Str,
+]
 
 view : Html.Node
 view =
@@ -41,16 +51,14 @@ view =
             Indent,
             Desc [Ident "url", Kw "<-", Ident "File.readUtf8", Ident "filename", Kw "|>", Ident "Task.await"] "<p>This reads the contents of the file (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p><p>The <code>&lt;-</code> does <a href=\"/tutorial#backpassing\">backpassing</a>, which is syntax sugar for defining a function. This whole line desugars to:</p><pre><code>Task.await\n    (File.readUtf8 filename)\n    \\url -&gt;</code></pre><p>The lines after this one form the body of the <code>\\url -&gt;</code> <a href=\"https://en.wikipedia.org/wiki/Callback_(computer_programming)\">callback</a>, which runs if the file read succeeds.</p>",
             Newline,
-            Desc [Literal "{", Ident "name", Literal ",", Ident "email", Literal "}"] "<p>This is <a href=\"/tutorial#record-destructuring\">record destructuring</a> syntax.</p><p>It takes ",
-            Desc [Kw "<-", Ident "Http.get", Ident "url", Ident "Json.codec"] "<p>TODO Json.codec, type inference, early error</p>",
-            Desc [Kw "|>", Ident "Task.await"] "<p>TODO Task.await</p>",
+            Desc [Ident "user", Kw "<-", Ident "Http.get", Ident "url", Ident "Json.codec", Kw "|>", Ident "Task.await"] "<p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p><p>If the shape of the JSON isn’t compatible with the type of <code>user</code> (based on type inference), this will give a decoding error immediately.</p><p>As with all the other lines ending in <code>|> Task.await</code>, if there’s an error, nothing else in <code>storeEmail</code> will be run, and <code>handleErr</code> will end up handling the error.</p>",
             Newline,
-            Desc [Ident "dest", Kw "=", Str "\"\\(name).txt\""] "<p>The <code>\\(name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
+            Desc [Ident "dest", Kw "=", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\\(user.name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
             Newline,
-            Desc [Literal "_"] "<p>In Roc, if you don’t want to bother naming something, you can always choose the name <code>_</code>.</p><p>You can name as many things as you like <code>_</code>, even in the same scope, but you can’t reference anything named <code>_</code>.</p><p>So it’s only useful for when you don’t want to choose a name.</p>",
-            Desc [Kw "<-", Ident "File.writeUtf8", Ident "(Path.fromStr dest)", Ident "email", Kw "|>", Ident "Task.await"] "<p>This writes the <code>email</code> string to the file encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>The parentheses here show where the nested call to <code>Path.fromStr</code> begins and ends.</p>",
+            Desc [Literal "_"] "<p>In Roc, if you don’t want to bother naming something, you can always choose the name <code>_</code>.</p><p>You can name as many things as you like <code>_</code>, but you can never reference anything named <code>_</code>.</p><p>So it’s only useful for when you don’t want to choose a name.</p>",
+            Desc [Kw "<-", Ident "File.writeUtf8", ParensAround [Ident "Path.fromStr dest"], Ident "user.email", Kw "|>", Ident "Task.await"] "<p>This writes the <code>user.email</code> string to the file encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>The parentheses here show where the nested call to <code>Path.fromStr</code> begins and ends.</p>",
             Newline,
-            Desc [Ident "Stdout.line", Str "\"Wrote email to \\(dest)\""] "<p>This prints what we did to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)\">stdout</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. That’s because, although <code>Stdout.line</code> returns a <a href=\"/tutorial#tasks\">task</a>, we don’t need to await it because nothing happens after it.</p>",
+            Desc [Ident "Stdout.line", StrInterpolation "\"Wrote email to " "dest" "\""] "<p>This prints what we did to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)\">stdout</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. That’s because, although <code>Stdout.line</code> returns a <a href=\"/tutorial#tasks\">task</a>, we don’t need to await it because nothing happens after it.</p>",
             Outdent,
             Newline,
             Desc [Ident "handleErr", Kw "=", Lambda ["err"]] "<p>Like <code>storeEmail</code>, <code>handleErr</code> is also a function.</p><p>Although type annotations are optional everywhere in Roc—because the language has 100% type inference—you could add type annotations to <code>main</code>, <code>storeEmail</code>, and <code>handleErr</code> if you wanted to.</p>",
@@ -58,17 +66,17 @@ view =
             Desc [Kw "when", Ident "err", Kw "is"] "<p>TODO when</p>",
             Indent,
             Desc [Literal "HttpErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
-            Desc [Ident "Stderr.line", Str "\"Error fetching URL \\(url)\""] "<p>TODO</p>",
+            Desc [Ident "Stderr.line", StrInterpolation "\"Error fetching URL " "url" "\""] "<p>TODO</p>",
             Newline,
             Desc [Literal "FileReadErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
-            Desc [Ident "Stderr.line", Str "\"Error reading from \\(Path.display path)\""] "<p>TODO</p>",
+            Desc [Ident "Stderr.line", StrInterpolation "\"Error reading from " "Path.display path" "\""] "<p>TODO</p>",
             Newline,
             Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
-            Desc [Ident "Stderr.line", Str "\"Error writing to \\(Path.display path)\""] "<p>TODO</p>",
+            Desc [Ident "Stderr.line", StrInterpolation "\"Error writing to " "Path.display path" "\""] "<p>TODO</p>",
         ]
 
-    pre [] [
-        samp [class "interactive-example"] [
+    pre [class "interactive-example"] [
+        samp [] [
             Html.text output,
         ],
     ]
@@ -112,16 +120,23 @@ tokensToStr = \tokens ->
                 Str.concat bufWithSpace "<span class=\"comment\"># \(str)</span>"
 
             Ident str ->
-                html =
-                    List.walk (Str.split str ".") "" \accum, ident ->
-                        identHtml = "<span class=\"ident\">\(ident)</span>"
+                Str.concat bufWithSpace (identToHtml str)
 
-                        if Str.isEmpty accum then
-                            identHtml
-                        else
-                            "\(accum)<span class=\"kw\">.</span>\(identHtml)"
+            StrInterpolation before interp after ->
+                bufWithSpace
+                |> Str.concat (if Str.isEmpty before then "" else "<span class=\"literal\">\(before)</span>")
+                |> Str.concat "<span class=\"kw\">\\(</span>\(identToHtml interp)<span class=\"kw\">)</span>"
+                |> Str.concat (if Str.isEmpty after then "" else "<span class=\"literal\">\(after)</span>")
 
-                Str.concat bufWithSpace html
+identToHtml : Str -> Str
+identToHtml = \str ->
+    List.walk (Str.split str ".") "" \accum, ident ->
+        identHtml = "<span class=\"ident\">\(ident)</span>"
+
+        if Str.isEmpty accum then
+            identHtml
+        else
+            "\(accum)<span class=\"kw\">.</span>\(identHtml)"
 
 sectionsToStr : List Section -> Str
 sectionsToStr = \sections ->

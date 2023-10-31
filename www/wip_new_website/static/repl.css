@@ -1,6 +1,7 @@
 #repl {
   display: flex;
   flex-direction: column;
+  font-size: 18px;
 }
 
 #source-input-wrapper {
@@ -36,6 +37,7 @@
   margin: 0;
   margin-bottom: 2em;
   box-sizing: border-box;
+  font-size: 18px;
 }
 
 #source-input:focus {
@@ -128,7 +130,6 @@
 .underline {
   text-decoration: underline;
 }
-
 
 /* Mobile-friendly screen width */
 @media only screen and (max-width: 767px) {
