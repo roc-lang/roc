@@ -138,36 +138,39 @@ generateEntryPoint = \buf, types, name, id ->
             Function rocFn ->
                 arguments =
                     toArgStr rocFn.args types \argId, _shape, index ->
-                        type = typeName types argId
+                        # This "()" will never happen because we drop Unit arguments
+                        type = typeName types argId |> Result.withDefault "()"
                         indexStr = Num.toStr index
 
                         "arg\(indexStr): \(type)"
 
-                ret = typeName types rocFn.ret
-
-                "(\(arguments)) -> \(ret)"
+                when typeName types rocFn.ret is
+                    Ok ret -> "(\(arguments)) -> \(ret)"
+                    Err ZeroSized -> "(\(arguments))"
 
             _ ->
-                ret = typeName types id
-                "() -> \(ret)"
+                when typeName types id is
+                    Ok ret -> "() -> \(ret)"
+                    Err ZeroSized -> "()"
 
     externSignature =
         when Types.shape types id is
             Function rocFn ->
                 arguments =
                     toArgStr rocFn.args types \argId, shape, _index ->
-                        type = typeName types argId
+                        # This "()" will never happen because we drop Unit arguments
+                        type = typeName types argId |> Result.withDefault "()"
 
                         if canDeriveCopy types shape then
                             "_: \(type)"
                         else
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
-                ret = typeName types rocFn.ret
+                ret = typeName types rocFn.ret |> Result.withDefault "core::ffi::c_void"
                 "(_: *mut \(ret), \(arguments))"
 
             _ ->
-                ret = typeName types id
+                ret = typeName types id |> Result.withDefault "core::ffi::c_void"
                 "(_: *mut \(ret))"
 
     externArguments =
@@ -207,11 +210,13 @@ generateFunction = \buf, types, rocFn ->
     name = rocFn.functionName
     externName = rocFn.externName
 
-    lambdaSet = typeName types rocFn.lambdaSet
+    # TODO We currently represent zero-sized lambda sets as *mut c_void - but is this correct?
+    lambdaSet = typeName types rocFn.lambdaSet |> Result.withDefault "*mut core::ffi::c_void"
 
     publicArguments =
         toArgStr rocFn.args types \argId, _shape, index ->
-            type = typeName types argId
+            # This "()" will never happen because we drop Unit argument
+            type = typeName types argId |> Result.withDefault "()"
             indexStr = Num.toStr index
 
             "arg\(indexStr): \(type)"
@@ -219,7 +224,8 @@ generateFunction = \buf, types, rocFn ->
     externDefArguments =
         withoutUnit =
             toArgStr rocFn.args types \argId, _shape, index ->
-                type = typeName types argId
+                # This "()" will never happen because we drop Unit argument
+                type = typeName types argId |> Result.withDefault "()"
                 indexStr = Num.toStr index
 
                 "arg\(indexStr): *const \(type)"
@@ -245,7 +251,10 @@ generateFunction = \buf, types, rocFn ->
 
     publicComma = if Str.isEmpty publicArguments then "" else ", "
 
-    ret = typeName types rocFn.ret
+    ret =
+        when typeName types rocFn.ret is
+            Ok retStr -> " -> \(retStr)"
+            Err ZeroSized -> ""
 
     """
     \(buf)
@@ -257,7 +266,7 @@ generateFunction = \buf, types, rocFn ->
     }
 
     impl \(name) {
-        pub fn force_thunk(self\(publicComma)\(publicArguments)) -> \(ret) {
+        pub fn force_thunk(self\(publicComma)\(publicArguments))\(ret) {
             extern "C" {
                 fn \(externName)(\(externDefArguments), closure_data: *mut u8, output: *mut \(ret));
             }
@@ -311,15 +320,18 @@ generateStructFields = \buf, types, visibility, structFields ->
 
 generateStructFieldWithoutClosure = \types, visibility ->
     \accum, { name: fieldName, id } ->
-        typeStr = typeName types id
-        escapedFieldName = escapeKW fieldName
+        when typeName types id is
+            Ok typeStr ->
+                escapedFieldName = escapeKW fieldName
 
-        pub =
-            when visibility is
-                Public -> "pub"
-                Private -> ""
+                pub =
+                    when visibility is
+                        Public -> "pub"
+                        Private -> ""
 
-        Str.concat accum "\(indent)\(pub) \(escapedFieldName): \(typeStr),\n"
+                Str.concat accum "\(indent)\(pub) \(escapedFieldName): \(typeStr),\n"
+
+            Err ZeroSized -> accum # Drop zero-sized fields
 
 nameTagUnionPayloadFields = \payloadFields ->
     # Tag union payloads have numbered fields, so we prefix them
@@ -400,18 +412,21 @@ deriveDebugTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId
 deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
     checks =
         List.walk tags "" \accum, { name: tagName, payload } ->
-            type =
-                when payload is
-                    Some id -> typeName types id
-                    None -> "()"
+            when payload is
+                Some id ->
+                    when typeName types id is
+                        Ok type ->
+                            """
+                            \(accum)
+                                            \(tagName) => {
+                                                let field: &\(type) = &self.payload.\(tagName);
+                                                f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
+                                            },
+                            """
 
-            """
-            \(accum)
-                            \(tagName) => {
-                                let field: &\(type) = &self.payload.\(tagName);
-                                f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
-                            },
-            """
+                        Err ZeroSized -> accum
+
+                None -> accum
 
     """
     \(buf)
@@ -554,8 +569,15 @@ generateConstructorFunctions = \buf, types, tagUnionType, tags ->
 
 generateConstructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
 generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
-    when optPayload is
-        None ->
+    payloadType =
+        when optPayload is
+            None -> Err ZeroSized
+            Some payloadId ->
+                typeName types payloadId
+                |> Result.map \payloadName -> (payloadName, Types.shape types payloadId)
+
+    when payloadType is
+        Err ZeroSized ->
             """
             \(buf)
 
@@ -569,10 +591,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 }
             """
 
-        Some payloadId ->
-            payloadType = typeName types payloadId
-            shape = Types.shape types payloadId
-
+        Ok (payloadName, shape) ->
             new =
                 if canDeriveCopy types shape then
                     "payload"
@@ -582,7 +601,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
             """
             \(buf)
 
-                pub fn \(name)(payload: \(payloadType)) -> Self {
+                pub fn \(name)(payload: \(payloadName)) -> Self {
                     Self {
                         discriminant: discriminant_\(tagUnionType)::\(name),
                         payload: union_\(tagUnionType) {
@@ -601,8 +620,15 @@ generateDestructorFunctions = \buf, types, tagUnionType, tags ->
 
 generateDestructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
 generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
-    when optPayload is
-        None ->
+    payloadType =
+        when optPayload is
+            None -> Err ZeroSized
+            Some payloadId ->
+                typeName types payloadId
+                |> Result.map \payloadName -> (payloadName, Types.shape types payloadId)
+
+    when payloadType is
+        Err ZeroSized ->
             """
             \(buf)
 
@@ -611,10 +637,7 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 }
             """
 
-        Some payloadId ->
-            payloadType = typeName types payloadId
-            shape = Types.shape types payloadId
-
+        Ok (payloadName, shape) ->
             take =
                 if canDeriveCopy types shape then
                     "unsafe { self.payload.\(name) }"
@@ -624,7 +647,7 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
             """
             \(buf)
 
-                pub fn unwrap_\(name)(mut self) -> \(payloadType) {
+                pub fn unwrap_\(name)(mut self) -> \(payloadName) {
                     debug_assert_eq!(self.discriminant, discriminant_\(tagUnionType)::\(name));
                     \(take)
                 }
@@ -646,12 +669,11 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     sizeOfSelf = Types.size types id
     alignOfSelf = Types.alignment types id
 
-    sizeOfUnion = sizeOfSelf - discriminantSize
-    alignOfUnion =
-        List.walk tags 1 \accum, { payload } ->
-            when payload is
-                Some payloadId -> Num.max accum (Types.alignment types payloadId)
-                None -> accum
+    # size of union = size of self - discriminant space
+    # (the discriminant's size will always be less than or equal to the alignment,
+    # so just subtract the alignment instead of looking at discriminantSize at all.)
+    sizeOfUnion = sizeOfSelf - alignOfSelf
+    alignOfUnion = alignOfSelf
 
     shape = Types.shape types id
 
@@ -756,13 +778,13 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
     payloadFieldNames =
         commaSeparated "" payloadFields \_, i ->
             n = Num.toStr i
-            "f\(n)"
+            Ok "f\(n)"
 
     constructorArguments =
         commaSeparated "" payloadFields \id, i ->
             n = Num.toStr i
-            type = typeName types id
-            "f\(n): \(type)"
+
+            Result.map (typeName types id) \type -> "f\(n): \(type)"
 
     debugFields =
         payloadFields
@@ -838,41 +860,43 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                     []
 
         fieldGetters =
-            List.walk payloadFields { i: 0, accum: "" } \{ i, accum }, fieldTypeId ->
-                fieldTypeName = typeName types fieldTypeId
-                fieldIndex = Num.toStr i
+            List.walk payloadFields { buf: "", fieldsAdded: 0 } \accum, fieldTypeId ->
+                when typeName types fieldTypeId is
+                    Ok fieldTypeName ->
+                        fieldIndex = Num.toStr accum.fieldsAdded
 
-                {
-                    i: i + 1,
-                    accum:
-                    """
-                    \(accum)
-                        pub fn get_\(tagName)_f\(fieldIndex)(&self) -> &\(fieldTypeName) {
-                            debug_assert!(self.is_\(tagName)());
+                        {
+                            fieldsAdded: accum.fieldsAdded + 1,
+                            buf:
+                            """
+                            \(accum.buf)
+                                pub fn get_\(tagName)_f\(fieldIndex)(&self) -> &\(fieldTypeName) {
+                                    debug_assert!(self.is_\(tagName)());
 
-                            // extern "C" {
-                            //     fn foobar(tag_id: u16, field_index: usize) -> usize;
-                            // }
+                                    // extern "C" {
+                                    //     fn foobar(tag_id: u16, field_index: usize) -> usize;
+                                    // }
 
-                            // let offset = unsafe { foobar(\(fieldIndex)) };
-                            let offset = 0;
-                            unsafe { &*self.unmasked_pointer().add(offset).cast() }
+                                    // let offset = unsafe { foobar(\(fieldIndex)) };
+                                    let offset = 0;
+                                    unsafe { &*self.unmasked_pointer().add(offset).cast() }
+                                }
+
+                            """,
                         }
 
-                    """,
-                }
-            |> .accum
+                    Err ZeroSized -> accum
+            |> .buf
 
         payloadFieldNames =
             commaSeparated "" payloadFields \_, i ->
                 n = Num.toStr i
-                "f\(n)"
+                Ok "f\(n)"
 
         constructorArguments =
             commaSeparated "" payloadFields \payloadId, i ->
                 n = Num.toStr i
-                type = typeName types payloadId
-                "f\(n): \(type)"
+                typeName types payloadId |> Result.map \type -> "f\(n): \(type)"
 
         fixManuallyDrop =
             when optPayload is
@@ -1299,38 +1323,42 @@ generateDiscriminant = \buf, types, name, tags, size ->
     else
         buf
 
+generateUnionField : Types -> (Str, { name : Str, payload : [None, Some TypeId] } -> Str)
 generateUnionField = \types ->
     \accum, { name: fieldName, payload } ->
         escapedFieldName = escapeKW fieldName
 
         when payload is
             Some id ->
-                typeStr = typeName types id
+                when typeName types id is
+                    Ok typeStr ->
+                        type = Types.shape types id
+                        fullTypeStr =
+                            if cannotSupportCopy types type then
+                                # types with pointers need ManuallyDrop
+                                # because rust unions don't (and can't)
+                                # know how to drop them automatically!
+                                "core::mem::ManuallyDrop<\(typeStr)>"
+                            else
+                                typeStr
 
-                type = Types.shape types id
-                fullTypeStr =
-                    if cannotSupportCopy types type then
-                        # types with pointers need ManuallyDrop
-                        # because rust unions don't (and can't)
-                        # know how to drop them automatically!
-                        "core::mem::ManuallyDrop<\(typeStr)>"
-                    else
-                        typeStr
+                        Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
 
-                Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
+                    Err ZeroSized -> accum
 
-            None ->
-                # use unit as the payload
-                Str.concat accum "\(indent)\(escapedFieldName): (),\n"
+            None -> accum
 
-commaSeparated : Str, List a, (a, Nat -> Str) -> Str
+commaSeparated : Str, List a, (a, Nat -> Result Str [ZeroSized]) -> Str
 commaSeparated = \buf, items, step ->
-    length = List.len items
-    List.walk items { buf, count: 0 } \accum, item ->
-        if accum.count + 1 == length then
-            { buf: Str.concat accum.buf (step item accum.count), count: length }
-        else
-            { buf: Str.concat accum.buf (step item accum.count) |> Str.concat ", ", count: accum.count + 1 }
+    List.walk items { buf, entriesAdded: 0 } \accum, item ->
+        when step item accum.entriesAdded is
+            Ok next ->
+                if accum.entriesAdded > 0 then
+                    { buf: "\(accum.buf), \(next)", entriesAdded: accum.entriesAdded + 1 }
+                else
+                    { buf: Str.concat accum.buf next, entriesAdded: 1 }
+
+            Err ZeroSized -> accum
     |> .buf
 
 generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
@@ -1348,13 +1376,12 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
     payloadFieldNames =
         commaSeparated "" payloadFields \_, i ->
             n = Num.toStr i
-            "f\(n)"
+            Ok "f\(n)"
 
     constructorArguments =
         commaSeparated "" payloadFields \id, i ->
             n = Num.toStr i
-            type = typeName types id
-            "f\(n): \(type)"
+            typeName types id |> Result.map \type -> "f\(n): \(type)"
 
     debugFields =
         payloadFields
@@ -1912,66 +1939,63 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
 
+typeName : Types, TypeId -> Result Str [ZeroSized]
 typeName = \types, id ->
     when Types.shape types id is
-        Unit -> "()"
-        Unsized -> "roc_std::RocList<u8>"
-        EmptyTagUnion -> "std::convert::Infallible"
-        RocStr -> "roc_std::RocStr"
-        Bool -> "bool"
-        Num U8 -> "u8"
-        Num U16 -> "u16"
-        Num U32 -> "u32"
-        Num U64 -> "u64"
-        Num U128 -> "u128"
-        Num I8 -> "i8"
-        Num I16 -> "i16"
-        Num I32 -> "i32"
-        Num I64 -> "i64"
-        Num I128 -> "i128"
-        Num F32 -> "f32"
-        Num F64 -> "f64"
-        Num Dec -> "roc_std:RocDec"
+        Unit -> Err ZeroSized
+        Unsized -> Ok "roc_std::RocList<u8>"
+        EmptyTagUnion -> Ok "std::convert::Infallible"
+        RocStr -> Ok "roc_std::RocStr"
+        Bool -> Ok "bool"
+        Num U8 -> Ok "u8"
+        Num U16 -> Ok "u16"
+        Num U32 -> Ok "u32"
+        Num U64 -> Ok "u64"
+        Num U128 -> Ok "u128"
+        Num I8 -> Ok "i8"
+        Num I16 -> Ok "i16"
+        Num I32 -> Ok "i32"
+        Num I64 -> Ok "i64"
+        Num I128 -> Ok "i128"
+        Num F32 -> Ok "f32"
+        Num F64 -> Ok "f64"
+        Num Dec -> Ok "roc_std:RocDec"
         RocDict key value ->
-            keyName = typeName types key
-            valueName = typeName types value
-
-            "roc_std::RocDict<\(keyName), \(valueName)>"
+            when (typeName types key, typeName types value) is
+                (Ok keyName, Ok valueName) -> Ok "roc_std::RocDict<\(keyName), \(valueName)>"
+                (_, _) -> crash "Generating Rust glue for a Dict that contains zero-sized types is unsupported because Rust's CFFI does not support it."
 
         RocSet elem ->
-            elemName = typeName types elem
-
-            "roc_std::RocSet<\(elemName)>"
+            when typeName types elem is
+                Ok elemName -> Ok "roc_std::RocSet<\(elemName)>"
+                Err _ -> crash "Generating Rust glue for a Set that contains zero-sized types is unsupported because Rust's CFFI does not support it."
 
         RocList elem ->
-            elemName = typeName types elem
-
-            "roc_std::RocList<\(elemName)>"
+            when typeName types elem is
+                Ok elemName -> Ok "roc_std::RocList<\(elemName)>"
+                Err _ -> crash "Generating Rust glue for a List that contains zero-sized types is unsupported because Rust's CFFI does not support it."
 
         RocBox elem ->
-            elemName = typeName types elem
-
-            "roc_std::RocBox<\(elemName)>"
+            when typeName types elem is
+                Ok elemName -> Ok "roc_std::RocBox<\(elemName)>"
+                Err _ -> crash "Generating Rust glue for a Box that contains zero-sized types is unsupported because Rust's CFFI does not support it."
 
         RocResult ok err ->
-            okName = typeName types ok
-            errName = typeName types err
+            when (typeName types ok, typeName types err) is
+                (Ok okName, Ok errName) -> Ok "roc_std::RocResult<\(okName), \(errName)>"
+                (_, _) -> crash "Generating Rust glue for a Result that contains zero-sized types is unsupported because Rust's CFFI does not support it."
 
-            "roc_std::RocResult<\(okName), \(errName)>"
-
-        RecursivePointer content ->
-            typeName types content
-
-        Struct { name } -> escapeKW name
-        TagUnionPayload { name } -> escapeKW name
-        TagUnion (NonRecursive { name }) -> escapeKW name
-        TagUnion (Recursive { name }) -> escapeKW name
-        TagUnion (Enumeration { name }) -> escapeKW name
-        TagUnion (NullableWrapped { name }) -> escapeKW name
-        TagUnion (NullableUnwrapped { name }) -> escapeKW name
-        TagUnion (NonNullableUnwrapped { name }) -> escapeKW name
-        TagUnion (SingleTagStruct { name }) -> escapeKW name
-        Function { functionName } -> escapeKW functionName
+        RecursivePointer content -> typeName types content
+        Struct { name } -> Ok (escapeKW name)
+        TagUnionPayload { name } -> Ok (escapeKW name)
+        TagUnion (NonRecursive { name }) -> Ok (escapeKW name)
+        TagUnion (Recursive { name }) -> Ok (escapeKW name)
+        TagUnion (Enumeration { name }) -> Ok (escapeKW name)
+        TagUnion (NullableWrapped { name }) -> Ok (escapeKW name)
+        TagUnion (NullableUnwrapped { name }) -> Ok (escapeKW name)
+        TagUnion (NonNullableUnwrapped { name }) -> Ok (escapeKW name)
+        TagUnion (SingleTagStruct { name }) -> Ok (escapeKW name)
+        Function { functionName } -> Ok (escapeKW functionName)
 
 getSizeRoundedToAlignment = \types, id ->
     alignment = Types.alignment types id
@@ -2087,6 +2111,7 @@ reservedKeywords = Set.fromList [
     "while",
 ]
 
+escapeKW : Str -> Str
 escapeKW = \input ->
     # use a raw identifier for this, to prevent a syntax error due to using a reserved keyword.
     # https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html
@@ -2095,11 +2120,6 @@ escapeKW = \input ->
         "r#\(input)"
     else
         input
-
-nextMultipleOf = \lhs, rhs ->
-    when lhs % rhs is
-        0 -> lhs
-        r -> lhs + (rhs - r)
 
 isUnit : Shape -> Bool
 isUnit = \shape ->
