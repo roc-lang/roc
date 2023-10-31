@@ -1068,7 +1068,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_GREATER_THAN[IntWidth::I128]
                         } else {
@@ -1106,7 +1105,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128]
                         } else {
@@ -1144,7 +1142,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_LESS_THAN[IntWidth::I128]
                         } else {
@@ -1183,7 +1180,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128]
                         } else {
