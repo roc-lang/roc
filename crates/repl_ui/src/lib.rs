@@ -20,7 +20,6 @@ pub const TIPS: &str = concatcp!(
     "x = 1",
     END_COL,
     ") to use later.\n\n",
-
     if cfg!(target_family = "wasm") {
         "" // In the web repl, we render tips in the UI around the repl instead of in the repl itself.
     } else {
