@@ -1,6 +1,7 @@
 #repl {
   display: flex;
   flex-direction: column;
+  font-size: 18px;
 }
 
 #source-input-wrapper {
@@ -36,12 +37,12 @@
   margin: 0;
   margin-bottom: 2em;
   box-sizing: border-box;
+  font-size: 18px;
 }
 
 #source-input:focus {
-  border: 1px solid var(--cyan);
+  outline: 2px solid var(--primary-1);
   box-sizing: border-box;
-  outline: none;
 }
 
 .history {
@@ -79,7 +80,7 @@
 }
 
 .panic {
-  color: red;
+  color: #ff6666;
 }
 
 .input-line-prefix {
@@ -87,7 +88,7 @@
 }
 
 .color-red {
-  color: red;
+  color: #ff6666;
 }
 
 .color-green {
@@ -103,7 +104,7 @@
 }
 
 .color-magenta {
-  color: var(--magenta);
+  color: var(--primary-1);
 }
 
 .color-cyan {
@@ -129,7 +130,6 @@
 .underline {
   text-decoration: underline;
 }
-
 
 /* Mobile-friendly screen width */
 @media only screen and (max-width: 767px) {

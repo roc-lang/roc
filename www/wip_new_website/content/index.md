@@ -27,23 +27,23 @@
 <section class="home-goals-container">
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and run fast. It compiles to machine code or <a href="https://webassembly.org/">WebAssembly</a>.</p>
+            <h3 class="home-goals-title"><a href="/fast">Fast</a></h3>
+            <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
             <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc's syntax, semantics, and toolset are designed to feel user-friendly and helpful.</p>
+            <h3 class="home-goals-title"><a href="/friendly">Friendly</a></h3>
+            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title">Functional</h3>
+            <h3 class="home-goals-title"><a href="/functional">Functional</a></h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It's a single-paradigm <a href="https://en.wikipedia.org/wiki/Functional_programming">functional</a> language.</p>
+             Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
             <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
         </div>
     </div>
@@ -51,20 +51,54 @@
 
 ## Try Roc
 
-<div id="repl">
-<code class="history">
-  <div id="help-text"></div>
-  <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
-</code>
-<section id="source-input-wrapper">
-  <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
-    disabled></textarea>
+<section id="homepage-repl-container">
+    <div id="repl-description" role="presentation">
+        <p>You can try out Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
+        <p><code>Shift-Enter</code> adds a newline.</p>
+        <p><span id="repl-arrow">←</span> Try entering <code>0.1 + 0.2</code></p>
+    </div>
+    <div id="repl" role="presentation">
+        <code class="history">
+          <div id="help-text"></div>
+          <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
+        </code>
+        <section id="source-input-wrapper">
+          <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+            onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
+        </section>
+    </div>
+    <script type="module" src="/wip/repl.js"></script>
 </section>
-</div>
-<script type="module" src="/wip/repl.js"></script>
-</div>
 
-## Examples
+## Use Cases
+
+Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
+
+Currently these use cases are the best-supported:
+
+### Command-Line Interfaces (CLIs)
+
+### Web Servers
+
+### Embedding
+
+Calling Roc functions from another language
+
+### Others
+
+You can create your own! Learn about **platforms and applications**...
+
+## Larger Example
+
+Here’s a larger example that shows a few different aspects of Roc:
+* File I/O and HTTP requests
+* Pattern matching for error handling
+* JSON deserialization via type inference
+* Common syntax sugar: string interpolation, pipelines, and backpassing
+
+The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
+
+<!-- ## More Examples
 
 We have developed a number of smaller code [examples](https://github.com/roc-lang/examples) which demonstrate how to use Roc. These cover a range of topics from basic syntax to more advanced features such as random number generation and using the popular `Task` feature.
 
@@ -85,9 +119,9 @@ TODO provide explanation of platform/application abstraction versus libraries as
 
 If you'd like to learn more about Roc check out one of these videos:
 
-*   [Roc at Handmade Seattle](https://media.handmade-seattle.com/roc-lang) - November 12, 2021 (very low-level explanation of how Roc's compiler makes programs run fast)
-*   [Outperforming Imperative with Pure Functional Languages](https://youtu.be/vzfy4EKwG_Y) - October 1, 2021 (about Roc's runtime performance and optimizer)
+*   [Roc at Handmade Seattle](https://media.handmade-seattle.com/roc-lang) - November 12, 2021 (very low-level explanation of how Roc’s compiler makes programs run fast)
+*   [Outperforming Imperative with Pure Functional Languages](https://youtu.be/vzfy4EKwG_Y) - October 1, 2021 (about Roc’s runtime performance and optimizer)
 *   [A taste of Roc](https://youtu.be/6qzWm_eoUXM) - September 23, 2021 (syntax, application examples)
 *   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
 *   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
-*   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language)
+*   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language) -->

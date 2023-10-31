@@ -13,7 +13,7 @@ use roc_reporting::report::StyleCodes;
 
 use crate::colors::GREEN;
 
-// TODO add link to repl tutorial(does not yet exist).
+// TODO add link to repl tutorial (does not yet exist).
 pub const TIPS: &str = concatcp!(
     "\nEnter an expression to evaluate, or a definition (like ",
     BLUE,
@@ -21,25 +21,7 @@ pub const TIPS: &str = concatcp!(
     END_COL,
     ") to use later.\n\n",
     if cfg!(target_family = "wasm") {
-        // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
-        // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
-        concatcp!(
-            BLUE,
-            "  - ",
-            END_COL,
-            PINK,
-            "Shift-Enter",
-            END_COL,
-            " or ",
-            PINK,
-            "Ctrl-Enter",
-            END_COL,
-            " makes a newline\n",
-            BLUE,
-            "  - ",
-            END_COL,
-            ":help"
-        )
+        "" // In the web repl, we render tips in the UI around the repl instead of in the repl itself.
     } else {
         // We use ctrl-v + ctrl-j for newlines because on Unix, terminals cannot distinguish between Shift-Enter and Enter
         concatcp!(

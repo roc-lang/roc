@@ -3,6 +3,7 @@ app "roc-website"
     imports [
         pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta },
         pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color },
+        InteractiveExample,
     ]
     provides [transformFileContent] to pf
 
@@ -19,7 +20,7 @@ pageData =
 getPage : Str -> { title : Str, description : Str }
 getPage = \current ->
     Dict.get pageData current
-    |> Result.withDefault { title: "", description: ""}
+    |> Result.withDefault { title: "", description: "" }
 
 getTitle : Str -> Str
 getTitle = \current ->
@@ -35,6 +36,12 @@ transformFileContent = \page, htmlContent ->
 
 view : Str, Str -> Html.Node
 view = \page, htmlContent ->
+    mainBody =
+        if page == "index.html" then
+            [text htmlContent, InteractiveExample.view]
+        else
+            [text htmlContent]
+
     html [lang "en"] [
         head [] [
             meta [charset "utf-8"] [],
@@ -50,15 +57,13 @@ view = \page, htmlContent ->
         ],
         body [] [
             viewNavbar page,
-            main [] [
-                text htmlContent,
-            ],
+            main [] mainBody,
             footer [] [
                 div [id "footer"] [
                     text " powered by ",
-                    a [href "https://www.netlify.com"] [ text "Netlify"],
-                ]
-            ]
+                    a [href "https://www.netlify.com"] [text "Netlify"],
+                ],
+            ],
         ],
         # TODO - add site.js if needed
         # script [src "/site.js"] [],
@@ -81,17 +86,22 @@ viewNavbar = \page ->
         ],
     ]
 
+rocLogo : Html.Node
 rocLogo =
-    (Html.element "svg") [
+    (Html.element "svg")
+        [
             (Html.attribute "viewBox") "0 -6 51 58",
             (Html.attribute "xmlns") "http://www.w3.org/2000/svg",
             (Html.attribute "aria-labelledby") "logo-link",
             (Html.attribute "role") "img",
-            class "roc-logo"
-        ] [
+            class "roc-logo",
+        ]
+        [
             (Html.element "title") [id "logo-link"] [text "Return to Roc Home"],
-            (Html.element "polygon") [
+            (Html.element "polygon")
+                [
                     (Html.attribute "role") "presentation",
                     (Html.attribute "points") "0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086",
-                ] [],
+                ]
+                [],
         ]
