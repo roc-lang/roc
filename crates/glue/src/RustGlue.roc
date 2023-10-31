@@ -643,33 +643,23 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     tagNames = List.map tags \{ name: n } -> n
     selfMut = "self"
 
-    max = \a, b -> if a >= b then a else b
+    sizeOfSelf = Types.size types id
+    alignOfSelf = Types.alignment types id
 
+    sizeOfUnion = sizeOfSelf - discriminantSize
     alignOfUnion =
         List.walk tags 1 \accum, { payload } ->
             when payload is
-                Some payloadId -> max accum (Types.alignment types payloadId)
+                Some payloadId -> Num.max accum (Types.alignment types payloadId)
                 None -> accum
 
-    alignOfUnionStr = Num.toStr alignOfUnion
-
-    sizeOfUnionStr =
-        List.walk tags 1 \accum, { payload } ->
-            when payload is
-                Some payloadId -> max accum (Types.size types payloadId)
-                None -> accum
-        |> nextMultipleOf alignOfUnion
-        |> Num.toStr
-
-    sizeOfSelf = Num.toStr (Types.size types id)
-    alignOfSelf = Num.toStr (Types.alignment types id)
     shape = Types.shape types id
 
     # TODO: this value can be different than the alignment of `id`
     align =
         List.walk tags 1 \accum, { payload } ->
             when payload is
-                Some payloadId -> max accum (Types.alignment types payloadId)
+                Some payloadId -> Num.max accum (Types.alignment types payloadId)
                 None -> accum
         |> Num.toStr
 
@@ -681,11 +671,11 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
         }
 
-        const _SIZE_CHECK_\(unionName): () = assert!(core::mem::size_of::<\(unionName)>() == \(sizeOfUnionStr));
-        const _ALIGN_CHECK_\(unionName): () = assert!(core::mem::align_of::<\(unionName)>() == \(alignOfUnionStr));
+        const _SIZE_CHECK_\(unionName): () = assert!(core::mem::size_of::<\(unionName)>() == \(Num.toStr sizeOfUnion));
+        const _ALIGN_CHECK_\(unionName): () = assert!(core::mem::align_of::<\(unionName)>() == \(Num.toStr alignOfUnion));
 
-        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(sizeOfSelf));
-        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(alignOfSelf));
+        const _SIZE_CHECK_\(escapedName): () = assert!(core::mem::size_of::<\(escapedName)>() == \(Num.toStr sizeOfSelf));
+        const _ALIGN_CHECK_\(escapedName): () = assert!(core::mem::align_of::<\(escapedName)>() == \(Num.toStr alignOfSelf));
 
         impl \(escapedName) {
             \(discriminantDocComment)
