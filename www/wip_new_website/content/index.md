@@ -48,7 +48,7 @@
     </div>
 </section>
 
-## Try Roc
+### [Try Roc](#try-roc) {#try-roc}
 
 <section id="homepage-repl-container">
     <div id="repl-description" role="presentation">

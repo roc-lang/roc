@@ -1,7 +1,7 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta },
+        pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta, script },
         pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color },
         InteractiveExample,
     ]
@@ -42,7 +42,7 @@ view = \page, htmlContent ->
         else
             [text htmlContent]
 
-    html [lang "en"] [
+    html [lang "en", class "no-js"] [
         head [] [
             meta [charset "utf-8"] [],
             Html.title [] [text (getTitle page)],
@@ -54,6 +54,10 @@ view = \page, htmlContent ->
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
             link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"] [],
+            # Remove the .no-js class from <html> before the body renders, so anything
+            # hidden via CSS using a .no-js selector will apply to the initial layout
+            # of the body instead of having a flash of content that immediately gets hidden.
+            script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"]
         ],
         body [] [
             viewNavbar page,
