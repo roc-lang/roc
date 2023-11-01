@@ -48,7 +48,7 @@
     </div>
 </section>
 
-### [Try Roc](#try-roc) {#try-roc}
+## [Try Roc](#try-roc) {#try-roc}
 
 <section id="homepage-repl-container">
     <div id="repl-description" role="presentation">
@@ -69,7 +69,7 @@
     <script type="module" src="/wip/repl.js"></script>
 </section>
 
-## Use Cases
+## [Use Cases](#use-cases) {#use-cases}
 
 Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
 
@@ -87,7 +87,7 @@ Calling Roc functions from another language
 
 You can create your own! Learn about **platforms and applications**...
 
-## Larger Example
+## [Larger Example](#larger-example) {#larger-example}
 
 Here’s a larger example that shows a few different aspects of Roc:
 * File I/O and HTTP requests

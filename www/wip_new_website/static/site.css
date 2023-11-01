@@ -125,6 +125,15 @@ h2 {
     color: var(--heading-color);
 }
 
+h2 a {
+    color: var(--heading-color);
+}
+
+h2:hover a {
+    color: var(--link-color);
+    text-decoration: none;
+}
+
 h3 {
     font-size: 1.5rem;
 }
