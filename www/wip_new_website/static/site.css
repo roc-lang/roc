@@ -170,7 +170,7 @@ h3 {
 #top-bar-links label {
     box-sizing: border-box;
     color: var(--top-bar-fg);
-    font-size: var(--font-size-normal);
+    font-size: 18px;
     display: block;
     height: var(--top-bar-height);
     padding: 12px 16px;
