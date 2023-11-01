@@ -48,9 +48,10 @@
     </div>
 </section>
 
-## [Try Roc](#try-roc) {#try-roc}
+<section id="try-roc">
+<h2><a href="#try-roc">Try Roc</a></h2>
 
-<section id="homepage-repl-container">
+<div id="homepage-repl-container" role="presentation">
     <div id="repl-description" role="presentation">
         <p>You can try out Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
         <p><code>Shift-Enter</code> adds a newline.</p>
@@ -67,6 +68,7 @@
         </section>
     </div>
     <script type="module" src="/wip/repl.js"></script>
+</div>
 </section>
 
 ## [Use Cases](#use-cases) {#use-cases}

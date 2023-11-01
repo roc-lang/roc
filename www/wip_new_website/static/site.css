@@ -232,7 +232,7 @@ pre>samp {
 }
 
 /* The repl won't work at all if you have JS disabled. */
-.no-js #homepage-repl-container, .no-js #try-roc {
+.no-js #try-roc {
     display: none !important;
 }
 

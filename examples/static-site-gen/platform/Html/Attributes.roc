@@ -9,6 +9,8 @@ interface Html.Attributes
         align,
         allow,
         alt,
+        ariaLabel,
+        ariaLabelledBy,
         async,
         autocapitalize,
         autocomplete,
