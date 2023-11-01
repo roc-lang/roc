@@ -60,7 +60,7 @@
     <div id="repl" role="presentation">
         <code class="history">
           <div id="help-text"></div>
-          <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
+          <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module...please wait!</div></div>
         </code>
         <section id="source-input-wrapper">
           <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"

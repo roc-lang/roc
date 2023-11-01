@@ -6,7 +6,7 @@ Roc is designed to have a small number of simple language primitives. This goal 
 
 All Roc values are semantically immutable, but may be opportunistically mutated behind the scenes when it would improve performance (without affecting the program's behavior). For example:
 
-```elm
+```roc
 colors
 |> Set.insert "Purple"
 |> Set.insert "Orange"
@@ -29,7 +29,7 @@ An ergonomics benefit of having no direct mutation primitives is that functions 
 
 This makes Roc functions naturally amenable to pipelining, as we saw in the earlier example:
 
-```elm
+```roc
 colors
 |> Set.insert "Purple"
 |> Set.insert "Orange"
@@ -53,41 +53,41 @@ In Roc, this will give a compile-time error. Once a name has been assigned to a 
 
 A benefit of this design is that it makes Roc code easier to rearrange without causing regressions. Consider this code:
 
-```elm
+```roc
 func = \arg ->
     greeting = "Hello"
     welcome = \name -> "\(greeting), \(name)!"
-    …
+    ...
     message = welcome "friend"
-    …
+    ...
 ```
 
 Suppose I decide to extract the `welcome` function to the top level, so I can reuse it elsewhere:
 
-```elm
+```roc
 func = \arg ->
-    …
+    ...
     message = welcome "Hello" "friend"
-    …
+    ...
 
 welcome = \prefix, name -> "\(prefix), \(name)!"
 ```
 
-Without knowing the rest of `func`, we can be confident this change will not alter the code's behavior. In contrast, suppose Roc allowed reassignment. Then it's possible something in the `…` parts of the code could have modified `greeting` before it was used in the `message =` declaration. For example:
+Without knowing the rest of `func`, we can be confident this change will not alter the code's behavior. In contrast, suppose Roc allowed reassignment. Then it's possible something in the `...` parts of the code could have modified `greeting` before it was used in the `message =` declaration. For example:
 
-```elm
+```roc
 func = \arg ->
     greeting = "Hello"
     welcome = \name -> "\(greeting), \(name)!"
-    …
+    ...
     if someCondition then
         greeting = "Hi"
-        …
+        ...
     else
-        …
-    …
+        ...
+    ...
     message = welcome "friend"
-    …
+    ...
 ```
 
 In this example, if we didn't read the whole function to see that `greeting` was later sometimes (but not always) changed from `"Hello"` to `"Hi"`, we might not have realized that changing it to `message = welcome "Hello" "friend"` would cause a regression due to having the greeting always be `"Hello"`. Because Roc disallows reassignment, this particular regression can't happen, and so the code can be confidently rearranged without checking the rest of the function.
