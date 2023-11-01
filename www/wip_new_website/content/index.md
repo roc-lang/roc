@@ -54,7 +54,7 @@
     <div id="repl-description" role="presentation">
         <p>You can try out Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
         <p><code>Shift-Enter</code> adds a newline.</p>
-        <p><span id="repl-arrow">←</span> Try entering <code>0.1 + 0.2</code></p>
+        <p><span id="repl-arrow" role="presentation">←</span> Try entering <code>0.1 + 0.2</code></p>
     </div>
     <div id="repl" role="presentation">
         <code class="history">
