@@ -27,24 +27,24 @@
 <section class="home-goals-container">
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title"><a href="/fast">Fast</a></h3>
+            <h3 class="home-goals-title"><a href="/wip/fast.html">Fast</a></h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
-            <p class="home-goals-learn-more"><a href="/fast">What does <i>fast</i> mean here?</a></p>
+            <p class="home-goals-learn-more"><a href="/wip/fast.html">What does <i>fast</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title"><a href="/friendly">Friendly</a></h3>
+            <h3 class="home-goals-title"><a href="/wip/friendly.html">Friendly</a></h3>
             <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
-            <p class="home-goals-learn-more"><a href="/friendly">What does <i>friendly</i> mean here?</a></p>
+            <p class="home-goals-learn-more"><a href="/wip/friendly.html">What does <i>friendly</i> mean here?</a></p>
         </div>
     </div>
     <div class="home-goals-column">
         <div class="home-goals-content">
-            <h3 class="home-goals-title"><a href="/functional">Functional</a></h3>
+            <h3 class="home-goals-title"><a href="/wip/functional.html">Functional</a></h3>
             <p class="home-goals-description">
              Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
-            <p class="home-goals-learn-more"><a href="/design_goals.html#functional">What does <i>functional</i> mean here?</a></p>
+            <p class="home-goals-learn-more"><a href="/wip/functional.html">What does <i>functional</i> mean here?</a></p>
         </div>
     </div>
 </section>
