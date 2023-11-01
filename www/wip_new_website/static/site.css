@@ -14,6 +14,7 @@
     --primary-1: #9b6bf2;
     --primary-2: #7c38f5;
     --highlight: #1bd6bd;
+    --code-color: white;
     --link-color: var(--primary-2);
     --code-link-color: var(--primary-2);
     --text-color: #000;
@@ -170,10 +171,10 @@ main {
 code,
 samp {
     font-family: var(--font-mono);
-    color: var(--code-color);
+    color: var(--text-color);
     background-color: var(--gray-bg);
     display: inline-block;
-    padding: 0;
+    padding: 5px;
 }
 
 p code,
@@ -207,11 +208,14 @@ pre {
     font-size: var(--font-size-normal);
     line-height: 1.76em;
     white-space: pre;
+    background-color: var(--dark-code-bg);
 }
 
 pre>samp {
     overflow-x: auto;
     display: block;
+    background-color: var(--dark-code-bg);
+    color: var(--code-color);
 }
 
 #homepage-repl-container {
@@ -708,7 +712,7 @@ samp .punctuation.terminator,
 code .punctuation.terminator,
 samp .kw,
 code .kw {
-    color: var(--magenta);
+    color: var(--primary-1);
 }
 
 /* Operators */
@@ -716,13 +720,13 @@ samp .op,
 code .op,
 samp .keyword.operator,
 code .keyword.operator {
-    color: var(--orange);
+    color: var(--primary-1);
 }
 
 /* Delimieters */
 samp .delimeter,
 code .delimeter {
-    color: var(--gray);
+    color: var(--primary-1);
 }
 
 /* Variables modules and field names */
@@ -734,7 +738,7 @@ samp .meta.block,
 code .meta.block,
 samp .lowerident,
 code .lowerident {
-    color: var(--blue);
+    color: white;
 }
 
 /* Types, Tags, and Modules */
@@ -744,7 +748,7 @@ samp .meta.path,
 code .meta.path,
 samp .upperident,
 code .upperident {
-    color: var(--green);
+    color: var(--dark-cyan);
 }
 
 samp .dim,
@@ -759,17 +763,17 @@ code .dim {
 }
 
 .copy-button {
-    background: var(--gray-bg);
-    border: 1px solid var(--magenta);
-    color: var(--magenta);
+    background: var(--dark-code-bg);
+    border: 1px solid var(--dark-cyan);
+    color: var(--dark-cyan);
     display: inline-block;
     cursor: pointer;
     margin: 8px;
 }
 
 .copy-button:hover {
-    border-color: var(--green);
-    color: var(--green);
+    border-color: var(--code-color);
+    color: var(--code-color);
 }
 
 .roc-logo {
