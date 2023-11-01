@@ -2,7 +2,7 @@ app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta, script },
-        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color },
+        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color, ariaLabel },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -78,7 +78,7 @@ viewNavbar = \page ->
     logo = if page == "index.html" then [] else [rocLogo]
 
     div [id "top-bar"] [
-        nav [] [
+        nav [ariaLabel "primary"] [
             a [id "nav-home-link", href "/wip/index.html", title "The Roc Programming Language"] logo,
             div [id "top-bar-links"] [
                 a [href "/wip/tutorial.html"] [text "tutorial"],
