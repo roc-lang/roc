@@ -1,8 +1,8 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, footer, div, main, text, nav, a, link, meta },
-        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color },
+        pf.Html.{ html, script, head, body, footer, div, main, text, nav, a, link, meta },
+        pf.Html.Attributes.{ content, src, name, id, href, rel, lang, class, title, charset, color },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -65,8 +65,7 @@ view = \page, htmlContent ->
                 ],
             ],
         ],
-        # TODO - add site.js if needed
-        # script [src "/site.js"] [],
+        script [src "/site.js"] [],
     ]
 
 viewNavbar : Str -> Html.Node
