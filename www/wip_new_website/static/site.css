@@ -955,6 +955,10 @@ code .dim {
     cursor: text;
 }
 
+.interactive-desc a {
+    color: #7c38f5;
+}
+
 .interactive-radio {
     display: none;
 }
