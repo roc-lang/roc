@@ -66,6 +66,14 @@ footer {
     margin: 0 auto;
 }
 
+.logo-dark {
+    fill: #612BDE;
+}
+
+.logo-light {
+    fill: #8257E5;
+}
+
 /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile.
  * When we think we're on mobile (based on max-width), we can switch the instruction.
 */
@@ -641,6 +649,14 @@ li {
         --faded-color: #bbbbbb;
         --gray: #6e6e6e;
         --heading-color: #eee;
+    }
+
+    .logo-dark {
+        fill: #6c3bdc;
+    }
+
+    .logo-light {
+        fill: #8A66DE;
     }
 
     #homepage-h1 {
