@@ -63,16 +63,13 @@ view =
             Newline,
             Desc [Ident "handleErr", Kw "=", Lambda ["err"]] "<p>Like <code>storeEmail</code>, <code>handleErr</code> is also a function.</p><p>Although type annotations are optional everywhere in Roc—because the language has 100% type inference—you could add type annotations to <code>main</code>, <code>storeEmail</code>, and <code>handleErr</code> if you wanted to.</p>",
             Indent,
-            Desc [Kw "when", Ident "err", Kw "is"] "<p>TODO when</p>",
+            Desc [Kw "when", Ident "err", Kw "is"] "<p>This will run one of the following lines depending on what value the <code>err</code> argument has.</p><p>Each line does a <a href=\"/tutorial#tags-with-payloads\">pattern match</a> on the shape of the error to decide whether to run, or to move on and try the next line's pattern.</p><p>Roc will do compile-time <a href=\"/tutorial#exhaustiveness\">exhaustiveness checking</a> and tell you if you forgot to handle any error cases here that could have occurred, based on the tasks that were run in <code>storeEmail</code>.</p>",
             Indent,
-            Desc [Literal "HttpErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
-            Desc [Ident "Stderr.line", StrInterpolation "\"Error fetching URL " "url" "\""] "<p>TODO</p>",
+            Desc [Literal "HttpErr", Ident "url", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error fetching URL " "url" "\""] "<p>This line will run if the <code>Http.get</code> request from earlier encountered an HTTP error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p>",
             Newline,
-            Desc [Literal "FileReadErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
-            Desc [Ident "Stderr.line", StrInterpolation "\"Error reading from " "Path.display path" "\""] "<p>TODO</p>",
+            Desc [Literal "FileReadErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error reading from " "Path.display path" "\""] "<p>This line will run if the <code>File.readUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p>",
             Newline,
-            Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->"] "<p>TODO</p>",
-            Desc [Ident "Stderr.line", StrInterpolation "\"Error writing to " "Path.display path" "\""] "<p>TODO</p>",
+            Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error writing to " "Path.display path" "\""] "<p>This line will run if the <code>File.writeUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p>",
         ]
 
     pre [class "interactive-example"] [
