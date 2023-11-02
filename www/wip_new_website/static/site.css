@@ -29,7 +29,7 @@
     --top-header-height: 67px;
     --sidebar-width: 280px;
 
-    --font-size-normal: 1rem;
+    --font-size-normal: 18px;
     --body-max-width: 1024px;
     --top-bar-height: 50px;
     --homepage-intro-box-width: 328px;
@@ -50,6 +50,10 @@ body {
     width: 100%;
     height: 100%;
     box-sizing: border-box;
+}
+
+p {
+    margin-top: 0;
 }
 
 footer {
@@ -118,6 +122,7 @@ h1 {
 }
 
 h2 {
+    display: inline-block;
     font-size: 3rem;
     border-bottom: 4px solid var(--dark-cyan);
     margin: 36px 0;
@@ -170,7 +175,7 @@ h3 {
 #top-bar-links label {
     box-sizing: border-box;
     color: var(--top-bar-fg);
-    font-size: 18px;
+    font-size: var(--font-size-normal);
     display: block;
     height: var(--top-bar-height);
     padding: 12px 16px;
@@ -246,10 +251,6 @@ pre>samp {
     flex: 1;
 }
 
-#homepage-repl-container #repl-description p:first-of-type {
-    margin-top: 0;
-}
-
 #homepage-repl-container #repl-description a {
     color: inherit;
     text-decoration: underline;
@@ -262,7 +263,8 @@ pre>samp {
 #homepage-repl-container #repl {
     flex: 1;
     border: 2px solid #444;
-    font-size: 18px;
+    font-size: var(--font-size-normal);
+    min-height: 0; /* On /repl on mobile, this expands to fill the screen, which we don't want */
 }
 
 #homepage-repl-container #repl, #homepage-repl-container #repl code {
@@ -272,7 +274,7 @@ pre>samp {
 
 #homepage-repl-container #source-input {
     margin-bottom: 0;
-    font-size: 18px;
+    font-size: var(--font-size-normal);
     height: 55px;
 }
 
@@ -341,7 +343,7 @@ td:last-child {
 p,
 aside,
 li {
-    font-size: 18px;
+    font-size: var(--font-size-normal);
     line-height: 1.85rem;
 }
 
@@ -397,6 +399,9 @@ li {
 
 /* Mobile-friendly screen width */
 @media only screen and (max-width: 1024px) {
+    :root {
+        --font-size-normal: 16px;
+    }
     /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile. */
     .desktop {
         display: none;
@@ -404,16 +409,6 @@ li {
 
     .mobile {
         display: inline;
-    }
-
-    p,
-    aside,
-    li,
-    footer,
-    code,
-    samp,
-    .code-snippet {
-        font-size: 16px;
     }
 
     h1 code,
@@ -844,7 +839,7 @@ code .dim {
 .home-goals-content h3 {
     font-family: inherit;
     text-transform: lowercase;
-    padding-bottom: 12px;
+    padding-bottom: 42px;
     padding-top: 2px;
     font-style: italic;
     text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
@@ -918,7 +913,7 @@ code .dim {
 /* Interactive example on homepage */
 
 .interactive-example {
-    font-size: 18px;
+    font-size: var(--font-size-normal);
 }
 
 .interactive-example, .interactive-example samp {
