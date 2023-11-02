@@ -1,8 +1,8 @@
 app "roc-tutorial"
     packages { pf: "../../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
-        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, title, charset, src, role },
+        pf.Html.{ html, head, body, header, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
+        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, title, charset, src },
     ]
     provides [transformFileContent] to pf
 
@@ -28,18 +28,18 @@ view = \htmlContent ->
                 text htmlContent,
             ],
             footer [] [
-                text "Made by people who like to make nice things."
-            ]
+                text "Made by people who like to make nice things.",
+            ],
         ],
         script [src "/site.js"] [],
     ]
 
 viewNavbar : Html.Node
 viewNavbar =
-    div [id "top-bar", role "presentation"] [
+    header [id "top-bar"] [
         nav [] [
             a [id "nav-home-link", href "/", title "The Roc Programming Language"] [text "roc"],
-            div [id "top-bar-links"] [
+            div [id "header-links"] [
                 a [href "/tutorial"] [text "tutorial"],
                 a [href "https://github.com/roc-lang/roc/tree/main/getting_started"] [text "install"],
                 a [href "/repl"] [text "repl"],
@@ -52,7 +52,7 @@ viewTutorialStart : Html.Node
 viewTutorialStart =
     div [id "tutorial-start"] [
         input [id "tutorial-toc-toggle", name "tutorial-toc-toggle", type "checkbox"] [],
-        nav [id "tutorial-toc"] [
+        nav [id "tutorial-toc", ariaLabel "Table of Contents"] [
             label [id "close-tutorial-toc", for "tutorial-toc-toggle"] [text "close"],
             # TODO fix search: input [id "toc-search", type "text", placeholder "Search"] [],
             ol [] tocLinks,
@@ -112,3 +112,5 @@ tutorialIntro =
             ],
         ],
     ]
+
+ariaLabel = Html.attribute "aria-label"

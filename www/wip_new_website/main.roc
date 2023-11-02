@@ -1,8 +1,8 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, script, head, body, footer, div, main, text, nav, a, link, meta },
-        pf.Html.Attributes.{ content, src, name, id, href, rel, lang, class, title, charset, color },
+        pf.Html.{ html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
+        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, src },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -12,7 +12,7 @@ pageData =
     |> Dict.insert "community.html" { title: "Community", description: "The Roc community" }
     |> Dict.insert "design_goals.html" { title: "Design Goals", description: "Roc's design goals" }
     |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
-    |> Dict.insert "home.html" { title: "Roc", description: "The Roc programming language" }
+    |> Dict.insert "index.html" { title: "Roc", description: "The Roc programming language" }
     |> Dict.insert "install.html" { title: "Install", description: "Getting started with the Roc programming language" }
     |> Dict.insert "donate.html" { title: "Donate", description: "Sponsor Roc" }
     |> Dict.insert "tutorial.html" { title: "Tutorial", description: "The Roc tutorial" }
@@ -42,7 +42,7 @@ view = \page, htmlContent ->
         else
             [text htmlContent]
 
-    html [lang "en"] [
+    html [lang "en", class "no-js"] [
         head [] [
             meta [charset "utf-8"] [],
             Html.title [] [text (getTitle page)],
@@ -54,6 +54,10 @@ view = \page, htmlContent ->
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
             link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"] [],
+            # Remove the .no-js class from <html> before the body renders, so anything
+            # hidden via CSS using a .no-js selector will apply to the initial layout
+            # of the body instead of having a flash of content that immediately gets hidden.
+            script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"]
         ],
         body [] [
             viewNavbar page,
@@ -72,8 +76,8 @@ viewNavbar : Str -> Html.Node
 viewNavbar = \page ->
     logo = if page == "index.html" then [] else [rocLogo]
 
-    div [id "top-bar"] [
-        nav [] [
+    header [id "top-bar"] [
+        nav [ariaLabel "primary"] [
             a [id "nav-home-link", href "/wip/index.html", title "The Roc Programming Language"] logo,
             div [id "top-bar-links"] [
                 a [href "/wip/tutorial.html"] [text "tutorial"],

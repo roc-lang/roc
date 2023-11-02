@@ -1,14 +1,13 @@
 <div role="presentation" id="homepage-intro-box">
   <h1 id="homepage-h1">Roc</h1>
   <svg id="homepage-logo" alt="The Roc logo, a purple origami bird made of six triangles" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" fill="#612BDE"/>
-      <path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" fill="#8257E5"/>
-      <path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" fill="#8257E5"/>
-      <path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" fill="#8257E5"/>
-      <path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" fill="#612BDE"/>
-      <path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" fill="#612BDE"/>
+      <path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" class="logo-dark"/>
+      <path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" class="logo-light"/>
+      <path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" class="logo-light"/>
+      <path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" class="logo-light"/>
+      <path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" class="logo-dark"/>
+      <path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" class="logo-dark"/>
   </svg>
-
 
   <p id="homepage-tagline">A fast, friendly, functional language.</p>
 
@@ -26,36 +25,37 @@
 
 <section class="home-goals-container">
     <div class="home-goals-column">
-        <div class="home-goals-content">
-            <h3 class="home-goals-title"><a href="/wip/fast.html">Fast</a></h3>
+        <a href="/wip/fast" class="home-goals-content">
+            <h3 class="home-goals-title">Fast</h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
-            <p class="home-goals-learn-more"><a href="/wip/fast.html">What does <i>fast</i> mean here?</a></p>
-        </div>
+            <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
+        </a>
     </div>
     <div class="home-goals-column">
-        <div class="home-goals-content">
-            <h3 class="home-goals-title"><a href="/wip/friendly.html">Friendly</a></h3>
+        <a href="/wip/friendly" class="home-goals-content">
+            <h3 class="home-goals-title">Friendly</h3>
             <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
-            <p class="home-goals-learn-more"><a href="/wip/friendly.html">What does <i>friendly</i> mean here?</a></p>
-        </div>
+            <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
+        </a>
     </div>
     <div class="home-goals-column">
-        <div class="home-goals-content">
-            <h3 class="home-goals-title"><a href="/wip/functional.html">Functional</a></h3>
+        <a href="/wip/functional" class="home-goals-content">
+            <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
              Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
-            <p class="home-goals-learn-more"><a href="/wip/functional.html">What does <i>functional</i> mean here?</a></p>
-        </div>
+            <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
+        </a>
     </div>
 </section>
 
-## Try Roc
+<section id="try-roc">
+<h2><a href="#try-roc">Try Roc</a></h2>
 
-<section id="homepage-repl-container">
+<div id="homepage-repl-container" role="presentation">
     <div id="repl-description" role="presentation">
         <p>You can try out Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
         <p><code>Shift-Enter</code> adds a newline.</p>
-        <p><span id="repl-arrow">←</span> Try entering <code>0.1 + 0.2</code></p>
+        <p><span id="repl-arrow" role="presentation">←</span> Try entering <code>0.1 + 0.2</code></p>
     </div>
     <div id="repl" role="presentation">
         <code class="history">
@@ -68,9 +68,10 @@
         </section>
     </div>
     <script type="module" src="/wip/repl.js"></script>
+</div>
 </section>
 
-## Use Cases
+## [Use Cases](#use-cases) {#use-cases}
 
 Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
 
@@ -88,7 +89,7 @@ Calling Roc functions from another language
 
 You can create your own! Learn about **platforms and applications**...
 
-## Larger Example
+## [Larger Example](#larger-example) {#larger-example}
 
 Here’s a larger example that shows a few different aspects of Roc:
 * File I/O and HTTP requests

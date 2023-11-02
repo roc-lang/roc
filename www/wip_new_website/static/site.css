@@ -30,7 +30,7 @@
     --top-header-height: 67px;
     --sidebar-width: 280px;
 
-    --font-size-normal: 1rem;
+    --font-size-normal: 18px;
     --body-max-width: 1024px;
     --top-bar-height: 50px;
     --homepage-intro-box-width: 328px;
@@ -53,6 +53,10 @@ body {
     box-sizing: border-box;
 }
 
+p {
+    margin-top: 0;
+}
+
 footer {
     width: 100%;
     color: var(--text-color);
@@ -65,6 +69,14 @@ footer {
 #footer {
     max-width: var(--body-max-width);
     margin: 0 auto;
+}
+
+.logo-dark {
+    fill: #612BDE;
+}
+
+.logo-light {
+    fill: #8257E5;
 }
 
 /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile.
@@ -111,11 +123,21 @@ h1 {
 }
 
 h2 {
+    display: inline-block;
     font-size: 3rem;
     border-bottom: 4px solid var(--dark-cyan);
     margin: 36px 0;
     padding: 36px 0;
     color: var(--heading-color);
+}
+
+h2 a {
+    color: var(--heading-color);
+}
+
+h2:hover a {
+    color: var(--link-color);
+    text-decoration: none;
 }
 
 h3 {
@@ -218,6 +240,11 @@ pre>samp {
     color: var(--code-color);
 }
 
+/* The repl won't work at all if you have JS disabled. */
+.no-js #try-roc {
+    display: none !important;
+}
+
 #homepage-repl-container {
     display: flex;
     flex-direction: row-reverse;
@@ -226,10 +253,6 @@ pre>samp {
 #homepage-repl-container #repl-description {
     padding: 0 36px;
     flex: 1;
-}
-
-#homepage-repl-container #repl-description p:first-of-type {
-    margin-top: 0;
 }
 
 #homepage-repl-container #repl-description a {
@@ -244,8 +267,8 @@ pre>samp {
 #homepage-repl-container #repl {
     flex: 1;
     border: 2px solid #444;
-    box-shadow: 4px 4px var(--dark-cyan);
-    font-size: 18px;
+    font-size: var(--font-size-normal);
+    min-height: 0; /* On /repl on mobile, this expands to fill the screen, which we don't want */
 }
 
 #homepage-repl-container #repl, #homepage-repl-container #repl code {
@@ -255,7 +278,7 @@ pre>samp {
 
 #homepage-repl-container #source-input {
     margin-bottom: 0;
-    font-size: 18px;
+    font-size: var(--font-size-normal);
     height: 55px;
 }
 
@@ -324,7 +347,7 @@ td:last-child {
 p,
 aside,
 li {
-    font-size: 18px;
+    font-size: var(--font-size-normal);
     line-height: 1.85rem;
 }
 
@@ -360,7 +383,6 @@ li {
     margin-bottom: 70px;
     line-height: 1.85em;
     color: #fcf9fd;
-    box-shadow: 4px 4px 0px var(--dark-cyan);
 }
 
 #first-code-sample .kw,
@@ -381,6 +403,9 @@ li {
 
 /* Mobile-friendly screen width */
 @media only screen and (max-width: 1024px) {
+    :root {
+        --font-size-normal: 16px;
+    }
     /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile. */
     .desktop {
         display: none;
@@ -388,16 +413,6 @@ li {
 
     .mobile {
         display: inline;
-    }
-
-    p,
-    aside,
-    li,
-    footer,
-    code,
-    samp,
-    .code-snippet {
-        font-size: 16px;
     }
 
     h1 code,
@@ -647,6 +662,14 @@ li {
         --heading-color: #eee;
     }
 
+    .logo-dark {
+        fill: #6c3bdc;
+    }
+
+    .logo-light {
+        fill: #8A66DE;
+    }
+
     #homepage-h1 {
         color: #fcf9fd;
     }
@@ -676,6 +699,10 @@ li {
 
     #first-code-sample, #homepage-repl-container #repl {
         border: 1px solid #ddd;
+    }
+
+    .home-goals-content:hover {
+        background-color: #481870 !important;
     }
 }
 
@@ -809,24 +836,39 @@ code .dim {
     flex-direction: column;
     padding: 20px;
     border: 4px solid var(--light-cyan);
-    box-shadow: 4px 4px #777;
+    color: inherit;
+    cursor: pointer;
 }
 
 .home-goals-content h3 {
     font-family: inherit;
     text-transform: lowercase;
-    padding-bottom: 12px;
+    padding-bottom: 42px;
     padding-top: 2px;
     font-style: italic;
     text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
     letter-spacing: 1px;
     word-spacing: 3px;
     margin: 0;
+    color: var(--light-cyan);
 }
 
-.home-goals-content a {
-    color: inherit;
+.home-goals-content:hover {
+    text-decoration: none;
+    cursor: pointer;
+    background-color: var(--light-cyan);
+}
+
+.home-goals-content:hover h3 {
+    color: #fff;
+}
+
+.home-goals-learn-more {
     text-decoration: underline;
+}
+
+.home-goals-content:hover .home-goals-learn-more {
+    color: var(--primary-2);
 }
 
 /* Wider screens */
@@ -875,8 +917,7 @@ code .dim {
 /* Interactive example on homepage */
 
 .interactive-example {
-    box-shadow: 4px 4px var(--dark-cyan);
-    font-size: 18px;
+    font-size: var(--font-size-normal);
 }
 
 .interactive-example, .interactive-example samp {
@@ -907,6 +948,10 @@ code .dim {
     padding: 0 16px;
     margin-top: 9px;
     cursor: text;
+}
+
+.interactive-desc a {
+    color: #7c38f5;
 }
 
 .interactive-radio {

@@ -139,6 +139,7 @@
     min-height: calc(100vh - var(--top-bar-height));
   }
 
+
   code.history {
     flex-grow: 1;
   }
@@ -149,5 +150,18 @@
 
   #loading-message {
     margin: 0;
+  }
+
+  #homepage-repl-container {
+    flex-direction: column;
+  }
+
+  #homepage-repl-container #repl-description {
+    padding: 0;
+    margin-bottom: 1.5em;
+  }
+
+  #repl-arrow {
+    display: none;
   }
 }
