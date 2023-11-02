@@ -121,8 +121,8 @@ DecoderFormatting implements
 ## ```
 ## decodeBool = Decode.custom \bytes, @Json {} ->
 ##     when bytes is
-##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.drop bytes 5 }
-##         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop bytes 4 }
+##         ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.dropFirst bytes 5 }
+##         ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.dropFirst bytes 4 }
 ##         _ -> { result: Err TooShort, rest: bytes }
 ## ```
 custom : (List U8, fmt -> DecodeResult val) -> Decoder val fmt where fmt implements DecoderFormatting

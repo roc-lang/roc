@@ -1,7 +1,7 @@
-procedure List.18 (List.147, List.148, List.149):
+procedure List.18 (List.146, List.147, List.148):
     let List.546 : U64 = 0i64;
-    let List.547 : U64 = CallByName List.6 List.147;
-    let List.545 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.87 List.147 List.148 List.149 List.546 List.547;
+    let List.547 : U64 = CallByName List.6 List.146;
+    let List.545 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.86 List.146 List.147 List.148 List.546 List.547;
     ret List.545;
 
 procedure List.6 (#Attr.2):
@@ -12,19 +12,19 @@ procedure List.66 (#Attr.2, #Attr.3):
     let List.555 : [<rnu>C *self, <null>] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.555;
 
-procedure List.87 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
-    joinpoint List.548 List.150 List.151 List.152 List.153 List.154:
-        let List.550 : Int1 = CallByName Num.22 List.153 List.154;
+procedure List.86 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+    joinpoint List.548 List.149 List.150 List.151 List.152 List.153:
+        let List.550 : Int1 = CallByName Num.22 List.152 List.153;
         if List.550 then
-            let List.554 : [<rnu>C *self, <null>] = CallByName List.66 List.150 List.153;
+            let List.554 : [<rnu>C *self, <null>] = CallByName List.66 List.149 List.152;
             inc List.554;
-            let List.155 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName Test.7 List.151 List.554;
+            let List.154 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName Test.7 List.150 List.554;
             let List.553 : U64 = 1i64;
-            let List.552 : U64 = CallByName Num.51 List.153 List.553;
-            jump List.548 List.150 List.155 List.152 List.552 List.154;
+            let List.552 : U64 = CallByName Num.51 List.152 List.553;
+            jump List.548 List.149 List.154 List.151 List.552 List.153;
         else
-            dec List.150;
-            ret List.151;
+            dec List.149;
+            ret List.150;
     in
     jump List.548 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 

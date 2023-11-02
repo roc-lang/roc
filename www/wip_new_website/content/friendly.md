@@ -53,7 +53,7 @@ If you like, you can run a program that has compile-time errors like this. (If t
 
 You can run `roc test` to run all your tests. Each test is declared with the `expect` keyword, and can be as short as one line. For example, this is a complete test:
 
-```
+```roc
 ## One plus one should equal two.
 expect 1 + 1 == 2
 ```

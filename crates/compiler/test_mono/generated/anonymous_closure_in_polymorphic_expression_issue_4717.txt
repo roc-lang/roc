@@ -2,29 +2,29 @@ procedure Bool.11 (#Attr.2, #Attr.3):
     let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
     ret Bool.24;
 
-procedure List.26 (List.174, List.175, List.176):
-    let List.560 : [C U64, C U64] = CallByName List.98 List.174 List.175 List.176;
+procedure List.26 (List.173, List.174, List.175):
+    let List.560 : [C U64, C U64] = CallByName List.97 List.173 List.174 List.175;
     let List.563 : U8 = 1i64;
     let List.564 : U8 = GetTagId List.560;
     let List.565 : Int1 = lowlevel Eq List.563 List.564;
     if List.565 then
-        let List.177 : U64 = UnionAtIndex (Id 1) (Index 0) List.560;
-        ret List.177;
+        let List.176 : U64 = UnionAtIndex (Id 1) (Index 0) List.560;
+        ret List.176;
     else
-        let List.178 : U64 = UnionAtIndex (Id 0) (Index 0) List.560;
-        ret List.178;
+        let List.177 : U64 = UnionAtIndex (Id 0) (Index 0) List.560;
+        ret List.177;
 
-procedure List.29 (List.319, List.320):
-    let List.559 : U64 = CallByName List.6 List.319;
-    let List.321 : U64 = CallByName Num.77 List.559 List.320;
-    let List.545 : List U8 = CallByName List.43 List.319 List.321;
+procedure List.38 (List.316, List.317):
+    let List.559 : U64 = CallByName List.6 List.316;
+    let List.318 : U64 = CallByName Num.77 List.559 List.317;
+    let List.545 : List U8 = CallByName List.43 List.316 List.318;
     ret List.545;
 
-procedure List.43 (List.317, List.318):
-    let List.557 : U64 = CallByName List.6 List.317;
-    let List.556 : U64 = CallByName Num.77 List.557 List.318;
-    let List.547 : {U64, U64} = Struct {List.318, List.556};
-    let List.546 : List U8 = CallByName List.49 List.317 List.547;
+procedure List.43 (List.314, List.315):
+    let List.557 : U64 = CallByName List.6 List.314;
+    let List.556 : U64 = CallByName Num.77 List.557 List.315;
+    let List.547 : {U64, U64} = Struct {List.315, List.556};
+    let List.546 : List U8 = CallByName List.49 List.314 List.547;
     ret List.546;
 
 procedure List.49 (List.392, List.393):
@@ -79,7 +79,7 @@ procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
     in
     jump List.569 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
-procedure List.98 (List.460, List.461, List.462):
+procedure List.97 (List.460, List.461, List.462):
     let List.567 : U64 = 0i64;
     let List.568 : U64 = CallByName List.6 List.460;
     let List.566 : [C U64, C U64] = CallByName List.80 List.460 List.461 List.462 List.567 List.568;
@@ -107,7 +107,7 @@ procedure Test.1 (Test.2):
     if Test.10 then
         ret Test.2;
     else
-        let Test.9 : List U8 = CallByName List.29 Test.2 Test.3;
+        let Test.9 : List U8 = CallByName List.38 Test.2 Test.3;
         ret Test.9;
 
 procedure Test.4 (Test.5, Test.15):

@@ -891,8 +891,8 @@ fn link_linux(
     lib_dirs.extend([
         usr_lib_arch_path,
         lib_arch_path,
-        strs_to_path(&["/usr", "lib"]),
         strs_to_path(&["/usr", "lib64"]),
+        strs_to_path(&["/usr", "lib"]),
     ]);
 
     // Look for the libraries we'll need

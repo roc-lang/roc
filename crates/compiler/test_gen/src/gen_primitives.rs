@@ -3006,7 +3006,7 @@ fn do_pass_bool_byte_closure_layout() {
             any: Parser U8
             any = \inp ->
                when List.first inp is
-                 Ok u -> [Pair u (List.drop inp 1)]
+                 Ok u -> [Pair u (List.dropFirst inp 1)]
                  _ -> []
 
 
