@@ -12,7 +12,7 @@ pageData =
     |> Dict.insert "community.html" { title: "Community", description: "The Roc community" }
     |> Dict.insert "design_goals.html" { title: "Design Goals", description: "Roc's design goals" }
     |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
-    |> Dict.insert "home.html" { title: "Roc", description: "The Roc programming language" }
+    |> Dict.insert "index.html" { title: "Roc", description: "The Roc programming language" }
     |> Dict.insert "install.html" { title: "Install", description: "Getting started with the Roc programming language" }
     |> Dict.insert "donate.html" { title: "Donate", description: "Sponsor Roc" }
     |> Dict.insert "tutorial.html" { title: "Tutorial", description: "The Roc tutorial" }
