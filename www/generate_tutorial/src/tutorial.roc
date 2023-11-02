@@ -1,8 +1,8 @@
 app "roc-tutorial"
     packages { pf: "../../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, header, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta, ariaLabel },
-        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, title, charset, src, role },
+        pf.Html.{ html, head, body, header, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
+        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, title, charset, src },
     ]
     provides [transformFileContent] to pf
 
@@ -28,8 +28,8 @@ view = \htmlContent ->
                 text htmlContent,
             ],
             footer [] [
-                text "Made by people who like to make nice things."
-            ]
+                text "Made by people who like to make nice things.",
+            ],
         ],
         script [src "/site.js"] [],
     ]
@@ -112,3 +112,5 @@ tutorialIntro =
             ],
         ],
     ]
+
+ariaLabel = Html.attribute "aria-label"
