@@ -233,7 +233,8 @@ pre {
     background-color: var(--dark-code-bg);
 }
 
-pre > samp {
+pre > samp,
+pre > code {
     overflow-x: auto;
     display: block;
     background-color: var(--dark-code-bg);
