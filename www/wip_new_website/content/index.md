@@ -1,6 +1,8 @@
 <div role="presentation" id="homepage-intro-box">
   <h1 id="homepage-h1">Roc</h1>
-  <svg id="homepage-logo" alt="The Roc logo, a purple origami bird made of six triangles" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <svg id="homepage-logo" aria-labelledby="logo-svg-title logo-svg-desc" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <title id="logo-svg-title">The Roc logo</title>
+        <desc id="logo-svg-desc">A purple origami bird made of six triangles</desc>
       <path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" class="logo-dark"/>
       <path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" class="logo-light"/>
       <path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" class="logo-light"/>
@@ -59,11 +61,10 @@
     </div>
     <div id="repl" role="presentation">
         <code class="history">
-          <div id="help-text"></div>
-          <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module...please wait!</div></div>
+          <div id="history-text" aria-live="polite"></div>
         </code>
         <section id="source-input-wrapper">
-          <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
             onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
         </section>
     </div>

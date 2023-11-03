@@ -26,7 +26,9 @@
     #   $ echo -n "polygon{fill:#7d59dd}@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}" | openssl dgst -sha256 -binary | openssl enc -base64
     #
     # Details on how this works: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/style-src
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=';"
+    #
+    # Also note that the sha256 in the script-src is for the <script> in the <head> that removes the 'no-js' class
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'sha256-8251D1208FFB6F7CF396957F7C78320D4E3779E86E7BF1E0D8AE8885BB7BA3A4' 'unsafe-eval'; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=';"
     X-Content-Type-Options = "nosniff"
     # Firefox prefetch requires some cache-control to be set
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334

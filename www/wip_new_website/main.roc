@@ -36,7 +36,7 @@ transformFileContent = \page, htmlContent ->
 
 preloadWoff2 : Str -> Node
 preloadWoff2 = \url ->
-    link [rel "preload", attribute "as" "font", type "font/woff2", href url] [],
+    link [rel "preload", (attribute "as") "font", type "font/woff2", href url]
 
 view : Str, Str -> Html.Node
 view = \page, htmlContent ->
@@ -48,26 +48,28 @@ view = \page, htmlContent ->
 
     html [lang "en", class "no-js"] [
         head [] [
-            meta [charset "utf-8"] [],
+            meta [charset "utf-8"],
             Html.title [] [text (getTitle page)],
-            meta [name "description", content (getDescription page)] [],
-            meta [name "viewport", content "width=device-width"] [],
-            link [rel "stylesheet", href "/wip/site.css"] [],
-            link [rel "stylesheet", href "/wip/repl.css"] [],
+            meta [name "description", content (getDescription page)],
+            meta [name "viewport", content "width=device-width"],
+            link [rel "stylesheet", href "/wip/site.css"],
+            link [rel "stylesheet", href "/wip/repl.css"],
             preloadWoff2 "/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2",
             preloadWoff2 "/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2",
             preloadWoff2 "/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2",
             preloadWoff2 "/fonts/lato-v23-latin/lato-v23-latin-regular.woff2",
             preloadWoff2 "/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2",
             preloadWoff2 "/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2",
-            link [rel "prefetch", attribute "as" "script", href "/repl/roc_repl_wasm.js"] [],
-            link [rel "icon", href "/favicon.svg"] [],
+            link [rel "prefetch", href "/repl/roc_repl_wasm.js"],
+            link [rel "icon", href "/favicon.svg"],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
-            link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"] [],
+            link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"],
             # Remove the .no-js class from <html> before the body renders, so anything
             # hidden via CSS using a .no-js selector will apply to the initial layout
             # of the body instead of having a flash of content that immediately gets hidden.
+            #
+            # WARNING: Updating this requires updating its sha256 in netlify.toml
             script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"]
         ],
         body [] [
