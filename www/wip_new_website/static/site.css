@@ -378,6 +378,7 @@ li {
 }
 
 #first-code-sample {
+    font-size: 16px;
     width: var(--homepage-intro-box-width);
     margin-top: 60px;
     margin-bottom: 70px;
