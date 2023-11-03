@@ -33,7 +33,7 @@
     --font-size-normal: 18px;
     --body-max-width: 1024px;
     --top-bar-height: 50px;
-    --homepage-intro-box-width: 328px;
+    --homepage-intro-box-width: 367px;
     --dark-code-bg: #202746;
 }
 
@@ -379,7 +379,6 @@ li {
 }
 
 #first-code-sample {
-    font-size: 16px;
     width: var(--homepage-intro-box-width);
     margin-top: 60px;
     margin-bottom: 70px;
