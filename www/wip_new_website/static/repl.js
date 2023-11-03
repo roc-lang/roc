@@ -168,36 +168,36 @@ async function processInputQueue() {
 var ROC_PANIC_INFO = null;
 
 function send_panic_msg_to_js(rocstr_ptr, panic_tag) {
-    const { memory } = repl.app.exports;
+  const { memory } = repl.app.exports;
 
-    const rocStrBytes = new Int8Array(memory.buffer, rocstr_ptr, 12);
-    const finalByte = rocStrBytes[11]
+  const rocStrBytes = new Int8Array(memory.buffer, rocstr_ptr, 12);
+  const finalByte = rocStrBytes[11];
 
-    let stringBytes = "";
-    if (finalByte < 0) {
-        // small string
+  let stringBytes = "";
+  if (finalByte < 0) {
+    // small string
 
-        // bitwise ops on negative JS numbers are weird. This clears the bit that we
-        // use to indicate a small string. In rust it's `finalByte as u8 ^ 0b1000_0000`
-        const length = finalByte + 128;
-        stringBytes = new Uint8Array(memory.buffer, rocstr_ptr, length);
-    } else {
-        // big string
-        const rocStrWords = new Uint32Array(memory.buffer, rocstr_ptr, 3);
-        const [ptr, len, _cap] = rocStrWords;
+    // bitwise ops on negative JS numbers are weird. This clears the bit that we
+    // use to indicate a small string. In rust it's `finalByte as u8 ^ 0b1000_0000`
+    const length = finalByte + 128;
+    stringBytes = new Uint8Array(memory.buffer, rocstr_ptr, length);
+  } else {
+    // big string
+    const rocStrWords = new Uint32Array(memory.buffer, rocstr_ptr, 3);
+    const [ptr, len, _cap] = rocStrWords;
 
-        const SEAMLESS_SLICE_BIT = 1 << 31;
-        const length = len & (~SEAMLESS_SLICE_BIT);
+    const SEAMLESS_SLICE_BIT = 1 << 31;
+    const length = len & (~SEAMLESS_SLICE_BIT);
 
-        stringBytes = new Uint8Array(memory.buffer, ptr, length);
-    }
+    stringBytes = new Uint8Array(memory.buffer, ptr, length);
+  }
 
-    const decodedString = repl.textDecoder.decode(stringBytes);
+  const decodedString = repl.textDecoder.decode(stringBytes);
 
-    ROC_PANIC_INFO = {
-        msg: decodedString,
-        panic_tag: panic_tag,
-    };
+  ROC_PANIC_INFO = {
+    msg: decodedString,
+    panic_tag: panic_tag,
+  };
 }
 
 // Load Wasm code into the browser's virtual machine, so we can run it later.
@@ -206,8 +206,8 @@ function send_panic_msg_to_js(rocstr_ptr, panic_tag) {
 async function js_create_app(wasm_module_bytes) {
   const { instance } = await WebAssembly.instantiate(wasm_module_bytes, {
     env: {
-        send_panic_msg_to_js: send_panic_msg_to_js,
-    }
+      send_panic_msg_to_js: send_panic_msg_to_js,
+    },
   });
 
   // Keep the instance alive so we can run it later from shared REPL code
@@ -221,7 +221,7 @@ function js_run_app() {
   // Run the user code, and remember the result address
   // We'll pass it to Rust in the next callback
   try {
-      repl.result_addr = wrapper();
+    repl.result_addr = wrapper();
   } catch (e) {
     // an exception could be that roc_panic was invoked,
     // or some other crash (likely a compiler bug)
@@ -305,14 +305,19 @@ function updateHistoryEntry(index, ok, outputText) {
     // Scroll the input element into view so you can see the most recent output.
     // Only do this if it's currently out of view though!
     const bounds = repl.elemSourceInput.getBoundingClientRect();
-    const isInView =
-      bounds.top >= 0 &&
+    const isInView = bounds.top >= 0 &&
       bounds.left >= 0 &&
-      bounds.bottom <= (window.innerHeight || document.documentElement.clientHeight) &&
-      bounds.right <= (window.innerWidth || document.documentElement.clientWidth);
+      bounds.bottom <=
+        (window.innerHeight || document.documentElement.clientHeight) &&
+      bounds.right <=
+        (window.innerWidth || document.documentElement.clientWidth);
 
     if (!isInView) {
-      repl.elemSourceInput.scrollIntoView({ behavior: "instant", block: "end", inline: "nearest" });
+      repl.elemSourceInput.scrollIntoView({
+        behavior: "instant",
+        block: "end",
+        inline: "nearest",
+      });
     }
   } else {
     // Scroll the page to the bottom so you can see the most recent output.
