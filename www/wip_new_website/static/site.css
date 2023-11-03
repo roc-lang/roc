@@ -539,6 +539,7 @@ li {
     font-family: "Permanent Marker";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2") format("woff2"),
         url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
@@ -551,6 +552,7 @@ li {
     font-family: "Merriweather";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2") format("woff2"),
         url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
@@ -562,6 +564,7 @@ li {
     font-family: "Merriweather";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2") format("woff2"),
         url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
@@ -574,6 +577,7 @@ li {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2") format("woff2"),
         url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
@@ -585,6 +589,7 @@ li {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2") format("woff2"),
         url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
@@ -597,6 +602,7 @@ li {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2") format("woff2"),
         url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
@@ -608,6 +614,7 @@ li {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2") format("woff2"),
         url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,

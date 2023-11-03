@@ -36,7 +36,15 @@ transformFileContent = \page, htmlContent ->
 
 preloadWoff2 : Str -> Node
 preloadWoff2 = \url ->
-    link [rel "preload", (attribute "as") "font", type "font/woff2", href url]
+    link [
+        rel "preload",
+        (attribute "as") "font",
+        type "font/woff2",
+        href url,
+        # Necessary for preloading fonts, even if the request won't be cross-origin
+        # https://stackoverflow.com/a/70878420
+        (attribute "crossorigin") "anonymous",
+    ]
 
 view : Str, Str -> Html.Node
 view = \page, htmlContent ->
@@ -71,7 +79,7 @@ view = \page, htmlContent ->
             #
             # WARNING: Updating this requires updating its sha256 in netlify.toml under Content-Security-Policy.
             #          Otherwise, this will work locally and then fail in production!
-            script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"]
+            script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"],
         ],
         body [] [
             viewNavbar page,
