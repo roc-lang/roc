@@ -27,22 +27,22 @@
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
     <div class="home-goals-column">
-        <a href="/wip/fast" class="home-goals-content">
-            <h2 class="home-goals-title">Fast</h2>
+        <a href="/wip/fast.html" class="home-goals-content">
+            <h3 class="home-goals-title">Fast</h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
     <div class="home-goals-column">
-        <a href="/wip/friendly" class="home-goals-content">
-            <h2 class="home-goals-title">Friendly</h2>
+        <a href="/wip/friendly.html" class="home-goals-content">
+            <h3 class="home-goals-title">Friendly</h3>
             <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
     <div class="home-goals-column">
-        <a href="/wip/functional" class="home-goals-content">
-            <h2 class="home-goals-title">Functional</h2>
+        <a href="/wip/functional.html" class="home-goals-content">
+            <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
              Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
