@@ -30,9 +30,9 @@ view : NavLink, Str -> Html.Node
 view = \currentNavLink, htmlContent ->
     html [lang "en"] [
         head [] [
-            meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
+            meta [httpEquiv "content-type", content "text/html; charset=utf-8"],
             Html.title [] [text currentNavLink.title],
-            link [rel "stylesheet", href "style.css"] [],
+            link [rel "stylesheet", href "style.css"],
         ],
         body [] [
             div [class "main"] [
