@@ -61,15 +61,16 @@
     </div>
     <div id="repl" role="presentation">
         <code class="history">
+          <div id="repl-intro-text">Enter an expression to evaluate, or a definition (like <span class="color-blue">x = 1</span>) to use later.</div>
           <div id="history-text" aria-live="polite"></div>
         </code>
         <div id="source-input-wrapper">
-          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code and press Enter."
             onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
         </div>
     </div>
-    <script type="module" src="/wip/repl.js"></script>
 </div>
+<script type="module" src="/wip/repl.js"></script>
 </section>
 
 ## [Use Cases](#use-cases) {#use-cases}

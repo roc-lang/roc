@@ -42,7 +42,12 @@ repl.elemSourceInput.addEventListener("input", onInput);
 repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
-  repl.elemHistory.querySelector("#loading-message").remove();
+  const loadingMessage = repl.elemHistory.querySelector("#loading-message");
+
+  if (loadingMessage != null) {
+    loadingMessage.remove();
+  }
+
   repl.elemSourceInput.placeholder = "Type some Roc code and press Enter.";
   repl.compiler = instance;
 
@@ -50,7 +55,10 @@ roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
   try {
     const helpText = await roc_repl_wasm.entrypoint_from_js(":help");
     const helpElem = document.getElementById("help-text");
-    helpElem.innerHTML = helpText.trim();
+
+    if (helpElem != null) {
+      helpElem.innerHTML = helpText.trim();
+    }
   } catch (e) {
     // Print error for Roc devs. Don't use console.error, we overrode that above to display on the page!
     console.warn(e);
