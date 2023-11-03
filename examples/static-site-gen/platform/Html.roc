@@ -127,7 +127,7 @@ interface Html
 Node : [
     Text Str,
     Element Str Nat (List Attribute) (List Node),
-    UnclosedElem Str Nat (List Attribute)
+    UnclosedElem Str Nat (List Attribute),
 ]
 
 Attribute : Html.Attributes.Attribute
@@ -220,12 +220,12 @@ renderHelp = \buffer, node ->
             "\(withChildren)</\(tagName)>"
 
         UnclosedElem tagName _ attrs ->
-                if List.isEmpty attrs then
-                     "\(buffer)<\(tagName)>"
-                else
-                    attrs
-                    |> List.walk "\(buffer)<\(tagName) " renderAttr
-                    |> Str.concat ">"
+            if List.isEmpty attrs then
+                "\(buffer)<\(tagName)>"
+            else
+                attrs
+                |> List.walk "\(buffer)<\(tagName) " renderAttr
+                |> Str.concat ">"
 
 # internal helper
 renderAttr : Str, Attribute -> Str
