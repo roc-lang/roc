@@ -34,6 +34,13 @@
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
     Cache-Control = "public, max-age=1200"
 
+[[headers]]
+  for = "/fonts/*"
+
+  [headers.values]
+    # Preloading fonts requires CORS headers for some reason
+    Access-Control-Allow-Origin = "*"
+
 # Redirect roc-lang.org/authors to the AUTHORS file in this repo
 #
 # This is referenced in the LICENSE file, which says to see roc-lang.org/authors
