@@ -1,8 +1,8 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
-        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, src },
+        pf.Html.{ Node, html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
+        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, src, type },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -34,6 +34,10 @@ transformFileContent : Str, Str -> Str
 transformFileContent = \page, htmlContent ->
     Html.render (view page htmlContent)
 
+preloadWoff2 : Str -> Node
+preloadWoff2 = \url ->
+    link [rel "preload", attribute "as" "font", type "font/woff2", href url] [],
+
 view : Str, Str -> Html.Node
 view = \page, htmlContent ->
     mainBody =
@@ -50,6 +54,13 @@ view = \page, htmlContent ->
             meta [name "viewport", content "width=device-width"] [],
             link [rel "stylesheet", href "/wip/site.css"] [],
             link [rel "stylesheet", href "/wip/repl.css"] [],
+            preloadWoff2 "/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2",
+            preloadWoff2 "/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2",
+            preloadWoff2 "/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2",
+            preloadWoff2 "/fonts/lato-v23-latin/lato-v23-latin-regular.woff2",
+            preloadWoff2 "/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2",
+            preloadWoff2 "/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2",
+            link [rel "prefetch", attribute "as" "script", href "/repl/roc_repl_wasm.js"] [],
             link [rel "icon", href "/favicon.svg"] [],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
