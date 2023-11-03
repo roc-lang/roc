@@ -23,7 +23,7 @@
       <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
 </div>
 
-<section class="home-goals-container">
+<section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
     <div class="home-goals-column">
         <a href="/wip/fast" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
