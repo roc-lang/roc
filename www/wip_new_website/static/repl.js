@@ -93,6 +93,14 @@ function onInputKeydown(event) {
       if (repl.inputQueue.length === 1) {
         processInputQueue();
       }
+
+      // Hide the arrow on the homepage that prompts you to enter something
+      const replArrow = document.getElementById('repl-arrow');
+
+      if (replArrow != null) {
+        replArrow.style.display = "none";
+      }
+
     }
   }
 }

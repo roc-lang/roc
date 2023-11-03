@@ -65,8 +65,7 @@
           <div id="history-text" aria-live="polite"></div>
         </code>
         <div id="source-input-wrapper">
-          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code here and press Enter."
-            onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
+          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code here and press Enter."></textarea>
         </div>
     </div>
 </div>
