@@ -817,19 +817,6 @@ code .dim {
     cursor: pointer;
 }
 
-.home-goals-content h3 {
-    font-family: inherit;
-    text-transform: lowercase;
-    padding-bottom: 42px;
-    padding-top: 2px;
-    font-style: italic;
-    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
-    letter-spacing: 1px;
-    word-spacing: 3px;
-    margin: 0;
-    color: var(--light-cyan);
-}
-
 .home-goals-content:hover {
     text-decoration: none;
     cursor: pointer;
@@ -869,6 +856,17 @@ code .dim {
     font-weight: bold;
     margin-bottom: 10px;
     font-size: 32px;
+    border-bottom: none;
+    font-family: inherit;
+    text-transform: lowercase;
+    padding-bottom: 42px;
+    padding-top: 2px;
+    font-style: italic;
+    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+    letter-spacing: 1px;
+    word-spacing: 3px;
+    margin: 0;
+    color: var(--light-cyan);
 }
 
 .home-goals-title a {
