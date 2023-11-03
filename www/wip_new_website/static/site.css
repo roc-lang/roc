@@ -269,6 +269,7 @@ pre>samp {
     border: 2px solid #444;
     font-size: var(--font-size-normal);
     min-height: 0; /* On /repl on mobile, this expands to fill the screen, which we don't want */
+    min-width: 496px; /* Make sure the placeholder doesn't wrap */
 }
 
 #homepage-repl-container #repl, #homepage-repl-container #repl code {
@@ -294,10 +295,10 @@ pre>samp {
     cursor: default;
     font-weight: bold;
     color: var(--primary-1);
-    font-size: 60px;
+    font-size: 48px;
     position: absolute;
-    top: 0px;
-    left: -64px;
+    top: -4px;
+    left: -56px;
     text-shadow: 1px 1px 1px #444;
 }
 

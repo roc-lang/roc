@@ -48,7 +48,7 @@ roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
     loadingMessage.remove();
   }
 
-  repl.elemSourceInput.placeholder = "Type some Roc code and press Enter.";
+  repl.elemSourceInput.placeholder = "Type some Roc code here and press Enter.";
   repl.compiler = instance;
 
   // Get help text from the compiler, and display it at top of the history panel

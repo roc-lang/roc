@@ -19,7 +19,7 @@
   height: 16px;
   z-index: 2;
   font-family: var(--font-mono);
-  color: var(--cyan);
+  color: var(--light-cyan);
   /* Let clicks pass through to the textarea */
   pointer-events: none;
 }
@@ -53,11 +53,11 @@
 #help-text,
 #history-text {
   white-space: pre-wrap;
-
 }
 
 #history-text {
   margin-top: 16px;
+  min-height: 26px;
 }
 
 #loading-message {

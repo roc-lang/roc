@@ -55,7 +55,7 @@
 
 <div id="homepage-repl-container" role="presentation">
     <div id="repl-description" role="presentation">
-        <p>You can try out Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
+        <p>You can try Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
         <p><code>Shift-Enter</code> adds a newline.</p>
         <p><span id="repl-arrow" role="presentation">←</span> Try entering <code>0.1 + 0.2</code></p>
     </div>
@@ -65,7 +65,7 @@
           <div id="history-text" aria-live="polite"></div>
         </code>
         <div id="source-input-wrapper">
-          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code and press Enter."
+          <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code here and press Enter."
             onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
         </div>
     </div>
