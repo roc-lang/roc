@@ -72,6 +72,12 @@
 <script type="module" src="/wip/repl.js"></script>
 </section>
 
+## Examples
+
+**TODO MOVE ME TO A BETTER LOCATION**
+
+[EXAMPLES](/wip/examples)
+
 ## [Use Cases](#use-cases) {#use-cases}
 
 Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
@@ -80,11 +86,21 @@ Currently these use cases are the best-supported:
 
 ### Command-Line Interfaces (CLIs)
 
+You can use Roc to write command-line tools and scripts. 
+
+Checkout [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) for a basic platform to build your own CLI tools.
+
 ### Web Servers
+
+You can use Roc to write web servers. 
+
+*(Coming soon)*
 
 ### Embedding
 
-Calling Roc functions from another language
+You can call Roc from another language. See [basic examples](https://github.com/roc-lang/roc/tree/main/examples) to help you get started with Node.js, JVM, Ruby, Python, Swift, and WASM. 
+
+It is easy to add support for other languages too.
 
 ### Others
 
