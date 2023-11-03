@@ -2,7 +2,7 @@ app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ Node, html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
-        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, src, type },
+        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, type },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -69,7 +69,8 @@ view = \page, htmlContent ->
             # hidden via CSS using a .no-js selector will apply to the initial layout
             # of the body instead of having a flash of content that immediately gets hidden.
             #
-            # WARNING: Updating this requires updating its sha256 in netlify.toml
+            # WARNING: Updating this requires updating its sha256 in netlify.toml under Content-Security-Policy.
+            #          Otherwise, this will work locally and then fail in production!
             script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"]
         ],
         body [] [
@@ -82,7 +83,6 @@ view = \page, htmlContent ->
                 ],
             ],
         ],
-        script [src "/site.js"] [],
     ]
 
 viewNavbar : Str -> Html.Node

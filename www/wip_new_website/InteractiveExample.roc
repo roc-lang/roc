@@ -178,5 +178,5 @@ radio = \index, labelHtml, descHtml ->
     checkedHtml = if index == 0 then " checked" else ""
 
     """
-    <input class="interactive-radio" type="radio" name="r" id="r\(Num.toStr index)" \(checkedHtml)><label for="r\(Num.toStr index)" title="Tap to learn about this syntax">\(labelHtml)</label><div class="interactive-desc">\(descHtml)</div>
+    <input class="interactive-radio" type="radio" name="r" id="r\(Num.toStr index)" \(checkedHtml)><label for="r\(Num.toStr index)" title="Tap to learn about this syntax">\(labelHtml)</label><span class="interactive-desc" role="presentation">\(descHtml)</span>
     """

@@ -63,10 +63,10 @@
         <code class="history">
           <div id="history-text" aria-live="polite"></div>
         </code>
-        <section id="source-input-wrapper">
+        <div id="source-input-wrapper">
           <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
             onfocus="document.getElementById('repl-arrow').style.display='none';"></textarea>
-        </section>
+        </div>
     </div>
     <script type="module" src="/wip/repl.js"></script>
 </div>

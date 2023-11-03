@@ -30,8 +30,8 @@ view = \htmlContent ->
             footer [] [
                 text "Made by people who like to make nice things.",
             ],
+            script [src "/site.js"] [],
         ],
-        script [src "/site.js"] [],
     ]
 
 viewNavbar : Html.Node
