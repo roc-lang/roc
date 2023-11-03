@@ -5,3 +5,8 @@ dynhost
 preprocessedhost
 metadata
 expects
+
+benchmarks/rbtree-ck
+benchmarks/rbtree-insert
+benchmarks/test-astar
+benchmarks/test-base64
