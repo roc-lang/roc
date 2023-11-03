@@ -14,12 +14,12 @@ view : Str -> Html.Node
 view = \htmlContent ->
     html [lang "en"] [
         head [] [
-            meta [charset "utf-8"] [],
+            meta [charset "utf-8"],
             Html.title [] [text "Roc Tutorial"],
-            meta [name "description", content "Learn how to use the Roc programming language."] [],
-            meta [name "viewport", content "width=device-width"] [],
-            link [rel "stylesheet", href "/site.css"] [],
-            link [rel "icon", href "/favicon.svg"] [],
+            meta [name "description", content "Learn how to use the Roc programming language."],
+            meta [name "viewport", content "width=device-width"],
+            link [rel "stylesheet", href "/site.css"],
+            link [rel "icon", href "/favicon.svg"],
         ],
         body [] [
             viewNavbar,
@@ -30,8 +30,8 @@ view = \htmlContent ->
             footer [] [
                 text "Made by people who like to make nice things.",
             ],
+            script [src "/site.js"] [],
         ],
-        script [src "/site.js"] [],
     ]
 
 viewNavbar : Html.Node

@@ -9,3 +9,8 @@ helloWorld
 helloWorldNoURL
 inspect-gui
 inspect-logging
+swiftui
+parser/examples/example
+gui/hello-gui
+gui/breakout/breakout
+gui/breakout/hello-gui

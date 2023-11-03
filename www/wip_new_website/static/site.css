@@ -25,7 +25,7 @@
     --faded-color: #4c4c4c;
     --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
         sans-serif;
-    --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
+    --font-mono: "Source Code Pro", SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
         monospace;
     --top-header-height: 67px;
     --sidebar-width: 280px;
@@ -33,7 +33,7 @@
     --font-size-normal: 18px;
     --body-max-width: 1024px;
     --top-bar-height: 50px;
-    --homepage-intro-box-width: 328px;
+    --homepage-intro-box-width: 367px;
     --dark-code-bg: #202746;
 }
 
@@ -72,11 +72,11 @@ footer {
 }
 
 .logo-dark {
-    fill: #612BDE;
+    fill: #612bde;
 }
 
 .logo-light {
-    fill: #8257E5;
+    fill: #8257e5;
 }
 
 /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile.
@@ -126,7 +126,9 @@ h2 {
     display: inline-block;
     font-size: 3rem;
     border-bottom: 4px solid var(--dark-cyan);
-    margin: 36px 0;
+    margin: 0;
+    margin-top: 72px;
+    margin-bottom: 36px;
     padding: 36px 0;
     color: var(--heading-color);
 }
@@ -233,7 +235,8 @@ pre {
     background-color: var(--dark-code-bg);
 }
 
-pre>samp {
+pre > samp,
+pre > code {
     overflow-x: auto;
     display: block;
     background-color: var(--dark-code-bg);
@@ -269,9 +272,11 @@ pre>samp {
     border: 2px solid #444;
     font-size: var(--font-size-normal);
     min-height: 0; /* On /repl on mobile, this expands to fill the screen, which we don't want */
+    min-width: 496px; /* Make sure the placeholder doesn't wrap */
 }
 
-#homepage-repl-container #repl, #homepage-repl-container #repl code {
+#homepage-repl-container #repl,
+#homepage-repl-container #repl code {
     color: white;
     background-color: var(--dark-code-bg);
 }
@@ -294,10 +299,10 @@ pre>samp {
     cursor: default;
     font-weight: bold;
     color: var(--primary-1);
-    font-size: 60px;
+    font-size: 48px;
     position: absolute;
-    top: 0px;
-    left: -64px;
+    top: -4px;
+    left: -56px;
     text-shadow: 1px 1px 1px #444;
 }
 
@@ -415,6 +420,11 @@ li {
         display: inline;
     }
 
+    h2 {
+        margin-top: 48px;
+        padding: 12px 0;
+    }
+
     h1 code,
     h2 code,
     h3 code,
@@ -478,7 +488,7 @@ li {
         display: block;
     }
 
-    #tutorial-toc-toggle:checked+#tutorial-toc {
+    #tutorial-toc-toggle:checked + #tutorial-toc {
         display: block;
     }
 
@@ -534,68 +544,12 @@ li {
     }
 }
 
-@font-face {
-    font-family: "Permanent Marker";
-    font-style: normal;
-    font-weight: 400;
-    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2") format("woff2"),
-        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff") format("woff");
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
-        U+2215, U+FEFF, U+FFFD;
-}
-
-/* latin-ext */
-@font-face {
-    font-family: "Merriweather";
-    font-style: normal;
-    font-weight: 400;
-    src: url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2") format("woff2"),
-        url("/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff") format("woff");
-    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
-        U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
-/* latin */
-@font-face {
-    font-family: "Merriweather";
-    font-style: normal;
-    font-weight: 400;
-    src: url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2") format("woff2"),
-        url("/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff") format("woff");
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
-        U+2215, U+FEFF, U+FFFD;
-}
-
-/* latin-ext */
-@font-face {
-    font-family: "Merriweather Sans";
-    font-style: normal;
-    font-weight: 400;
-    src: url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff2") format("woff2"),
-        url("/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff") format("woff");
-    unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
-        U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
-/* latin */
-@font-face {
-    font-family: "Merriweather Sans";
-    font-style: normal;
-    font-weight: 400;
-    src: url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff2") format("woff2"),
-        url("/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff") format("woff");
-    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
-        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
-        U+2215, U+FEFF, U+FFFD;
-}
-
 /* latin-ext */
 @font-face {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2") format("woff2"),
         url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
@@ -607,6 +561,7 @@ li {
     font-family: "Lato";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2") format("woff2"),
         url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
@@ -619,6 +574,7 @@ li {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2") format("woff2"),
         url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff") format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
@@ -630,6 +586,7 @@ li {
     font-family: "Source Code Pro";
     font-style: normal;
     font-weight: 400;
+    font-display: swap;
     src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2") format("woff2"),
         url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
@@ -667,7 +624,7 @@ li {
     }
 
     .logo-light {
-        fill: #8A66DE;
+        fill: #8a66de;
     }
 
     #homepage-h1 {
@@ -697,7 +654,8 @@ li {
         border-color: var(--gray);
     }
 
-    #first-code-sample, #homepage-repl-container #repl {
+    #first-code-sample,
+    #homepage-repl-container #repl {
         border: 1px solid #ddd;
     }
 
@@ -811,7 +769,6 @@ code .dim {
     text-shadow: 1px 1px 1px #010101;
 }
 
-
 /* HOME GOALS */
 
 .home-goals-container {
@@ -820,7 +777,6 @@ code .dim {
     justify-content: space-between;
     gap: 48px;
     width: 100%;
-    margin-bottom: 48px;
 }
 
 .home-goals-column {
@@ -838,19 +794,6 @@ code .dim {
     border: 4px solid var(--light-cyan);
     color: inherit;
     cursor: pointer;
-}
-
-.home-goals-content h3 {
-    font-family: inherit;
-    text-transform: lowercase;
-    padding-bottom: 42px;
-    padding-top: 2px;
-    font-style: italic;
-    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
-    letter-spacing: 1px;
-    word-spacing: 3px;
-    margin: 0;
-    color: var(--light-cyan);
 }
 
 .home-goals-content:hover {
@@ -892,6 +835,17 @@ code .dim {
     font-weight: bold;
     margin-bottom: 10px;
     font-size: 32px;
+    border-bottom: none;
+    font-family: inherit;
+    text-transform: lowercase;
+    padding-bottom: 42px;
+    padding-top: 2px;
+    font-style: italic;
+    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+    letter-spacing: 1px;
+    word-spacing: 3px;
+    margin: 0;
+    color: var(--light-cyan);
 }
 
 .home-goals-title a {
@@ -901,7 +855,8 @@ code .dim {
 
 .home-goals-title a:hover {
     color: black;
-    text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+    text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff,
+        1px 1px 0 #fff;
 }
 
 .home-goals-learn-more a:hover {
@@ -913,14 +868,14 @@ code .dim {
     margin-bottom: 2em;
 }
 
-
 /* Interactive example on homepage */
 
 .interactive-example {
     font-size: var(--font-size-normal);
 }
 
-.interactive-example, .interactive-example samp {
+.interactive-example,
+.interactive-example samp {
     background-color: #202746;
     color: white;
 }
@@ -935,7 +890,7 @@ code .dim {
 }
 
 .interactive-example label:hover,
-.interactive-radio:checked+label {
+.interactive-radio:checked + label {
     background-color: #000;
     cursor: pointer;
 }
@@ -958,7 +913,7 @@ code .dim {
     display: none;
 }
 
-.interactive-radio:checked+label+.interactive-desc {
+.interactive-radio:checked + label + .interactive-desc {
     display: block;
     position: absolute;
     top: 0;

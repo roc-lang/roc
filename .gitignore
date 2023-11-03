@@ -76,3 +76,8 @@ www/src/roc-tutorial
 
 # checkmate
 checkmate_*.json
+
+# ignore the examples folder in the WIP website, this is copied from roc-lang/examples in when building the site
+www/wip_new_website/content/examples
+www/examples-main.zip
+www/examples-main

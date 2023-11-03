@@ -1,8 +1,8 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
-        pf.Html.Attributes.{ content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, src },
+        pf.Html.{ Node, html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
+        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, type },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -34,6 +34,18 @@ transformFileContent : Str, Str -> Str
 transformFileContent = \page, htmlContent ->
     Html.render (view page htmlContent)
 
+preloadWoff2 : Str -> Node
+preloadWoff2 = \url ->
+    link [
+        rel "preload",
+        (attribute "as") "font",
+        type "font/woff2",
+        href url,
+        # Necessary for preloading fonts, even if the request won't be cross-origin
+        # https://stackoverflow.com/a/70878420
+        (attribute "crossorigin") "anonymous",
+    ]
+
 view : Str, Str -> Html.Node
 view = \page, htmlContent ->
     mainBody =
@@ -44,20 +56,28 @@ view = \page, htmlContent ->
 
     html [lang "en", class "no-js"] [
         head [] [
-            meta [charset "utf-8"] [],
+            meta [charset "utf-8"],
             Html.title [] [text (getTitle page)],
-            meta [name "description", content (getDescription page)] [],
-            meta [name "viewport", content "width=device-width"] [],
-            link [rel "stylesheet", href "/wip/site.css"] [],
-            link [rel "stylesheet", href "/wip/repl.css"] [],
-            link [rel "icon", href "/favicon.svg"] [],
+            meta [name "description", content (getDescription page)],
+            meta [name "viewport", content "width=device-width"],
+            link [rel "icon", href "/favicon.svg"],
+            # Preload the latin-regular (but not latin-ext) unicode ranges of our fonts.
+            # The homepage doesn't actually use latin-ext
+            preloadWoff2 "/fonts/lato-v23-latin/lato-v23-latin-regular.woff2",
+            preloadWoff2 "/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2",
+            link [rel "prefetch", href "/repl/roc_repl_wasm.js"],
+            link [rel "stylesheet", href "/wip/site.css"],
+            link [rel "stylesheet", href "/wip/repl.css"],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
-            link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"] [],
+            link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"],
             # Remove the .no-js class from <html> before the body renders, so anything
             # hidden via CSS using a .no-js selector will apply to the initial layout
             # of the body instead of having a flash of content that immediately gets hidden.
-            script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"]
+            #
+            # WARNING: Updating this requires updating its sha256 in netlify.toml under Content-Security-Policy.
+            #          Otherwise, this will work locally and then fail in production!
+            script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"],
         ],
         body [] [
             viewNavbar page,
@@ -69,7 +89,6 @@ view = \page, htmlContent ->
                 ],
             ],
         ],
-        script [src "/site.js"] [],
     ]
 
 viewNavbar : Str -> Html.Node
