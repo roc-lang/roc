@@ -62,8 +62,6 @@ view = \page, htmlContent ->
             meta [name "viewport", content "width=device-width"],
             link [rel "stylesheet", href "/wip/site.css"],
             link [rel "stylesheet", href "/wip/repl.css"],
-            preloadWoff2 "/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2",
-            preloadWoff2 "/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2",
             preloadWoff2 "/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2",
             preloadWoff2 "/fonts/lato-v23-latin/lato-v23-latin-regular.woff2",
             preloadWoff2 "/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2",
