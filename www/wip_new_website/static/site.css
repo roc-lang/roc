@@ -126,7 +126,9 @@ h2 {
     display: inline-block;
     font-size: 3rem;
     border-bottom: 4px solid var(--dark-cyan);
-    margin: 36px 0;
+    margin: 0;
+    margin-top: 72px;
+    margin-bottom: 36px;
     padding: 36px 0;
     color: var(--heading-color);
 }
@@ -414,6 +416,11 @@ li {
 
     .mobile {
         display: inline;
+    }
+
+    h2 {
+        margin-top: 48px;
+        padding: 12px 0;
     }
 
     h1 code,
@@ -768,7 +775,6 @@ code .dim {
     justify-content: space-between;
     gap: 48px;
     width: 100%;
-    margin-bottom: 48px;
 }
 
 .home-goals-column {
