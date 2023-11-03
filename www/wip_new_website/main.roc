@@ -60,14 +60,14 @@ view = \page, htmlContent ->
             Html.title [] [text (getTitle page)],
             meta [name "description", content (getDescription page)],
             meta [name "viewport", content "width=device-width"],
-            link [rel "stylesheet", href "/wip/site.css"],
-            link [rel "stylesheet", href "/wip/repl.css"],
-            preloadWoff2 "/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2",
+            link [rel "icon", href "/favicon.svg"],
+            # Preload the latin-regular (but not latin-ext) unicode ranges of our fonts.
+            # The homepage doesn't actually use latin-ext
             preloadWoff2 "/fonts/lato-v23-latin/lato-v23-latin-regular.woff2",
-            preloadWoff2 "/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2",
             preloadWoff2 "/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2",
             link [rel "prefetch", href "/repl/roc_repl_wasm.js"],
-            link [rel "icon", href "/favicon.svg"],
+            link [rel "stylesheet", href "/wip/site.css"],
+            link [rel "stylesheet", href "/wip/repl.css"],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
             link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"],
