@@ -796,7 +796,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.expr(sym, expr, layout, &sym_storage);
 
         if let StoredValue::Local { local_id, .. } = sym_storage {
-            if !self.code_builder.stack_is_empty() {
+            if !self.code_builder.is_set(local_id) {
                 self.code_builder.set_local(local_id);
             }
         }
@@ -1153,7 +1153,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         match storage {
-            StoredValue::Local { value_type, .. } => {
+            StoredValue::Local {
+                value_type,
+                local_id,
+                ..
+            } => {
                 match (lit, value_type) {
                     (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x),
                     (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
@@ -1167,6 +1171,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     _ => invalid_error(),
                 };
+                self.code_builder.set_local(*local_id);
             }
 
             StoredValue::StackMemory { location, .. } => {

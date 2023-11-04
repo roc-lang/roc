@@ -1,3 +1,4 @@
+use bitvec::vec::BitVec;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
@@ -11,6 +12,7 @@ use roc_wasm_module::{
     round_up_to_alignment, Align, LocalId, RelocationEntry, ValueType, WasmModule,
     FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
+use std::iter::repeat;
 
 use crate::DEBUG_SETTINGS;
 
@@ -106,6 +108,9 @@ pub struct CodeBuilder<'a> {
     /// Relocations for calls to JS imports
     /// When we remove unused imports, the live ones are re-indexed
     import_relocations: Vec<'a, (usize, u32)>,
+
+    /// Keep track of which local variables have been set
+    set_locals: BitVec<u64>,
 }
 
 #[allow(clippy::new_without_default)]
@@ -127,6 +132,7 @@ impl<'a> CodeBuilder<'a> {
             inner_length: Vec::with_capacity_in(5, arena),
             vm_block_stack,
             import_relocations: Vec::with_capacity_in(0, arena),
+            set_locals: BitVec::with_capacity(64),
         }
     }
 
@@ -137,6 +143,7 @@ impl<'a> CodeBuilder<'a> {
         self.preamble.clear();
         self.inner_length.clear();
         self.import_relocations.clear();
+        self.set_locals.clear();
 
         self.vm_block_stack.truncate(1);
         self.vm_block_stack[0].value_stack.clear();
@@ -536,6 +543,18 @@ impl<'a> CodeBuilder<'a> {
     }
     pub fn set_local(&mut self, id: LocalId) {
         self.inst_imm32(SETLOCAL, 1, false, id.0);
+        let index = id.0 as usize;
+        let len = self.set_locals.len();
+        if index >= len {
+            self.set_locals.extend(repeat(false).take(index + 1 - len));
+        }
+        self.set_locals.set(index, true);
+    }
+    /// Check if a local variable has been set
+    /// This is not a Wasm instruction, just a helper method
+    pub fn is_set(&self, id: LocalId) -> bool {
+        let index = id.0 as usize;
+        (index < self.set_locals.len()) && self.set_locals[index]
     }
     pub fn tee_local(&mut self, id: LocalId) {
         self.inst_imm32(TEELOCAL, 0, false, id.0);
