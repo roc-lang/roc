@@ -19,7 +19,7 @@ jobs:
 
       - name: get latest roc nightly
         run: |
-          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linuxTESTING_x86_64-latest.tar.gz
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
   
       - name: rename nightly tar
         run: mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
@@ -43,7 +43,7 @@ jobs:
       # Now test the latest basic-cli release, not the main branch
       ######
 
-      - name: Remove roc nightly to keep things simple (we'll download it again later)
+      - name: Remove roc_nightly folder to keep things simple (we'll download it again later)
         run: rm -rf roc_nightly
       
       - name: Get the examples of the latest basic-cli release
