@@ -556,7 +556,9 @@ impl<'a> Storage<'a> {
             }
 
             StoredValue::Local {
-                value_type, size, ..
+                value_type,
+                size,
+                local_id,
             } => {
                 use roc_wasm_module::Align::*;
 
@@ -580,9 +582,7 @@ impl<'a> Storage<'a> {
                     }
                 };
 
-                if let StoredValue::Local { local_id, .. } = to_storage {
-                    code_builder.set_local(local_id);
-                }
+                code_builder.set_local(local_id);
             }
         }
     }
