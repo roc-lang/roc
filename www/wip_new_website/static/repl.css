@@ -30,7 +30,7 @@
   color: var(--code-color);
   background-color: var(--code-bg);
   display: inline-block;
-  height: 76px;
+  height: 78px;
   padding: 16px;
   padding-left: 36px;
   border: 1px solid transparent;
@@ -38,6 +38,7 @@
   margin-bottom: 2em;
   box-sizing: border-box;
   font-size: 18px;
+  resize: none;
 }
 
 #source-input:focus {
@@ -68,6 +69,7 @@
 
 .history-item {
   margin-bottom: 24px;
+  overflow-x: hidden;
 }
 
 .history-item .input {
