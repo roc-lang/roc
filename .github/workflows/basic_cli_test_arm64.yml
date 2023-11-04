@@ -17,6 +17,8 @@ jobs:
           repository: roc-lang/basic-cli
           ref: main
 
+      - run: ls ci
+
       #- name: get latest roc nightly
       #  run: |
       #    curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
