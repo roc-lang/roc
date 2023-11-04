@@ -36,7 +36,7 @@ jobs:
       - run: expect -v
 
       # Run all tests 
-      - run: ./ci/all_tests.sh
+      - run: EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
 
       ######
       # Now test the latest basic-cli release, not the main branch
