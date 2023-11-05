@@ -15,7 +15,7 @@ use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_target::Target;
+use roc_target::{get_target_triple_str, Target};
 use std::fs::{self, FileType};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -156,7 +156,10 @@ fn main() -> io::Result<()> {
             roc_linker::preprocess_host(
                 &triple,
                 &platform_path.with_file_name("main.roc"),
-                &platform_path.with_file_name(format!("{}.rh", target)),
+                // The target triple string must be derived from the triple to convert from the generic
+                // `system` target to the exact specific target.
+                &platform_path
+                    .with_file_name(format!("{}.rh", get_target_triple_str(&triple).unwrap())),
                 &stub_lib,
                 &stub_dll_symbols,
             );
