@@ -65,7 +65,7 @@
           <div id="history-text" aria-live="polite"></div>
         </code>
         <div id="repl-prompt" role="presentation">»</div>
-        <textarea aria-label="Enter Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code here and press Enter."></textarea>
+        <textarea aria-label="Input Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code and press Enter."></textarea>
     </div>
 </div>
 <script type="module" src="/wip/repl.js"></script>
@@ -85,19 +85,19 @@ Currently these use cases are the best-supported:
 
 ### Command-Line Interfaces (CLIs)
 
-You can use Roc to write command-line tools and scripts. 
+You can use Roc to write command-line tools and scripts.
 
 Checkout [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) for a basic platform to build your own CLI tools.
 
 ### Web Servers
 
-You can use Roc to write web servers. 
+You can use Roc to write web servers.
 
 *(Coming soon)*
 
 ### Embedding
 
-You can call Roc from another language. See [basic examples](https://github.com/roc-lang/roc/tree/main/examples) to help you get started with Node.js, JVM, Ruby, Python, Swift, and WASM. 
+You can call Roc from another language. See [basic examples](https://github.com/roc-lang/roc/tree/main/examples) to help you get started with Node.js, JVM, Ruby, Python, Swift, and WASM.
 
 It is easy to add support for other languages too.
 

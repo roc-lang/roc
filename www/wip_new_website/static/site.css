@@ -272,7 +272,6 @@ pre > code {
     border: 2px solid #444;
     font-size: var(--font-size-normal);
     min-height: 0; /* On /repl on mobile, this expands to fill the screen, which we don't want */
-    min-width: 496px; /* Make sure the placeholder doesn't wrap */
 }
 
 #homepage-repl-container #repl,
