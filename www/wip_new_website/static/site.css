@@ -281,12 +281,9 @@ pre>samp {
 
 #homepage-repl-container #source-input {
     margin-bottom: 0;
-    font-size: var(--font-size-normal);
-    height: 55px;
-}
-
-#homepage-repl-container #source-input-wrapper {
     margin-top: 6px;
+    font-size: var(--font-size-normal);
+    height: 57px;
 }
 
 #homepage-repl-container p {
@@ -302,12 +299,7 @@ pre>samp {
     top: -4px;
     left: -56px;
     text-shadow: 1px 1px 1px #444;
-}
-
-.repl-prompt:before {
-    /* Add this using CSS so it isn't selectable, which would be annoying when trying to copy/paste! */
-    color: var(--repl-prompt);
-    content: "» ";
+    z-index: 3;
 }
 
 .repl-err {

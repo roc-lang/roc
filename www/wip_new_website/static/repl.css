@@ -1,20 +1,14 @@
 #repl {
+  position: relative;
   display: flex;
   flex-direction: column;
   font-size: 18px;
 }
 
-#source-input-wrapper {
+#repl-prompt {
   position: relative;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-#source-input-wrapper::before {
-  content: "» ";
-  position: absolute;
-  left: 15px;
-  top: 18px;
+  left: 16px;
+  top: 41px;
   line-height: 16px;
   height: 16px;
   z-index: 2;
@@ -22,6 +16,7 @@
   color: var(--light-cyan);
   /* Let clicks pass through to the textarea */
   pointer-events: none;
+  user-select: none;
 }
 
 #source-input {
