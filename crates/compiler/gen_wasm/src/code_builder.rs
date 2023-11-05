@@ -343,24 +343,15 @@ impl<'a> CodeBuilder<'a> {
     instruction_no_args!(return_, RETURN);
 
     pub fn call(&mut self, function_index: u32) {
-        self.call_impl(function_index, false)
+        self.inst_base(CALL);
+        self.code.encode_padded_u32(function_index);
+        log_instruction!("{:10}\t{}", format!("{CALL:?}"), function_index);
     }
 
     pub fn call_import(&mut self, function_index: u32) {
-        self.call_impl(function_index, true)
-    }
-
-    #[inline(always)]
-    fn call_impl(&mut self, function_index: u32, is_import: bool) {
-        self.inst_base(CALL);
-
-        if is_import {
-            self.import_relocations
-                .push((self.code.len(), function_index));
-        }
-
-        self.code.encode_padded_u32(function_index);
-        log_instruction!("{:10}\t{}", format!("{CALL:?}"), function_index);
+        self.import_relocations
+            .push((self.code.len(), function_index));
+        self.call(function_index)
     }
 
     #[allow(dead_code)]
