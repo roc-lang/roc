@@ -898,6 +898,7 @@ code .dim {
     border: 1px solid black;
     color: black;
     padding: 0 16px;
+    padding-top: 12px;
     margin-top: 9px;
     cursor: text;
 }
