@@ -187,24 +187,6 @@ impl<'a> CodeBuilder<'a> {
         VmSymbolState::Pushed { pushed_at }
     }
 
-    /// Verify if a sequence of symbols is at the top of the stack
-    pub fn verify_stack_match(&self, symbols: &[Symbol]) -> bool {
-        let current_stack = self.current_stack();
-        let n_symbols = symbols.len();
-        let stack_depth = current_stack.len();
-        if n_symbols > stack_depth {
-            return false;
-        }
-        let offset = stack_depth - n_symbols;
-
-        for (i, sym) in symbols.iter().enumerate() {
-            if current_stack[offset + i] != *sym {
-                return false;
-            }
-        }
-        true
-    }
-
     /**********************************************************
 
         FUNCTION HEADER

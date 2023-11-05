@@ -436,14 +436,12 @@ impl<'a> Storage<'a> {
 
         // If the symbols were already at the top of the stack, do nothing!
         // Should be common for simple cases, due to the structure of the Mono IR
-        if !code_builder.verify_stack_match(&symbols_to_load) {
-            if matches!(return_method, WriteToPointerArg) {
-                self.load_return_address_ccc(code_builder, return_symbol);
-            };
+        if matches!(return_method, WriteToPointerArg) {
+            self.load_return_address_ccc(code_builder, return_symbol);
+        };
 
-            for arg in arguments {
-                self.load_symbol_ccc(code_builder, *arg);
-            }
+        for arg in arguments {
+            self.load_symbol_ccc(code_builder, *arg);
         }
 
         (num_wasm_args, has_return_val)
