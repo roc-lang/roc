@@ -22,21 +22,6 @@ macro_rules! log_instruction {
     };
 }
 
-/// A control block in our model of the VM
-/// Child blocks cannot "see" values from their parent block
-struct VmBlock<'a> {
-    /// opcode indicating what kind of block this is
-    opcode: OpCode,
-    /// the stack of values for this block
-    value_stack: Vec<'a, Symbol>,
-}
-
-impl std::fmt::Debug for VmBlock<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?} {:?}", self.opcode, self.value_stack))
-    }
-}
-
 // An instruction (local.set or local.tee) to be inserted into the function code
 #[derive(Debug)]
 struct Insertion {
@@ -86,10 +71,6 @@ pub struct CodeBuilder<'a> {
     /// but it goes before them in the binary, so it's a separate vector.
     inner_length: Vec<'a, u8>,
 
-    /// Our simulation model of the Wasm stack machine
-    /// Nested blocks of instructions. A child block can't "see" the stack of its parent block
-    vm_block_stack: Vec<'a, VmBlock<'a>>,
-
     /// Relocations for calls to JS imports
     /// When we remove unused imports, the live ones are re-indexed
     import_relocations: Vec<'a, (usize, u32)>,
@@ -101,13 +82,6 @@ pub struct CodeBuilder<'a> {
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        let mut vm_block_stack = Vec::with_capacity_in(8, arena);
-        let function_block = VmBlock {
-            opcode: BLOCK,
-            value_stack: Vec::with_capacity_in(8, arena),
-        };
-        vm_block_stack.push(function_block);
-
         CodeBuilder {
             arena,
             code: Vec::with_capacity_in(1024, arena),
@@ -115,7 +89,6 @@ impl<'a> CodeBuilder<'a> {
             insert_bytes: Vec::with_capacity_in(64, arena),
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
-            vm_block_stack,
             import_relocations: Vec::with_capacity_in(0, arena),
             set_locals: BitVec::with_capacity(64),
         }
@@ -129,24 +102,6 @@ impl<'a> CodeBuilder<'a> {
         self.inner_length.clear();
         self.import_relocations.clear();
         self.set_locals.clear();
-
-        self.vm_block_stack.truncate(1);
-        self.vm_block_stack[0].value_stack.clear();
-    }
-
-    /**********************************************************
-
-        SYMBOLS
-
-        The Wasm VM stores temporary values in its stack machine.
-        We track which stack positions correspond to IR Symbols,
-        because it helps to generate more efficient code.
-
-    ***********************************************************/
-
-    fn current_stack_mut(&mut self) -> &mut Vec<'a, Symbol> {
-        let block = self.vm_block_stack.last_mut().unwrap();
-        &mut block.value_stack
     }
 
     /**********************************************************
@@ -314,26 +269,13 @@ impl<'a> CodeBuilder<'a> {
     /// Base method for generating instructions
     /// Emits the opcode and simulates VM stack push/pop
     fn inst_base(&mut self, opcode: OpCode, pops: usize, push: bool) {
-        let current_stack = self.current_stack_mut();
-        let stack_size = current_stack.len();
-
-        debug_assert!(
-            stack_size >= pops,
-            "Wasm value stack underflow. Tried to pop {pops} but only {stack_size} available"
-        );
-
-        let new_len = stack_size - pops;
-        current_stack.truncate(new_len);
-        if push {
-            current_stack.push(Symbol::WASM_TMP);
-        }
         self.code.push(opcode as u8);
     }
 
     /// Plain instruction without any immediates
     fn inst(&mut self, opcode: OpCode, pops: usize, push: bool) {
         self.inst_base(opcode, pops, push);
-        log_instruction!("{:10}\t\t{:?}", format!("{opcode:?}"), self.vm_block_stack);
+        log_instruction!("{opcode:?}");
     }
 
     /// Block instruction
@@ -344,37 +286,20 @@ impl<'a> CodeBuilder<'a> {
         // This results in slightly more instructions but not much. (Rust does the same thing!)
         self.code.push(ValueType::VOID);
 
-        // Start a new block with a fresh value stack
-        self.vm_block_stack.push(VmBlock {
-            opcode,
-            value_stack: Vec::with_capacity_in(8, self.arena),
-        });
-
-        log_instruction!("{:10}\t{:?}", format!("{opcode:?}"), &self.vm_block_stack);
+        log_instruction!("{opcode:?}");
     }
 
     fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
         self.inst_base(opcode, pops, push);
         self.code.encode_u32(immediate);
-        log_instruction!(
-            "{:10}\t{}\t{:?}",
-            format!("{opcode:?}"),
-            immediate,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{}", format!("{opcode:?}"), immediate);
     }
 
     fn inst_mem(&mut self, opcode: OpCode, pops: usize, push: bool, align: Align, offset: u32) {
         self.inst_base(opcode, pops, push);
         self.code.push(align as u8);
         self.code.encode_u32(offset);
-        log_instruction!(
-            "{:10} {:?} {}\t{:?}",
-            format!("{opcode:?}"),
-            align,
-            offset,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10} {:?} {}", format!("{opcode:?}"), align, offset);
     }
 
     /**********************************************************
@@ -400,28 +325,12 @@ impl<'a> CodeBuilder<'a> {
         self.inst_block(IF, 1);
     }
     pub fn else_(&mut self) {
-        // Reuse the 'then' block but clear its value stack
-        self.current_stack_mut().clear();
         self.inst(ELSE, 0, false);
     }
 
     pub fn end(&mut self) {
-        // We need to drop any unused values from the VM stack in order to pass Wasm validation.
-        // This happens, for example, in test `gen_tags::if_guard_exhaustiveness`
-        let n_unused = self
-            .vm_block_stack
-            .last()
-            .map(|block| block.value_stack.len())
-            .unwrap_or(0);
-
-        for _ in 0..n_unused {
-            self.drop_();
-        }
-
         self.inst_base(END, 0, false);
-        self.vm_block_stack.pop();
-
-        log_instruction!("END       \t\t{:?}", &self.vm_block_stack);
+        log_instruction!("END");
     }
     pub fn br(&mut self, levels: u32) {
         self.inst_imm32(BR, 0, false, levels);
@@ -463,13 +372,7 @@ impl<'a> CodeBuilder<'a> {
         }
 
         self.code.encode_padded_u32(function_index);
-
-        log_instruction!(
-            "{:10}\t{}\t{:?}",
-            format!("{CALL:?}"),
-            function_index,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{}", format!("{CALL:?}"), function_index);
     }
 
     #[allow(dead_code)]
@@ -547,12 +450,7 @@ impl<'a> CodeBuilder<'a> {
     where
         T: std::fmt::Debug + std::fmt::Display,
     {
-        log_instruction!(
-            "{:10}\t{}\t{:?}",
-            format!("{opcode:?}"),
-            x,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{}", format!("{opcode:?}"), x);
     }
     pub fn i32_const(&mut self, x: i32) {
         self.inst_base(I32CONST, 0, true);
