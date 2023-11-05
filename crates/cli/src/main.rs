@@ -151,10 +151,12 @@ fn main() -> io::Result<()> {
                 function_kind,
             );
 
+            // TODO: pipeline the executable location through here.
+            // Currently it is essentally hardcoded as platform_path/dynhost.
             roc_linker::preprocess_host(
                 &triple,
                 &platform_path.with_file_name("main.roc"),
-                &platform_path.with_file_name("linux-x64.rh"),
+                &platform_path.with_file_name(format!("{}.rh", target)),
                 &stub_lib,
                 &stub_dll_symbols,
             );
