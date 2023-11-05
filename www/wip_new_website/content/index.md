@@ -27,22 +27,22 @@
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
     <div class="home-goals-column">
-        <a href="/wip/fast" class="home-goals-content">
-            <h2 class="home-goals-title">Fast</h2>
+        <a href="/wip/fast.html" class="home-goals-content">
+            <h3 class="home-goals-title">Fast</h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
     <div class="home-goals-column">
-        <a href="/wip/friendly" class="home-goals-content">
-            <h2 class="home-goals-title">Friendly</h2>
+        <a href="/wip/friendly.html" class="home-goals-content">
+            <h3 class="home-goals-title">Friendly</h3>
             <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
     <div class="home-goals-column">
-        <a href="/wip/functional" class="home-goals-content">
-            <h2 class="home-goals-title">Functional</h2>
+        <a href="/wip/functional.html" class="home-goals-content">
+            <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
              Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
@@ -71,6 +71,12 @@
 <script type="module" src="/wip/repl.js"></script>
 </section>
 
+## Examples
+
+**TODO MOVE ME TO A BETTER LOCATION**
+
+[EXAMPLES](/wip/examples)
+
 ## [Use Cases](#use-cases) {#use-cases}
 
 Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
@@ -79,11 +85,21 @@ Currently these use cases are the best-supported:
 
 ### Command-Line Interfaces (CLIs)
 
+You can use Roc to write command-line tools and scripts. 
+
+Checkout [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) for a basic platform to build your own CLI tools.
+
 ### Web Servers
+
+You can use Roc to write web servers. 
+
+*(Coming soon)*
 
 ### Embedding
 
-Calling Roc functions from another language
+You can call Roc from another language. See [basic examples](https://github.com/roc-lang/roc/tree/main/examples) to help you get started with Node.js, JVM, Ruby, Python, Swift, and WASM. 
+
+It is easy to add support for other languages too.
 
 ### Others
 

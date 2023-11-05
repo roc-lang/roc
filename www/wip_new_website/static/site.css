@@ -72,11 +72,11 @@ footer {
 }
 
 .logo-dark {
-    fill: #612BDE;
+    fill: #612bde;
 }
 
 .logo-light {
-    fill: #8257E5;
+    fill: #8257e5;
 }
 
 /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile.
@@ -235,7 +235,8 @@ pre {
     background-color: var(--dark-code-bg);
 }
 
-pre>samp {
+pre > samp,
+pre > code {
     overflow-x: auto;
     display: block;
     background-color: var(--dark-code-bg);
@@ -274,7 +275,8 @@ pre>samp {
     min-width: 496px; /* Make sure the placeholder doesn't wrap */
 }
 
-#homepage-repl-container #repl, #homepage-repl-container #repl code {
+#homepage-repl-container #repl,
+#homepage-repl-container #repl code {
     color: white;
     background-color: var(--dark-code-bg);
 }
@@ -478,7 +480,7 @@ li {
         display: block;
     }
 
-    #tutorial-toc-toggle:checked+#tutorial-toc {
+    #tutorial-toc-toggle:checked + #tutorial-toc {
         display: block;
     }
 
@@ -614,7 +616,7 @@ li {
     }
 
     .logo-light {
-        fill: #8A66DE;
+        fill: #8a66de;
     }
 
     #homepage-h1 {
@@ -644,7 +646,8 @@ li {
         border-color: var(--gray);
     }
 
-    #first-code-sample, #homepage-repl-container #repl {
+    #first-code-sample,
+    #homepage-repl-container #repl {
         border: 1px solid #ddd;
     }
 
@@ -758,7 +761,6 @@ code .dim {
     text-shadow: 1px 1px 1px #010101;
 }
 
-
 /* HOME GOALS */
 
 .home-goals-container {
@@ -845,7 +847,8 @@ code .dim {
 
 .home-goals-title a:hover {
     color: black;
-    text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff;
+    text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff,
+        1px 1px 0 #fff;
 }
 
 .home-goals-learn-more a:hover {
@@ -857,14 +860,14 @@ code .dim {
     margin-bottom: 2em;
 }
 
-
 /* Interactive example on homepage */
 
 .interactive-example {
     font-size: var(--font-size-normal);
 }
 
-.interactive-example, .interactive-example samp {
+.interactive-example,
+.interactive-example samp {
     background-color: #202746;
     color: white;
 }
@@ -879,7 +882,7 @@ code .dim {
 }
 
 .interactive-example label:hover,
-.interactive-radio:checked+label {
+.interactive-radio:checked + label {
     background-color: #000;
     cursor: pointer;
 }
@@ -903,7 +906,7 @@ code .dim {
     display: none;
 }
 
-.interactive-radio:checked+label+.interactive-desc {
+.interactive-radio:checked + label + .interactive-desc {
     display: block;
     position: absolute;
     top: 0;

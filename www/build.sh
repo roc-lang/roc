@@ -19,6 +19,18 @@ rm -rf build/
 cp -r public/ build/
 mkdir build/wip # for WIP site
 
+# download the latest code for the examples
+echo 'Downloading latest examples...'
+curl -fLJO https://github.com/roc-lang/examples/archive/refs/heads/main.zip
+unzip examples-main.zip
+cp -R examples-main/examples/ wip_new_website/content/examples/
+
+# relace links in wip_new_website/content/examples/index.md to work on the WIP site
+sed -i 's|](/|](/wip/examples/|g' wip_new_website/content/examples/index.md
+
+# clean up examples artifacts
+rm -rf examples-main examples-main.zip
+
 # download fonts just-in-time so we don't have to bloat the repo with them.
 DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"

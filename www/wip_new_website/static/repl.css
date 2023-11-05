@@ -8,9 +8,9 @@
 #repl-prompt {
     position: relative;
     left: 16px;
-    top: 41px;
+    top: 25px;
     line-height: 16px;
-    height: 16px;
+    height: 0;
     z-index: 2;
     font-family: var(--font-mono);
     color: var(--light-cyan);
