@@ -37,21 +37,6 @@ impl std::fmt::Debug for VmBlock<'_> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum VmSymbolState {
-    /// Value doesn't exist yet
-    NotYetPushed,
-
-    /// Value has been pushed onto the VM stack but not yet popped
-    /// Remember where it was pushed, in case we need to insert another instruction there later
-    Pushed { pushed_at: usize },
-
-    /// Value has been pushed and popped, so it's not on the VM stack any more.
-    /// If we want to use it again later, we will have to create a local for it,
-    /// by going back to insert a local.tee instruction at pushed_at
-    Popped { pushed_at: usize },
-}
-
 // An instruction (local.set or local.tee) to be inserted into the function code
 #[derive(Debug)]
 struct Insertion {
@@ -159,32 +144,9 @@ impl<'a> CodeBuilder<'a> {
 
     ***********************************************************/
 
-    pub fn stack_is_empty(&self) -> bool {
-        let block = self.vm_block_stack.last().unwrap();
-        block.value_stack.is_empty()
-    }
-
-    fn current_stack(&self) -> &Vec<'a, Symbol> {
-        let block = self.vm_block_stack.last().unwrap();
-        &block.value_stack
-    }
-
     fn current_stack_mut(&mut self) -> &mut Vec<'a, Symbol> {
         let block = self.vm_block_stack.last_mut().unwrap();
         &mut block.value_stack
-    }
-
-    /// Set the Symbol that is at the top of the VM stack right now
-    /// We will use this later when we need to load the Symbol
-    pub fn set_top_symbol(&mut self, sym: Symbol) -> VmSymbolState {
-        let current_stack = &mut self.vm_block_stack.last_mut().unwrap().value_stack;
-        let pushed_at = self.code.len();
-        let top_symbol: &mut Symbol = current_stack
-            .last_mut()
-            .unwrap_or_else(|| internal_error!("Empty stack when trying to set Symbol {:?}", sym));
-        *top_symbol = sym;
-
-        VmSymbolState::Pushed { pushed_at }
     }
 
     /**********************************************************

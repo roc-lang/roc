@@ -319,7 +319,6 @@ impl<'a> Storage<'a> {
         match storage {
             StoredValue::Local { local_id, .. } => {
                 code_builder.get_local(local_id);
-                code_builder.set_top_symbol(sym);
             }
 
             StoredValue::StackMemory {
@@ -343,15 +342,10 @@ impl<'a> Storage<'a> {
                     }
                 } else {
                     // It's one of the 128-bit numbers, all of which we load as two i64's
-                    // (Mark the same Symbol twice. Shouldn't matter except for debugging.)
                     code_builder.i64_load(Align::Bytes8, offset);
-                    code_builder.set_top_symbol(sym);
-
                     code_builder.get_local(local_id);
                     code_builder.i64_load(Align::Bytes8, offset + 8);
                 }
-
-                code_builder.set_top_symbol(sym);
             }
         }
     }
@@ -383,7 +377,6 @@ impl<'a> Storage<'a> {
                     code_builder.i32_const(offset as i32);
                     code_builder.i32_add();
                 }
-                code_builder.set_top_symbol(sym);
             }
         }
     }
