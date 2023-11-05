@@ -806,7 +806,7 @@ fn build_loaded_file<'a>(
     code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
-    linking_strategy: LinkingStrategy,
+    mut linking_strategy: LinkingStrategy,
     prebuilt_requested: bool,
     wasm_dev_stack_bytes: Option<u32>,
     loaded: roc_load::MonomorphizedModule<'a>,
@@ -820,6 +820,21 @@ fn build_loaded_file<'a>(
         _ => unreachable!(),
     };
 
+    // For example, if we're loading the platform from a URL, it's automatically prebuilt
+    // even if the --prebuilt-platform CLI flag wasn't set.
+    let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
+
+    if is_platform_prebuilt && linking_strategy == LinkingStrategy::Surgical {
+        // Fallback to legacy linking if the preprocessed host file does not exist, but a legacy host does exist.
+        let preprocessed_host_path = platform_main_roc
+            .with_file_name(roc_linker::preprocessed_host_filename(target).unwrap());
+        let legacy_host_path =
+            platform_main_roc.with_file_name(legacy_host_filename(target).unwrap());
+        if !preprocessed_host_path.exists() && legacy_host_path.exists() {
+            linking_strategy = LinkingStrategy::Legacy;
+        }
+    }
+
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
         if let roc_target::OperatingSystem::Wasi = operating_system {
@@ -832,10 +847,6 @@ fn build_loaded_file<'a>(
     } else {
         platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target).unwrap())
     };
-
-    // For example, if we're loading the platform from a URL, it's automatically prebuilt
-    // even if the --prebuilt-platform CLI flag wasn't set.
-    let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
 
     let mut output_exe_path = match out_path {
         Some(path) => {
