@@ -345,7 +345,7 @@ impl<'a> LowLevelCall<'a> {
                     let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
                     backend.code_builder.get_local(elem_local);
                     backend.code_builder.i32_const(1);
-                    backend.code_builder.call(inc_fn, 2, false);
+                    backend.code_builder.call(inc_fn);
                 }
             }
             ListReplaceUnsafe => {

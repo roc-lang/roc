@@ -351,7 +351,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         self.code_builder.i32_const(0); // argc=0
         self.code_builder.i32_const(0); // argv=NULL
-        self.code_builder.call(main_fn_index, 2, true);
+        self.code_builder.call(main_fn_index);
         self.code_builder.drop_();
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
         self.reset();
@@ -587,8 +587,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
         let has_return_val = ret_type_and_size.is_some();
-        self.code_builder
-            .call(inner_wasm_fn_index, n_inner_wasm_args, has_return_val);
+        self.code_builder.call(inner_wasm_fn_index);
 
         // If the inner function returns a primitive, store it to the address we loaded at the very beginning
         if let Some((ty, size)) = ret_type_and_size {
@@ -655,8 +654,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        self.code_builder
-            .call(inner_wasm_fn_index, n_inner_args, true);
+        self.code_builder.call(inner_wasm_fn_index);
 
         // Write empty function header (local variables array with zero length)
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
@@ -1389,8 +1387,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
 
-        self.code_builder
-            .call(wasm_fn_index, num_wasm_args, has_return_val);
+        self.code_builder.call(wasm_fn_index);
     }
 
     fn expr_call_low_level(
@@ -1428,11 +1425,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.called_fns.set(*fn_index as usize, true);
 
         if *fn_index < self.import_fn_count {
-            self.code_builder
-                .call_import(*fn_index, num_wasm_args, has_return_val);
+            self.code_builder.call_import(*fn_index);
         } else {
-            self.code_builder
-                .call(*fn_index, num_wasm_args, has_return_val);
+            self.code_builder.call(*fn_index);
         }
     }
 

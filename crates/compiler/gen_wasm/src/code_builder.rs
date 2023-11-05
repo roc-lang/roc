@@ -342,11 +342,11 @@ impl<'a> CodeBuilder<'a> {
 
     instruction_no_args!(return_, RETURN);
 
-    pub fn call(&mut self, function_index: u32, _n_args: usize, _has_return_val: bool) {
+    pub fn call(&mut self, function_index: u32) {
         self.call_impl(function_index, false)
     }
 
-    pub fn call_import(&mut self, function_index: u32, _n_args: usize, _has_return_val: bool) {
+    pub fn call_import(&mut self, function_index: u32) {
         self.call_impl(function_index, true)
     }
 
