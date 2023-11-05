@@ -38,7 +38,9 @@ const repl = {
 };
 
 // Initialise
-repl.elemSourceInput.addEventListener("input", onInput);
+repl.elemSourceInput.value = ""; // Some browsers remember the input across refreshes
+resetSourceInputHeight();
+repl.elemSourceInput.addEventListener("input", resetSourceInputHeight);
 repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
@@ -65,13 +67,38 @@ roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
   }
 });
 
+// Focus the repl input the first time it scrolls into view
+// (but not on mobile, because that would pop up the whole keyboard abruptly)
+if (window.innerWidth > 768) {
+  // Function to be called when the input enters the viewport
+  function handleIntersect(entries, observer) {
+    entries.forEach(entry => {
+      // Check if the input is intersecting
+      if (entry.isIntersecting) {
+        // Apply focus to it, then unobserve it because we only want to do this once.
+        entry.target.focus();
+        observer.unobserve(entry.target);
+      }
+    });
+  }
+
+  // Set up the Intersection Observer
+  let observer = new IntersectionObserver(handleIntersect, {
+    // Use the whole viewport for the intersection
+    root: null,
+    // Trigger the callback when the input is fully visible
+    threshold: 1.0
+  });
+
+  observer.observe(repl.elemSourceInput);
+}
+
 // ----------------------------------------------------------------------------
 // Handle inputs
 // ----------------------------------------------------------------------------
 
-function onInput(event) {
-  // Have the textarea grow with the input
-  event.target.style.height = event.target.scrollHeight + 2 + "px"; // +2 for the border
+function resetSourceInputHeight() {
+  repl.elemSourceInput.style.height = repl.elemSourceInput.scrollHeight + 2 + "px"; // +2 for the border
 }
 
 function onInputKeydown(event) {

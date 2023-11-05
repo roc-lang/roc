@@ -1,27 +1,22 @@
 #repl {
+    position: relative;
     display: flex;
     flex-direction: column;
     font-size: 18px;
 }
 
-#source-input-wrapper {
+#repl-prompt {
     position: relative;
-    width: 100%;
-    box-sizing: border-box;
-}
-
-#source-input-wrapper::before {
-  content: "» ";
-  position: absolute;
-  left: 15px;
-  top: 18px;
-  line-height: 16px;
-  height: 16px;
-  z-index: 2;
-  font-family: var(--font-mono);
-  color: var(--light-cyan);
-  /* Let clicks pass through to the textarea */
-  pointer-events: none;
+    left: 16px;
+    top: 25px;
+    line-height: 16px;
+    height: 0;
+    z-index: 2;
+    font-family: var(--font-mono);
+    color: var(--light-cyan);
+    /* Let clicks pass through to the textarea */
+    pointer-events: none;
+    user-select: none;
 }
 
 #source-input {
@@ -30,7 +25,7 @@
     color: var(--code-color);
     background-color: var(--code-bg);
     display: inline-block;
-    height: 76px;
+    height: 78px;
     padding: 16px;
     padding-left: 36px;
     border: 1px solid transparent;
@@ -38,6 +33,7 @@
     margin-bottom: 2em;
     box-sizing: border-box;
     font-size: 18px;
+    resize: none;
 }
 
 #source-input:focus {
@@ -52,12 +48,12 @@
 
 #help-text,
 #history-text {
-  white-space: pre-wrap;
+    white-space: pre-wrap;
 }
 
 #history-text {
-  margin-top: 16px;
-  min-height: 26px;
+    margin-top: 16px;
+    min-height: 26px;
 }
 
 #loading-message {
@@ -68,6 +64,7 @@
 
 .history-item {
     margin-bottom: 24px;
+    overflow-x: hidden;
 }
 
 .history-item .input {
@@ -113,7 +110,7 @@
 
 .color-white {
     /* Really this isn't white so much as "default text color." For the repl, this should be black
-  in a light color scheme, and only white in dark mode. The name could be better! */
+    in a light color scheme, and only white in dark mode. The name could be better! */
     color: black;
 }
 

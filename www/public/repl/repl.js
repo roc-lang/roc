@@ -36,7 +36,9 @@ const repl = {
 };
 
 // Initialise
-repl.elemSourceInput.addEventListener("input", onInput);
+repl.elemSourceInput.value = ""; // Some browsers remember the input across refreshes
+resetSourceInputHeight();
+repl.elemSourceInput.addEventListener("input", resetSourceInputHeight);
 repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
 roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
@@ -61,9 +63,8 @@ roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
 // Handle inputs
 // ----------------------------------------------------------------------------
 
-function onInput(event) {
-  // Have the textarea grow with the input
-  event.target.style.height = event.target.scrollHeight + 2 + "px"; // +2 for the border
+function resetSourceInputHeight() {
+  repl.elemSourceInput.style.height = repl.elemSourceInput.scrollHeight + 2 + "px"; // +2 for the border
 }
 
 function onInputKeydown(event) {
