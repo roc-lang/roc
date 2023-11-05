@@ -68,28 +68,30 @@ roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
 });
 
 // Focus the repl input the first time it scrolls into view
+// (but not on mobile, because that would pop up the whole keyboard abruptly)
+if (window.innerWidth > 768) {
+  // Function to be called when the input enters the viewport
+  function handleIntersect(entries, observer) {
+    entries.forEach(entry => {
+      // Check if the input is intersecting
+      if (entry.isIntersecting) {
+        // Apply focus to it, then unobserve it because we only want to do this once.
+        entry.target.focus();
+        observer.unobserve(entry.target);
+      }
+    });
+  }
 
-// Function to be called when the input enters the viewport
-function handleIntersect(entries, observer) {
-  entries.forEach(entry => {
-    // Check if the input is intersecting
-    if (entry.isIntersecting) {
-      // Apply focus to it, then unobserve it because we only want to do this once.
-      entry.target.focus();
-      observer.unobserve(entry.target);
-    }
+  // Set up the Intersection Observer
+  let observer = new IntersectionObserver(handleIntersect, {
+    // Use the whole viewport for the intersection
+    root: null,
+    // Trigger the callback when the input is fully visible
+    threshold: 1.0
   });
+
+  observer.observe(repl.elemSourceInput);
 }
-
-// Set up the Intersection Observer
-let observer = new IntersectionObserver(handleIntersect, {
-  // Use the whole viewport for the intersection
-  root: null,
-  // Trigger the callback when the input is fully visible
-  threshold: 1.0
-});
-
-observer.observe(repl.elemSourceInput);
 
 // ----------------------------------------------------------------------------
 // Handle inputs
