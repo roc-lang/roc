@@ -136,7 +136,6 @@ impl<'a> LowLevelCall<'a> {
     /// Result is the type signature of the call
     fn load_args(&self, backend: &mut WasmBackend<'a, '_>) {
         backend.storage.load_symbols_for_call(
-            backend.env.arena,
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
@@ -248,7 +247,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // loads arg, start, count
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
@@ -470,7 +468,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load the arguments that have symbols
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
@@ -509,7 +506,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -548,7 +544,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -583,7 +578,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -622,7 +616,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -674,7 +667,6 @@ impl<'a> LowLevelCall<'a> {
                 //  dec: Dec,                  i32
 
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -721,7 +713,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load the return pointer and the list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -759,7 +750,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load the return pointer and the list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,

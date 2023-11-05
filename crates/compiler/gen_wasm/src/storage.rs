@@ -49,25 +49,6 @@ pub enum StoredValue {
     },
 }
 
-impl StoredValue {
-    /// Value types to pass to Wasm functions
-    /// One Roc value can become 0, 1, or 2 Wasm arguments
-    pub fn arg_types(&self) -> &'static [ValueType] {
-        use ValueType::*;
-        match self {
-            // Simple numbers: 1 Roc argument => 1 Wasm argument
-            Self::Local { value_type, .. } => match value_type {
-                I32 => &[I32],
-                I64 => &[I64],
-                F32 => &[F32],
-                F64 => &[F64],
-            },
-            // Stack memory values: 1 Roc argument => 0-2 Wasm arguments
-            Self::StackMemory { size, format, .. } => stack_memory_arg_types(*size, *format),
-        }
-    }
-}
-
 pub enum AddressValue {
     /// The address value has been loaded to the VM stack
     Loaded,
@@ -150,14 +131,8 @@ impl<'a> Storage<'a> {
 
     /// Allocate storage for a Roc variable
     ///
-    /// Wasm primitives (i32, i64, f32, f64) are allocated "storage" on the VM stack.
-    /// This is really just a way to model how the stack machine works as a sort of
-    /// temporary storage. It doesn't result in any code generation.
-    /// For some values, this initial storage allocation may need to be upgraded later
-    /// to a Local. See `load_symbols`.
-    ///
-    /// Structs and Tags are stored in memory rather than in Wasm primitives.
-    /// They are allocated a certain offset and size in the stack frame.
+    /// Wasm primitives (i32, i64, f32, f64) are allocated local variables.
+    /// Data structures are stored in memory, with an offset and size in the stack frame.
     pub fn allocate_var(
         &mut self,
         interner: &STLayoutInterner<'a>,
@@ -313,7 +288,6 @@ impl<'a> Storage<'a> {
     }
 
     /// Load a single symbol using the C Calling Convention
-    /// *Private* because external code should always load symbols in bulk (see load_symbols)
     fn load_symbol_ccc(&mut self, code_builder: &mut CodeBuilder, sym: Symbol) {
         let storage = self.get(&sym).to_owned();
         match storage {
@@ -382,8 +356,6 @@ impl<'a> Storage<'a> {
     }
 
     /// Load symbols to the top of the VM stack
-    /// Avoid calling this method in a loop with one symbol at a time! It will work,
-    /// but it generates very inefficient Wasm code.
     pub fn load_symbols(&mut self, code_builder: &mut CodeBuilder, symbols: &[Symbol]) {
         for sym in symbols.iter() {
             self.load_symbol_ccc(code_builder, *sym);
@@ -393,51 +365,18 @@ impl<'a> Storage<'a> {
     /// Load symbols for a function call
     pub fn load_symbols_for_call(
         &mut self,
-        arena: &'a Bump,
         code_builder: &mut CodeBuilder,
         arguments: &[Symbol],
         return_symbol: Symbol,
         return_layout: &WasmLayout,
-    ) -> (usize, bool) {
-        use ReturnMethod::*;
-
-        let mut num_wasm_args = 0;
-        let mut symbols_to_load = Vec::with_capacity_in(arguments.len() * 2 + 1, arena);
-
-        let return_method = return_layout.return_method();
-        let has_return_val = match return_method {
-            Primitive(..) => true,
-            NoReturnValue => false,
-            WriteToPointerArg => {
-                num_wasm_args += 1;
-                symbols_to_load.push(return_symbol);
-                false
-            }
-        };
-
-        for arg in arguments {
-            let stored = self.symbol_storage_map.get(arg).unwrap();
-            let arg_types = stored.arg_types();
-            num_wasm_args += arg_types.len();
-            match arg_types.len() {
-                0 => {}
-                1 => symbols_to_load.push(*arg),
-                2 => symbols_to_load.extend_from_slice(&[*arg, *arg]),
-                n => internal_error!("Cannot have {} Wasm arguments for 1 Roc argument", n),
-            }
-        }
-
-        // If the symbols were already at the top of the stack, do nothing!
-        // Should be common for simple cases, due to the structure of the Mono IR
-        if matches!(return_method, WriteToPointerArg) {
+    ) {
+        if return_layout.return_method() == ReturnMethod::WriteToPointerArg {
             self.load_return_address_ccc(code_builder, return_symbol);
         };
 
         for arg in arguments {
             self.load_symbol_ccc(code_builder, *arg);
         }
-
-        (num_wasm_args, has_return_val)
     }
 
     /// Generate code to copy a StoredValue to an arbitrary memory location

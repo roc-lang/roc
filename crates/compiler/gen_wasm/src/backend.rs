@@ -1329,7 +1329,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 let name = foreign_symbol.as_str();
                 let wasm_layout = WasmLayout::new(self.layout_interner, *ret_layout);
                 self.storage.load_symbols_for_call(
-                    self.env.arena,
                     &mut self.code_builder,
                     arguments,
                     ret_sym,
@@ -1359,7 +1358,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         self.storage.load_symbols_for_call(
-            self.env.arena,
             &mut self.code_builder,
             arguments,
             ret_sym,
