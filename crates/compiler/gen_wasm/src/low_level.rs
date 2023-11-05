@@ -134,19 +134,19 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool) {
+    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) {
         backend.storage.load_symbols_for_call(
             backend.env.arena,
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
             &WasmLayout::new(backend.layout_interner, self.ret_layout),
-        )
+        );
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a, '_>, name: &'a str) {
-        let (num_wasm_args, has_return_val) = self.load_args(backend);
-        backend.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val);
+        self.load_args(backend);
+        backend.call_host_fn_after_loading_args(name);
     }
 
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
@@ -255,7 +255,7 @@ impl<'a> LowLevelCall<'a> {
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE);
             }
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
@@ -434,7 +434,7 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE);
             }
             ListWithCapacity => {
                 // List.withCapacity : Nat -> List elem
@@ -457,7 +457,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY);
             }
             ListConcat => {
                 // List.concat : List elem, List elem -> List elem
@@ -485,7 +485,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT);
             }
 
             ListReserve => {
@@ -526,7 +526,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE);
             }
 
             ListReleaseExcessCapacity => {
@@ -561,11 +561,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(
-                    bitcode::LIST_RELEASE_EXCESS_CAPACITY,
-                    5,
-                    false,
-                );
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RELEASE_EXCESS_CAPACITY);
             }
 
             ListAppendUnsafe => {
@@ -602,7 +598,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 3, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE);
             }
             ListPrepend => {
                 // List.prepend : List elem, elem -> List elem
@@ -642,7 +638,7 @@ impl<'a> LowLevelCall<'a> {
                 }
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND);
             }
             ListSublist => {
                 // As a low-level, record is destructured
@@ -692,7 +688,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[start, len]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST);
             }
             ListDropAt => {
                 // List.dropAt : List elem, Nat -> List elem
@@ -739,7 +735,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[drop_index]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT);
             }
             ListSwap => {
                 // List.swap : List elem, Nat, Nat -> List elem
@@ -777,7 +773,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[index_1, index_2]);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP);
             }
 
             // Num
@@ -2707,7 +2703,7 @@ pub fn call_higher_order_lowlevel<'a>(
             cb.i32_const(alignment as i32);
             cb.i32_const(element_width as i32);
 
-            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 8, false);
+            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH);
         }
     }
 }
@@ -2772,7 +2768,7 @@ fn list_map_n<'a>(
     cb.i32_const(elem_ret_size as i32);
 
     // If we have lists of different lengths, we may need to decrement
-    let num_wasm_args = if arg_elem_layouts.len() > 1 {
+    if arg_elem_layouts.len() > 1 {
         for el in arg_elem_layouts.iter() {
             // The dec function will be passed a pointer to the element within the list, not the element itself!
             // Here we wrap the layout in a Struct to ensure we get the right code gen
@@ -2783,13 +2779,9 @@ fn list_map_n<'a>(
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
-        7 + arg_elem_layouts.len() * 3
-    } else {
-        9
     };
 
-    let has_return_val = false;
-    backend.call_host_fn_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
+    backend.call_host_fn_after_loading_args(zig_fn_name);
 }
 
 fn ensure_symbol_is_in_memory<'a>(

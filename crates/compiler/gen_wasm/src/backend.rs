@@ -525,7 +525,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
-        let mut n_inner_wasm_args = 0;
         let ret_type_and_size = match inner_ret_layout.return_method() {
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::Primitive(ty, size) => {
@@ -537,7 +536,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             ReturnMethod::WriteToPointerArg => {
                 // If the inner function writes to a return pointer, load its address
                 self.code_builder.get_local(heap_return_ptr_id);
-                n_inner_wasm_args += 1;
                 None
             }
         };
@@ -559,7 +557,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
 
             // Load the argument pointer. If it's a primitive value, dereference it too.
-            n_inner_wasm_args += 1;
             self.code_builder.get_local(LocalId(i as u32));
             self.dereference_boxed_value(inner_layout);
         }
@@ -586,7 +583,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        let has_return_val = ret_type_and_size.is_some();
         self.code_builder.call(inner_wasm_fn_index);
 
         // If the inner function returns a primitive, store it to the address we loaded at the very beginning
@@ -637,10 +633,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let closure_data_layout = wrapper_proc_layout.arguments[0];
         let value_layout = wrapper_proc_layout.arguments[1];
 
-        let mut n_inner_args = 2;
         if self.layout_interner.stack_size(closure_data_layout) > 0 {
             self.code_builder.get_local(LocalId(0));
-            n_inner_args += 1;
         }
 
         let inner_layout = match self.layout_interner.get_repr(value_layout) {
@@ -1017,7 +1011,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // push the allocation's alignment
         self.code_builder.i32_const(alignment as i32);
 
-        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
+        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR);
 
         self.stmt(following);
     }
@@ -1047,7 +1041,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // load the pointer
         self.storage.load_symbols(&mut self.code_builder, &[msg]);
         self.code_builder.i32_const(tag as _);
-        self.call_host_fn_after_loading_args("roc_panic", 2, false);
+        self.call_host_fn_after_loading_args("roc_panic");
 
         self.code_builder.unreachable_();
     }
@@ -1334,14 +1328,14 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             } => {
                 let name = foreign_symbol.as_str();
                 let wasm_layout = WasmLayout::new(self.layout_interner, *ret_layout);
-                let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
+                self.storage.load_symbols_for_call(
                     self.env.arena,
                     &mut self.code_builder,
                     arguments,
                     ret_sym,
                     &wasm_layout,
                 );
-                self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
+                self.call_host_fn_after_loading_args(name)
             }
         }
     }
@@ -1364,7 +1358,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
         }
 
-        let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
+        self.storage.load_symbols_for_call(
             self.env.arena,
             &mut self.code_builder,
             arguments,
@@ -1410,12 +1404,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     }
 
     /// Generate a call instruction to a host function or Zig builtin.
-    pub fn call_host_fn_after_loading_args(
-        &mut self,
-        name: &str,
-        num_wasm_args: usize,
-        has_return_val: bool,
-    ) {
+    pub fn call_host_fn_after_loading_args(&mut self, name: &str) {
         let (_, fn_index) = self
             .host_lookup
             .iter()
@@ -2002,7 +1991,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.code_builder.i32_const(alignment_bytes as i32);
 
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_host_fn_after_loading_args("roc_alloc", 2, true);
+        self.call_host_fn_after_loading_args("roc_alloc");
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);
