@@ -9268,9 +9268,13 @@ fn assign_num_literal_expr<'a>(
     num_value: IntOrFloatValue,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let layout = layout_cache
-        .from_var(env.arena, variable, env.subs)
-        .unwrap();
+    let layout = match layout_cache.from_var(env.arena, variable, env.subs) {
+        Ok(layout) => layout,
+        Err(_) => match num_value {
+            IntOrFloatValue::Float(_) => Layout::default_float(),
+            IntOrFloatValue::Int(_) => Layout::default_integer(),
+        },
+    };
     let literal =
         make_num_literal(&layout_cache.interner, layout, num_str, num_value).to_expr_literal();
 
