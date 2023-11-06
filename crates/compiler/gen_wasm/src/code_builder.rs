@@ -75,7 +75,7 @@ pub struct CodeBuilder<'a> {
     import_relocations: Vec<'a, (usize, u32)>,
 
     /// Keep track of which local variables have been set
-    set_locals: BitVec<u64>,
+    set_locals: BitVec<u32>,
 }
 
 #[allow(clippy::new_without_default)]
