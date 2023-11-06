@@ -57,7 +57,11 @@
     <div id="repl-description" role="presentation">
         <p>You can try Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
         <p><code>Shift-Enter</code> adds a newline.</p>
-        <p><span id="repl-arrow" role="presentation">←</span> Try entering <code>0.1 + 0.2</code></p>
+        <p>Try entering <code>0.1 + 0.2</code>
+        <svg id="repl-arrow" role="presentation" width="100" height="50" viewBox="0 0 100 50" xmlns="http://www.w3.org/2000/svg">
+          <polygon points="70,20 30,20 30,15 0,25 30,35 30,30 70,30"/>
+        </svg>
+        </p>
     </div>
     <div id="repl" role="presentation">
         <code class="history">
