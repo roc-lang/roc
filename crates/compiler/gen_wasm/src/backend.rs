@@ -89,8 +89,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         fn_index_offset: u32,
         helper_proc_gen: CodeGenHelp<'a>,
     ) -> Self {
-        let can_relocate_heap = module.linking.find_internal_symbol("__heap_base").is_ok()
-            && module.linking.find_internal_symbol("__heap_end").is_ok();
+        let has_heap_base = module.linking.find_internal_symbol("__heap_base").is_ok();
+        let has_heap_end = module.linking.find_internal_symbol("__heap_end").is_ok();
 
         // We don't want to import any Memory or Tables
         module.import.imports.retain(|import| {
@@ -135,7 +135,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             proc_lookup,
             host_lookup,
             helper_proc_gen,
-            can_relocate_heap,
+            can_relocate_heap: has_heap_base && has_heap_end,
 
             // Function-level data
             block_depth: 0,
@@ -351,7 +351,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         self.code_builder.i32_const(0); // argc=0
         self.code_builder.i32_const(0); // argv=NULL
-        self.code_builder.call(main_fn_index, 2, true);
+        self.code_builder.call(main_fn_index);
         self.code_builder.drop_();
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
         self.reset();
@@ -525,7 +525,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
-        let mut n_inner_wasm_args = 0;
         let ret_type_and_size = match inner_ret_layout.return_method() {
             ReturnMethod::NoReturnValue => None,
             ReturnMethod::Primitive(ty, size) => {
@@ -537,7 +536,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             ReturnMethod::WriteToPointerArg => {
                 // If the inner function writes to a return pointer, load its address
                 self.code_builder.get_local(heap_return_ptr_id);
-                n_inner_wasm_args += 1;
                 None
             }
         };
@@ -559,7 +557,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             }
 
             // Load the argument pointer. If it's a primitive value, dereference it too.
-            n_inner_wasm_args += 1;
             self.code_builder.get_local(LocalId(i as u32));
             self.dereference_boxed_value(inner_layout);
         }
@@ -586,9 +583,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        let has_return_val = ret_type_and_size.is_some();
-        self.code_builder
-            .call(inner_wasm_fn_index, n_inner_wasm_args, has_return_val);
+        self.code_builder.call(inner_wasm_fn_index);
 
         // If the inner function returns a primitive, store it to the address we loaded at the very beginning
         if let Some((ty, size)) = ret_type_and_size {
@@ -638,10 +633,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let closure_data_layout = wrapper_proc_layout.arguments[0];
         let value_layout = wrapper_proc_layout.arguments[1];
 
-        let mut n_inner_args = 2;
         if self.layout_interner.stack_size(closure_data_layout) > 0 {
             self.code_builder.get_local(LocalId(0));
-            n_inner_args += 1;
         }
 
         let inner_layout = match self.layout_interner.get_repr(value_layout) {
@@ -655,8 +648,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
-        self.code_builder
-            .call(inner_wasm_fn_index, n_inner_args, true);
+        self.code_builder.call(inner_wasm_fn_index);
 
         // Write empty function header (local variables array with zero length)
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
@@ -795,21 +787,17 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         self.expr(sym, expr, layout, &sym_storage);
 
-        // If this value is stored in the VM stack, we need code_builder to track it
-        // (since every instruction can change the VM stack)
-        if let Some(StoredValue::VirtualMachineStack { vm_state, .. }) =
-            self.storage.symbol_storage_map.get_mut(&sym)
-        {
-            *vm_state = self.code_builder.set_top_symbol(sym);
+        if let StoredValue::Local { local_id, .. } = sym_storage {
+            if !self.code_builder.is_set(local_id) {
+                self.code_builder.set_local(local_id);
+            }
         }
     }
 
     fn stmt_ret(&mut self, sym: Symbol) {
         use crate::storage::StoredValue::*;
 
-        let storage = self.storage.symbol_storage_map.get(&sym).unwrap();
-
-        match storage {
+        match self.storage.get(&sym) {
             StackMemory {
                 location,
                 size,
@@ -855,12 +843,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // NOTE currently implemented as a series of conditional jumps
         // We may be able to improve this in the future with `Select`
         // or `BrTable`
-
-        // Ensure the condition value is not stored only in the VM stack
-        // Otherwise we can't reach it from inside the block
-        let cond_storage = self.storage.get(&cond_symbol).to_owned();
-        self.storage
-            .ensure_value_has_local(&mut self.code_builder, cond_symbol, cond_storage);
 
         // create a block for each branch except the default
         for _ in 0..branches.len() {
@@ -929,16 +911,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // make locals for join pointer parameters
         let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
         for parameter in parameters.iter() {
-            let mut param_storage = self.storage.allocate_var(
+            let param_storage = self.storage.allocate_var(
                 self.layout_interner,
                 parameter.layout,
                 parameter.symbol,
                 StoredVarKind::Variable,
-            );
-            param_storage = self.storage.ensure_value_has_local(
-                &mut self.code_builder,
-                parameter.symbol,
-                param_storage,
             );
             jp_param_storages.push(param_storage);
         }
@@ -964,12 +941,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         for (arg_symbol, param_storage) in arguments.iter().zip(param_storages.iter()) {
             let arg_storage = self.storage.get(arg_symbol).clone();
-            self.storage.clone_value(
-                &mut self.code_builder,
-                param_storage,
-                &arg_storage,
-                *arg_symbol,
-            );
+            self.storage
+                .clone_value(&mut self.code_builder, param_storage, &arg_storage);
         }
 
         // jump
@@ -1018,17 +991,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Get pointer and offset
         let value_storage = self.storage.get(&value).to_owned();
-        let stored_with_local =
-            self.storage
-                .ensure_value_has_local(&mut self.code_builder, value, value_storage);
-        let (tag_local_id, tag_offset) = match stored_with_local {
+        let (tag_local_id, tag_offset) = match value_storage {
             StoredValue::StackMemory { location, .. } => {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
             StoredValue::Local { local_id, .. } => (local_id, 0),
-            StoredValue::VirtualMachineStack { .. } => {
-                internal_error!("{:?} should have a local variable", value)
-            }
         };
 
         // load pointer, and add the offset to the pointer
@@ -1044,7 +1011,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // push the allocation's alignment
         self.code_builder.i32_const(alignment as i32);
 
-        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR, 2, false);
+        self.call_host_fn_after_loading_args(bitcode::UTILS_FREE_DATA_PTR);
 
         self.stmt(following);
     }
@@ -1074,7 +1041,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         // load the pointer
         self.storage.load_symbols(&mut self.code_builder, &[msg]);
         self.code_builder.i32_const(tag as _);
-        self.call_host_fn_after_loading_args("roc_panic", 2, false);
+        self.call_host_fn_after_loading_args("roc_panic");
 
         self.code_builder.unreachable_();
     }
@@ -1117,13 +1084,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 reuse,
             } => {
                 let reuse = reuse.map(|ru| ru.symbol);
-                self.expr_tag(union_layout, *tag_id, arguments, sym, storage, reuse)
+                self.expr_tag(union_layout, *tag_id, arguments, storage, reuse)
             }
 
             Expr::GetTagId {
                 structure,
                 union_layout,
-            } => self.expr_get_tag_id(*structure, union_layout, sym, storage),
+            } => self.expr_get_tag_id(*structure, union_layout, storage),
 
             Expr::UnionAtIndex {
                 structure,
@@ -1142,7 +1109,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 *tag_id,
                 union_layout,
                 *index,
-                sym,
                 storage,
             ),
 
@@ -1157,7 +1123,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             Expr::Alloca {
                 initializer,
                 element_layout,
-            } => self.expr_alloca(*initializer, *element_layout, sym, storage),
+            } => self.expr_alloca(*initializer, *element_layout, storage),
 
             Expr::RuntimeErrorFunction(_) => {
                 todo!("Expression `{}`", expr.to_pretty(100, false))
@@ -1179,7 +1145,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         };
 
         match storage {
-            StoredValue::VirtualMachineStack { value_type, .. } => {
+            StoredValue::Local {
+                value_type,
+                local_id,
+                ..
+            } => {
                 match (lit, value_type) {
                     (Literal::Float(x), ValueType::F64) => self.code_builder.f64_const(*x),
                     (Literal::Float(x), ValueType::F32) => self.code_builder.f32_const(*x as f32),
@@ -1193,6 +1163,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     (Literal::Byte(x), ValueType::I32) => self.code_builder.i32_const(*x as i32),
                     _ => invalid_error(),
                 };
+                self.code_builder.set_local(*local_id);
             }
 
             StoredValue::StackMemory { location, .. } => {
@@ -1233,8 +1204,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     Literal::Bool(_) | Literal::Byte(_) => invalid_error(),
                 }
             }
-
-            _ => invalid_error(),
         };
     }
 
@@ -1359,14 +1328,13 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             } => {
                 let name = foreign_symbol.as_str();
                 let wasm_layout = WasmLayout::new(self.layout_interner, *ret_layout);
-                let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
-                    self.env.arena,
+                self.storage.load_symbols_for_call(
                     &mut self.code_builder,
                     arguments,
                     ret_sym,
                     &wasm_layout,
                 );
-                self.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val)
+                self.call_host_fn_after_loading_args(name)
             }
         }
     }
@@ -1389,8 +1357,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             return self.expr_call_low_level(lowlevel, arguments, ret_sym, ret_layout, ret_storage);
         }
 
-        let (num_wasm_args, has_return_val) = self.storage.load_symbols_for_call(
-            self.env.arena,
+        self.storage.load_symbols_for_call(
             &mut self.code_builder,
             arguments,
             ret_sym,
@@ -1412,8 +1379,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         let wasm_fn_index = self.fn_index_offset + roc_proc_index as u32;
 
-        self.code_builder
-            .call(wasm_fn_index, num_wasm_args, has_return_val);
+        self.code_builder.call(wasm_fn_index);
     }
 
     fn expr_call_low_level(
@@ -1436,12 +1402,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     }
 
     /// Generate a call instruction to a host function or Zig builtin.
-    pub fn call_host_fn_after_loading_args(
-        &mut self,
-        name: &str,
-        num_wasm_args: usize,
-        has_return_val: bool,
-    ) {
+    pub fn call_host_fn_after_loading_args(&mut self, name: &str) {
         let (_, fn_index) = self
             .host_lookup
             .iter()
@@ -1451,11 +1412,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.called_fns.set(*fn_index as usize, true);
 
         if *fn_index < self.import_fn_count {
-            self.code_builder
-                .call_import(*fn_index, num_wasm_args, has_return_val);
+            self.code_builder.call_import(*fn_index);
         } else {
-            self.code_builder
-                .call(*fn_index, num_wasm_args, has_return_val);
+            self.code_builder.call(*fn_index);
         }
     }
 
@@ -1540,12 +1499,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 if !fields.is_empty() {
                     // Struct expression but not Struct layout => single element. Copy it.
                     let field_storage = self.storage.get(&fields[0]).to_owned();
-                    self.storage.clone_value(
-                        &mut self.code_builder,
-                        storage,
-                        &field_storage,
-                        fields[0],
-                    );
+                    self.storage
+                        .clone_value(&mut self.code_builder, storage, &field_storage);
                 } else {
                     // Empty record. Nothing to do.
                 }
@@ -1574,12 +1529,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             } => {
                 debug_assert!(matches!(value_type, ValueType::I32));
                 (AddressValue::NotLoaded(*local_id), 0)
-            }
-
-            StoredValue::VirtualMachineStack { .. } => {
-                self.storage
-                    .load_symbols(&mut self.code_builder, &[structure]);
-                (AddressValue::Loaded, 0)
             }
         };
         for field in field_layouts.iter().take(index as usize) {
@@ -1691,7 +1640,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         union_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
         arguments: &'a [Symbol],
-        symbol: Symbol,
         stored: &StoredValue,
         maybe_reused: Option<Symbol>,
     ) {
@@ -1705,12 +1653,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let (data_size, data_alignment) =
             union_layout.data_size_and_alignment(self.layout_interner);
 
-        // We're going to use the pointer many times, so put it in a local variable
-        let stored_with_local =
-            self.storage
-                .ensure_value_has_local(&mut self.code_builder, symbol, stored.to_owned());
-
-        let (local_id, data_offset) = match stored_with_local {
+        let (local_id, data_offset) = match stored {
             StoredValue::StackMemory { location, .. } => {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
@@ -1722,23 +1665,20 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                     self.code_builder.if_();
                     {
                         self.storage.load_symbols(&mut self.code_builder, &[reused]);
-                        self.code_builder.set_local(local_id);
+                        self.code_builder.set_local(*local_id);
                     }
                     self.code_builder.else_();
                     {
                         self.allocate_with_refcount(Some(data_size), data_alignment, 1);
-                        self.code_builder.set_local(local_id);
+                        self.code_builder.set_local(*local_id);
                     }
                     self.code_builder.end();
                 } else {
                     // Call the allocator to get a memory address.
                     self.allocate_with_refcount(Some(data_size), data_alignment, 1);
-                    self.code_builder.set_local(local_id);
+                    self.code_builder.set_local(*local_id);
                 }
-                (local_id, 0)
-            }
-            StoredValue::VirtualMachineStack { .. } => {
-                internal_error!("{:?} should have a local variable", symbol)
+                (*local_id, 0)
             }
         };
 
@@ -1792,7 +1732,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         &mut self,
         structure: Symbol,
         union_layout: &UnionLayout<'a>,
-        tag_id_symbol: Symbol,
         stored_value: &StoredValue,
     ) {
         use UnionLayout::*;
@@ -1805,13 +1744,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 return;
             }
             NullableWrapped { nullable_id, .. } => {
-                let stored_with_local = self.storage.ensure_value_has_local(
-                    &mut self.code_builder,
-                    tag_id_symbol,
-                    stored_value.to_owned(),
-                );
-                let local_id = match stored_with_local {
-                    StoredValue::Local { local_id, .. } => local_id,
+                let local_id = match stored_value {
+                    StoredValue::Local { local_id, .. } => *local_id,
                     _ => internal_error!("ensure_value_has_local didn't work"),
                 };
 
@@ -1903,19 +1837,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
         // Get pointer and offset to the tag's data
         let structure_storage = self.storage.get(&structure).to_owned();
-        let stored_with_local = self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            structure,
-            structure_storage,
-        );
-        let (tag_local_id, tag_offset) = match stored_with_local {
+        let (tag_local_id, tag_offset) = match structure_storage {
             StoredValue::StackMemory { location, .. } => {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
             StoredValue::Local { local_id, .. } => (local_id, 0),
-            StoredValue::VirtualMachineStack { .. } => {
-                internal_error!("{:?} should have a local variable", structure)
-            }
         };
 
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
@@ -1944,7 +1870,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         tag_id: TagIdIntType,
         union_layout: &UnionLayout<'a>,
         index: u64,
-        symbol: Symbol,
         storage: &StoredValue,
     ) {
         use UnionLayout::*;
@@ -1977,20 +1902,11 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             .sum();
 
         // Get pointer and offset to the tag's data
-        let structure_storage = self.storage.get(&structure).to_owned();
-        let stored_with_local = self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            structure,
-            structure_storage,
-        );
-        let (tag_local_id, tag_offset) = match stored_with_local {
+        let (tag_local_id, tag_offset) = match self.storage.get(&structure) {
             StoredValue::StackMemory { location, .. } => {
                 location.local_and_offset(self.storage.stack_frame_pointer)
             }
-            StoredValue::Local { local_id, .. } => (local_id, 0),
-            StoredValue::VirtualMachineStack { .. } => {
-                internal_error!("{:?} should have a local variable", structure)
-            }
+            StoredValue::Local { local_id, .. } => (*local_id, 0),
         };
 
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
@@ -2007,12 +1923,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.code_builder.i32_const(from_offset as _);
         self.code_builder.i32_add();
 
-        let symbol_local = match self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            symbol,
-            storage.clone(),
-        ) {
-            StoredValue::Local { local_id, .. } => local_id,
+        let symbol_local = match storage {
+            StoredValue::Local { local_id, .. } => *local_id,
             _ => internal_error!("A heap pointer will always be an i32"),
         };
 
@@ -2025,11 +1937,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
     pub(crate) fn ptr_load(&mut self, ret_sym: Symbol, arg_sym: Symbol) {
         let (from_addr_val, from_offset) = match self.storage.get(&arg_sym) {
-            StoredValue::VirtualMachineStack { .. } => {
-                self.storage
-                    .load_symbols(&mut self.code_builder, &[arg_sym]);
-                (AddressValue::Loaded, 0)
-            }
             StoredValue::Local { local_id, .. } => (AddressValue::NotLoaded(*local_id), 0),
             StoredValue::StackMemory { location, .. } => {
                 let (local_id, offset) =
@@ -2063,7 +1970,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
     ) {
         if !self.can_relocate_heap {
             // This will probably only happen for test hosts.
-            panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export __heap_base");
+            panic!("The app tries to allocate heap memory but the host doesn't support that. It needs to export symbols __heap_base and __heap_end");
         }
         // Add extra bytes for the refcount
         let extra_bytes = alignment_bytes.max(PTR_SIZE);
@@ -2082,7 +1989,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         self.code_builder.i32_const(alignment_bytes as i32);
 
         // Call the foreign function. (Zig and C calling conventions are the same for this signature)
-        self.call_host_fn_after_loading_args("roc_alloc", 2, true);
+        self.call_host_fn_after_loading_args("roc_alloc");
 
         // Save the allocation address to a temporary local variable
         let local_id = self.storage.create_anonymous_local(ValueType::I32);
@@ -2158,7 +2065,6 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         &mut self,
         initializer: Option<Symbol>,
         element_layout: InLayout<'a>,
-        ret_symbol: Symbol,
         ret_storage: &StoredValue,
     ) {
         // Alloca : a -> Ptr a
@@ -2181,12 +2087,8 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         }
 
         // create a local variable for the pointer
-        let ptr_local_id = match self.storage.ensure_value_has_local(
-            &mut self.code_builder,
-            ret_symbol,
-            ret_storage.clone(),
-        ) {
-            StoredValue::Local { local_id, .. } => local_id,
+        let ptr_local_id = match ret_storage {
+            StoredValue::Local { local_id, .. } => *local_id,
             _ => internal_error!("A pointer will always be an i32"),
         };
 

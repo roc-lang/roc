@@ -103,7 +103,6 @@ impl From<&StoredValue> for CodeGenNumType {
     fn from(stored: &StoredValue) -> CodeGenNumType {
         use StoredValue::*;
         match stored {
-            VirtualMachineStack { value_type, .. } => CodeGenNumType::from(*value_type),
             Local { value_type, .. } => CodeGenNumType::from(*value_type),
             StackMemory { format, .. } => CodeGenNumType::from(*format),
         }
@@ -135,19 +134,18 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool) {
+    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) {
         backend.storage.load_symbols_for_call(
-            backend.env.arena,
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
             &WasmLayout::new(backend.layout_interner, self.ret_layout),
-        )
+        );
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a, '_>, name: &'a str) {
-        let (num_wasm_args, has_return_val) = self.load_args(backend);
-        backend.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val);
+        self.load_args(backend);
+        backend.call_host_fn_after_loading_args(name);
     }
 
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
@@ -249,14 +247,13 @@ impl<'a> LowLevelCall<'a> {
 
                 // loads arg, start, count
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE);
             }
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
@@ -346,7 +343,7 @@ impl<'a> LowLevelCall<'a> {
                     let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
                     backend.code_builder.get_local(elem_local);
                     backend.code_builder.i32_const(1);
-                    backend.code_builder.call(inc_fn, 2, false);
+                    backend.code_builder.call(inc_fn);
                 }
             }
             ListReplaceUnsafe => {
@@ -435,7 +432,7 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE);
             }
             ListWithCapacity => {
                 // List.withCapacity : Nat -> List elem
@@ -458,7 +455,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY);
             }
             ListConcat => {
                 // List.concat : List elem, List elem -> List elem
@@ -471,7 +468,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load the arguments that have symbols
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
@@ -486,7 +482,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT);
             }
 
             ListReserve => {
@@ -510,7 +506,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -527,7 +522,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE);
             }
 
             ListReleaseExcessCapacity => {
@@ -549,7 +544,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -562,11 +556,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(
-                    bitcode::LIST_RELEASE_EXCESS_CAPACITY,
-                    5,
-                    false,
-                );
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RELEASE_EXCESS_CAPACITY);
             }
 
             ListAppendUnsafe => {
@@ -588,7 +578,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -603,7 +592,7 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 3, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE);
             }
             ListPrepend => {
                 // List.prepend : List elem, elem -> List elem
@@ -627,7 +616,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -643,7 +631,7 @@ impl<'a> LowLevelCall<'a> {
                 }
                 backend.code_builder.i32_const(elem_width as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND);
             }
             ListSublist => {
                 // As a low-level, record is destructured
@@ -679,7 +667,6 @@ impl<'a> LowLevelCall<'a> {
                 //  dec: Dec,                  i32
 
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -693,7 +680,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[start, len]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST);
             }
             ListDropAt => {
                 // List.dropAt : List elem, Nat -> List elem
@@ -726,7 +713,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load the return pointer and the list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -740,7 +726,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[drop_index]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 5, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT);
             }
             ListSwap => {
                 // List.swap : List elem, Nat, Nat -> List elem
@@ -764,7 +750,6 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load the return pointer and the list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
@@ -778,7 +763,7 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[index_1, index_2]);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP);
             }
 
             // Num
@@ -1069,7 +1054,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_GREATER_THAN[IntWidth::I128]
                         } else {
@@ -1107,7 +1091,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128]
                         } else {
@@ -1145,7 +1128,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_LESS_THAN[IntWidth::I128]
                         } else {
@@ -1184,7 +1166,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128]
                         } else {
@@ -2093,8 +2074,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             Unreachable => match self.ret_storage {
-                StoredValue::VirtualMachineStack { value_type, .. }
-                | StoredValue::Local { value_type, .. } => match value_type {
+                StoredValue::Local { value_type, .. } => match value_type {
                     ValueType::I32 => backend.code_builder.i32_const(0),
                     ValueType::I64 => backend.code_builder.i64_const(0),
                     ValueType::F32 => backend.code_builder.f32_const(0.0),
@@ -2189,7 +2169,7 @@ impl<'a> LowLevelCall<'a> {
         use StoredValue::*;
 
         match backend.storage.get(&self.arguments[0]).to_owned() {
-            VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+            Local { value_type, .. } => {
                 self.load_args(backend);
                 match self.lowlevel {
                     LowLevel::Eq => match value_type {
@@ -2299,7 +2279,7 @@ fn num_is_nan(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2362,7 +2342,7 @@ fn num_is_infinite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2405,7 +2385,7 @@ fn num_is_finite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2713,7 +2693,7 @@ pub fn call_higher_order_lowlevel<'a>(
             cb.i32_const(alignment as i32);
             cb.i32_const(element_width as i32);
 
-            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 8, false);
+            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH);
         }
     }
 }
@@ -2778,7 +2758,7 @@ fn list_map_n<'a>(
     cb.i32_const(elem_ret_size as i32);
 
     // If we have lists of different lengths, we may need to decrement
-    let num_wasm_args = if arg_elem_layouts.len() > 1 {
+    if arg_elem_layouts.len() > 1 {
         for el in arg_elem_layouts.iter() {
             // The dec function will be passed a pointer to the element within the list, not the element itself!
             // Here we wrap the layout in a Struct to ensure we get the right code gen
@@ -2789,13 +2769,9 @@ fn list_map_n<'a>(
             let ptr = backend.get_fn_ptr(idx);
             backend.code_builder.i32_const(ptr);
         }
-        7 + arg_elem_layouts.len() * 3
-    } else {
-        9
     };
 
-    let has_return_val = false;
-    backend.call_host_fn_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
+    backend.call_host_fn_after_loading_args(zig_fn_name);
 }
 
 fn ensure_symbol_is_in_memory<'a>(
