@@ -254,7 +254,8 @@ pre > code {
 }
 
 #homepage-repl-container #repl-description {
-    padding: 0 36px;
+    padding: 0 30px;
+    margin-top: 2px;
     flex: 1;
 }
 
@@ -272,7 +273,7 @@ pre > code {
     border: 2px solid #444;
     font-size: var(--font-size-normal);
     min-height: 0; /* On /repl on mobile, this expands to fill the screen, which we don't want */
-    min-width: 496px; /* Make sure the placeholder doesn't wrap */
+    margin-right: 6px;
 }
 
 #homepage-repl-container #repl,
@@ -295,13 +296,13 @@ pre > code {
 #homepage-repl-container #repl-arrow {
     cursor: default;
     font-weight: bold;
-    color: var(--primary-1);
     font-size: 48px;
     position: absolute;
-    top: -4px;
-    left: -56px;
+    top: -9px;
+    left: -79px;
     text-shadow: 1px 1px 1px #444;
     z-index: 3;
+    fill: var(--primary-1);
 }
 
 .repl-err {
