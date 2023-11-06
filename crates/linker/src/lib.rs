@@ -90,7 +90,7 @@ pub fn generate_stub_lib(
     roc_cache_dir: RocCacheDir<'_>,
     triple: &Triple,
     function_kind: FunctionKind,
-) -> std::io::Result<i32> {
+) -> (PathBuf, PathBuf, Vec<String>) {
     // Note: this should theoretically just be able to load the host, I think.
     // Instead, I am loading an entire app because that was simpler and had example code.
     // If this was expected to stay around for the the long term, we should change it.
@@ -146,10 +146,10 @@ pub fn generate_stub_lib(
 
         let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
         generate_dynamic_lib(triple, &stub_dll_symbols, &stub_lib);
+        (platform_path.into(), stub_lib, stub_dll_symbols)
     } else {
         unreachable!();
-    };
-    Ok(0)
+    }
 }
 
 pub fn generate_stub_lib_from_loaded(

@@ -4,9 +4,10 @@ use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_OUTPUT,
-    FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
+    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
+    GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -14,7 +15,7 @@ use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_target::Target;
+use roc_target::{get_target_triple_str, Target};
 use std::fs::{self, FileType};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -131,7 +132,38 @@ fn main() -> io::Result<()> {
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &target.to_triple(),
                 function_kind,
-            )
+            );
+            Ok(0)
+        }
+        Some((CMD_PREPROCESS_HOST, matches)) => {
+            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            let target = matches
+                .get_one::<String>(FLAG_TARGET)
+                .and_then(|s| Target::from_str(s).ok())
+                .unwrap_or_default();
+
+            let triple = target.to_triple();
+            let function_kind = FunctionKind::LambdaSet;
+            let (platform_path, stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib(
+                &input_path,
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                &triple,
+                function_kind,
+            );
+
+            // TODO: pipeline the executable location through here.
+            // Currently it is essentally hardcoded as platform_path/dynhost.
+            roc_linker::preprocess_host(
+                &triple,
+                &platform_path.with_file_name("main.roc"),
+                // The target triple string must be derived from the triple to convert from the generic
+                // `system` target to the exact specific target.
+                &platform_path
+                    .with_file_name(format!("{}.rh", get_target_triple_str(&triple).unwrap())),
+                &stub_lib,
+                &stub_dll_symbols,
+            );
+            Ok(0)
         }
         Some((CMD_BUILD, matches)) => {
             let target = matches

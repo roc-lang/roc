@@ -48,6 +48,7 @@ pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
+pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_BUNDLE: &str = "bundle";
@@ -339,6 +340,23 @@ pub fn build_app() -> Command {
         )
         .subcommand(Command::new(CMD_GEN_STUB_LIB)
             .about("Generate a stubbed shared library that can be used for linking a platform binary.\nThe stubbed library has prototypes, but no function bodies.\n\nNote: This command will be removed in favor of just using `roc build` once all platforms support the surgical linker")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for an app using the platform")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Into::<&'static str>::into(Target::default()))
+                    .value_parser(build_target_values_parser.clone())
+                    .required(false),
+            )
+        )
+        .subcommand(Command::new(CMD_PREPROCESS_HOST)
+            .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for an app using the platform")
