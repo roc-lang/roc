@@ -54,14 +54,20 @@ pub fn link(
 }
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
-pub fn legacy_host_filename(target: &Triple) -> Option<String> {
+pub fn legacy_host_file(target: &Triple, platform_main_roc: &Path) -> Option<PathBuf> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
-    let ext = os.object_file_ext();
+    let lib_ext = os.static_libary_file_ext();
 
-    Some(
-        roc_linker::preprocessed_host_filename(target)?
-            .replace(roc_linker::PRECOMPILED_HOST_EXT, ext),
-    )
+    let file_name = roc_linker::preprocessed_host_filename(target)?
+        .replace(roc_linker::PRECOMPILED_HOST_EXT, lib_ext);
+
+    let lib_path = platform_main_roc.with_file_name(file_name);
+    if lib_path.exists() {
+        Some(lib_path)
+    } else {
+        let obj_ext = os.object_file_ext();
+        Some(lib_path.with_extension(obj_ext))
+    }
 }
 
 // Attempts to find a file that is stored relative to the roc executable.
@@ -461,7 +467,7 @@ pub fn rebuild_host(
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
+        legacy_host_file(target, &platform_main_roc).unwrap()
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());

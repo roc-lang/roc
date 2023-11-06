@@ -1,5 +1,5 @@
 use crate::link::{
-    legacy_host_filename, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
+    legacy_host_file, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
@@ -828,8 +828,7 @@ fn build_loaded_file<'a>(
         // Fallback to legacy linking if the preprocessed host file does not exist, but a legacy host does exist.
         let preprocessed_host_path = platform_main_roc
             .with_file_name(roc_linker::preprocessed_host_filename(target).unwrap());
-        let legacy_host_path =
-            platform_main_roc.with_file_name(legacy_host_filename(target).unwrap());
+        let legacy_host_path = legacy_host_file(target, &platform_main_roc).unwrap();
         if !preprocessed_host_path.exists() && legacy_host_path.exists() {
             linking_strategy = LinkingStrategy::Legacy;
         }
@@ -842,7 +841,7 @@ fn build_loaded_file<'a>(
             // and has a file called "host.zig"
             platform_main_roc.with_file_name("host.zig")
         } else {
-            platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
+            legacy_host_file(target, &platform_main_roc).unwrap()
         }
     } else {
         platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target).unwrap())
