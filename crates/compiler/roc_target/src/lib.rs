@@ -34,7 +34,7 @@ impl OperatingSystem {
         }
     }
 
-    pub const fn static_libary_file_ext(&self) -> &str {
+    pub const fn static_library_file_ext(&self) -> &str {
         match self {
             OperatingSystem::Windows => "lib",
             OperatingSystem::Unix => "a",
