@@ -1941,7 +1941,12 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
+            Symbol::LIST_GET
+            | Symbol::LIST_SET
+            | Symbol::LIST_REPLACE
+            | Symbol::LIST_APPEND
+            | Symbol::LIST_APPEND_IF_OK
+            | Symbol::LIST_PREPEND_IF_OK => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let fn_name = self.lambda_name_to_string(
                     func_name,
