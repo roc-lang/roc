@@ -1,6 +1,6 @@
 interface InteractiveExample
     exposes [view]
-    imports [pf.Html.{ pre, samp }, pf.Html.Attributes.{ class }]
+    imports [pf.Html.{ pre, samp, div, text, a, class, p }, pf.Html.Attributes.{ class, role, href, id }]
 
 Section : [Desc (List Token) Str, Indent, Outdent, Newline]
 Token : [
@@ -72,10 +72,18 @@ view =
             Desc [Literal "FileWriteErr", Ident "path", Kw "_", Kw "->", Ident "Stderr.line", StrInterpolation "\"Error writing to " "Path.display path" "\""] "<p>This line will run if the <code>File.writeUtf8</code> from earlier encountered a file I/O error.</p><p>It handles the error by printing an error message to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)\">stderr</a>.</p><p>The <code>_</code> is where more information about the error is stored in the <code>FileWriteErr</code>. If we wanted to print more detail about what the error was, we’d name that something other than <code>_</code> and actually use it.</p>",
         ]
 
-    pre [class "interactive-example"] [
-        samp [] [
-            Html.text output,
+    div [role "presentation"] [
+        pre [class "interactive-example"] [
+            samp [] [text output],
         ],
+        p [] [
+            text "To get started learning the language, try the ",
+            a [href "/tutorial"] [text "tutorial"],
+            text " next!",
+        ],
+        p [id "final-tutorial-link"] [
+            a [class "btn-small", href "/tutorial"] [text "Start Tutorial"]
+        ]
     ]
 
 tokensToStr : List Token -> Str

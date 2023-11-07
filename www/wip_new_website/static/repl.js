@@ -13,6 +13,8 @@ import * as roc_repl_wasm from "./roc_repl_wasm.js";
 
 const isHomepage = document.getElementById("homepage-repl-container") != null;
 
+const tutorialButtonSvg = `<svg viewBox="0 -6 51 58" xmlns="http://www.w3.org/2000/svg" aria-labelledby="repl-tutorial-link" role="img" class="roc-logo"><title id="repl-tutorial-link">Return to Roc Home</title><polygon role="presentation" points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"></polygon></svg>`;
+
 // ----------------------------------------------------------------------------
 // REPL state
 // ----------------------------------------------------------------------------
@@ -20,11 +22,30 @@ const isHomepage = document.getElementById("homepage-repl-container") != null;
 const repl = {
   elemHistory: document.getElementById("history-text"),
   elemSourceInput: document.getElementById("source-input"),
+  description: document.getElementById("repl-description"),
 
   inputQueue: [],
   inputHistory: [],
   inputHistoryIndex: 0,
   inputStash: "", // stash the user input while we're toggling through history with up/down arrows
+
+  // Current progress through the repl tutorial
+  tutorialStep: 0,
+  tutorialSteps: [
+    {
+      match: ((input) => input.replace(/ /g, "") === "0.1+0.2"),
+      show: "<p>Was this the answer you expected? (If so, try this in other programming languages and see what their answers are.)</p><p>Roc has a <a href=\"/builtins/Num#Dec\">decimal</a> type as well as <a href=\"/builtins/Num#F64\">floating-point</a> for when performance is more important than decimal precision.</p><p>Next, enter <code>name = \"(put your name here)\"</code></p>",
+    },
+    {
+      match: ((input) => input.replace(/ /g, "").match(/^name="/i)),
+      show: "<p>This created a new <a href=\"https://www.roc-lang.org/tutorial#defs\">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href=\"/tutorial#strings-and-numbers\">string</a> you entered.</p><p>Try using this definition by entering <code>\"Hi, \\(name)!\"</code></p>"
+    },
+    {
+      match: ((input) => input.match(/^["][^\\]+\\\(name\)/i)),
+        show: `<p>Nicely done! This is an example of <a href=\"/tutorial#string-interpolation\">string interpolation</a>, which replaces part of a string with whatever you put inside the parentheses after a <code>\\</code>.</p><p>Now that you’ve written a few <a href=\"/tutorial#naming-things\">expressions</a>, you can either continue exploring in this REPL, or move on to the <a href=\"/tutorial\">tutorial</a> to learn how to make full programs.<p><p><span class='welcome-to-roc'>Welcome to Roc!</span> <a href='/tutorial' class='btn-small'>${tutorialButtonSvg} Start Tutorial</a></p>`
+    }
+  ],
+
 
   textDecoder: new TextDecoder(),
   textEncoder: new TextEncoder(),
@@ -127,7 +148,6 @@ function onInputKeydown(event) {
       if (replArrow != null) {
         replArrow.style.display = "none";
       }
-
     }
   }
 }
@@ -179,27 +199,40 @@ function setInput(value) {
   el.selectionEnd = value.length;
 }
 
+function showNextReplTutorialEntry(inputText) {
+  const nextStep = repl.tutorialSteps[repl.tutorialStep];
+
+  if (typeof nextStep === "object" && nextStep.match(inputText)) {
+    repl.description.innerHTML = repl.description.innerHTML + "<hr/>" + nextStep.show;
+
+    repl.tutorialStep = repl.tutorialStep + 1;
+  }
+}
+
 // Use a queue just in case we somehow get inputs very fast
 // We want the REPL to only process one at a time, since we're using some global state.
 // In normal usage we shouldn't see this edge case anyway. Maybe with copy/paste?
 async function processInputQueue() {
   while (repl.inputQueue.length) {
     const inputText = repl.inputQueue[0];
-    repl.inputHistoryIndex = createHistoryEntry(inputText);
-    repl.inputStash = "";
 
-    let outputText = "";
-    let ok = true;
     if (inputText) {
+      repl.inputHistoryIndex = createHistoryEntry(inputText);
+      repl.inputStash = "";
+
+      let outputText = "";
+      let ok = true;
       try {
         outputText = await roc_repl_wasm.entrypoint_from_js(inputText);
       } catch (e) {
         outputText = `${e}`;
         ok = false;
       }
+
+      updateHistoryEntry(repl.inputHistoryIndex, ok, outputText);
+      showNextReplTutorialEntry(inputText);
     }
 
-    updateHistoryEntry(repl.inputHistoryIndex, ok, outputText);
     repl.inputQueue.shift();
   }
 }

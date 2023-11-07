@@ -16,4 +16,4 @@ mkdir -p dist/wip
 roc run main.roc -- content/ dist/wip/
 cp -r static/* dist/wip/
 
-simple-http-server -p 8080 --nocache --cors --index -- dist/
+npx http-server dist/ -p 8080 -c-1 --cors
