@@ -28,6 +28,9 @@ jobs:
     
       - run: zig version
 
+      - name: clean roc executables and temporaries
+        run: git clean -fdx examples crates/cli_testing_examples/
+
       - name: test_gen llvm tests
         run: cargo nextest-gen-llvm --release --no-fail-fast --locked -E "package(test_gen) - test(gen_str::str_append_scalar)"
 

@@ -49,6 +49,9 @@ jobs:
           curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v16.0.6/LLVM-16.0.6-win64.7z
           7z x LLVM-16.0.6-win64.7z -oC:\LLVM-16.0.6-win64
 
+      - name: clean roc executables and temporaries
+        run: git clean -fdx examples crates/cli_testing_examples/
+
       - name: Build tests --release without running. 
         run: cargo test --locked --release --no-run
 

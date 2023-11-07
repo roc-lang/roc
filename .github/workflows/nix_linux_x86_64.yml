@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
           
+      - name: clean roc executables and temporaries
+        run: git clean -fdx examples crates/cli_testing_examples/
+
       - name: test building default.nix
         run: nix-build 
 
