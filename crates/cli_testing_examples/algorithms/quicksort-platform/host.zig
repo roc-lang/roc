@@ -9,7 +9,7 @@ const expect = testing.expect;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(input: RocList) callconv(.C) RocList;
+extern fn roc__mainForHost_1_exposed(output: *RocList, input: *RocList) void;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -120,7 +120,8 @@ pub export fn main() u8 {
     var timer = std.time.Timer.start() catch unreachable;
 
     // actually call roc to populate the callresult
-    const callresult: RocList = roc__mainForHost_1_exposed(roc_list);
+    roc__mainForHost_1_exposed(&roc_list, &roc_list);
+    const callresult = roc_list;
 
     // stdout the result
     const length = @min(20, callresult.length);

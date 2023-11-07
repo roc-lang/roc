@@ -4287,6 +4287,7 @@ fn expose_function_to_host<'a, 'ctx>(
         niche,
     };
 
+    /*
     let c_function_name: String = layout_ids
         .get_toplevel(symbol, &proc_layout)
         .to_exposed_symbol_string(symbol, &env.interns);
@@ -4300,6 +4301,7 @@ fn expose_function_to_host<'a, 'ctx>(
         return_layout,
         &c_function_name,
     );
+    */
 }
 
 fn expose_function_to_host_help_c_abi_generic_v3<'a, 'ctx>(
@@ -4586,6 +4588,125 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         call_result,
     );
     builder.new_build_return(None);
+
+    c_function
+}
+
+fn expose_function_to_host_help_c_abi_new<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    roc_function: FunctionValue<'ctx>,
+    entry_point: SingleEntryPoint<'a>,
+    c_function_name: &str,
+) -> FunctionValue<'ctx> {
+    // this function will always have the type
+    //
+    // > fn(output: *mut O, arguments: *mut A)
+    //
+    // arguments are consumed!
+
+    let argument_repr = layout_interner.get_repr(entry_point.arguments_layout);
+    let return_repr = layout_interner.get_repr(entry_point.return_layout);
+
+    let argument_type = basic_type_from_layout(env, layout_interner, argument_repr);
+    let return_type = basic_type_from_layout(env, layout_interner, return_repr);
+
+    let c_argument_types = [
+        return_type.ptr_type(AddressSpace::default()).into(),
+        argument_type.ptr_type(AddressSpace::default()).into(),
+    ];
+    let c_function_type = env
+        .context
+        .void_type()
+        .fn_type(&function_arguments(env, &c_argument_types), false);
+
+    let c_function_spec = FunctionSpec {
+        typ: c_function_type,
+        call_conv: C_CALL_CONV,
+        cconv_stack_return_type: None,
+    };
+
+    let c_function = add_func(
+        env.context,
+        env.module,
+        c_function_name,
+        c_function_spec,
+        Linkage::External,
+    );
+
+    let subprogram = env.new_subprogram(c_function_name);
+    c_function.set_subprogram(subprogram);
+
+    // STEP 2: build the exposed function's body
+    let builder = env.builder;
+    let context = env.context;
+
+    let entry = context.append_basic_block(c_function, "entry");
+
+    builder.position_at_end(entry);
+
+    debug_info_init!(env, c_function);
+
+    let [ return_ptr, argument_ptr] = c_function.get_params()[..] else {
+        unreachable!();
+    };
+
+    let return_ptr = return_ptr.into_pointer_value();
+    let argument_ptr = argument_ptr.into_pointer_value();
+
+    // extract all the fields from the struct
+    let argument_count = entry_point.layout.arguments.len();
+    let mut fields = Vec::with_capacity_in(argument_count, env.arena);
+
+    for (i, field_layout) in entry_point.layout.arguments.iter().enumerate() {
+        let field_repr = layout_interner.get_repr(*field_layout);
+        let field_type = basic_type_from_layout(env, layout_interner, field_repr);
+        let field_ptr = env
+            .builder
+            .build_struct_gep(argument_type, argument_ptr, i as u32, "get_field")
+            .unwrap();
+        let field = env.builder.build_load(field_type, field_ptr, "load_field");
+
+        fields.push(field.unwrap());
+    }
+
+    let result = call_direct_roc_function(env, layout_interner, roc_function, return_repr, &fields);
+
+    store_roc_value(env, layout_interner, return_repr, return_ptr, result);
+
+    env.builder.build_return(None).unwrap();
+
+    {
+        // STEP 3: build a {} -> u64 function that gives the size of the return type
+        let size_function_spec = FunctionSpec::cconv(
+            env,
+            CCReturn::Return,
+            Some(env.context.i64_type().as_basic_type_enum()),
+            &[],
+        );
+
+        let size_function_name: String = format!("{c_function_name}_size");
+
+        let size_function = add_func(
+            env.context,
+            env.module,
+            size_function_name.as_str(),
+            size_function_spec,
+            Linkage::External,
+        );
+
+        let subprogram = env.new_subprogram(&size_function_name);
+        size_function.set_subprogram(subprogram);
+
+        let entry = context.append_basic_block(size_function, "entry");
+
+        builder.position_at_end(entry);
+
+        debug_info_init!(env, size_function);
+
+        let size: BasicValueEnum = return_type.size_of().unwrap().into();
+        builder.new_build_return(Some(&size));
+    }
 
     c_function
 }
@@ -4999,95 +5120,6 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
             env.builder.new_build_return(None);
         }
     }
-
-    c_function
-}
-
-fn expose_function_to_host_help_c_abi_v3<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    layout_interner: &STLayoutInterner<'a>,
-    ident_string: &str,
-    roc_function: FunctionValue<'ctx>,
-    entry_point: SingleEntryPoint<'a>,
-    c_function_name: &str,
-) -> FunctionValue<'ctx> {
-    match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
-            return expose_function_to_host_help_c_abi_gen_test(
-                env,
-                layout_interner,
-                ident_string,
-                roc_function,
-                entry_point.layout.arguments,
-                entry_point.layout.result,
-                c_function_name,
-            )
-        }
-
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {}
-    }
-
-    // a generic version that writes the result into a passed *u8 pointer
-    expose_function_to_host_help_c_abi_generic_v3(
-        env,
-        layout_interner,
-        roc_function,
-        entry_point,
-        &format!("{c_function_name}_generic"),
-    );
-
-    // TODO
-    let c_function = expose_function_to_host_help_c_abi_v2(
-        env,
-        layout_interner,
-        roc_function,
-        entry_point.layout.arguments,
-        entry_point.layout.result,
-        c_function_name,
-    );
-
-    // STEP 3: build a {} -> u64 function that gives the size of the return type
-    let size_function_spec = FunctionSpec::cconv(
-        env,
-        CCReturn::Return,
-        Some(env.context.i64_type().as_basic_type_enum()),
-        &[],
-    );
-    let size_function_name: String = format!("{c_function_name}_size");
-
-    let size_function = add_func(
-        env.context,
-        env.module,
-        size_function_name.as_str(),
-        size_function_spec,
-        Linkage::External,
-    );
-
-    let subprogram = env.new_subprogram(&size_function_name);
-    size_function.set_subprogram(subprogram);
-
-    let entry = env.context.append_basic_block(size_function, "entry");
-
-    env.builder.position_at_end(entry);
-
-    debug_info_init!(env, size_function);
-
-    let return_type = match env.mode {
-        LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
-            roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
-        }
-
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
-            basic_type_from_layout(
-                env,
-                layout_interner,
-                layout_interner.get_repr(entry_point.return_layout),
-            )
-        }
-    };
-
-    let size: BasicValueEnum = return_type.size_of().unwrap().into();
-    env.builder.build_return(Some(&size));
 
     c_function
 }
@@ -5603,6 +5635,7 @@ pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
     layout_interner: &'r STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
+    entry_point: EntryPoint<'a>,
     scope: &mut Scope<'a, 'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
@@ -5624,6 +5657,13 @@ pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
         let is_erased = proc.is_erased;
         debug_assert!(!is_erased || func_solutions.specs().count() == 1);
 
+        let entry_point = match entry_point {
+            EntryPoint::Single(entry_point) => {
+                (entry_point.symbol == symbol).then_some(entry_point)
+            }
+            EntryPoint::Expects { .. } => None,
+        };
+
         for specialization in it {
             let func_spec = if is_erased {
                 FuncBorrowSpec::Erased
@@ -5631,8 +5671,15 @@ pub(crate) fn build_proc_headers<'a, 'r, 'ctx>(
                 FuncBorrowSpec::Some(*specialization)
             };
 
-            let fn_val =
-                build_proc_header(env, layout_interner, func_spec, symbol, &proc, layout_ids);
+            let fn_val = build_proc_header(
+                env,
+                layout_interner,
+                func_spec,
+                symbol,
+                &proc,
+                entry_point,
+                layout_ids,
+            );
 
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
@@ -5867,6 +5914,7 @@ fn build_procedures_help<'a>(
         layout_interner,
         mod_solutions,
         procedures,
+        entry_point,
         &mut scope,
         &mut layout_ids,
     );
@@ -5992,6 +6040,7 @@ fn build_proc_header<'a, 'ctx>(
     func_spec: FuncBorrowSpec,
     symbol: Symbol,
     proc: &roc_mono::ir::Proc<'a>,
+    entry_point: Option<SingleEntryPoint<'a>>,
     layout_ids: &mut LayoutIds<'a>,
 ) -> FunctionValue<'ctx> {
     let args = proc.args;
@@ -6040,6 +6089,20 @@ fn build_proc_header<'a, 'ctx>(
             proc.ret_layout,
             layout_ids,
         );
+
+        if let Some(entry_point) = entry_point {
+            let c_function_name: String = layout_ids
+                .get_toplevel(entry_point.symbol, &entry_point.layout)
+                .to_exposed_symbol_string(entry_point.symbol, &env.interns);
+
+            expose_function_to_host_help_c_abi_new(
+                env,
+                layout_interner,
+                fn_val,
+                entry_point,
+                &c_function_name,
+            );
+        }
     }
 
     if false {

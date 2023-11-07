@@ -10,7 +10,7 @@ const Allocator = mem.Allocator;
 
 // NOTE the LLVM backend expects this signature
 // extern fn roc__mainForHost_1_exposed(i64, *i64) void;
-extern fn roc__mainForHost_1_exposed(i64) i64;
+extern fn roc__mainForHost_1_exposed(out: *i64, in: *const i64) void;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -100,7 +100,9 @@ pub export fn main() u8 {
 
     var timer = std.time.Timer.start() catch unreachable;
 
-    const result = roc__mainForHost_1_exposed(10);
+    const in: i64 = 10;
+    var result: i64 = 0;
+    roc__mainForHost_1_exposed(&result, &in);
 
     const nanos = timer.read();
     const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);

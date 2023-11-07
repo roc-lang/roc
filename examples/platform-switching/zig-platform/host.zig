@@ -92,9 +92,7 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
-
-const Unit = extern struct {};
+extern fn roc__mainForHost_1_exposed(*RocStr, *extern struct {}) void;
 
 pub fn main() u8 {
     const stdout = std.io.getStdOut().writer();
@@ -104,7 +102,7 @@ pub fn main() u8 {
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
-    roc__mainForHost_1_exposed_generic(&callresult);
+    roc__mainForHost_1_exposed(&callresult, &.{});
 
     const nanos = timer.read();
     const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);

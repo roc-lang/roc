@@ -7,8 +7,8 @@ use std::io::Write;
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: &mut RocStr);
+    #[link_name = "roc__mainForHost_1_exposed"]
+    fn roc_main(_: &mut RocStr, _: &());
 }
 
 #[no_mangle]
@@ -81,7 +81,7 @@ pub unsafe extern "C" fn roc_shm_open(
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let mut roc_str = RocStr::default();
-    unsafe { roc_main(&mut roc_str) };
+    unsafe { roc_main(&mut roc_str, &()) };
 
     if let Err(e) = std::io::stdout().write_all(roc_str.as_bytes()) {
         panic!("Writing to stdout failed! {:?}", e);
