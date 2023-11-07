@@ -135,6 +135,7 @@ hr {
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 24px;
+    min-width: 308px; /* Widest logo plus padding - Firefox on Android needs this */
 }
 
 #final-tutorial-link {
