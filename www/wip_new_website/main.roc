@@ -97,13 +97,13 @@ viewNavbar = \page ->
 
     header [id "top-bar"] [
         nav [ariaLabel "primary"] [
-            a [id "nav-home-link", href "/wip/index.html", title "The Roc Programming Language"] logo,
+            a [id "nav-home-link", href "/wip/", title "The Roc Programming Language"] logo,
             div [id "top-bar-links"] [
-                a [href "/wip/tutorial.html"] [text "tutorial"],
-                a [href "/wip/install.html"] [text "install"],
-                a [href "/wip/community.html"] [text "community"],
-                a [href "/wip/docs.html"] [text "docs"],
-                a [href "/wip/donate.html"] [text "donate"],
+                a [href "/wip/tutorial"] [text "tutorial"],
+                a [href "/wip/install"] [text "install"],
+                a [href "/wip/community"] [text "community"],
+                a [href "/wip/docs"] [text "docs"],
+                a [href "/wip/donate"] [text "donate"],
             ],
         ],
     ]
