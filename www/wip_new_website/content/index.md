@@ -142,7 +142,7 @@ You can sponsor Roc by donating to the [Roc Programming Language Foundation](htt
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
-We are a small team trying to do big things, and every donation helps!
+We are a small group trying to do big things, and every donation helps!
 
 ## [Larger Example](#larger-example) {#larger-example}
 
