@@ -20,9 +20,6 @@ jobs:
 
       - run: zig version
 
-      - name: clean roc executables and temporaries
-        run: git clean -fdx examples crates/cli_testing_examples/
-
       - name: check formatting with rustfmt
         run: nix develop -c cargo fmt --all -- --check
 

@@ -38,9 +38,6 @@ jobs:
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
-      - name: clean roc executables and temporaries
-        run: git clean -fdx examples crates/cli_testing_examples/
-
       - name: regular rust tests
         # see #5904 for skipped test
         run: cargo test --locked --release -- --skip cli_run::expects_dev_and_test && sccache --show-stats
