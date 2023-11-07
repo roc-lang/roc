@@ -20,11 +20,30 @@ const isHomepage = document.getElementById("homepage-repl-container") != null;
 const repl = {
   elemHistory: document.getElementById("history-text"),
   elemSourceInput: document.getElementById("source-input"),
+  description: document.getElementById("repl-description"),
 
   inputQueue: [],
   inputHistory: [],
   inputHistoryIndex: 0,
   inputStash: "", // stash the user input while we're toggling through history with up/down arrows
+
+  // Current progress through the repl tutorial
+  tutorialStep: 0,
+  tutorialSteps: [
+    {
+      match: ((input) => input.replace(/ /g, "") === "0.1+0.2"),
+      show: "<p>Was this the answer you expected? (If so, try this in other programming languages and see what their answers are.)</p><p>Roc has a <a href=\"/builtins/Num#Dec\">decimal</a> type as well as <a href=\"/builtins/Num#F64\">floating-point</a> for when performance is more important than decimal precision.</p><p>Next, enter <code>name = \"(put your name here)\"</code></p>",
+    },
+    {
+      match: ((input) => input.replace(/ /g, "").match(/^name="/i)),
+      show: "<p>This created a new <a href=\"https://www.roc-lang.org/tutorial#defs\">definition</a>&mdash;<code>name</code> is now defined to be equal to the string you entered.</p><p>Try using this definition by entering <code>\"Hi, \\(name)!\"</code></p>"
+    },
+    {
+      match: ((input) => input.match(/^["][^\\]+\\\(name\)/i)),
+        show: "<p>nice</p>"
+    }
+  ],
+
 
   textDecoder: new TextDecoder(),
   textEncoder: new TextEncoder(),
@@ -127,7 +146,6 @@ function onInputKeydown(event) {
       if (replArrow != null) {
         replArrow.style.display = "none";
       }
-
     }
   }
 }
@@ -179,27 +197,40 @@ function setInput(value) {
   el.selectionEnd = value.length;
 }
 
+function showNextReplTutorialEntry(inputText) {
+  const nextStep = repl.tutorialSteps[repl.tutorialStep];
+
+  if (typeof nextStep === "object" && nextStep.match(inputText)) {
+    repl.description.innerHTML = repl.description.innerHTML + "<hr/>" + nextStep.show;
+
+    repl.tutorialStep = repl.tutorialStep + 1;
+  }
+}
+
 // Use a queue just in case we somehow get inputs very fast
 // We want the REPL to only process one at a time, since we're using some global state.
 // In normal usage we shouldn't see this edge case anyway. Maybe with copy/paste?
 async function processInputQueue() {
   while (repl.inputQueue.length) {
     const inputText = repl.inputQueue[0];
-    repl.inputHistoryIndex = createHistoryEntry(inputText);
-    repl.inputStash = "";
 
-    let outputText = "";
-    let ok = true;
     if (inputText) {
+      repl.inputHistoryIndex = createHistoryEntry(inputText);
+      repl.inputStash = "";
+
+      let outputText = "";
+      let ok = true;
       try {
         outputText = await roc_repl_wasm.entrypoint_from_js(inputText);
       } catch (e) {
         outputText = `${e}`;
         ok = false;
       }
+
+      updateHistoryEntry(repl.inputHistoryIndex, ok, outputText);
+      showNextReplTutorialEntry(inputText);
     }
 
-    updateHistoryEntry(repl.inputHistoryIndex, ok, outputText);
     repl.inputQueue.shift();
   }
 }

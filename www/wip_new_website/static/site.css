@@ -71,6 +71,11 @@ footer {
     margin: 0 auto;
 }
 
+hr {
+    color: var(--primary-1);
+    margin-bottom: 1rem;
+}
+
 .logo-dark {
     fill: #612bde;
 }
