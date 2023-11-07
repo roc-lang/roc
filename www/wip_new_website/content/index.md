@@ -109,6 +109,41 @@ It is easy to add support for other languages too.
 
 You can create your own! Learn about **platforms and applications**...
 
+## Sponsors
+
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
+
+<p id="sponsor-logos">
+    <a href="https://www.vendr.com"><img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/></a>
+    <a href="https://www.rwx.com"><img src="https://github.com/roc-lang/roc/assets/1094080/82c0868e-d23f-42a0-ac2d-c6e6b2e16575" height="60" alt="RWX logo"/></a>
+    <a href="https://tweedegolf.nl/en"><img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/></a>
+</p>
+
+If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
+
+We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
+
+<ul id="individual-sponsors">
+    <li><a href="https://github.com/aaronwhite">Aaron White</a></li>
+    <li><a href="https://github.com/ayazhafiz">Ayaz Hafiz</a></li>
+    <li><a href="https://github.com/cdolan">Christopher Dolan</a></li>
+    <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>
+    <li><a href="https://github.com/Ocupe">Jonas Schell</a></li>
+    <li><a href="https://github.com/rvcas">Lucas Rosa</a></li>
+    <li><a href="https://github.com/nickgravgaard">Nick Gravgaard</a></li>
+    <li><a href="https://github.com/rtfeldman">Richard Feldman</a></li>
+    <li><a href="https://github.com/shritesh">Shritesh Bhattarai</a></li>
+    <li><a href="https://github.com/popara">Zeljko Nesic</a></li>
+</ul>
+
+Thank you all so much for helping Roc progress! 💜
+
+You can sponsor Roc by donating to the [Roc Programming Language Foundation](https://foundation.roc-lang.org/), a registered [US 503(c)(3) nonprofit organization](https://en.wikipedia.org/wiki/501(c)(3)_organization) (meaning donations to it are tax-exempt in the US) using:
+- [GitHub](https://github.com/sponsors/roc-lang)
+- [Liberapay](https://liberapay.com/roc_lang)
+
+We are a small team trying to do big things, and every donation helps!
+
 ## [Larger Example](#larger-example) {#larger-example}
 
 Here’s a larger example that shows a few different aspects of Roc:

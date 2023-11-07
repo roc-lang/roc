@@ -107,6 +107,40 @@ hr {
    border-color: #7c38f5;
 }
 
+#individual-sponsors {
+   list-style-type: none;
+   padding: 24px 40px;
+}
+
+#individual-sponsors li {
+  display: inline;
+  white-space: nowrap;
+}
+
+#individual-sponsors li::after {
+  content: ",";
+  white-space: pre; /* Preserve the space after the comma */
+}
+
+#individual-sponsors li:last-child::after {
+  content: ""; /* No comma after the last one */
+}
+
+#sponsor-logos {
+    background-color: #fff;
+    padding: 24px 36px;
+    padding-bottom: 12px;
+    border-radius: 24px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 24px;
+}
+
+#final-tutorial-link {
+    padding-top: 12px;
+}
+
 /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile.
  * When we think we're on mobile (based on max-width), we can switch the instruction.
 */
