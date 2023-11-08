@@ -220,7 +220,7 @@ interface List
 ##
 ## List.isEmpty []
 ## ```
-isEmpty : List a -> Bool
+isEmpty : List * -> Bool
 isEmpty = \list ->
     List.len list == 0
 
@@ -373,10 +373,10 @@ prependIfOk = \list, result ->
 ## One [List] can store up to 2,147,483,648 elements (just over 2 billion), which
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
-len : List a -> Nat
+len : List * -> Nat
 
 ## Create a list with space for at least capacity elements
-withCapacity : Nat -> List a
+withCapacity : Nat -> List *
 
 ## Enlarge the list for at least capacity additional elements
 reserve : List a, Nat -> List a
