@@ -1,8 +1,8 @@
 app "rust-glue"
     packages { pf: "../platform/main.roc" }
     imports [
-        pf.Types.{ Types },
-        pf.Shape.{ Shape, RocFn },
+        pf.Module.{ Module },
+        pf.Type.{ Type, RocFn },
         pf.File.{ File },
         pf.TypeId.{ TypeId },
         "../static/Cargo.toml" as rocAppCargoToml : Str,
@@ -17,11 +17,11 @@ app "rust-glue"
     ]
     provides [makeGlue] to pf
 
-makeGlue : List Types -> Result (List File) Str
+makeGlue : List Module -> Result (List File) Str
 makeGlue = \typesByArch ->
     modFileContent =
         List.walk typesByArch "" \content, types ->
-            arch = (Types.target types).architecture
+            arch = (Module.target types).architecture
             archStr = archName arch
 
             Str.concat
@@ -35,7 +35,7 @@ makeGlue = \typesByArch ->
                 """
 
     typesByArch
-    |> List.map convertTypesToFile
+    |> List.map convertModuleToFile
     |> List.append { name: "roc_app/src/lib.rs", content: modFileContent }
     |> List.concat staticFiles
     |> Ok
@@ -54,10 +54,10 @@ staticFiles = [
     { name: "roc_std/src/storage.rs", content: rocStdStorage },
 ]
 
-convertTypesToFile : Types -> File
-convertTypesToFile = \types ->
+convertModuleToFile : Module -> File
+convertModuleToFile = \types ->
     content =
-        Types.walkShapes types fileHeader \buf, type, id ->
+        Module.walkTypes types fileHeader \buf, type, id ->
             when type is
                 Struct { name, fields } ->
                     generateStruct buf types id name fields Public
@@ -119,7 +119,7 @@ convertTypesToFile = \types ->
                     # TODO: Eventually we want to generate roc_std. So these types will need to be emitted.
                     buf
 
-    arch = (Types.target types).architecture
+    arch = (Module.target types).architecture
     archStr = archName arch
 
     {
@@ -127,14 +127,14 @@ convertTypesToFile = \types ->
         content: content |> generateEntryPoints types,
     }
 
-generateEntryPoints : Str, Types -> Str
+generateEntryPoints : Str, Module -> Str
 generateEntryPoints = \buf, types ->
-    List.walk (Types.entryPoints types) buf \accum, T name id -> generateEntryPoint accum types name id
+    List.walk (Module.entryPoints types) buf \accum, T name id -> generateEntryPoint accum types name id
 
-generateEntryPoint : Str, Types, Str, TypeId -> Str
+generateEntryPoint : Str, Module, Str, TypeId -> Str
 generateEntryPoint = \buf, types, name, id ->
     publicSignature =
-        when Types.shape types id is
+        when Module.shape types id is
             Function rocFn ->
                 arguments =
                     toArgStr rocFn.args types \argId, _shape, index ->
@@ -154,7 +154,7 @@ generateEntryPoint = \buf, types, name, id ->
                     Err ZeroSized -> "()"
 
     externSignature =
-        when Types.shape types id is
+        when Module.shape types id is
             Function rocFn ->
                 arguments =
                     toArgStr rocFn.args types \argId, shape, _index ->
@@ -174,7 +174,7 @@ generateEntryPoint = \buf, types, name, id ->
                 "(_: *mut \(ret))"
 
     externArguments =
-        when Types.shape types id is
+        when Module.shape types id is
             Function rocFn ->
                 toArgStr rocFn.args types \_argId, shape, index ->
                     indexStr = Num.toStr index
@@ -205,7 +205,7 @@ generateEntryPoint = \buf, types, name, id ->
     }
     """
 
-generateFunction : Str, Types, RocFn -> Str
+generateFunction : Str, Module, RocFn -> Str
 generateFunction = \buf, types, rocFn ->
     name = rocFn.functionName
     externName = rocFn.externName
@@ -284,7 +284,7 @@ generateFunction = \buf, types, rocFn ->
     }
     """
 
-generateStruct : Str, Types, TypeId, _, _, _ -> Str
+generateStruct : Str, Module, TypeId, _, _, _ -> Str
 generateStruct = \buf, types, id, name, structFields, visibility ->
     escapedName = escapeKW name
     repr =
@@ -302,7 +302,7 @@ generateStruct = \buf, types, id, name, structFields, visibility ->
             Public -> "pub "
             Private -> ""
 
-    structType = Types.shape types id
+    structType = Module.shape types id
 
     buf
     |> generateDeriveStr types structType IncludeDebug
@@ -408,7 +408,7 @@ deriveCloneTagUnion = \buf, tagUnionType, tags ->
     }
     """
 
-deriveDebugTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveDebugTagUnion : Str, Module, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
     checks =
         List.walk tags "" \accum, { name: tagName, payload } ->
@@ -443,7 +443,7 @@ deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
     }
     """
 
-deriveEqTagUnion : Str, Types, Shape, Str -> Str
+deriveEqTagUnion : Str, Module, Type, Str -> Str
 deriveEqTagUnion = \buf, types, shape, tagUnionType ->
     if canSupportEqHashOrd types shape then
         """
@@ -454,7 +454,7 @@ deriveEqTagUnion = \buf, types, shape, tagUnionType ->
     else
         buf
 
-derivePartialEqTagUnion : Str, Types, Shape, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialEqTagUnion : Str, Module, Type, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 derivePartialEqTagUnion = \buf, types, shape, tagUnionType, tags ->
     if canSupportPartialEqOrd types shape then
         checks =
@@ -485,7 +485,7 @@ derivePartialEqTagUnion = \buf, types, shape, tagUnionType, tags ->
     else
         buf
 
-deriveOrdTagUnion : Str, Types, Shape, Str -> Str
+deriveOrdTagUnion : Str, Module, Type, Str -> Str
 deriveOrdTagUnion = \buf, types, shape, tagUnionType ->
     if canSupportEqHashOrd types shape then
         """
@@ -500,7 +500,7 @@ deriveOrdTagUnion = \buf, types, shape, tagUnionType ->
     else
         buf
 
-derivePartialOrdTagUnion : Str, Types, Shape, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+derivePartialOrdTagUnion : Str, Module, Type, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 derivePartialOrdTagUnion = \buf, types, shape, tagUnionType, tags ->
     if canSupportPartialEqOrd types shape then
         checks =
@@ -533,7 +533,7 @@ derivePartialOrdTagUnion = \buf, types, shape, tagUnionType, tags ->
     else
         buf
 
-deriveHashTagUnion : Str, Types, Shape, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveHashTagUnion : Str, Module, Type, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 deriveHashTagUnion = \buf, types, shape, tagUnionType, tags ->
     if canSupportEqHashOrd types shape then
         checks =
@@ -560,21 +560,21 @@ deriveHashTagUnion = \buf, types, shape, tagUnionType, tags ->
     else
         buf
 
-generateConstructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+generateConstructorFunctions : Str, Module, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateConstructorFunctions = \buf, types, tagUnionType, tags ->
     buf
     |> Str.concat "\n\nimpl \(tagUnionType) {"
     |> \b -> List.walk tags b \accum, r -> generateConstructorFunction accum types tagUnionType r.name r.payload
     |> Str.concat "\n}\n\n"
 
-generateConstructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
+generateConstructorFunction : Str, Module, Str, Str, [Some TypeId, None] -> Str
 generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
     payloadType =
         when optPayload is
             None -> Err ZeroSized
             Some payloadId ->
                 typeName types payloadId
-                |> Result.map \payloadName -> (payloadName, Types.shape types payloadId)
+                |> Result.map \payloadName -> (payloadName, Module.shape types payloadId)
 
     when payloadType is
         Err ZeroSized ->
@@ -611,21 +611,21 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 }
             """
 
-generateDestructorFunctions : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+generateDestructorFunctions : Str, Module, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
 generateDestructorFunctions = \buf, types, tagUnionType, tags ->
     buf
     |> Str.concat "\n\nimpl \(tagUnionType) {"
     |> \b -> List.walk tags b \accum, r -> generateDestructorFunction accum types tagUnionType r.name r.payload
     |> Str.concat "\n}\n\n"
 
-generateDestructorFunction : Str, Types, Str, Str, [Some TypeId, None] -> Str
+generateDestructorFunction : Str, Module, Str, Str, [Some TypeId, None] -> Str
 generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
     payloadType =
         when optPayload is
             None -> Err ZeroSized
             Some payloadId ->
                 typeName types payloadId
-                |> Result.map \payloadName -> (payloadName, Types.shape types payloadId)
+                |> Result.map \payloadName -> (payloadName, Module.shape types payloadId)
 
     when payloadType is
         Err ZeroSized ->
@@ -657,7 +657,7 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 }
             """
 
-generateNonRecursiveTagUnion : Str, Types, TypeId, Str, List { name : Str, payload : [Some TypeId, None] }, U32, U32 -> Str
+generateNonRecursiveTagUnion : Str, Module, TypeId, Str, List { name : Str, payload : [Some TypeId, None] }, U32, U32 -> Str
 generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset ->
     escapedName = escapeKW name
     discriminantName = "discriminant_\(escapedName)"
@@ -666,8 +666,8 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     tagNames = List.map tags \{ name: n } -> n
     selfMut = "self"
 
-    sizeOfSelf = Types.size types id
-    alignOfSelf = Types.alignment types id
+    sizeOfSelf = Module.size types id
+    alignOfSelf = Module.alignment types id
 
     # size of union = size of self - discriminant space
     # (the discriminant's size will always be less than or equal to the alignment,
@@ -675,13 +675,13 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     sizeOfUnion = sizeOfSelf - alignOfSelf
     alignOfUnion = alignOfSelf
 
-    shape = Types.shape types id
+    shape = Module.shape types id
 
     # TODO: this value can be different than the alignment of `id`
     align =
         List.walk tags 1 \accum, { payload } ->
             when payload is
-                Some payloadId -> Num.max accum (Types.alignment types payloadId)
+                Some payloadId -> Num.max accum (Module.alignment types payloadId)
                 None -> accum
         |> Num.toStr
 
@@ -739,7 +739,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
     |> generateDestructorFunctions types escapedName tags
     |> generateConstructorFunctions types escapedName tags
     |> \b ->
-        type = Types.shape types id
+        type = Module.shape types id
         if cannotSupportCopy types type then
             # A custom drop impl is only needed when we can't derive copy.
             b
@@ -766,7 +766,7 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
     discriminantName = "discriminant_\(escapedName)"
 
     payloadFields =
-        when Types.shape types payload is
+        when Module.shape types payload is
             TagUnionPayload { fields } ->
                 when fields is
                     HasNoClosure xs -> List.map xs .id
@@ -847,7 +847,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         payloadFields =
             when optPayload is
                 Some payload ->
-                    when Types.shape types payload is
+                    when Module.shape types payload is
                         TagUnionPayload { fields } ->
                             when fields is
                                 HasNoClosure xs -> List.map xs .id
@@ -901,7 +901,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         fixManuallyDrop =
             when optPayload is
                 Some payload ->
-                    shape = Types.shape types payload
+                    shape = Module.shape types payload
 
                     if canDeriveCopy types shape then
                         "payload"
@@ -1001,7 +1001,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> Str.joinWith "\n"
 
     partialEqImpl =
-        if canSupportPartialEqOrd types (Types.shape types id) then
+        if canSupportPartialEqOrd types (Module.shape types id) then
             """
             impl PartialEq for \(escapedName) {
                 fn eq(&self, other: &Self) -> bool {
@@ -1031,7 +1031,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
             payloadFields =
                 when optPayload is
                     Some payload ->
-                        when Types.shape types payload is
+                        when Module.shape types payload is
                             TagUnionPayload { fields } ->
                                 when fields is
                                     HasNoClosure xs -> List.map xs .id
@@ -1084,7 +1084,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> Str.joinWith "\n"
 
     hashImpl =
-        if canSupportPartialEqOrd types (Types.shape types id) then
+        if canSupportPartialEqOrd types (Module.shape types id) then
             """
             impl core::hash::Hash for \(escapedName) {
                 fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
@@ -1124,7 +1124,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> Str.joinWith "\n"
 
     partialOrdImpl =
-        if canSupportPartialEqOrd types (Types.shape types id) then
+        if canSupportPartialEqOrd types (Module.shape types id) then
             """
             impl PartialOrd for \(escapedName) {
                 fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -1153,8 +1153,8 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         else
             ""
 
-    sizeOfSelf = Num.toStr (Types.size types id)
-    alignOfSelf = Num.toStr (Types.alignment types id)
+    sizeOfSelf = Num.toStr (Module.size types id)
+    alignOfSelf = Num.toStr (Module.alignment types id)
 
     buf
     |> generateDiscriminant types discriminantName tagNames discriminantSize
@@ -1259,7 +1259,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         buf
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
-                Some id if cannotSupportCopy types (Types.shape types id) ->
+                Some id if cannotSupportCopy types (Module.shape types id) ->
                     "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) },"
 
                 _ ->
@@ -1287,7 +1287,7 @@ writeTagImpls = \buf, tags, discriminantName, indents, f ->
     |> writeIndents indents
     |> Str.concat "}\n"
 
-generateTagUnionSizer : Str, Types, TypeId, _ -> Str
+generateTagUnionSizer : Str, Module, TypeId, _ -> Str
 generateTagUnionSizer = \buf, types, id, tags ->
     if List.len tags > 1 then
         # When there's a discriminant (so, multiple tags) and there is
@@ -1323,7 +1323,7 @@ generateDiscriminant = \buf, types, name, tags, size ->
     else
         buf
 
-generateUnionField : Types -> (Str, { name : Str, payload : [None, Some TypeId] } -> Str)
+generateUnionField : Module -> (Str, { name : Str, payload : [None, Some TypeId] } -> Str)
 generateUnionField = \types ->
     \accum, { name: fieldName, payload } ->
         escapedFieldName = escapeKW fieldName
@@ -1332,7 +1332,7 @@ generateUnionField = \types ->
             Some id ->
                 when typeName types id is
                     Ok typeStr ->
-                        type = Types.shape types id
+                        type = Module.shape types id
                         fullTypeStr =
                             if cannotSupportCopy types type then
                                 # types with pointers need ManuallyDrop
@@ -1361,10 +1361,10 @@ commaSeparated = \buf, items, step ->
             Err ZeroSized -> accum
     |> .buf
 
-generateNullableUnwrapped : Str, Types, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
+generateNullableUnwrapped : Str, Module, TypeId, Str, Str, Str, TypeId, [FirstTagIsNull, SecondTagIsNull] -> Str
 generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull ->
     payloadFields =
-        when Types.shape types nonNullPayload is
+        when Module.shape types nonNullPayload is
             TagUnionPayload { fields } ->
                 when fields is
                     HasNoClosure xs -> List.map xs .id
@@ -1410,8 +1410,8 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
                 }
                 """
 
-    sizeOfSelf = Num.toStr (Types.size types tagUnionid)
-    alignOfSelf = Num.toStr (Types.alignment types tagUnionid)
+    sizeOfSelf = Num.toStr (Module.size types tagUnionid)
+    alignOfSelf = Num.toStr (Module.alignment types tagUnionid)
 
     """
     \(buf)
@@ -1566,18 +1566,16 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
 
         """
     |> \b ->
-        fieldTypes =
+        fieldModule =
             payloadFields
-            |> List.map \{ id } ->
+            |> List.keepOks \{ id } ->
                 typeName types id
         args =
-            fieldTypes
+            fieldModule
             |> List.mapWithIndex \fieldTypeName, index ->
-                indexStr = Num.toStr index
-
-                "f\(indexStr): \(fieldTypeName)"
+                "f\(Num.toStr index): \(fieldTypeName)"
         fields =
-            payloadFields
+            fieldModule
             |> List.mapWithIndex \_, index ->
                 indexStr = Num.toStr index
 
@@ -1592,10 +1590,10 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             b,
             args,
             fields,
-            fieldTypes,
+            fieldModule,
             fieldAccesses,
         }
-    |> \{ b, args, fields, fieldTypes, fieldAccesses } ->
+    |> \{ b, args, fields, fieldModule, fieldAccesses } ->
         argsStr = Str.joinWith args ", "
         fieldsStr = Str.joinWith fields "\n\(indent)\(indent)\(indent)"
 
@@ -1612,11 +1610,11 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
 
 
                 """,
-            fieldTypes,
+            fieldModule,
             fieldAccesses,
         }
-    |> \{ b, fieldTypes, fieldAccesses } ->
-        retType = asRustTuple fieldTypes
+    |> \{ b, fieldModule, fieldAccesses } ->
+        retType = asRustTuple fieldModule
         retExpr = asRustTuple fieldAccesses
 
         {
@@ -1631,12 +1629,12 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
 
 
                 """,
-            fieldTypes,
+            fieldModule,
             fieldAccesses,
         }
-    |> \{ b, fieldTypes, fieldAccesses } ->
+    |> \{ b, fieldModule, fieldAccesses } ->
         retType =
-            fieldTypes
+            fieldModule
             |> List.map \ft -> "&\(ft)"
             |> asRustTuple
         retExpr =
@@ -1744,27 +1742,27 @@ generateDeriveStr = \buf, types, type, includeDebug ->
     |> condWrite (canSupportEqHashOrd types type) "Eq, Ord, Hash, "
     |> Str.concat ")]\n"
 
-canSupportEqHashOrd : Types, Shape -> Bool
+canSupportEqHashOrd : Module, Type -> Bool
 canSupportEqHashOrd = \types, type ->
     !(hasFloat types type) && (canSupportPartialEqOrd types type)
 
-canSupportPartialEqOrd : Types, Shape -> Bool
+canSupportPartialEqOrd : Module, Type -> Bool
 canSupportPartialEqOrd = \types, type ->
     when type is
         Function rocFn ->
-            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            runtimeRepresentation = Module.shape types rocFn.lambdaSet
             canSupportPartialEqOrd types runtimeRepresentation
 
         Unsized -> Bool.false
         Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) -> Bool.true
         RocStr -> Bool.true
         RocList inner | RocSet inner | RocBox inner ->
-            innerType = Types.shape types inner
+            innerType = Module.shape types inner
             canSupportPartialEqOrd types innerType
 
         RocDict k v ->
-            kType = Types.shape types k
-            vType = Types.shape types v
+            kType = Module.shape types k
+            vType = Module.shape types v
 
             canSupportPartialEqOrd types kType && canSupportPartialEqOrd types vType
 
@@ -1772,23 +1770,23 @@ canSupportPartialEqOrd = \types, type ->
             List.all tags \{ payload } ->
                 when payload is
                     None -> Bool.true
-                    Some id -> canSupportPartialEqOrd types (Types.shape types id)
+                    Some id -> canSupportPartialEqOrd types (Module.shape types id)
 
         TagUnion (NullableWrapped { tags }) ->
             List.all tags \{ payload } ->
                 when payload is
                     None -> Bool.true
-                    Some id -> canSupportPartialEqOrd types (Types.shape types id)
+                    Some id -> canSupportPartialEqOrd types (Module.shape types id)
 
         TagUnion (NonNullableUnwrapped { payload }) ->
-            canSupportPartialEqOrd types (Types.shape types payload)
+            canSupportPartialEqOrd types (Module.shape types payload)
 
         TagUnion (NullableUnwrapped { nonNullPayload }) ->
-            canSupportPartialEqOrd types (Types.shape types nonNullPayload)
+            canSupportPartialEqOrd types (Module.shape types nonNullPayload)
 
         RecursivePointer _ -> Bool.true
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.all fields \{ id } -> canSupportPartialEqOrd types (Types.shape types id)
+            List.all fields \{ id } -> canSupportPartialEqOrd types (Module.shape types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure _ }) ->
             Bool.false
@@ -1796,30 +1794,30 @@ canSupportPartialEqOrd = \types, type ->
         TagUnion (NonRecursive { tags }) ->
             List.all tags \{ payload } ->
                 when payload is
-                    Some id -> canSupportPartialEqOrd types (Types.shape types id)
+                    Some id -> canSupportPartialEqOrd types (Module.shape types id)
                     None -> Bool.true
 
         RocResult okId errId ->
-            okShape = Types.shape types okId
-            errShape = Types.shape types errId
+            okType = Module.shape types okId
+            errType = Module.shape types errId
 
-            canSupportPartialEqOrd types okShape && canSupportPartialEqOrd types errShape
+            canSupportPartialEqOrd types okType && canSupportPartialEqOrd types errType
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.all fields \{ id } -> canSupportPartialEqOrd types (Types.shape types id)
+            List.all fields \{ id } -> canSupportPartialEqOrd types (Module.shape types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.all fields \{ id } -> canSupportPartialEqOrd types (Types.shape types id)
+            List.all fields \{ id } -> canSupportPartialEqOrd types (Module.shape types id)
 
-cannotSupportCopy : Types, Shape -> Bool
+cannotSupportCopy : Module, Type -> Bool
 cannotSupportCopy = \types, type ->
     !(canDeriveCopy types type)
 
-canDeriveCopy : Types, Shape -> Bool
+canDeriveCopy : Module, Type -> Bool
 canDeriveCopy = \types, type ->
     when type is
         Function rocFn ->
-            runtimeRepresentation = Types.shape types rocFn.lambdaSet
+            runtimeRepresentation = Module.shape types rocFn.lambdaSet
             canDeriveCopy types runtimeRepresentation
 
         # unsized values are heap-allocated
@@ -1827,42 +1825,42 @@ canDeriveCopy = \types, type ->
         Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) -> Bool.true
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.false
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Module.shape types id)
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Module.shape types id)
 
         TagUnion (NonRecursive { tags }) ->
             List.all tags \{ payload } ->
                 when payload is
-                    Some id -> canDeriveCopy types (Types.shape types id)
+                    Some id -> canDeriveCopy types (Module.shape types id)
                     None -> Bool.true
 
         RocResult okId errId ->
-            canDeriveCopy types (Types.shape types okId)
-            && canDeriveCopy types (Types.shape types errId)
+            canDeriveCopy types (Module.shape types okId)
+            && canDeriveCopy types (Module.shape types errId)
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Module.shape types id)
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.all fields \{ id } -> canDeriveCopy types (Types.shape types id)
+            List.all fields \{ id } -> canDeriveCopy types (Module.shape types id)
 
 cannotSupportDefault = \types, type ->
     when type is
         Unit | Unsized | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
         RocStr | Bool | Num _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            cannotSupportDefault types (Types.shape types id)
+            cannotSupportDefault types (Module.shape types id)
 
         TagUnionPayload { fields: HasClosure _ } -> Bool.true
         RocDict keyId valId ->
-            cannotSupportCopy types (Types.shape types keyId)
-            || cannotSupportCopy types (Types.shape types valId)
+            cannotSupportCopy types (Module.shape types keyId)
+            || cannotSupportCopy types (Module.shape types valId)
 
         Struct { fields: HasClosure _ } -> Bool.true
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> cannotSupportDefault types (Types.shape types id)
+            List.any fields \{ id } -> cannotSupportDefault types (Module.shape types id)
 
 hasFloat = \types, type ->
     hasFloatHelp types type (Set.empty {})
@@ -1879,40 +1877,40 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
         Unit | Unsized | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            hasFloatHelp types (Types.shape types id) doNotRecurse
+            hasFloatHelp types (Module.shape types id) doNotRecurse
 
         RocDict id0 id1 | RocResult id0 id1 ->
-            hasFloatHelp types (Types.shape types id0) doNotRecurse
-            || hasFloatHelp types (Types.shape types id1) doNotRecurse
+            hasFloatHelp types (Module.shape types id0) doNotRecurse
+            || hasFloatHelp types (Module.shape types id1) doNotRecurse
 
         Struct { fields: HasNoClosure fields } | TagUnionPayload { fields: HasNoClosure fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Module.shape types id) doNotRecurse
 
         Struct { fields: HasClosure fields } | TagUnionPayload { fields: HasClosure fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Module.shape types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payload: HasNoClosure fields }) ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Module.shape types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payload: HasClosure fields }) ->
-            List.any fields \{ id } -> hasFloatHelp types (Types.shape types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (Module.shape types id) doNotRecurse
 
         TagUnion (Recursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
+                    Some id -> hasFloatHelp types (Module.shape types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
+                    Some id -> hasFloatHelp types (Module.shape types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NullableWrapped { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (Types.shape types id) doNotRecurse
+                    Some id -> hasFloatHelp types (Module.shape types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonNullableUnwrapped { payload }) ->
@@ -1921,7 +1919,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
+                hasFloatHelp types (Module.shape types payload) nextDoNotRecurse
 
         TagUnion (NullableUnwrapped { nonNullPayload }) ->
             if Set.contains doNotRecurse nonNullPayload then
@@ -1929,7 +1927,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse nonNullPayload
 
-                hasFloatHelp types (Types.shape types nonNullPayload) nextDoNotRecurse
+                hasFloatHelp types (Module.shape types nonNullPayload) nextDoNotRecurse
 
         RecursivePointer payload ->
             if Set.contains doNotRecurse payload then
@@ -1937,11 +1935,11 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (Types.shape types payload) nextDoNotRecurse
+                hasFloatHelp types (Module.shape types payload) nextDoNotRecurse
 
-typeName : Types, TypeId -> Result Str [ZeroSized]
+typeName : Module, TypeId -> Result Str [ZeroSized]
 typeName = \types, id ->
-    when Types.shape types id is
+    when Module.shape types id is
         Unit -> Err ZeroSized
         Unsized -> Ok "roc_std::RocList<u8>"
         EmptyTagUnion -> Ok "std::convert::Infallible"
@@ -1998,9 +1996,9 @@ typeName = \types, id ->
         Function { functionName } -> Ok (escapeKW functionName)
 
 getSizeRoundedToAlignment = \types, id ->
-    alignment = Types.alignment types id
+    alignment = Module.alignment types id
 
-    Types.size types id
+    Module.size types id
     |> roundUpToAlignment alignment
 
 roundUpToAlignment = \width, alignment ->
@@ -2121,16 +2119,16 @@ escapeKW = \input ->
     else
         input
 
-isUnit : Shape -> Bool
+isUnit : Type -> Bool
 isUnit = \shape ->
     when shape is
         Unit -> Bool.true
         _ -> Bool.false
 
-toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
+toArgStr : List TypeId, Module, (TypeId, Type, Nat -> Str) -> Str
 toArgStr = \args, types, fmt ->
     List.walkWithIndex args "" \state, argId, index ->
-        shape = Types.shape types argId
+        shape = Module.shape types argId
 
         # Drop `()` args; they aren't FFI-safe, and nothing will get passed anyway.
         if isUnit shape then

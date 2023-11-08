@@ -3,6 +3,7 @@ members = [
   "crates/compiler/*",
   "crates/vendor/*",
   "crates/glue",
+  "crates/glue_for_glue",
   "crates/cli",
   "crates/cli_utils",
   "crates/highlight",

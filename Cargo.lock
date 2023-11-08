@@ -2602,6 +2602,7 @@ dependencies = [
  "roc_collections",
  "roc_error_macros",
  "roc_gen_llvm",
+ "roc_glue_for_glue",
  "roc_linker",
  "roc_load",
  "roc_module",
@@ -2616,6 +2617,13 @@ dependencies = [
  "strum_macros",
  "target-lexicon",
  "tempfile",
+]
+
+[[package]]
+name = "roc_glue_for_glue"
+version = "1.0.0"
+dependencies = [
+ "roc_std",
 ]
 
 [[package]]
