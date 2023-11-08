@@ -5,6 +5,7 @@ use roc_std::{RocBox, RocStr};
 use std::env;
 use std::ffi::CStr;
 use std::fs;
+use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
@@ -14,9 +15,26 @@ use syntect::html::{ClassStyle, ClassedHTMLGenerator};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
-extern "C" {
-    #[link_name = "roc__transformFileContentForHost_1_exposed"]
-    fn roc_transformFileContentForHost(relPath: RocBox<RocStr>, content: RocBox<RocStr>) -> RocStr;
+#[repr(C)]
+struct Arguments {
+    rel_path: RocBox<RocStr>,
+    content: RocBox<RocStr>,
+}
+
+fn roc_transform_file_content_for_host(
+    rel_path: RocBox<RocStr>,
+    content: RocBox<RocStr>,
+) -> RocStr {
+    let mut output = RocStr::default();
+    let arguments = ManuallyDrop::new(Arguments { rel_path, content });
+
+    extern "C" {
+        fn roc__transformFileContentForHost_1_exposed(output: &mut RocStr, input: &Arguments);
+    }
+
+    unsafe { roc__transformFileContentForHost_1_exposed(&mut output, &arguments) };
+
+    output
 }
 
 #[no_mangle]
@@ -299,9 +317,10 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
     let roc_content_html = RocStr::from(content_html.as_str());
-    let roc_output_str = unsafe {
-        roc_transformFileContentForHost(RocBox::new(roc_relpath), RocBox::new(roc_content_html))
-    };
+    let roc_output_str = roc_transform_file_content_for_host(
+        RocBox::new(roc_relpath),
+        RocBox::new(roc_content_html),
+    );
 
     let output_file = output_dir.join(&output_relpath);
     let rust_output_str: &str = &roc_output_str;

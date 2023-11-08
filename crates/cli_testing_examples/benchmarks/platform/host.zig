@@ -10,7 +10,7 @@ const maxInt = std.math.maxInt;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
+extern fn roc__mainForHost_1_exposed([*]u8, *const extern struct {}) void;
 extern fn roc__mainForHost_1_exposed_size() i64;
 extern fn roc__mainForHost_0_caller(*const u8, [*]u8, [*]u8) void;
 extern fn roc__mainForHost_0_size() i64;
@@ -115,7 +115,7 @@ pub fn main() !u8 {
 
     var timer = std.time.Timer.start() catch unreachable;
 
-    roc__mainForHost_1_exposed_generic(output);
+    roc__mainForHost_1_exposed(output, &.{});
 
     const closure_data_pointer = @as([*]u8, @ptrCast(output));
 

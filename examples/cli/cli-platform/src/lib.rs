@@ -19,8 +19,8 @@ use file_glue::ReadErr;
 use file_glue::WriteErr;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(output: *mut u8);
+    #[link_name = "roc__mainForHost_1_exposed"]
+    fn roc_main(output: *mut u8, input: &());
 
     #[link_name = "roc__mainForHost_1_exposed_size"]
     fn roc_main_size() -> i64;
@@ -213,7 +213,7 @@ pub extern "C" fn rust_main() {
         // TODO allocate on the stack if it's under a certain size
         let buffer = std::alloc::alloc(layout);
 
-        roc_main(buffer);
+        roc_main(buffer, &());
 
         call_the_closure(buffer);
 

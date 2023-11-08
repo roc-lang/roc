@@ -9,7 +9,7 @@ const expect = testing.expect;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
+extern fn roc__mainForHost_1_exposed(*RocStr, *const extern struct {}) void;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -89,7 +89,7 @@ pub export fn main() i32 {
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
-    roc__mainForHost_1_exposed_generic(&callresult);
+    roc__mainForHost_1_exposed(&callresult, &.{});
 
     const nanos = timer.read();
     const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);

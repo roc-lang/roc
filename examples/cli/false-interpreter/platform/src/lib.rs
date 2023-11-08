@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::raw::c_char;
 
 extern "C" {
-    #[link_name = "roc__mainForHost_1_exposed_generic"]
+    #[link_name = "roc__mainForHost_1_exposed"]
     fn roc_main(output: *mut u8, args: &RocStr);
 
     #[link_name = "roc__mainForHost_1_exposed_size"]
