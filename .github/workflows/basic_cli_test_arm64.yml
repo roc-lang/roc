@@ -15,8 +15,40 @@ jobs:
         with:
           repository: roc-lang/basic-cli
           ref: main
+
+      - name: get latest roc nightly
+        run: |
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
+  
+      - name: rename nightly tar
+        run: mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
+
+      - name: decompress the tar
+        run: tar -xzf roc_nightly.tar.gz
+
+      - run: rm roc_nightly.tar.gz
+
+      - name: simplify nightly folder name
+        run: mv roc_nightly* roc_nightly
+
+      - run: ./roc_nightly/roc version
+
+      - run: expect -v
+
+      # Run all tests 
+      - run: EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
+
+      ######
+      # Now test the latest basic-cli release, not the main branch
+      ######
+
+      - name: Remove roc_nightly folder to keep things simple (we'll download it again later)
+        run: rm -rf roc_nightly
       
-      - name: Run all tests with latest roc nightly + latest basic-cli release
+      - name: Get the examples of the latest basic-cli release
+        run: ./ci/get_latest_release_examples.sh
+
+      - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
           sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
-          ./ci/test_latest_release.sh
+          EXAMPLES_DIR=./latest-release-examples/ ./ci/test_latest_release.sh
