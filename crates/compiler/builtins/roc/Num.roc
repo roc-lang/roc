@@ -27,8 +27,8 @@ interface Num
         Unsigned8,
         Nat,
         Dec,
-        F32,
         F64,
+        F32,
         Natural,
         Decimal,
         Binary32,
@@ -461,7 +461,21 @@ Binary32 := []
 
 FloatingPoint range := range
 
+## A 64-bit [IEEE 754 binary floating-point number](https://en.wikipedia.org/wiki/IEEE_754).
+##
+## [F64] represents decimal numbers less precisely than [Dec] does, but operations on it
+## can be faster because CPUs have hardware-level support for [F64] but not [Dec]. There
+## are other tradeoffs between the two, such as:
+## * [Dec] has a fixed number of digits it can represent before the decimal point, and a fixed number it can represent after the decimal point. In contrast, [F64]'s decimal point can "float"—which conceptually means if you don't need many digits before the decimal point, you can get more digits of precision afterwards (and vice versa).
+## * [Dec] represents its number internally in [base-10](https://en.wikipedia.org/wiki/Decimal), whereas [F64] uses [base-2](https://en.wikipedia.org/wiki/Binary_number). This can lead to imprecise answers like `0.1 + 0.2` returning `0.3` for [Dec] and `0.30000000000000004` for [F64]. This is not a bug; rather, it's a consequence of [F64]'s base-2 representation.
+## * [Dec] always gives a precise answer (or an error), whereas [F64] can lose precision. For example, increasing a very large [F64] number (using addition, perhaps) can result in the whole number portion being incorrect. `1234567890123456789 + 100` correctly results in a number ending in `889` for `Dec`, but results in a number ending `800` in [F64] due to precision loss.
 F64 : Num (FloatingPoint Binary64)
+
+## A 32-bit [IEEE 754 binary floating-point number](https://en.wikipedia.org/wiki/IEEE_754).
+##
+## This works just like [F64] (see its docs for a comparison with [Dec]) except it's smaller.
+## That in turn means it takes up less memory, but can store smaller numbers (and becomes imprecise
+## more easily than [F64] does).
 F32 : Num (FloatingPoint Binary32)
 
 ## A [decimal](https://en.wikipedia.org/wiki/Decimal) number.
