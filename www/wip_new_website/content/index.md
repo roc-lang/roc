@@ -23,11 +23,6 @@
   -->
   <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
       <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
-  <div class="get-started-buttons" role="presentation">
-      <a href="/tutorial">tutorial</a>
-      <a href="#examples">examples</a>
-      <a href="/tutorial">install</a>
-  </div>
 </div>
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
