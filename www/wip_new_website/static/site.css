@@ -555,7 +555,7 @@ li {
         font-size: 16px;
     }
 
-    .home-goals-container {
+    .home-goals-container, .home-examples-container {
         /* It's unclear why this !important is necessary, since its specificity
          should theoretically be higher than what it's overriding. In practice,
          at least in Chrome, removing the !important breaks this. */
@@ -902,6 +902,21 @@ code .dim {
 
 .home-goals-content:hover .home-goals-learn-more {
     color: var(--primary-2);
+}
+
+.home-examples-container {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 48px;
+    width: 100%;
+}
+
+.home-examples-column {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    width: 100%;
 }
 
 /* Wider screens */
