@@ -55,6 +55,7 @@ pub fn apply_trmc<'a, 'i>(
             let trmc_candidate_symbols = trmc_candidates(env.interner, proc);
 
             if !trmc_candidate_symbols.is_empty() {
+                println!("\n\n{:#?}\n\n", trmc_candidate_symbols);
                 let new_proc =
                     crate::tail_recursion::TrmcEnv::init(env, proc, trmc_candidate_symbols);
                 *proc = new_proc;
@@ -504,13 +505,25 @@ fn trmc_candidates_help(
     stmt: &'_ Stmt<'_>,
     candidates: &mut TrmcCandidateSet,
 ) {
-    // if this stmt is the literal tail tag application and return, then this is a TRMC opportunity
-    if let Some(cons_info) = TrmcEnv::is_terminal_constructor(stmt) {
-        // the tag application must directly use the result of the recursive call
-        let recursive_call = candidates
-            .active()
-            .find(|call| cons_info.arguments.contains(call));
 
+    let struct_with_rec_call = struct_has_call(stmt, candidates);
+
+    let terminal_tag_candidate = match struct_with_rec_call {
+        Some((_, next, _)) => next,
+        None => stmt,
+    };
+
+    // if this stmt is the literal tail tag application and return, then this is a TRMC opportunity
+    if let Some(cons_info) = TrmcEnv::is_terminal_constructor(terminal_tag_candidate) {
+
+        let recursive_call = match struct_with_rec_call {
+            // the tag application must directly use the result of the recursive call
+            None => candidates
+                .active()
+                .find(|call| cons_info.arguments.contains(call)),
+            // or directly use a struct that has a property with the result of the recursive call
+            Some((struct_symbol, _ , call)) => cons_info.arguments.contains(struct_symbol).then_some(call),
+        };
         // if we find a usage, this is a confirmed TRMC call
         if let Some(recursive_call) = recursive_call {
             candidates.confirm(recursive_call);
@@ -520,7 +533,15 @@ fn trmc_candidates_help(
     }
 
     // if the stmt uses the active recursive call, that invalidates the recursive call for this branch
-    candidates.retain(|recursive_call| !stmt_contains_symbol_nonrec(stmt, *recursive_call));
+    let dbg_changed = candidates.active().count();
+    candidates.retain(|recursive_call| {
+        let call_not_used = !stmt_contains_symbol_nonrec(stmt, *recursive_call);
+        call_not_used || call_only_used_in_record_cons(stmt, *recursive_call)
+    });
+    let dbg_changed_after = candidates.active().count();
+    if dbg_changed != dbg_changed_after {
+        println!("{:#?}", stmt)
+    }
 
     match stmt {
         Stmt::Let(symbol, expr, _, next) => {
@@ -556,7 +577,28 @@ fn trmc_candidates_help(
             trmc_candidates_help(function_name, body, candidates);
             trmc_candidates_help(function_name, remainder, candidates);
         }
-        Stmt::Ret(_) | Stmt::Jump(_, _) | Stmt::Crash(_, _) => { /* terminal */ }
+        Stmt::Jump(_, _) | Stmt::Crash(_, _) => { /* terminal */ }
+        Stmt::Ret(_) => {
+            // TODO: remove those candidates that were left in because they were used in a
+            // struct, but that struct, –with a tag application– is not the returned value. Maybe this needs to go into the first if let in this funcion
+        }
+    }
+}
+
+fn struct_has_call<'a>(
+    stmt: &'a Stmt<'a>,
+    candidates: &mut TrmcCandidateSet,
+) -> Option<(&'a Symbol, &'a Stmt<'a>,Symbol)> {
+    match stmt {
+        Stmt::Let(symbol, Expr::Struct(values), _, next) => {
+            for value in *values {
+                if let Some(call) = candidates.active().find(|call| call == value) {
+                    return Some((symbol, next, call));
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -1128,5 +1170,28 @@ fn stmt_contains_symbol_nonrec(stmt: &Stmt, needle: Symbol) -> bool {
         Stmt::Join { .. } => false,
         Stmt::Jump(_, arguments) => arguments.contains(&needle),
         Stmt::Crash(symbol, _) => needle == *symbol,
+    }
+}
+
+fn call_only_used_in_record_cons(stmt: &Stmt<'_>, rec_call: Symbol) -> bool {
+    use crate::ir::ModifyRc::*;
+
+    match stmt {
+        Stmt::Let(_, expr, _, _) => expr_contains_symbol(expr, rec_call),
+        Stmt::Switch { cond_symbol, .. } => rec_call == *cond_symbol,
+        Stmt::Ret(symbol) => rec_call == *symbol,
+        Stmt::Refcounting(modify, _) => {
+            matches!( modify, Inc(symbol, _) | Dec(symbol) | DecRef(symbol)  if rec_call == *symbol  )
+        }
+        Stmt::Expect {
+            condition, lookups, ..
+        }
+        | Stmt::ExpectFx {
+            condition, lookups, ..
+        } => rec_call == *condition || lookups.contains(&rec_call),
+        Stmt::Dbg { symbol, .. } => rec_call == *symbol,
+        Stmt::Join { .. } => false,
+        Stmt::Jump(_, arguments) => arguments.contains(&rec_call),
+        Stmt::Crash(symbol, _) => rec_call == *symbol,
     }
 }

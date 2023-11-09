@@ -238,7 +238,23 @@ fn verify_procedures<'a>(
     }
 }
 #[mono_test]
-fn norbi_no_trmc() {
+fn norbi_try() {
+    indoc!(
+        r#"
+        ConsList a : [ Nil, Cons { first: a, rest: ConsList a } ]
+
+        map : ConsList a, (a -> b) -> ConsList b
+        map = \list, f ->
+            when list is
+                Nil -> Nil
+                Cons { first, rest } -> Cons { first: f first, rest: map rest f }
+
+        map (Cons { first: 1, rest: Nil }) Num.neg
+        "#
+    )
+}
+#[mono_test]
+fn trmc_map_conslist() {
     indoc!(
         r#"
         ConsList a : [Nil, Cons a (ConsList a)]
@@ -246,7 +262,9 @@ fn norbi_no_trmc() {
         map : ConsList a, (a -> b) -> ConsList b
         map = \list, f ->
             when list is
-                Cons x xx -> Cons (f x) (map xx f)
+                Cons x xx -> 
+                    rest = map xx f
+                    Cons (f x) rest
                 Nil -> Nil
 
         map (Cons 1 (Cons 2 Nil)) Num.neg
