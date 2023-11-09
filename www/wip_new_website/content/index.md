@@ -23,6 +23,11 @@
   -->
   <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
       <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+  <div class="get-started-buttons" role="presentation">
+      <a href="/tutorial">tutorial</a>
+      <a href="#examples">examples</a>
+      <a href="/tutorial">install</a>
+  </div>
 </div>
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
@@ -103,6 +108,19 @@ Here are some examples of how it can be used today.
 There are a variety of [other examples](/wip/examples) you can check out, if you’d like to get a feel for some different ways people write Roc code.
 </section>
 
+
+## [Code Sample with Explanations](#code-sample) {#code-sample}
+
+Here’s a code sample that shows a few different aspects of Roc:
+* File I/O and HTTP requests
+* Pattern matching for error handling
+* JSON deserialization via type inference
+* Common syntax sugar: string interpolation, pipelines, and backpassing
+
+The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
+
+<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->
+
 ## Sponsors
 
 We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
@@ -151,42 +169,3 @@ We are currently trying to raise $4,000 USD/month in donations to fund one longt
 - [Liberapay](https://liberapay.com/roc_lang)
 
 All donations go through the [Roc Programming Language Foundation](https://foundation.roc-lang.org/), a registered [US 503(c)(3) nonprofit organization](https://en.wikipedia.org/wiki/501(c)(3)_organization), which means these donations are tax-exempt in the US.
-
-
-## [Larger Example](#larger-example) {#larger-example}
-
-Here’s a larger example that shows a few different aspects of Roc:
-* File I/O and HTTP requests
-* Pattern matching for error handling
-* JSON deserialization via type inference
-* Common syntax sugar: string interpolation, pipelines, and backpassing
-
-The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
-
-<!-- ## More Examples
-
-We have developed a number of smaller code [examples](https://github.com/roc-lang/examples) which demonstrate how to use Roc. These cover a range of topics from basic syntax to more advanced features such as random number generation and using the popular `Task` feature.
-
-## Use cases
-
--   Tools & Scripts
--   Web (coming soon)
--   Networking & Servers (coming soon)
--   Graphical (coming soon)
--   Scientific (coming soon)
--   Embedded (coming soon)
-
-## Platforms & Applications
-
-TODO provide explanation of platform/application abstraction versus libraries as common in most other languages as this is one of the most unique features of Roc
-
-## Talks and Publications
-
-If you'd like to learn more about Roc check out one of these videos:
-
-*   [Roc at Handmade Seattle](https://media.handmade-seattle.com/roc-lang) - November 12, 2021 (very low-level explanation of how Roc’s compiler makes programs run fast)
-*   [Outperforming Imperative with Pure Functional Languages](https://youtu.be/vzfy4EKwG_Y) - October 1, 2021 (about Roc’s runtime performance and optimizer)
-*   [A taste of Roc](https://youtu.be/6qzWm_eoUXM) - September 23, 2021 (syntax, application examples)
-*   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
-*   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
-*   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language) -->

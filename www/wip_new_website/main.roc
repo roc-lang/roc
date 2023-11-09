@@ -50,7 +50,9 @@ view : Str, Str -> Html.Node
 view = \page, htmlContent ->
     mainBody =
         if page == "index.html" then
-            [text htmlContent, InteractiveExample.view]
+            when Str.splitFirst htmlContent "<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->" is
+                Ok { before, after } -> [text before, InteractiveExample.view, text after]
+                Err NotFound -> crash "Could not find the comment where the larger example on the homepage should have been inserted. Was it removed or edited?"
         else
             [text htmlContent]
 

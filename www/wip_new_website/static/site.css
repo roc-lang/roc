@@ -467,9 +467,28 @@ li {
 #first-code-sample {
     width: var(--homepage-intro-box-width);
     margin-top: 60px;
-    margin-bottom: 70px;
     line-height: 1.85em;
     color: #fcf9fd;
+}
+
+.get-started-buttons {
+    margin-top: 12px;
+    width: var(--homepage-intro-box-width);
+    margin-bottom: 70px;
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+}
+
+.get-started-buttons a {
+    color: var(--primary-1);
+    display: inline-block;
+    font-size: 1.5rem;
+    text-decoration: none;
+}
+
+.get-started-buttons a:hover {
+    text-decoration: underline;
 }
 
 #first-code-sample .kw,
