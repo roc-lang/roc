@@ -505,31 +505,27 @@ fn trmc_candidates_help(
     stmt: &'_ Stmt<'_>,
     candidates: &mut TrmcCandidateSet,
 ) {
-
-    let struct_with_rec_call = struct_has_call(stmt, candidates);
-
-    let terminal_tag_candidate = match struct_with_rec_call {
-        Some((_, next, _)) => next,
-        None => stmt,
+    // a TRMC opportunity is a tail tag appliaction and return on a:
+    // 1) recursive call's return value, or
+    // 2) struct that contains a recursive call's return value
+    let recursive_call = match is_struct_with_value_of_rec_call(stmt, candidates) {
+        None => TrmcEnv::is_terminal_constructor(stmt)
+            // case 1), the tail tag application must directly use the result of the recursive call
+            .and_then(|cons_info| {
+                candidates
+                    .active()
+                    .find(|call| cons_info.arguments.contains(call))
+            }),
+        Some((struct_symbol, next, call)) => TrmcEnv::is_terminal_constructor(next)
+            // case 2), the tail tag application must directly use the struct
+            .and_then(|cons_info| cons_info.arguments.contains(struct_symbol).then_some(call)),
     };
 
-    // if this stmt is the literal tail tag application and return, then this is a TRMC opportunity
-    if let Some(cons_info) = TrmcEnv::is_terminal_constructor(terminal_tag_candidate) {
+    // if we find a usage, this is a confirmed TRMC call
+    if let Some(recursive_call) = recursive_call {
+        candidates.confirm(recursive_call);
 
-        let recursive_call = match struct_with_rec_call {
-            // the tag application must directly use the result of the recursive call
-            None => candidates
-                .active()
-                .find(|call| cons_info.arguments.contains(call)),
-            // or directly use a struct that has a property with the result of the recursive call
-            Some((struct_symbol, _ , call)) => cons_info.arguments.contains(struct_symbol).then_some(call),
-        };
-        // if we find a usage, this is a confirmed TRMC call
-        if let Some(recursive_call) = recursive_call {
-            candidates.confirm(recursive_call);
-
-            return;
-        }
+        return;
     }
 
     // if the stmt uses the active recursive call, that invalidates the recursive call for this branch
@@ -577,27 +573,19 @@ fn trmc_candidates_help(
             trmc_candidates_help(function_name, body, candidates);
             trmc_candidates_help(function_name, remainder, candidates);
         }
-        Stmt::Jump(_, _) | Stmt::Crash(_, _) => { /* terminal */ }
-        Stmt::Ret(_) => {
-            // TODO: remove those candidates that were left in because they were used in a
-            // struct, but that struct, –with a tag application– is not the returned value. Maybe this needs to go into the first if let in this funcion
-        }
+        Stmt::Ret(_) | Stmt::Jump(_, _) | Stmt::Crash(_, _) => { /* terminal */ }
     }
 }
 
-fn struct_has_call<'a>(
+fn is_struct_with_value_of_rec_call<'a>(
     stmt: &'a Stmt<'a>,
     candidates: &mut TrmcCandidateSet,
-) -> Option<(&'a Symbol, &'a Stmt<'a>,Symbol)> {
+) -> Option<(&'a Symbol, &'a Stmt<'a>, Symbol)> {
     match stmt {
-        Stmt::Let(symbol, Expr::Struct(values), _, next) => {
-            for value in *values {
-                if let Some(call) = candidates.active().find(|call| call == value) {
-                    return Some((symbol, next, call));
-                }
-            }
-            None
-        }
+        Stmt::Let(symbol, Expr::Struct(values), _, next) => candidates
+            .active()
+            .find(|call| values.iter().any(|value| call == value))
+            .map(|call| (symbol, *next, call)),
         _ => None,
     }
 }
@@ -1173,6 +1161,7 @@ fn stmt_contains_symbol_nonrec(stmt: &Stmt, needle: Symbol) -> bool {
     }
 }
 
+// TODO: yet it's just a coppy - pasta of stmt_contains_symbol_nonrec
 fn call_only_used_in_record_cons(stmt: &Stmt<'_>, rec_call: Symbol) -> bool {
     use crate::ir::ModifyRc::*;
 
