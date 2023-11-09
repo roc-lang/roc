@@ -26,21 +26,21 @@
 </div>
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
-    <div class="home-goals-column">
+    <div role="presentation" class="home-goals-column">
         <a href="/wip/fast.html" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
             <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
-    <div class="home-goals-column">
+    <div role="presentation" class="home-goals-column">
         <a href="/wip/friendly.html" class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
             <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
-    <div class="home-goals-column">
+    <div role="presentation" class="home-goals-column">
         <a href="/wip/functional.html" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
@@ -75,39 +75,46 @@
 <script type="module" src="/wip/repl.js"></script>
 </section>
 
-## Examples
-
-**TODO MOVE ME TO A BETTER LOCATION**
-
-[EXAMPLES](/wip/examples)
-
-## [Use Cases](#use-cases) {#use-cases}
+## [Examples](#examples) {#examples}
 
 Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
 
-Currently these use cases are the best-supported:
+Here are some examples of how it can be used today.
 
-### Command-Line Interfaces (CLIs)
+<div role="presentation" class="home-examples-container">
+    <div role="presentation" class="home-examples-column">
+        <h3 class="home-examples-title">Command-Line Interfaces</h3>
+        <p>You can use Roc to create command-line interfaces (CLIs) and scripts. For example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc source code repository.</p>
+        <p>For a more flexible starting point, <a href="https://github.com/roc-lang/basic-cli">roc-lang/basic-cli</a> is a popular platform for building your own CLI tools. It's the most mature Roc platform today.</p>
+    </div>
+    <div role="presentation" class="home-examples-column">
+        <h3 class="home-examples-title">Web Servers</h3>
+        <p>You can also use Roc to build web servers. <a href="https://github.com/roc-lang/basic-webserver">roc-lang/basic-webserver</a> is an upcoming platform for doing this.</>
+    </div>
+    <div role="presentation" class="home-examples-column">
+        <h3 class="home-examples-title">Embedding</h3>
+        <p>You can call Roc functions from other languages. See <a href="https://github.com/roc-lang/roc/tree/main/examples">basic examples</a> of how to call Roc functions from Python, Node.js, Swift, WebAssembly, and JVM languages. Any function that supports C interop can call Roc functions, using similar techniques to the ones these examples use.</p>
+        <p>Most of those examples are minimal proofs of concept. <a href="https://github.com/vendrinc/roc-esbuild">roc-esbuild</a> is a work in progress that’s used at <a href="https://www.vendr.com/careers">Vendr</a> to call Roc functions from Node.js.</p>
+    </div>
+</div>
 
-You can use Roc to write command-line tools and scripts.
+### Other Examples
 
-Checkout [roc-lang/basic-cli](https://github.com/roc-lang/basic-cli) for a basic platform to build your own CLI tools.
+There are a variety of [other examples](/wip/examples) you can check out, if you’d like to get a feel for some different ways people write Roc code.
+</section>
 
-### Web Servers
 
-You can use Roc to write web servers.
+## [Code Sample with Explanations](#code-sample) {#code-sample}
 
-*(Coming soon)*
+Here’s a code sample that shows a few different aspects of Roc:
+* File I/O and HTTP requests
+* Pattern matching for error handling
+* JSON deserialization via type inference
+* Common syntax sugar: string interpolation, pipelines, and backpassing
 
-### Embedding
+The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
 
-You can call Roc from another language. See [basic examples](https://github.com/roc-lang/roc/tree/main/examples) to help you get started with Node.js, JVM, Ruby, Python, Swift, and WASM.
-
-It is easy to add support for other languages too.
-
-### Others
-
-You can create your own! Learn about **platforms and applications**...
+<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->
 
 ## Sponsors
 
@@ -157,42 +164,3 @@ We are currently trying to raise $4,000 USD/month in donations to fund one longt
 - [Liberapay](https://liberapay.com/roc_lang)
 
 All donations go through the [Roc Programming Language Foundation](https://foundation.roc-lang.org/), a registered [US 503(c)(3) nonprofit organization](https://en.wikipedia.org/wiki/501(c)(3)_organization), which means these donations are tax-exempt in the US.
-
-
-## [Larger Example](#larger-example) {#larger-example}
-
-Here’s a larger example that shows a few different aspects of Roc:
-* File I/O and HTTP requests
-* Pattern matching for error handling
-* JSON deserialization via type inference
-* Common syntax sugar: string interpolation, pipelines, and backpassing
-
-The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
-
-<!-- ## More Examples
-
-We have developed a number of smaller code [examples](https://github.com/roc-lang/examples) which demonstrate how to use Roc. These cover a range of topics from basic syntax to more advanced features such as random number generation and using the popular `Task` feature.
-
-## Use cases
-
--   Tools & Scripts
--   Web (coming soon)
--   Networking & Servers (coming soon)
--   Graphical (coming soon)
--   Scientific (coming soon)
--   Embedded (coming soon)
-
-## Platforms & Applications
-
-TODO provide explanation of platform/application abstraction versus libraries as common in most other languages as this is one of the most unique features of Roc
-
-## Talks and Publications
-
-If you'd like to learn more about Roc check out one of these videos:
-
-*   [Roc at Handmade Seattle](https://media.handmade-seattle.com/roc-lang) - November 12, 2021 (very low-level explanation of how Roc’s compiler makes programs run fast)
-*   [Outperforming Imperative with Pure Functional Languages](https://youtu.be/vzfy4EKwG_Y) - October 1, 2021 (about Roc’s runtime performance and optimizer)
-*   [A taste of Roc](https://youtu.be/6qzWm_eoUXM) - September 23, 2021 (syntax, application examples)
-*   [Roc at the Philly ETE conference](https://youtu.be/cpQwtwVKAfU?t=75) - May 6, 2021 (platforms and applications)
-*   [Roc on Zig Showtime](https://youtu.be/FMyyYdFSOHA) - April 24, 2021 (making a platform)
-*   [Roc at the Berlin FP Meetup](https://youtu.be/ZnYa99QoznE?t=4790) - September 1, 2020 (overall vision for the language) -->
