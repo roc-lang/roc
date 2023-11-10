@@ -72,7 +72,7 @@
         <textarea aria-label="Input Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code and press Enter."></textarea>
     </div>
 </div>
-<script type="module" src="/wip/repl.js"></script>
+<script type="module" src="/wip/site.js"></script>
 </section>
 
 ## [Examples](#examples) {#examples}
@@ -149,6 +149,7 @@ We'd also like to express our gratitude to each and every one of our fantastic [
     <li><a href="https://github.com/ayazhafiz">Ayaz Hafiz</a></li>
     <li><a href="https://github.com/cdolan">Christopher Dolan</a></li>
     <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>
+    <li><a href="https://github.com/jamesbirtles">James Birtles</a></li>
     <li><a href="https://github.com/Ocupe">Jonas Schell</a></li>
     <li><a href="https://github.com/rvcas">Lucas Rosa</a></li>
     <li><a href="https://github.com/nickgravgaard">Nick Gravgaard</a></li>
