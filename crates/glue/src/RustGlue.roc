@@ -163,7 +163,10 @@ generateEntryPoint = \buf, types, name, id ->
                         else
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
-                ret = typeName types rocFn.ret
+                ret =
+                    when Types.shape types rocFn.ret is
+                        Function _ -> "u8"
+                        _ -> typeName types rocFn.ret
                 "(_: *mut \(ret), \(arguments))"
 
             _ ->
@@ -190,14 +193,20 @@ generateEntryPoint = \buf, types, name, id ->
     pub fn \(name)\(publicSignature) {
         extern "C" {
             fn roc__\(name)_1_exposed_generic\(externSignature);
+            fn roc__\(name)_1_size() -> i64;
         }
 
-        let mut ret = core::mem::MaybeUninit::uninit();
-
         unsafe {
-            roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
+            let capacity = roc__\(name)_1_size() as usize;
 
-            ret.assume_init()
+            let mut ret = RocFunction_88 {
+                closure_data: Vec::with_capacity(capacity),
+            };
+            ret.closure_data.resize(capacity, 0);
+
+            roc__\(name)_1_exposed_generic(ret.closure_data.as_mut_ptr(), \(externArguments));
+
+            ret
         }
     }
     """
@@ -206,8 +215,6 @@ generateFunction : Str, Types, RocFn -> Str
 generateFunction = \buf, types, rocFn ->
     name = rocFn.functionName
     externName = rocFn.externName
-
-    lambdaSet = typeName types rocFn.lambdaSet
 
     publicArguments =
         toArgStr rocFn.args types \argId, _shape, index ->
@@ -253,21 +260,19 @@ generateFunction = \buf, types, rocFn ->
     #[repr(C)]
     #[derive(Debug, Clone)]
     pub struct \(name) {
-        closure_data: \(lambdaSet),
+        closure_data: Vec<u8>,
     }
 
     impl \(name) {
-        pub fn force_thunk(self\(publicComma)\(publicArguments)) -> \(ret) {
+        pub fn force_thunk(mut self\(publicComma)\(publicArguments)) -> \(ret) {
             extern "C" {
                 fn \(externName)(\(externDefArguments), closure_data: *mut u8, output: *mut \(ret));
             }
 
             let mut output = core::mem::MaybeUninit::uninit();
-            let closure_ptr =
-                (&mut core::mem::ManuallyDrop::new(self.closure_data)) as *mut _ as *mut u8;
 
             unsafe {
-                \(externName)(\(externCallArguments), closure_ptr, output.as_mut_ptr());
+                \(externName)(\(externCallArguments), self.closure_data.as_mut_ptr(), output.as_mut_ptr());
 
                 output.assume_init()
             }
