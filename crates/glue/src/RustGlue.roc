@@ -20,7 +20,7 @@ app "rust-glue"
 makeGlue : List Types -> Result (List File) Str
 makeGlue = \typesByArch ->
     modFileContent =
-        List.walk typesByArch "" \content, types ->
+        List.walk typesByArch fileHeader \content, types ->
             arch = (Types.target types).architecture
             archStr = archName arch
 
