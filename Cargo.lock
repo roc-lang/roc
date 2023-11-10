@@ -3053,7 +3053,6 @@ dependencies = [
  "roc_problem",
  "roc_region",
  "roc_reporting",
- "roc_solve",
  "roc_solve_problem",
  "roc_solve_schema",
  "roc_target",
