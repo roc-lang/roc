@@ -72,7 +72,7 @@
         <textarea aria-label="Input Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Type some Roc code and press Enter."></textarea>
     </div>
 </div>
-<script type="module" src="/wip/repl.js"></script>
+<script type="module" src="/wip/site.js"></script>
 </section>
 
 ## [Examples](#examples) {#examples}
