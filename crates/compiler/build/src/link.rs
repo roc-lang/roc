@@ -554,7 +554,7 @@ pub fn rebuild_host(
             let rust_flags = if cfg!(windows) {
                 "-Z export-executable-symbols"
             } else {
-                "-C link-args=-rdynamic"
+                "-C link-dead-code"
             };
             cargo_cmd.env("RUSTFLAGS", rust_flags);
             cargo_cmd.args(["--bin", "host"]);
