@@ -1574,7 +1574,7 @@ This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymo
 Here, we're using backpassing to define two anonymous functions. Here's one of them:
 
 ```roc
-text <-
+text <- await Stdin.line
 
 Stdout.line "You just entered: \(text)"
 ```
