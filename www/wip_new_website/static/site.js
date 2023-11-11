@@ -1,3 +1,5 @@
+const isOnMobile = window.innerWidth <= 1024;
+
 // The only way we can provide values to wasm_bindgen's generated code is to set globals
 window.js_create_app = js_create_app;
 window.js_run_app = js_run_app;
@@ -33,19 +35,18 @@ const repl = {
   tutorialStep: 0,
   tutorialSteps: [
     {
-      match: ((input) => input.replace(/ /g, "") === "0.1+0.2"),
-      show: "<p>Was this the answer you expected? (If so, try this in other programming languages and see what their answers are.)</p><p>Roc has a <a href=\"/builtins/Num#Dec\">decimal</a> type as well as <a href=\"/builtins/Num#F64\">floating-point</a> for when performance is more important than decimal precision.</p><p>Next, enter <code>name = \"(put your name here)\"</code></p>",
+      match: (input) => input.replace(/ /g, "") === "0.1+0.2",
+      show: '<p>Was this the answer you expected? (If so, try this in other programming languages and see what their answers are.)</p><p>Roc has a <a href="/builtins/Num#Dec">decimal</a> type as well as <a href="/builtins/Num#F64">floating-point</a> for when performance is more important than decimal precision.</p><p>Next, enter <code>name = "(put your name here)"</code></p>',
     },
     {
-      match: ((input) => input.replace(/ /g, "").match(/^name="/i)),
-      show: "<p>This created a new <a href=\"https://www.roc-lang.org/tutorial#defs\">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href=\"/tutorial#strings-and-numbers\">string</a> you entered.</p><p>Try using this definition by entering <code>\"Hi, \\(name)!\"</code></p>"
+      match: (input) => input.replace(/ /g, "").match(/^name="/i),
+      show: '<p>This created a new <a href="https://www.roc-lang.org/tutorial#defs">definition</a>&mdash;<code>name</code> is now defined to be equal to the <a href="/tutorial#strings-and-numbers">string</a> you entered.</p><p>Try using this definition by entering <code>"Hi, \\(name)!"</code></p>',
     },
     {
-      match: ((input) => input.match(/^["][^\\]+\\\(name\)/i)),
-        show: `<p>Nicely done! This is an example of <a href=\"/tutorial#string-interpolation\">string interpolation</a>, which replaces part of a string with whatever you put inside the parentheses after a <code>\\</code>.</p><p>Now that you’ve written a few <a href=\"/tutorial#naming-things\">expressions</a>, you can either continue exploring in this REPL, or move on to the <a href=\"/tutorial\">tutorial</a> to learn how to make full programs.<p><p><span class='welcome-to-roc'>Welcome to Roc!</span> <a href='/tutorial' class='btn-small'>${tutorialButtonSvg} Start Tutorial</a></p>`
-    }
+      match: (input) => input.match(/^["][^\\]+\\\(name\)/i),
+      show: `<p>Nicely done! This is an example of <a href=\"/tutorial#string-interpolation\">string interpolation</a>, which replaces part of a string with whatever you put inside the parentheses after a <code>\\</code>.</p><p>Now that you’ve written a few <a href=\"/tutorial#naming-things\">expressions</a>, you can either continue exploring in this REPL, or move on to the <a href=\"/tutorial\">tutorial</a> to learn how to make full programs.<p><p><span class='welcome-to-roc'>Welcome to Roc!</span> <a href='/tutorial' class='btn-small'>${tutorialButtonSvg} Start Tutorial</a></p>`,
+    },
   ],
-
 
   textDecoder: new TextDecoder(),
   textEncoder: new TextEncoder(),
@@ -90,10 +91,10 @@ roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
 
 // Focus the repl input the first time it scrolls into view
 // (but not on mobile, because that would pop up the whole keyboard abruptly)
-if (window.innerWidth > 768) {
+if (!isOnMobile) {
   // Function to be called when the input enters the viewport
   function handleIntersect(entries, observer) {
-    entries.forEach(entry => {
+    entries.forEach((entry) => {
       // Check if the input is intersecting
       if (entry.isIntersecting) {
         // Apply focus to it, then unobserve it because we only want to do this once.
@@ -108,7 +109,7 @@ if (window.innerWidth > 768) {
     // Use the whole viewport for the intersection
     root: null,
     // Trigger the callback when the input is fully visible
-    threshold: 1.0
+    threshold: 1.0,
   });
 
   observer.observe(repl.elemSourceInput);
@@ -119,7 +120,8 @@ if (window.innerWidth > 768) {
 // ----------------------------------------------------------------------------
 
 function resetSourceInputHeight() {
-  repl.elemSourceInput.style.height = repl.elemSourceInput.scrollHeight + 2 + "px"; // +2 for the border
+  repl.elemSourceInput.style.height =
+    repl.elemSourceInput.scrollHeight + 2 + "px"; // +2 for the border
 }
 
 function onInputKeydown(event) {
@@ -143,7 +145,7 @@ function onInputKeydown(event) {
       }
 
       // Hide the arrow on the homepage that prompts you to enter something
-      const replArrow = document.getElementById('repl-arrow');
+      const replArrow = document.getElementById("repl-arrow");
 
       if (replArrow != null) {
         replArrow.style.display = "none";
@@ -203,7 +205,8 @@ function showNextReplTutorialEntry(inputText) {
   const nextStep = repl.tutorialSteps[repl.tutorialStep];
 
   if (typeof nextStep === "object" && nextStep.match(inputText)) {
-    repl.description.innerHTML = repl.description.innerHTML + "<hr/>" + nextStep.show;
+    repl.description.innerHTML =
+      repl.description.innerHTML + "<hr/>" + nextStep.show;
 
     repl.tutorialStep = repl.tutorialStep + 1;
   }
@@ -263,7 +266,7 @@ function send_panic_msg_to_js(rocstr_ptr, panic_tag) {
     const [ptr, len, _cap] = rocStrWords;
 
     const SEAMLESS_SLICE_BIT = 1 << 31;
-    const length = len & (~SEAMLESS_SLICE_BIT);
+    const length = len & ~SEAMLESS_SLICE_BIT;
 
     stringBytes = new Uint8Array(memory.buffer, ptr, length);
   }
@@ -381,7 +384,8 @@ function updateHistoryEntry(index, ok, outputText) {
     // Scroll the input element into view so you can see the most recent output.
     // Only do this if it's currently out of view though!
     const bounds = repl.elemSourceInput.getBoundingClientRect();
-    const isInView = bounds.top >= 0 &&
+    const isInView =
+      bounds.top >= 0 &&
       bounds.left >= 0 &&
       bounds.bottom <=
         (window.innerHeight || document.documentElement.clientHeight) &&
@@ -406,74 +410,106 @@ function updateHistoryEntry(index, ok, outputText) {
 const tutorialTocToggle = document.querySelector("#tutorial-toc-toggle");
 
 if (tutorialTocToggle != null) {
-    document.querySelectorAll("#tutorial-toc li a").forEach((elem) => {
-        // Clicking any of the ToC links closes the ToC
-        elem.addEventListener("click", (event) => {
-            tutorialTocToggle.checked = false;
-        })
+  document.querySelectorAll("#tutorial-toc li a").forEach((elem) => {
+    // Clicking any of the ToC links closes the ToC
+    elem.addEventListener("click", (event) => {
+      tutorialTocToggle.checked = false;
     });
+  });
 
-    document.addEventListener("keydown", (event) => {
-        // Escape closes the ToC
-        if (event.key == "Escape") {
-            tutorialTocToggle.checked = false;
-        }
-    });
-
-    const isTouchSupported = () => {
-      try{ document.createEvent("TouchEvent"); return true; }
-      catch(e){ return false; }
+  document.addEventListener("keydown", (event) => {
+    // Escape closes the ToC
+    if (event.key == "Escape") {
+      tutorialTocToggle.checked = false;
     }
+  });
 
-    // Select all <samp> elements that are children of <pre> elements
-    const codeBlocks = document.querySelectorAll("pre > samp");
+  const isTouchSupported = () => {
+    try {
+      document.createEvent("TouchEvent");
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
 
-    // Iterate over each code block
-    codeBlocks.forEach((codeBlock) => {
-      // Create a "Copy" button
-      const copyButton = document.createElement("button");
-      copyButton.classList.add("copy-button");
-      copyButton.textContent = "Copy";
+  // Select all <samp> elements that are children of <pre> elements
+  const codeBlocks = document.querySelectorAll("pre > samp");
 
-      // Add event listener to copy button
-      copyButton.addEventListener("click", () => {
-        const codeText = codeBlock.innerText;
-        navigator.clipboard.writeText(codeText);
-        copyButton.textContent = "Copied!";
-        copyButton.classList.add("copy-button-copied");
-        copyButton.addEventListener("mouseleave", () => {
-            copyButton.textContent = "Copy";
-            copyButton.classList.remove('copy-button-copied');
-        });
+  // Iterate over each code block
+  codeBlocks.forEach((codeBlock) => {
+    // Create a "Copy" button
+    const copyButton = document.createElement("button");
+    copyButton.classList.add("copy-button");
+    copyButton.textContent = "Copy";
+
+    // Add event listener to copy button
+    copyButton.addEventListener("click", () => {
+      const codeText = codeBlock.innerText;
+      navigator.clipboard.writeText(codeText);
+      copyButton.textContent = "Copied!";
+      copyButton.classList.add("copy-button-copied");
+      copyButton.addEventListener("mouseleave", () => {
+        copyButton.textContent = "Copy";
+        copyButton.classList.remove("copy-button-copied");
+      });
+    });
+
+    // Create a container for the copy button and append it to the document
+    const buttonContainer = document.createElement("div");
+    buttonContainer.classList.add("button-container");
+    buttonContainer.appendChild(copyButton);
+    codeBlock.parentNode.insertBefore(buttonContainer, codeBlock);
+
+    // Hide the button container by default
+    buttonContainer.style.display = "none";
+
+    if (isTouchSupported()) {
+      // Show the button container on click for touch support (e.g. mobile)
+      document.addEventListener("click", (event) => {
+        if (event.target.closest("pre > samp") !== codeBlock) {
+          buttonContainer.style.display = "none";
+        } else {
+          buttonContainer.style.display = "block";
+        }
+      });
+    } else {
+      // Show the button container on hover for non-touch support (e.g. desktop)
+      codeBlock.parentNode.addEventListener("mouseenter", () => {
+        buttonContainer.style.display = "block";
       });
 
-      // Create a container for the copy button and append it to the document
-      const buttonContainer = document.createElement("div");
-      buttonContainer.classList.add("button-container");
-      buttonContainer.appendChild(copyButton);
-      codeBlock.parentNode.insertBefore(buttonContainer, codeBlock);
+      codeBlock.parentNode.addEventListener("mouseleave", () => {
+        buttonContainer.style.display = "none";
+      });
+    }
+  });
+}
 
-      // Hide the button container by default
-      buttonContainer.style.display = "none";
+// HOMEPAGE //
 
-      if (isTouchSupported()) {
-        // Show the button container on click for touch support (e.g. mobile)
-        document.addEventListener("click", (event) => {
-          if (event.target.closest("pre > samp") !== codeBlock) {
-            buttonContainer.style.display = "none";
-          } else {
-            buttonContainer.style.display = "block";
-          }
-        });
-      } else {
-        // Show the button container on hover for non-touch support (e.g. desktop)
-        codeBlock.parentNode.addEventListener("mouseenter", () => {
-          buttonContainer.style.display = "block";
-        });
-
-        codeBlock.parentNode.addEventListener("mouseleave", () => {
-          buttonContainer.style.display = "none";
-        });
-      }
+if (isOnMobile) {
+  const hideDesc = () => {
+    document.querySelectorAll(".interactive-radio").forEach((radio) => {
+      radio.checked = false;
     });
+  };
+
+  hideDesc(); // On mobile, start out with all the descriptions hidden.
+
+  document.querySelectorAll(".interactive-example").forEach((example) => {
+    example.querySelectorAll("label").forEach((label) => {
+      label.addEventListener("click", (event) => {
+        const desc = label.nextSibling; // The description node always comes next
+
+        // Set the position of the target element
+        desc.style.top = label.offsetTop + label.offsetHeight + "px"; // Position below the button
+        desc.style.left = label.offsetLeft + "px"; // Align with the left of the button
+      });
+    });
+
+    example.querySelectorAll(".close-desc").forEach((button) => {
+      button.addEventListener("click", hideDesc);
+    });
+  });
 }

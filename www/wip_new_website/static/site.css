@@ -500,6 +500,10 @@ li {
         display: inline;
     }
 
+    .close-desc {
+        display: block !important;
+    }
+
     h2 {
         margin-top: 48px;
         padding: 12px 0;
@@ -1000,6 +1004,10 @@ code .dim {
 
 .interactive-desc {
     display: none;
+    position: absolute;
+    top: 0;
+    right: 300px;
+    width: 300px;
     background-color: #ede6ff;
     border: 1px solid black;
     color: black;
@@ -1007,6 +1015,8 @@ code .dim {
     padding-top: 12px;
     margin-top: 9px;
     cursor: text;
+    white-space: normal;
+    font-family: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial;
 }
 
 .interactive-desc a {
@@ -1019,10 +1029,25 @@ code .dim {
 
 .interactive-radio:checked + label + .interactive-desc {
     display: block;
+}
+
+.close-desc {
+    display: none;
     position: absolute;
-    top: 0;
-    right: 300px;
-    width: 300px;
-    white-space: normal;
-    font-family: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial;
+    height: 40px;
+    width: 40px;
+    font-size: 24px;
+    top: -12px;
+    right: -12px;
+    color: #fff;
+    background: #9b6bf2;
+    border: 2px solid #7c38f5;
+    border-radius: 100%;
+    z-index: 4;
+}
+
+.close-desc:hover {
+    color: #222;
+    background: var(--light-cyan);
+    border-color: var(--light-cyan);
 }
