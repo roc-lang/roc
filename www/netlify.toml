@@ -14,6 +14,17 @@
   [headers.values]
     X-Frame-Options = "DENY"
     X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    # Firefox prefetch requires some cache-control to be set
+    # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
+    Cache-Control = "public, max-age=1200"
+
+[[headers]]
+  for = "/packages/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
     # unsafe-eval is needed for wasm compilation in the repl to work on Safari and Chrome;
     # otherwise they block it.
     # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
@@ -33,16 +44,7 @@
     #   $ echo -n "document.documentElement.className = document.documentElement.className.replace('no-js', '');" | openssl dgst -sha256 -binary | openssl enc -base64
     #
     # In both cases, the sha256 should be in this format: 'sha256-MySha256GoesHere'
-    #
-    # We need the unsafe-inline style in order to make the web repl auto-resize
-    # (it needs to grow its height dynamically). If we could figure out another way
-    # to do that using pure CSS, then we could remove unsafe-inline here and
-    # use a .hidden class instead of our other usages of .style.display = "none" etc.
-    # Also we use innerHTML (although we could instead add the elements explicitly,
-    # or else always have them in the DOM and then show/hide/modify them on the fly),
-    # and that also requires unsafe-inline.
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'sha256-glHRII/7b3zzlpV/fHgyDU43eehue/Hg2K6Ihbt7o6Q=' 'unsafe-eval'; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=' 'unsafe-inline';"
-    X-Content-Type-Options = "nosniff"
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'sha256-glHRII/7b3zzlpV/fHgyDU43eehue/Hg2K6Ihbt7o6Q='; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=' 'unsafe-inline';"
     # Firefox prefetch requires some cache-control to be set
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
     Cache-Control = "public, max-age=1200"
