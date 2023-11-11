@@ -151,7 +151,7 @@ generateEntryPoint = \buf, types, name, id ->
                 ret = typeName types id
                 "() -> \(ret)"
 
-    externSignature =
+    (externSignature, returnsFn) =
         when Types.shape types id is
             Function rocFn ->
                 arguments =
@@ -163,15 +163,16 @@ generateEntryPoint = \buf, types, name, id ->
                         else
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
-                ret =
+                (ret, retFn) =
                     when Types.shape types rocFn.ret is
-                        Function _ -> "u8"
-                        _ -> typeName types rocFn.ret
-                "(_: *mut \(ret), \(arguments))"
+                        Function _ -> ("u8", Bool.true)
+                        _ -> (typeName types rocFn.ret, Bool.false)
+
+                ("(_: *mut \(ret), \(arguments))", retFn)
 
             _ ->
                 ret = typeName types id
-                "(_: *mut \(ret))"
+                ("(_: *mut \(ret))", Bool.false)
 
     externArguments =
         when Types.shape types id is
@@ -187,29 +188,48 @@ generateEntryPoint = \buf, types, name, id ->
             _ ->
                 ""
 
-    """
-    \(buf)
+    if returnsFn then
+        """
+        \(buf)
 
-    pub fn \(name)\(publicSignature) {
-        extern "C" {
-            fn roc__\(name)_1_exposed_generic\(externSignature);
-            fn roc__\(name)_1_size() -> i64;
+        pub fn \(name)\(publicSignature) {
+            extern "C" {
+                fn roc__\(name)_1_exposed_generic\(externSignature);
+                fn roc__\(name)_1_size() -> i64;
+            }
+
+            unsafe {
+                let capacity = roc__\(name)_1_size() as usize;
+
+                let mut ret = RocFunction_88 {
+                    closure_data: Vec::with_capacity(capacity),
+                };
+                ret.closure_data.resize(capacity, 0);
+
+                roc__\(name)_1_exposed_generic(ret.closure_data.as_mut_ptr(), \(externArguments));
+
+                ret
+            }
         }
+        """
+    else
+        """
+        \(buf)
 
-        unsafe {
-            let capacity = roc__\(name)_1_size() as usize;
+        pub fn \(name)\(publicSignature) {
+            extern "C" {
+                fn roc__\(name)_1_exposed_generic\(externSignature);
+            }
 
-            let mut ret = RocFunction_88 {
-                closure_data: Vec::with_capacity(capacity),
-            };
-            ret.closure_data.resize(capacity, 0);
+            let mut ret = core::mem::MaybeUninit::uninit();
 
-            roc__\(name)_1_exposed_generic(ret.closure_data.as_mut_ptr(), \(externArguments));
+            unsafe {
+                roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
 
-            ret
+                ret.assume_init()
+            }
         }
-    }
-    """
+        """
 
 generateFunction : Str, Types, RocFn -> Str
 generateFunction = \buf, types, rocFn ->
