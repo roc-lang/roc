@@ -151,7 +151,7 @@ generateEntryPoint = \buf, types, name, id ->
                 ret = typeName types id
                 "() -> \(ret)"
 
-    (externSignature, returnsFn) =
+    (externSignature, returnTypeName, returnsFn) =
         when Types.shape types id is
             Function rocFn ->
                 arguments =
@@ -163,16 +163,16 @@ generateEntryPoint = \buf, types, name, id ->
                         else
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
-                (ret, retFn) =
-                    when Types.shape types rocFn.ret is
-                        Function _ -> ("u8", Bool.true)
-                        _ -> (typeName types rocFn.ret, Bool.false)
-
-                ("(_: *mut \(ret), \(arguments))", retFn)
+                ret = typeName types rocFn.ret
+                when Types.shape types rocFn.ret is
+                    Function _ ->
+                        ("(_: *mut u8, \(arguments))", ret, Bool.true)
+                    _ -> 
+                        ("(_: *mut \(ret), \(arguments))", ret, Bool.false)
 
             _ ->
                 ret = typeName types id
-                ("(_: *mut \(ret))", Bool.false)
+                ("(_: *mut \(ret))", ret, Bool.false)
 
     externArguments =
         when Types.shape types id is
@@ -201,7 +201,7 @@ generateEntryPoint = \buf, types, name, id ->
             unsafe {
                 let capacity = roc__\(name)_1_size() as usize;
 
-                let mut ret = RocFunction_88 {
+                let mut ret = \(returnTypeName) {
                     closure_data: Vec::with_capacity(capacity),
                 };
                 ret.closure_data.resize(capacity, 0);
