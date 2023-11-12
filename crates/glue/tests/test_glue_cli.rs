@@ -131,6 +131,9 @@ mod glue_cli_run {
         arguments:"arguments" => indoc!(r#"
             Answer was: 84
         "#),
+        closures:"closures" => indoc!(r#"
+            Answer was: 672
+        "#),
         rocresult:"rocresult" => indoc!(r#"
             Answer was: RocOk(ManuallyDrop { value: "Hello World!" })
             Answer was: RocErr(ManuallyDrop { value: 42 })

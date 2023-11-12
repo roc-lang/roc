@@ -195,11 +195,11 @@ generateEntryPoint = \buf, types, name, id ->
         pub fn \(name)\(publicSignature) {
             extern "C" {
                 fn roc__\(name)_1_exposed_generic\(externSignature);
-                fn roc__\(name)_1_size() -> i64;
+                fn roc__\(name)_1_exposed_size() -> i64;
             }
 
             unsafe {
-                let capacity = roc__\(name)_1_size() as usize;
+                let capacity = roc__\(name)_1_exposed_size() as usize;
 
                 let mut ret = \(returnTypeName) {
                     closure_data: Vec::with_capacity(capacity),
@@ -278,7 +278,7 @@ generateFunction = \buf, types, rocFn ->
     \(buf)
 
     #[repr(C)]
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     pub struct \(name) {
         closure_data: Vec<u8>,
     }
