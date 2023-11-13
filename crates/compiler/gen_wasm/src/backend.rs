@@ -1099,18 +1099,18 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            Expr::UnionFieldPtrAtIndex {
+            Expr::GetElementPointer {
                 structure,
                 union_layout,
-                index,
+                indices,
                 ..
             } => {
-                debug_assert!(index.len() >= 2);
+                debug_assert!(indices.len() >= 2);
                 self.expr_union_field_ptr_at_index(
                     *structure,
-                    index[0] as u16,
+                    indices[0] as u16,
                     union_layout,
-                    index[1],
+                    indices[1],
                     storage,
                 )
             }

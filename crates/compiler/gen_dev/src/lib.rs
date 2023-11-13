@@ -182,7 +182,7 @@ impl<'a> LastSeenMap<'a> {
                     Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
-                    Expr::UnionFieldPtrAtIndex { structure, .. } => {
+                    Expr::GetElementPointer { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
@@ -849,14 +849,14 @@ trait Backend<'a> {
             } => {
                 self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
             }
-            Expr::UnionFieldPtrAtIndex {
+            Expr::GetElementPointer {
                 structure,
                 union_layout,
-                index,
+                indices,
                 ..
             } => {
-                debug_assert!(index.len() >= 2);
-                self.load_union_field_ptr_at_index(sym, structure, index[0] as u16, index[1], union_layout);
+                debug_assert!(indices.len() >= 2);
+                self.load_union_field_ptr_at_index(sym, structure, indices[0] as u16, indices[1], union_layout);
             }
             Expr::GetTagId {
                 structure,

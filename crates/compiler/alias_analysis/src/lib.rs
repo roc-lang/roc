@@ -1436,15 +1436,15 @@ fn expr_spec<'a>(
                 builder.add_get_tuple_field(block, variant_id, index)
             }
         },
-        UnionFieldPtrAtIndex {
-            index,
+        GetElementPointer {
+            indices,
             structure,
             union_layout,
             ..
         } => {
-            debug_assert!(index.len() >= 2);
-            let tag_id = index[0] as u32;
-            let index = index[1];
+            debug_assert!(indices.len() >= 2);
+            let tag_id = indices[0] as u32;
+            let index = indices[1];
             let tag_value_id = env.symbols[structure];
 
             let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();

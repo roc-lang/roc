@@ -452,15 +452,15 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
                 ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
             }),
-            &Expr::UnionFieldPtrAtIndex {
+            &Expr::GetElementPointer {
                 structure,
                 union_layout,
-                index,
+                indices,
                 ..
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
-                debug_assert!(index.len() >= 2);
+                debug_assert!(indices.len() >= 2);
 
-                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, index[0] as _, index[1])
+                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, indices[0] as _, indices[1])
             }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {

@@ -2003,15 +2003,15 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             }
         }
 
-        UnionFieldPtrAtIndex {
+        GetElementPointer {
             structure,
-            index,
+            indices,
             union_layout,
             ..
         } => {
-            debug_assert!(index.len() >= 2);
-            let tag_id = index[0];
-            let index = index[1] as usize;
+            debug_assert!(indices.len() >= 2);
+            let tag_id = indices[0];
+            let index = indices[1] as usize;
             // cast the argument bytes into the desired shape for this tag
             let argument = scope.load_symbol(structure);
             let ret_repr = layout_interner.get_repr(layout);
