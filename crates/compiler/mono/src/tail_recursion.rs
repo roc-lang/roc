@@ -907,12 +907,11 @@ impl<'a> TrmcEnv<'a> {
                                 reuse: None,
                             };
 
-                            let index = vec![in env.arena; recursive_field_index as u64].into_bump_slice();
+                            let index = vec![in env.arena; cons_info.tag_id as u64, recursive_field_index as u64].into_bump_slice();
 
                             let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
                             let get_reference_expr = Expr::UnionFieldPtrAtIndex {
                                 structure: *symbol,
-                                tag_id: cons_info.tag_id,
                                 union_layout: cons_info.tag_layout,
                                 index,
                             };

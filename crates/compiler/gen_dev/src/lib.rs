@@ -851,12 +851,12 @@ trait Backend<'a> {
             }
             Expr::UnionFieldPtrAtIndex {
                 structure,
-                tag_id,
                 union_layout,
                 index,
+                ..
             } => {
-                debug_assert_ne!(index.len(), 0);
-                self.load_union_field_ptr_at_index(sym, structure, *tag_id, index[0], union_layout);
+                debug_assert!(index.len() >= 2);
+                self.load_union_field_ptr_at_index(sym, structure, index[0] as u16, index[1], union_layout);
             }
             Expr::GetTagId {
                 structure,

@@ -1894,7 +1894,6 @@ pub enum Expr<'a> {
     },
     UnionFieldPtrAtIndex {
         structure: Symbol,
-        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
         index: &'a [u64],
     },
@@ -2154,18 +2153,18 @@ impl<'a> Expr<'a> {
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
             UnionFieldPtrAtIndex {
-                tag_id,
                 structure,
                 index,
                 ..
             } => {
                 let it = index.iter().map(|num| alloc.as_string(num));
+                let it = alloc.intersperse(it, ", ");
                 text!(
                     alloc,
-                    "TODO: fixme, UnionFieldPtrAtIndex (Id {tag_id}) (Index [",
+                    "GetElementPointer (Indices [",
                 )
-                .append(alloc.intersperse(it, ", "))
-                .append(alloc.text("])"))
+                .append(it)
+                .append(alloc.text("]) "))
                 .append(symbol_to_doc(alloc, *structure, pretty))
             }
             // .append(alloc.intersperse(index.iter(), ", "))},
@@ -7950,13 +7949,11 @@ fn substitute_in_expr<'a>(
         // currently only used for tail recursion modulo cons (TRMC)
         UnionFieldPtrAtIndex {
             structure,
-            tag_id,
             index,
             union_layout,
         } => match substitute(subs, *structure) {
             Some(structure) => Some(UnionFieldPtrAtIndex {
                 structure,
-                tag_id: *tag_id,
                 index,
                 union_layout: *union_layout,
             }),

@@ -1101,16 +1101,16 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
 
             Expr::UnionFieldPtrAtIndex {
                 structure,
-                tag_id,
                 union_layout,
                 index,
+                ..
             } => {
-                debug_assert_ne!(index.len(), 0);
+                debug_assert!(index.len() >= 2);
                 self.expr_union_field_ptr_at_index(
                     *structure,
-                    *tag_id,
+                    index[0] as u16,
                     union_layout,
-                    index[0],
+                    index[1],
                     storage,
                 )
             }

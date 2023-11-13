@@ -454,13 +454,13 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }),
             &Expr::UnionFieldPtrAtIndex {
                 structure,
-                tag_id,
                 union_layout,
                 index,
+                ..
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
-            debug_assert_ne!(index.len(), 0);
+                debug_assert!(index.len() >= 2);
 
-                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, tag_id, index[0])
+                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, index[0] as _, index[1])
             }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {
