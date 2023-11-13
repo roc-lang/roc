@@ -8,7 +8,7 @@ use crate::layout::{
     UnionLayout,
 };
 use bumpalo::collections::Vec;
-use bumpalo::Bump;
+use bumpalo::{Bump, vec};
 use roc_collections::{MutMap, VecMap};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -907,13 +907,14 @@ impl<'a> TrmcEnv<'a> {
                                 reuse: None,
                             };
 
-                            let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
+                            let index = vec![in env.arena; recursive_field_index as u64].into_bump_slice();
 
+                            let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
                             let get_reference_expr = Expr::UnionFieldPtrAtIndex {
                                 structure: *symbol,
                                 tag_id: cons_info.tag_id,
                                 union_layout: cons_info.tag_layout,
-                                index: recursive_field_index as _,
+                                index,
                             };
 
                             let new_hole_symbol = env.named_unique_symbol("newHole");

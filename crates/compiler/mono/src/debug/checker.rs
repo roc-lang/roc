@@ -458,7 +458,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 union_layout,
                 index,
             } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
-                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, tag_id, index)
+            debug_assert_ne!(index.len(), 0);
+
+                ctx.check_union_field_ptr_at_index(structure, layout, union_layout, tag_id, index[0])
             }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {

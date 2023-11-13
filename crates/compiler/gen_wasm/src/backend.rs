@@ -1104,13 +1104,16 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 tag_id,
                 union_layout,
                 index,
-            } => self.expr_union_field_ptr_at_index(
-                *structure,
-                *tag_id,
-                union_layout,
-                *index,
-                storage,
-            ),
+            } => {
+                debug_assert_ne!(index.len(), 0);
+                self.expr_union_field_ptr_at_index(
+                    *structure,
+                    *tag_id,
+                    union_layout,
+                    index[0],
+                    storage,
+                )
+            }
 
             Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
             Expr::ErasedMake { .. } => todo_lambda_erasure!(),

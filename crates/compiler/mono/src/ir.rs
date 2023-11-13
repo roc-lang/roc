@@ -1896,7 +1896,7 @@ pub enum Expr<'a> {
         structure: Symbol,
         tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
-        index: u64,
+        index: &'a [u64],
     },
 
     Array {
@@ -2158,9 +2158,17 @@ impl<'a> Expr<'a> {
                 structure,
                 index,
                 ..
-            } => text!(alloc, "UnionFieldPtrAtIndex (Id {tag_id}) (Index {index}) ",)
-                .append(symbol_to_doc(alloc, *structure, pretty)),
-
+            } => {
+                let it = index.iter().map(|num| alloc.as_string(num));
+                text!(
+                    alloc,
+                    "TODO: fixme, UnionFieldPtrAtIndex (Id {tag_id}) (Index [",
+                )
+                .append(alloc.intersperse(it, ", "))
+                .append(alloc.text("])"))
+                .append(symbol_to_doc(alloc, *structure, pretty))
+            }
+            // .append(alloc.intersperse(index.iter(), ", "))},
             Alloca { initializer, .. } => match initializer {
                 Some(initializer) => {
                     text!(alloc, "Alloca ").append(symbol_to_doc(alloc, *initializer, pretty))
@@ -7949,7 +7957,7 @@ fn substitute_in_expr<'a>(
             Some(structure) => Some(UnionFieldPtrAtIndex {
                 structure,
                 tag_id: *tag_id,
-                index: *index,
+                index,
                 union_layout: *union_layout,
             }),
             None => None,

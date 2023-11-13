@@ -2009,6 +2009,8 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             index,
             union_layout,
         } => {
+            debug_assert_ne!(index.len(), 0);
+            let index = index[0] as usize;
             // cast the argument bytes into the desired shape for this tag
             let argument = scope.load_symbol(structure);
             let ret_repr = layout_interner.get_repr(layout);
@@ -2028,7 +2030,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         None,
-                        *index as usize,
+                        index,
                         ptr,
                         target_loaded_type,
                     )
@@ -2044,7 +2046,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         Some(struct_type.into_struct_type()),
-                        *index as usize,
+                        index,
                         argument.into_pointer_value(),
                         target_loaded_type,
                     )
@@ -2072,7 +2074,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         None,
-                        *index as usize,
+                        index,
                         ptr,
                         target_loaded_type,
                     )
@@ -2096,7 +2098,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         field_layouts,
                         Some(struct_type.into_struct_type()),
                         // the tag id is not stored
-                        *index as usize,
+                        index,
                         argument.into_pointer_value(),
                         target_loaded_type,
                     )
