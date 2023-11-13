@@ -1,10 +1,10 @@
 use inkwell::{
     attributes::{Attribute, AttributeLoc},
     module::Linkage,
-    types::{BasicType, BasicTypeEnum, IntType},
+    types::{BasicType, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-        PointerValue, StructValue,
+        StructValue,
     },
     AddressSpace, IntPredicate,
 };
@@ -20,13 +20,13 @@ use roc_mono::{
     },
     list_element_layout,
 };
-use roc_target::PtrWidth;
+use roc_target::{PtrWidth, TargetInfo};
 
 use crate::llvm::{
     bitcode::{
         call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
         call_str_bitcode_fn, call_void_bitcode_fn, pass_list_or_string_to_zig_32bit,
-        BitcodeReturns,
+        pass_string_to_zig_wasm, BitcodeReturns,
     },
     build::{
         cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
@@ -220,8 +220,9 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 _ => unreachable!(),
             };
 
-            let result = match env.target_info.ptr_width() {
-                PtrWidth::Bytes4 => {
+            use roc_target::Architecture::*;
+            let result = match env.target_info.architecture {
+                Aarch32 | X86_32 => {
                     let zig_function = env.module.get_function(intrinsic).unwrap();
                     let zig_function_type = zig_function.get_type();
 
@@ -270,7 +271,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             )
                             .ptr_type(AddressSpace::default());
 
-                            let roc_return_alloca = env.builder.build_pointer_cast(
+                            let roc_return_alloca = env.builder.new_build_pointer_cast(
                                 zig_return_alloca,
                                 roc_return_type,
                                 "cast_to_roc",
@@ -286,7 +287,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         }
                     }
                 }
-                PtrWidth::Bytes8 => {
+                Aarch64 | X86_64 => {
                     let (type_name, width) = {
                         match layout_interner.get_repr(number_layout) {
                             LayoutRepr::Builtin(Builtin::Int(int_width)) => {
@@ -331,6 +332,52 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     } else {
                         call_bitcode_fn(env, &[string], intrinsic)
                     }
+                }
+                Wasm32 => {
+                    let return_type_name = match layout_interner.get_repr(number_layout) {
+                        LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width.type_name(),
+                        LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width.type_name(),
+                        LayoutRepr::Builtin(Builtin::Decimal) => {
+                            // zig picks 128 for dec.RocDec
+                            "i128"
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let return_type = zig_num_parse_result_type(env, return_type_name);
+
+                    let zig_return_alloca =
+                        create_entry_block_alloca(env, parent, return_type.into(), "str_to_num");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            zig_return_alloca.into(),
+                            pass_string_to_zig_wasm(env, string).into(),
+                        ],
+                        intrinsic,
+                    );
+
+                    let roc_return_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .ptr_type(AddressSpace::default());
+
+                    let roc_return_alloca = env.builder.new_build_pointer_cast(
+                        zig_return_alloca,
+                        roc_return_type,
+                        "cast_to_roc",
+                    );
+
+                    load_roc_value(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                        roc_return_alloca,
+                        "str_to_num_result",
+                    )
                 }
             };
 
@@ -389,10 +436,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
             let result_ptr = env
                 .builder
-                .build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+                .new_build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
-            match env.target_info.ptr_width() {
-                PtrWidth::Bytes4 => {
+            use roc_target::Architecture::*;
+            match env.target_info.architecture {
+                Aarch32 | X86_32 => {
                     arguments!(list, start, count);
                     let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
 
@@ -409,7 +457,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_FROM_UTF8_RANGE,
                     );
                 }
-                PtrWidth::Bytes8 => {
+                Aarch64 | X86_64 | Wasm32 => {
                     arguments!(_list, start, count);
 
                     // we use the symbol here instead
@@ -482,11 +530,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             .into_int_value();
 
             // cast to the appropriate usize of the current build
-            let byte_count =
-                env.builder
-                    .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize");
+            let byte_count = env.builder.new_build_int_cast_sign_flag(
+                length,
+                env.ptr_int(),
+                false,
+                "len_as_usize",
+            );
 
-            let is_zero = env.builder.build_int_compare(
+            let is_zero = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 byte_count,
                 env.ptr_int().const_zero(),
@@ -510,21 +561,17 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
             arguments!(string, index);
 
-            use roc_target::OperatingSystem::*;
-            match env.target_info.operating_system {
-                Windows => {
-                    let zig_return_type = env
-                        .module
-                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
-                        .unwrap()
-                        .get_type()
-                        .get_param_types()[0]
-                        .into_pointer_type()
-                        .get_element_type();
+            let roc_return_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
-                    let result = env
-                        .builder
-                        .build_alloca(BasicTypeEnum::try_from(zig_return_type).unwrap(), "result");
+            use roc_target::Architecture::*;
+            use roc_target::OperatingSystem::*;
+            match env.target_info {
+                TargetInfo {
+                    operating_system: Windows,
+                    ..
+                } => {
+                    let result = env.builder.new_build_alloca(roc_return_type, "result");
 
                     call_void_bitcode_fn(
                         env,
@@ -532,12 +579,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    let roc_return_type = basic_type_from_layout(
-                        env,
-                        layout_interner,
-                        layout_interner.get_repr(layout),
-                    );
-                    let cast_result = env.builder.build_pointer_cast(
+                    let cast_result = env.builder.new_build_pointer_cast(
                         result,
                         roc_return_type.ptr_type(AddressSpace::default()),
                         "cast",
@@ -546,7 +588,35 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     env.builder
                         .new_build_load(roc_return_type, cast_result, "load_result")
                 }
-                Unix => {
+                TargetInfo {
+                    architecture: Wasm32,
+                    ..
+                } => {
+                    let result = env.builder.new_build_alloca(roc_return_type, "result");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            result.into(),
+                            pass_string_to_zig_wasm(env, string).into(),
+                            index,
+                        ],
+                        bitcode::STR_GET_SCALAR_UNSAFE,
+                    );
+
+                    let cast_result = env.builder.new_build_pointer_cast(
+                        result,
+                        roc_return_type.ptr_type(AddressSpace::default()),
+                        "cast",
+                    );
+
+                    env.builder
+                        .new_build_load(roc_return_type, cast_result, "load_result")
+                }
+                TargetInfo {
+                    operating_system: Unix,
+                    ..
+                } => {
                     let result = call_str_bitcode_fn(
                         env,
                         &[string],
@@ -555,20 +625,20 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    // on 32-bit targets, zig bitpacks the struct
-                    match env.target_info.ptr_width() {
-                        PtrWidth::Bytes8 => result,
-                        PtrWidth::Bytes4 => {
-                            let to = basic_type_from_layout(
-                                env,
-                                layout_interner,
-                                layout_interner.get_repr(layout),
-                            );
-                            complex_bitcast_check_size(env, result, to, "to_roc_record")
-                        }
-                    }
+                    // zig will pad the struct to the alignment boundary, or bitpack it on 32-bit
+                    // targets. So we have to cast it to the format that the roc code expects
+                    let alloca = env
+                        .builder
+                        .new_build_alloca(result.get_type(), "to_roc_record");
+                    env.builder.new_build_store(alloca, result);
+
+                    env.builder
+                        .new_build_load(roc_return_type, alloca, "to_roc_record")
                 }
-                Wasi => unimplemented!(),
+                TargetInfo {
+                    operating_system: Wasi,
+                    ..
+                } => unimplemented!(),
             }
         }
         StrCountUtf8Bytes => {
@@ -1057,7 +1127,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
                     match lhs_builtin {
                         Int(int_width) => {
-                            let are_equal = env.builder.build_int_compare(
+                            let are_equal = env.builder.new_build_int_compare(
                                 IntPredicate::EQ,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
@@ -1070,18 +1140,21 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                                 IntPredicate::ULT
                             };
 
-                            let is_less_than = env.builder.build_int_compare(
+                            let is_less_than = env.builder.new_build_int_compare(
                                 predicate,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
                                 "int_compare",
                             );
 
-                            let step1 =
-                                env.builder
-                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+                            let step1 = env.builder.new_build_select(
+                                is_less_than,
+                                tag_lt,
+                                tag_gt,
+                                "lt_or_gt",
+                            );
 
-                            env.builder.build_select(
+                            env.builder.new_build_select(
                                 are_equal,
                                 tag_eq,
                                 step1.into_int_value(),
@@ -1089,24 +1162,27 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                             )
                         }
                         Float(_) => {
-                            let are_equal = env.builder.build_float_compare(
+                            let are_equal = env.builder.new_build_float_compare(
                                 FloatPredicate::OEQ,
                                 lhs_arg.into_float_value(),
                                 rhs_arg.into_float_value(),
                                 "float_eq",
                             );
-                            let is_less_than = env.builder.build_float_compare(
+                            let is_less_than = env.builder.new_build_float_compare(
                                 FloatPredicate::OLT,
                                 lhs_arg.into_float_value(),
                                 rhs_arg.into_float_value(),
                                 "float_compare",
                             );
 
-                            let step1 =
-                                env.builder
-                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+                            let step1 = env.builder.new_build_select(
+                                is_less_than,
+                                tag_lt,
+                                tag_gt,
+                                "lt_or_gt",
+                            );
 
-                            env.builder.build_select(
+                            env.builder.new_build_select(
                                 are_equal,
                                 tag_eq,
                                 step1.into_int_value(),
@@ -1177,7 +1253,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 // LLVM shift intrinsics expect the left and right sides to have the same type, so
                 // here we cast up `rhs` to the lhs type. Since the rhs was checked to be a U8,
                 // this cast isn't lossy.
-                let rhs_arg = env.builder.build_int_cast(
+                let rhs_arg = env.builder.new_build_int_cast(
                     rhs_arg.into_int_value(),
                     lhs_arg.get_type().into_int_type(),
                     "cast_for_shift",
@@ -1205,7 +1281,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let to_signed = intwidth_from_layout(layout).is_signed();
 
             env.builder
-                .build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
+                .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
                 .into()
         }
         NumToFloatCast => {
@@ -1224,11 +1300,11 @@ pub(crate) fn run_low_level<'a, 'ctx>(
 
                     if width.is_signed() {
                         env.builder
-                            .build_signed_int_to_float(int_val, dest, "signed_int_to_float")
+                            .new_build_signed_int_to_float(int_val, dest, "signed_int_to_float")
                             .into()
                     } else {
                         env.builder
-                            .build_unsigned_int_to_float(int_val, dest, "unsigned_int_to_float")
+                            .new_build_unsigned_int_to_float(int_val, dest, "unsigned_int_to_float")
                             .into()
                     }
                 }
@@ -1242,7 +1318,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                     .into_float_type();
 
                     env.builder
-                        .build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
+                        .new_build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
                         .into()
                 }
                 LayoutRepr::Builtin(Builtin::Decimal) => {
@@ -1292,7 +1368,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // The (&&) operator
             arguments!(lhs_arg, rhs_arg);
 
-            let bool_val = env.builder.build_and(
+            let bool_val = env.builder.new_build_and(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
                 "bool_and",
@@ -1304,7 +1380,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // The (||) operator
             arguments!(lhs_arg, rhs_arg);
 
-            let bool_val = env.builder.build_or(
+            let bool_val = env.builder.new_build_or(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
                 "bool_or",
@@ -1316,7 +1392,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // The (!) operator
             arguments!(arg);
 
-            let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
+            let bool_val = env.builder.new_build_not(arg.into_int_value(), "bool_not");
             BasicValueEnum::IntValue(bool_val)
         }
         Hash => {
@@ -1341,14 +1417,14 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             debug_assert!(data_ptr.is_pointer_value());
 
             env.builder
-                .build_pointer_cast(data_ptr.into_pointer_value(), target_type, "ptr_cast")
+                .new_build_pointer_cast(data_ptr.into_pointer_value(), target_type, "ptr_cast")
                 .into()
         }
 
         PtrStore => {
             arguments!(ptr, value);
 
-            env.builder.build_store(ptr.into_pointer_value(), value);
+            env.builder.new_build_store(ptr.into_pointer_value(), value);
 
             // ptr
             env.context.struct_type(&[], false).const_zero().into()
@@ -1377,7 +1453,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         RefCountIsUnique => {
             arguments_with_layouts!((data_ptr, data_layout));
 
-            let ptr = env.builder.build_pointer_cast(
+            let ptr = env.builder.new_build_pointer_cast(
                 data_ptr.into_pointer_value(),
                 env.context.i8_type().ptr_type(AddressSpace::default()),
                 "cast_to_i8_ptr",
@@ -1413,8 +1489,10 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                         layout_interner,
                         layout_interner.get_repr(layout),
                     );
-                    let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
-                    env.builder.build_store(ptr, basic_type.const_zero());
+                    let ptr = env
+                        .builder
+                        .new_build_alloca(basic_type, "unreachable_alloca");
+                    env.builder.new_build_store(ptr, basic_type.const_zero());
 
                     ptr.into()
                 }
@@ -1459,7 +1537,7 @@ fn build_int_binop<'ctx>(
 
             throw_on_overflow(env, parent, result, "integer addition overflowed!")
         }
-        NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
+        NumAddWrap => bd.new_build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => {
             let with_overflow = env.call_intrinsic(
                 &LLVM_ADD_WITH_OVERFLOW[int_width],
@@ -1490,7 +1568,7 @@ fn build_int_binop<'ctx>(
 
             throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
         }
-        NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
+        NumSubWrap => bd.new_build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => {
             let with_overflow = env.call_intrinsic(
                 &LLVM_SUB_WITH_OVERFLOW[int_width],
@@ -1521,7 +1599,7 @@ fn build_int_binop<'ctx>(
 
             throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
         }
-        NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumMulWrap => bd.new_build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulSaturated => call_bitcode_fn(
             env,
             &[lhs.into(), rhs.into()],
@@ -1546,37 +1624,37 @@ fn build_int_binop<'ctx>(
         }
         NumGt => {
             if int_width.is_signed() {
-                bd.build_int_compare(SGT, lhs, rhs, "gt_int").into()
+                bd.new_build_int_compare(SGT, lhs, rhs, "gt_int").into()
             } else {
-                bd.build_int_compare(UGT, lhs, rhs, "gt_uint").into()
+                bd.new_build_int_compare(UGT, lhs, rhs, "gt_uint").into()
             }
         }
         NumGte => {
             if int_width.is_signed() {
-                bd.build_int_compare(SGE, lhs, rhs, "gte_int").into()
+                bd.new_build_int_compare(SGE, lhs, rhs, "gte_int").into()
             } else {
-                bd.build_int_compare(UGE, lhs, rhs, "gte_uint").into()
+                bd.new_build_int_compare(UGE, lhs, rhs, "gte_uint").into()
             }
         }
         NumLt => {
             if int_width.is_signed() {
-                bd.build_int_compare(SLT, lhs, rhs, "lt_int").into()
+                bd.new_build_int_compare(SLT, lhs, rhs, "lt_int").into()
             } else {
-                bd.build_int_compare(ULT, lhs, rhs, "lt_uint").into()
+                bd.new_build_int_compare(ULT, lhs, rhs, "lt_uint").into()
             }
         }
         NumLte => {
             if int_width.is_signed() {
-                bd.build_int_compare(SLE, lhs, rhs, "lte_int").into()
+                bd.new_build_int_compare(SLE, lhs, rhs, "lte_int").into()
             } else {
-                bd.build_int_compare(ULE, lhs, rhs, "lte_uint").into()
+                bd.new_build_int_compare(ULE, lhs, rhs, "lte_uint").into()
             }
         }
         NumRemUnchecked => {
             if int_width.is_signed() {
-                bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
+                bd.new_build_int_signed_rem(lhs, rhs, "rem_int").into()
             } else {
-                bd.build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
+                bd.new_build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
             }
         }
         NumIsMultipleOf => {
@@ -1606,44 +1684,44 @@ fn build_int_binop<'ctx>(
             let cont_block = env.context.append_basic_block(parent, "branchcont");
 
             if is_signed {
-                bd.build_switch(
+                bd.new_build_switch(
                     rhs,
                     default_block,
                     &[(zero, special_block), (neg_1, special_block)],
                 )
             } else {
-                bd.build_switch(rhs, default_block, &[(zero, special_block)])
+                bd.new_build_switch(rhs, default_block, &[(zero, special_block)])
             };
 
             let condition_rem = {
                 bd.position_at_end(default_block);
 
                 let rem = if is_signed {
-                    bd.build_int_signed_rem(lhs, rhs, "int_rem")
+                    bd.new_build_int_signed_rem(lhs, rhs, "int_rem")
                 } else {
-                    bd.build_int_unsigned_rem(lhs, rhs, "uint_rem")
+                    bd.new_build_int_unsigned_rem(lhs, rhs, "uint_rem")
                 };
-                let result = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
+                let result = bd.new_build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
 
-                bd.build_unconditional_branch(cont_block);
+                bd.new_build_unconditional_branch(cont_block);
                 result
             };
 
             let condition_special = {
                 bd.position_at_end(special_block);
 
-                let is_zero = bd.build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
+                let is_zero = bd.new_build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
 
                 let result = if is_signed {
                     let is_neg_one =
-                        bd.build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
+                        bd.new_build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
 
-                    bd.build_or(is_neg_one, is_zero, "cond")
+                    bd.new_build_or(is_neg_one, is_zero, "cond")
                 } else {
                     is_zero
                 };
 
-                bd.build_unconditional_branch(cont_block);
+                bd.new_build_unconditional_branch(cont_block);
 
                 result
             };
@@ -1651,7 +1729,7 @@ fn build_int_binop<'ctx>(
             {
                 bd.position_at_end(cont_block);
 
-                let phi = bd.build_phi(env.context.bool_type(), "branch");
+                let phi = bd.new_build_phi(env.context.bool_type(), "branch");
 
                 phi.add_incoming(&[
                     (&condition_rem, default_block),
@@ -1668,9 +1746,9 @@ fn build_int_binop<'ctx>(
         ),
         NumDivTruncUnchecked => {
             if int_width.is_signed() {
-                bd.build_int_signed_div(lhs, rhs, "div_int").into()
+                bd.new_build_int_signed_div(lhs, rhs, "div_int").into()
             } else {
-                bd.build_int_unsigned_div(lhs, rhs, "div_uint").into()
+                bd.new_build_int_unsigned_div(lhs, rhs, "div_uint").into()
             }
         }
         NumDivCeilUnchecked => call_bitcode_fn(
@@ -1678,15 +1756,15 @@ fn build_int_binop<'ctx>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_DIV_CEIL[int_width],
         ),
-        NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
-        NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
-        NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
-        NumShiftLeftBy => bd.build_left_shift(lhs, rhs, "int_shift_left").into(),
+        NumBitwiseAnd => bd.new_build_and(lhs, rhs, "int_bitwise_and").into(),
+        NumBitwiseXor => bd.new_build_xor(lhs, rhs, "int_bitwise_xor").into(),
+        NumBitwiseOr => bd.new_build_or(lhs, rhs, "int_bitwise_or").into(),
+        NumShiftLeftBy => bd.new_build_left_shift(lhs, rhs, "int_shift_left").into(),
         NumShiftRightBy => bd
-            .build_right_shift(lhs, rhs, true, "int_shift_right")
+            .new_build_right_shift(lhs, rhs, true, "int_shift_right")
             .into(),
         NumShiftRightZfBy => bd
-            .build_right_shift(lhs, rhs, false, "int_shift_right_zf")
+            .new_build_right_shift(lhs, rhs, false, "int_shift_right_zf")
             .into(),
 
         _ => {
@@ -1767,16 +1845,16 @@ fn build_float_binop<'ctx>(
     let bd = env.builder;
 
     match op {
-        NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
+        NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
             let context = env.context;
 
-            let result = bd.build_float_add(lhs, rhs, "add_float");
+            let result = bd.new_build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
                 call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
-            let is_infinite = bd.build_not(is_finite, "negate");
+            let is_infinite = bd.new_build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
                 &[context.f64_type().into(), context.bool_type().into()],
@@ -1796,16 +1874,16 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
+        NumSub => bd.new_build_float_sub(lhs, rhs, "sub_float").into(),
         NumSubChecked => {
             let context = env.context;
 
-            let result = bd.build_float_sub(lhs, rhs, "sub_float");
+            let result = bd.new_build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
                 call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
-            let is_infinite = bd.build_not(is_finite, "negate");
+            let is_infinite = bd.new_build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
                 &[context.f64_type().into(), context.bool_type().into()],
@@ -1825,17 +1903,17 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
-        NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
-        NumMulSaturated => bd.build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMul => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMulSaturated => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
         NumMulChecked => {
             let context = env.context;
 
-            let result = bd.build_float_mul(lhs, rhs, "mul_float");
+            let result = bd.new_build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
                 call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
-            let is_infinite = bd.build_not(is_finite, "negate");
+            let is_infinite = bd.new_build_not(is_finite, "negate");
 
             let struct_type = context.struct_type(
                 &[context.f64_type().into(), context.bool_type().into()],
@@ -1855,11 +1933,15 @@ fn build_float_binop<'ctx>(
             struct_value.into()
         }
         NumMulWrap => unreachable!("wrapping multiplication is not defined on floats"),
-        NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
-        NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
-        NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
-        NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumDivFrac => bd.build_float_div(lhs, rhs, "div_float").into(),
+        NumGt => bd.new_build_float_compare(OGT, lhs, rhs, "float_gt").into(),
+        NumGte => bd
+            .new_build_float_compare(OGE, lhs, rhs, "float_gte")
+            .into(),
+        NumLt => bd.new_build_float_compare(OLT, lhs, rhs, "float_lt").into(),
+        NumLte => bd
+            .new_build_float_compare(OLE, lhs, rhs, "float_lte")
+            .into(),
+        NumDivFrac => bd.new_build_float_div(lhs, rhs, "div_float").into(),
         NumPow => call_bitcode_fn(
             env,
             &[lhs.into(), rhs.into()],
@@ -1882,7 +1964,7 @@ fn throw_on_overflow<'ctx>(
 
     let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
 
-    let condition = bd.build_int_compare(
+    let condition = bd.new_build_int_compare(
         IntPredicate::EQ,
         has_overflowed.into_int_value(),
         context.bool_type().const_zero(),
@@ -1892,7 +1974,7 @@ fn throw_on_overflow<'ctx>(
     let then_block = context.append_basic_block(parent, "then_block");
     let throw_block = context.append_basic_block(parent, "throw_block");
 
-    bd.build_conditional_branch(condition, then_block, throw_block);
+    bd.new_build_conditional_branch(condition, then_block, throw_block);
 
     bd.position_at_end(throw_block);
 
@@ -1952,10 +2034,10 @@ fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
     env.builder.position_at_end(block);
     env.builder.set_current_debug_location(di_location);
 
-    let call = env.builder.build_call(function, &[], "overflow");
+    let call = env.builder.new_build_call(function, &[], "overflow");
     call.set_call_convention(FAST_CALL_CONV);
 
-    env.builder.build_unreachable();
+    env.builder.new_build_unreachable();
 }
 
 fn dec_split_into_words<'ctx>(
@@ -1967,50 +2049,72 @@ fn dec_split_into_words<'ctx>(
 
     let left_bits_i128 = env
         .builder
-        .build_right_shift(value, int_64, false, "left_bits_i128");
+        .new_build_right_shift(value, int_64, false, "left_bits_i128");
 
     (
-        env.builder.build_int_cast(value, int_64_type, ""),
-        env.builder.build_int_cast(left_bits_i128, int_64_type, ""),
+        env.builder.new_build_int_cast(value, int_64_type, ""),
+        env.builder
+            .new_build_int_cast(left_bits_i128, int_64_type, ""),
     )
 }
 
-fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> PointerValue<'ctx> {
-    let dec_type = zig_dec_type(env);
+fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
+    use roc_target::OperatingSystem::*;
+    match env.target_info.operating_system {
+        Windows => {
+            let dec_type = zig_dec_type(env);
 
-    let alloca = env.builder.build_alloca(dec_type, "dec_alloca");
+            let alloca = env.builder.new_build_alloca(dec_type, "dec_alloca");
 
-    let instruction = alloca.as_instruction_value().unwrap();
-    instruction.set_alignment(16).unwrap();
+            let instruction = alloca.as_instruction_value().unwrap();
+            instruction.set_alignment(16).unwrap();
 
-    let ptr = env.builder.build_pointer_cast(
-        alloca,
-        value.get_type().ptr_type(AddressSpace::default()),
-        "cast_to_i128_ptr",
-    );
+            let ptr = env.builder.new_build_pointer_cast(
+                alloca,
+                value.get_type().ptr_type(AddressSpace::default()),
+                "cast_to_i128_ptr",
+            );
 
-    env.builder.build_store(ptr, value);
+            env.builder.new_build_store(ptr, value);
 
-    alloca
+            alloca.into()
+        }
+        Unix => {
+            if matches!(env.target_info.architecture, X86_32 | X86_64) {
+                internal_error!("X86 unix does not pass with a dec alloc instead it splits into high and low halves");
+            }
+            let i64_type = env.context.i64_type();
+            let alloca = env
+                .builder
+                .build_array_alloca(i64_type, i64_type.const_int(2, false), "dec_alloca")
+                .unwrap();
+            let instruction = alloca.as_instruction_value().unwrap();
+            instruction.set_alignment(16).unwrap();
+            let ptr = env.builder.new_build_pointer_cast(
+                alloca,
+                value.get_type().ptr_type(AddressSpace::default()),
+                "cast_to_i128_ptr",
+            );
+            env.builder.new_build_store(ptr, value);
+            env.builder
+                .new_build_load(i64_type.array_type(2), alloca, "load as array")
+        }
+        Wasi => unimplemented!(),
+    }
 }
 
 fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let dec = dec.into_int_value();
 
-    match env.target_info.operating_system {
-        Windows => {
-            //
-            call_str_bitcode_fn(
-                env,
-                &[],
-                &[dec_alloca(env, dec).into()],
-                BitcodeReturns::Str,
-                bitcode::DEC_TO_STR,
-            )
-        }
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (low, high) = dec_split_into_words(env, dec);
 
             call_str_bitcode_fn(
@@ -2021,7 +2125,23 @@ fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> Basic
                 bitcode::DEC_TO_STR,
             )
         }
-        Wasi => unimplemented!(),
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_str_bitcode_fn(
+            env,
+            &[],
+            &[dec.into()],
+            BitcodeReturns::Str,
+            bitcode::DEC_TO_STR,
+        ),
+        _ => call_str_bitcode_fn(
+            env,
+            &[],
+            &[dec_alloca(env, dec)],
+            BitcodeReturns::Str,
+            bitcode::DEC_TO_STR,
+        ),
     }
 }
 
@@ -2030,16 +2150,23 @@ fn dec_unary_op<'ctx>(
     fn_name: &str,
     dec: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let dec = dec.into_int_value();
-    match env.target_info.operating_system {
-        Windows => call_bitcode_fn(env, &[dec_alloca(env, dec).into()], fn_name),
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (low, high) = dec_split_into_words(env, dec);
             call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
         }
-        Wasi => unimplemented!(),
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[dec.into()], fn_name),
+        _ => call_bitcode_fn(env, &[dec_alloca(env, dec)], fn_name),
     }
 }
 
@@ -2049,30 +2176,22 @@ fn dec_binop_with_overflow<'ctx>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> StructValue<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
-    let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
+    let return_alloca = env.builder.new_build_alloca(return_type, "return_alloca");
 
-    match env.target_info.operating_system {
-        Windows => {
-            call_void_bitcode_fn(
-                env,
-                &[
-                    return_alloca.into(),
-                    dec_alloca(env, lhs).into(),
-                    dec_alloca(env, rhs).into(),
-                ],
-                fn_name,
-            );
-        }
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
-
             call_void_bitcode_fn(
                 env,
                 &[
@@ -2085,8 +2204,28 @@ fn dec_binop_with_overflow<'ctx>(
                 fn_name,
             );
         }
-        Wasi => unimplemented!(),
-    }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => {
+            call_void_bitcode_fn(
+                env,
+                &[return_alloca.into(), lhs.into(), rhs.into()],
+                fn_name,
+            );
+        }
+        _ => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    dec_alloca(env, lhs),
+                    dec_alloca(env, rhs),
+                ],
+                fn_name,
+            );
+        }
+    };
 
     env.builder
         .new_build_load(return_type, return_alloca, "load_dec")
@@ -2099,24 +2238,19 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    match env.target_info.operating_system {
-        Windows => {
-            // windows is much nicer for us here
-            call_bitcode_fn(
-                env,
-                &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
-                fn_name,
-            )
-        }
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
-
             call_bitcode_fn(
                 env,
                 &[
@@ -2128,7 +2262,11 @@ pub(crate) fn dec_binop_with_unchecked<'ctx>(
                 fn_name,
             )
         }
-        Wasi => unimplemented!(),
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
+        _ => call_bitcode_fn(env, &[dec_alloca(env, lhs), dec_alloca(env, rhs)], fn_name),
     }
 }
 
@@ -2312,7 +2450,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                     let target_float_type = convert::float_type_from_float_width(env, float_width);
 
-                    bd.build_cast(
+                    bd.new_build_cast(
                         InstructionOpcode::SIToFP,
                         arg,
                         target_float_type,
@@ -2372,7 +2510,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 let target_int_type = convert::int_type_from_int_width(env, target_int_width);
                 let target_int_val: BasicValueEnum<'ctx> = env
                     .builder
-                    .build_int_cast_sign_flag(
+                    .new_build_int_cast_sign_flag(
                         arg,
                         target_int_type,
                         target_int_width.is_signed(),
@@ -2441,7 +2579,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 )
                                 .ptr_type(AddressSpace::default());
 
-                                let roc_return_alloca = env.builder.build_pointer_cast(
+                                let roc_return_alloca = env.builder.new_build_pointer_cast(
                                     zig_return_alloca,
                                     roc_return_type,
                                     "cast_to_roc",
@@ -2506,7 +2644,7 @@ fn int_neg_raise_on_overflow<'ctx>(
     let builder = env.builder;
 
     let min_val = int_type_signed_min(int_type);
-    let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
+    let condition = builder.new_build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let parent = block.get_parent().expect("to be in a function");
@@ -2514,7 +2652,7 @@ fn int_neg_raise_on_overflow<'ctx>(
     let else_block = env.context.append_basic_block(parent, "else");
 
     env.builder
-        .build_conditional_branch(condition, then_block, else_block);
+        .new_build_conditional_branch(condition, then_block, else_block);
 
     builder.position_at_end(then_block);
 
@@ -2526,7 +2664,7 @@ fn int_neg_raise_on_overflow<'ctx>(
 
     builder.position_at_end(else_block);
 
-    builder.build_int_neg(arg, "negate_int").into()
+    builder.new_build_int_neg(arg, "negate_int").into()
 }
 
 fn int_abs_raise_on_overflow<'ctx>(
@@ -2537,7 +2675,7 @@ fn int_abs_raise_on_overflow<'ctx>(
     let builder = env.builder;
 
     let min_val = int_type_signed_min(int_type);
-    let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
+    let condition = builder.new_build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let parent = block.get_parent().expect("to be in a function");
@@ -2545,7 +2683,7 @@ fn int_abs_raise_on_overflow<'ctx>(
     let else_block = env.context.append_basic_block(parent, "else");
 
     env.builder
-        .build_conditional_branch(condition, then_block, else_block);
+        .new_build_conditional_branch(condition, then_block, else_block);
 
     builder.position_at_end(then_block);
 
@@ -2577,16 +2715,16 @@ fn int_abs_with_overflow<'ctx>(
     let shifted_alloca = {
         let bits_to_shift = int_type.get_bit_width() as u64 - 1;
         let shift_val = int_type.const_int(bits_to_shift, false);
-        let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
-        let alloca = bd.build_alloca(int_type, "#int_abs_help");
+        let shifted = bd.new_build_right_shift(arg, shift_val, true, shifted_name);
+        let alloca = bd.new_build_alloca(int_type, "#int_abs_help");
 
         // shifted = arg >>> 63
-        bd.build_store(alloca, shifted);
+        bd.new_build_store(alloca, shifted);
 
         alloca
     };
 
-    let xored_arg = bd.build_xor(
+    let xored_arg = bd.new_build_xor(
         arg,
         bd.new_build_load(int_type, shifted_alloca, shifted_name)
             .into_int_value(),
@@ -2594,7 +2732,7 @@ fn int_abs_with_overflow<'ctx>(
     );
 
     BasicValueEnum::IntValue(
-        bd.build_int_sub(
+        bd.new_build_int_sub(
             xored_arg,
             bd.new_build_load(int_type, shifted_alloca, shifted_name)
                 .into_int_value(),
@@ -2617,7 +2755,7 @@ fn build_float_unary_op<'a, 'ctx>(
 
     // TODO: Handle different sized floats
     match op {
-        NumNeg => bd.build_float_neg(arg, "negate_float").into(),
+        NumNeg => bd.new_build_float_neg(arg, "negate_float").into(),
         NumAbs => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FABS[float_width]),
         NumSqrtUnchecked => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SQRT[float_width]),
         NumLogUnchecked => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_LOG[float_width]),
@@ -2628,13 +2766,13 @@ fn build_float_unary_op<'a, 'ctx>(
             };
             match (float_width, return_width) {
                 (FloatWidth::F32, FloatWidth::F32) => arg.into(),
-                (FloatWidth::F32, FloatWidth::F64) => bd.build_cast(
+                (FloatWidth::F32, FloatWidth::F64) => bd.new_build_cast(
                     InstructionOpcode::FPExt,
                     arg,
                     env.context.f64_type(),
                     "f32_to_f64",
                 ),
-                (FloatWidth::F64, FloatWidth::F32) => bd.build_cast(
+                (FloatWidth::F64, FloatWidth::F32) => bd.new_build_cast(
                     InstructionOpcode::FPTrunc,
                     arg,
                     env.context.f32_type(),

@@ -135,6 +135,7 @@ interface Str
         withCapacity,
         withPrefix,
         graphemes,
+        contains,
     ]
     imports [
         Bool.{ Bool, Eq },
@@ -995,3 +996,15 @@ strToNumHelp = \string ->
 ## ```
 withPrefix : Str, Str -> Str
 withPrefix = \str, prefix -> Str.concat prefix str
+
+## Determines whether or not the first Str contains the second.
+## ```
+## expect Str.contains "foobarbaz" "bar"
+## expect !(Str.contains "apple" "orange")
+## expect Str.contains "anything" ""
+## ```
+contains : Str, Str -> Bool
+contains = \haystack, needle ->
+    when firstMatch haystack needle is
+        Some _index -> Bool.true
+        None -> Bool.false

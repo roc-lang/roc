@@ -71,7 +71,7 @@ pub fn type_problem<'b>(
             symbol,
             overall_type,
         )),
-        UnexposedLookup(symbol) => {
+        UnexposedLookup(_, symbol) => {
             let title = "UNRECOGNIZED NAME".to_string();
             let doc = alloc
                 .stack(vec![alloc
@@ -748,7 +748,7 @@ fn to_expr_report<'b>(
             };
 
             let it_is = match annotation_source {
-                TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
+                TypedIfBranch { .. } => "This branch is".to_string(),
                 TypedWhenBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedBody { .. } => "The body is".into(),
                 RequiredSymbol { .. } => "The provided type is".into(),
@@ -4667,17 +4667,19 @@ fn type_problem_to_pretty<'b>(
             }
         }
 
-        (IntFloat, _) => alloc.tip().append(alloc.concat([
-            alloc.reflow("You can convert between "),
-            alloc.type_str("Int"),
-            alloc.reflow(" and "),
-            alloc.type_str("Frac"),
-            alloc.reflow(" using functions like "),
-            alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
-            alloc.reflow(" and "),
-            alloc.symbol_qualified(Symbol::NUM_ROUND),
-            alloc.reflow("."),
-        ])),
+        (IntFloat, _) => {
+            alloc.tip().append(alloc.concat(
+                [
+                    alloc.reflow(
+                        "You can convert between integers and fractions using functions like ",
+                    ),
+                    alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
+                    alloc.reflow(" and "),
+                    alloc.symbol_qualified(Symbol::NUM_ROUND),
+                    alloc.reflow("."),
+                ],
+            ))
+        }
 
         (TagsMissing(missing), ExpectationContext::WhenCondition) => match missing.split_last() {
             None => alloc.nil(),

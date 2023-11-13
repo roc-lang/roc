@@ -316,12 +316,6 @@ fn get_test_main_fn<T>(
     get_raw_fn("test_main", lib)
 }
 
-pub(crate) fn run_function<T>(fn_name: &str, lib: &libloading::Library) -> T {
-    let main = get_raw_fn::<T>(fn_name, lib);
-
-    unsafe { main() }
-}
-
 pub(crate) fn run_test_main<T>(lib: &libloading::Library) -> Result<T, (String, CrashTag)> {
     let main = get_test_main_fn::<T>(lib);
 
@@ -336,10 +330,58 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
     }
 }
 
+// only used in tests
+pub(crate) fn asm_evals_to<T, U, F>(
+    src: &str,
+    expected: U,
+    transform: F,
+    leak: bool,
+    lazy_literals: bool,
+) where
+    U: PartialEq + std::fmt::Debug,
+    F: FnOnce(T) -> U,
+{
+    use bumpalo::Bump;
+
+    let arena = Bump::new();
+    let (_main_fn_name, errors, lib) =
+        crate::helpers::dev::helper(&arena, src, leak, lazy_literals);
+
+    let result = crate::helpers::dev::run_test_main::<T>(&lib);
+
+    if !errors.is_empty() {
+        dbg!(&errors);
+
+        assert_eq!(
+            errors,
+            std::vec::Vec::new(),
+            "Encountered errors: {:?}",
+            errors
+        );
+    }
+
+    match result {
+        Ok(value) => {
+            let expected = expected;
+            #[allow(clippy::redundant_closure_call)]
+            let given = transform(value);
+            assert_eq!(&given, &expected, "output is different");
+        }
+        Err((msg, tag)) => match tag {
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+            CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+        },
+    }
+}
+
+pub(crate) fn identity<T>(x: T) -> T {
+    x
+}
+
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, (|val| val));
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::dev::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
@@ -357,50 +399,13 @@ macro_rules! assert_evals_to {
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
-        use bumpalo::Bump;
-
-        let arena = Bump::new();
-        let (_main_fn_name, errors, lib) =
-            $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
-
-        // NOTE: on aarch64 our infrastructure for roc_panic does not work yet. Therefore we call
-        // just the main roc function which does not do anything to catch/report panics.
-        let result = if cfg!(target_arch = "aarch64") {
-            let typ = std::any::type_name::<$ty>();
-            println!("calling the `{_main_fn_name}: {typ}` function");
-            let result = $crate::helpers::dev::run_function::<$ty>(&_main_fn_name, &lib);
-            Ok(result)
-        } else {
-            $crate::helpers::dev::run_test_main::<$ty>(&lib)
-        };
-
-        if !errors.is_empty() {
-            dbg!(&errors);
-
-            assert_eq!(
-                errors,
-                std::vec::Vec::new(),
-                "Encountered errors: {:?}",
-                errors
-            );
-        }
-
-        match result {
-            Ok(value) => {
-                let expected = $expected;
-                #[allow(clippy::redundant_closure_call)]
-                let given = $transform(value);
-                assert_eq!(&given, &expected, "output is different");
-            }
-            Err((msg, tag)) => {
-                use roc_mono::ir::CrashTag;
-
-                match tag {
-                    CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
-                    CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
-                }
-            }
-        }
+        $crate::helpers::dev::asm_evals_to::<$ty, _, _>(
+            $src,
+            $expected,
+            $transform,
+            $leak,
+            $lazy_literals,
+        );
     };
 }
 

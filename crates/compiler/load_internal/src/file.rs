@@ -2,9 +2,9 @@
 
 use crate::docs::ModuleDocumentation;
 use crate::module::{
-    ConstrainedModule, EntryPoint, Expectations, ExposedToHost, FoundSpecializationsModule,
-    LateSpecializationsModule, LoadedModule, ModuleHeader, ModuleTiming, MonomorphizedModule,
-    ParsedModule, ToplevelExpects, TypeCheckedModule,
+    CheckedModule, ConstrainedModule, EntryPoint, Expectations, ExposedToHost,
+    FoundSpecializationsModule, LateSpecializationsModule, LoadedModule, ModuleHeader,
+    ModuleTiming, MonomorphizedModule, ParsedModule, ToplevelExpects, TypeCheckedModule,
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
@@ -69,7 +69,6 @@ use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Var
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
-use std::env::current_dir;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -90,9 +89,6 @@ use crate::work::{DepCycle, Dependencies};
 use crate::wasm_instant::{Duration, Instant};
 #[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, Instant};
-
-/// Default name for the binary generated for an app, if an invalid one was specified.
-const DEFAULT_APP_OUTPUT_PATH: &str = "app";
 
 /// Filename extension for normal Roc modules
 const ROC_FILE_EXTENSION: &str = "roc";
@@ -697,7 +693,6 @@ struct State<'a> {
     pub opt_platform_shorthand: Option<&'a str>,
     pub platform_data: Option<PlatformData<'a>>,
     pub exposed_types: ExposedByModule,
-    pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
     pub target_info: TargetInfo,
     pub(self) function_kind: FunctionKind,
@@ -785,7 +780,6 @@ impl<'a> State<'a> {
             target_info,
             function_kind,
             platform_data: None,
-            output_path: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
             dependencies,
@@ -954,7 +948,6 @@ pub enum LoadingProblem<'a> {
     ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
 
-    MsgChannelDied,
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
 
@@ -964,6 +957,27 @@ pub enum LoadingProblem<'a> {
     ImportCycle(PathBuf, Vec<ModuleId>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
+    ChannelProblem(ChannelProblem),
+}
+
+#[derive(Debug)]
+pub enum ChannelProblem {
+    FailedToEnqueueTask(Box<PanicReportInfo>),
+    FailedToSendRootMsg,
+    FailedToSendWorkerShutdownMsg,
+    ChannelDisconnected,
+    FailedToSendManyMsg,
+    FailedToSendFinishedSpecializationsMsg,
+    FailedToSendTaskMsg,
+    FailedToSendFinishedTypeCheckingMsg,
+}
+
+#[derive(Debug)]
+pub struct PanicReportInfo {
+    can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
+    type_problems: MutMap<ModuleId, Vec<TypeError>>,
+    sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
+    interns: Interns,
 }
 
 pub enum Phases {
@@ -980,13 +994,35 @@ fn enqueue_task<'a>(
     injector: &Injector<BuildTask<'a>>,
     listeners: &[Sender<WorkerMsg>],
     task: BuildTask<'a>,
+    state: &State<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
     injector.push(task);
 
     for listener in listeners {
-        listener
-            .send(WorkerMsg::TaskAdded)
-            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        listener.send(WorkerMsg::TaskAdded).map_err(|_| {
+            let module_ids = { (*state.arc_modules).lock().clone() }.into_module_ids();
+
+            let interns = Interns {
+                module_ids,
+                all_ident_ids: state.constrained_ident_ids.clone(),
+            };
+
+            LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(Box::new(
+                PanicReportInfo {
+                    can_problems: state.module_cache.can_problems.clone(),
+                    type_problems: state.module_cache.type_problems.clone(),
+                    interns,
+                    sources: state
+                        .module_cache
+                        .sources
+                        .iter()
+                        .map(|(key, (path, str_ref))| {
+                            (*key, (path.clone(), str_ref.to_string().into_boxed_str()))
+                        })
+                        .collect(),
+                },
+            )))
+        })?;
     }
 
     Ok(())
@@ -1030,7 +1066,7 @@ pub fn load_and_typecheck_str<'a>(
         roc_cache_dir,
         load_config,
     )? {
-        Monomorphized(_) => unreachable!(""),
+        Monomorphized(_) => unreachable!(),
         TypeChecked(module) => Ok(module),
     }
 }
@@ -1080,32 +1116,7 @@ impl<'a> LoadStart<'a> {
             );
 
             match res_loaded {
-                Ok(header_output) => {
-                    if let Msg::Header(ModuleHeader {
-                        module_id: header_id,
-                        header_type,
-                        is_root_module,
-                        ..
-                    }) = &header_output.msg
-                    {
-                        debug_assert_eq!(*header_id, header_output.module_id);
-                        debug_assert!(is_root_module);
-
-                        if let HeaderType::Interface { name, .. } = header_type {
-                            // Interface modules can have names like Foo.Bar.Baz,
-                            // in which case we need to adjust the src_dir to
-                            // remove the "Bar/Baz" directories in order to correctly
-                            // resolve this interface module's imports!
-                            let dirs_to_pop = name.as_str().matches('.').count();
-
-                            for _ in 0..dirs_to_pop {
-                                src_dir.pop();
-                            }
-                        }
-                    }
-
-                    header_output
-                }
+                Ok(header_output) => adjust_header_paths(header_output, &mut src_dir),
 
                 Err(problem) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
@@ -1139,7 +1150,7 @@ impl<'a> LoadStart<'a> {
         filename: PathBuf,
         src: &'a str,
         roc_cache_dir: RocCacheDir<'_>,
-        src_dir: PathBuf,
+        mut src_dir: PathBuf,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -1153,7 +1164,7 @@ impl<'a> LoadStart<'a> {
         } = {
             let root_start_time = Instant::now();
 
-            load_from_str(
+            let header_output = load_from_str(
                 arena,
                 filename,
                 src,
@@ -1161,7 +1172,9 @@ impl<'a> LoadStart<'a> {
                 Arc::clone(&ident_ids_by_module),
                 roc_cache_dir,
                 root_start_time,
-            )?
+            )?;
+
+            adjust_header_paths(header_output, &mut src_dir)
         };
 
         Ok(LoadStart {
@@ -1173,6 +1186,34 @@ impl<'a> LoadStart<'a> {
             opt_platform_shorthand: opt_platform_id,
         })
     }
+}
+
+fn adjust_header_paths<'a>(
+    header_output: HeaderOutput<'a>,
+    src_dir: &mut PathBuf,
+) -> HeaderOutput<'a> {
+    if let Msg::Header(ModuleHeader {
+        module_id: header_id,
+        header_type,
+        ..
+    }) = &header_output.msg
+    {
+        debug_assert_eq!(*header_id, header_output.module_id);
+
+        if let HeaderType::Interface { name, .. } = header_type {
+            // Interface modules can have names like Foo.Bar.Baz,
+            // in which case we need to adjust the src_dir to
+            // remove the "Bar/Baz" directories in order to correctly
+            // resolve this interface module's imports!
+            let dirs_to_pop = name.as_str().matches('.').count();
+
+            for _ in 0..dirs_to_pop {
+                src_dir.pop();
+            }
+        }
+    }
+
+    header_output
 }
 
 pub enum LoadResult<'a> {
@@ -1325,7 +1366,7 @@ pub fn load_single_threaded<'a>(
 
     msg_tx
         .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
 
     let number_of_workers = 1;
     let mut state = State::new(
@@ -1575,7 +1616,9 @@ fn state_thread_step<'a>(
         }
         Err(err) => match err {
             crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
-            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::MsgChannelDied),
+            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::ChannelProblem(
+                ChannelProblem::ChannelDisconnected,
+            )),
         },
     }
 }
@@ -1647,7 +1690,7 @@ fn load_multi_threaded<'a>(
     let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
 
     // Reserve one CPU for the main thread, and let all the others be eligible
     // to spawn workers.
@@ -1705,10 +1748,15 @@ fn load_multi_threaded<'a>(
     // Get a reference to the completed stealers, so we can send that
     // reference to each worker. (Slices are Sync, but bumpalo Vecs are not.)
     let stealers = stealers.into_bump_slice();
-
     let it = worker_arenas.iter_mut();
+
+    let mut can_problems_recorded = MutMap::default();
+    let mut type_problems_recorded = MutMap::default();
+    let mut sources_recorded = MutMap::default();
+    let mut interns_recorded = Interns::default();
+
     {
-        thread::scope(|thread_scope| {
+        let thread_result = thread::scope(|thread_scope| {
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
 
@@ -1744,7 +1792,9 @@ fn load_multi_threaded<'a>(
                         )
                     });
 
-                res_join_handle.unwrap();
+                res_join_handle.unwrap_or_else(|_| {
+                    panic!("Join handle panicked!");
+                });
             }
 
             // We've now distributed one worker queue to each thread.
@@ -1760,9 +1810,13 @@ fn load_multi_threaded<'a>(
             macro_rules! shut_down_worker_threads {
                 () => {
                     for listener in worker_listeners {
-                        listener
-                            .send(WorkerMsg::Shutdown)
-                            .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                        // We intentionally don't propagate this Result, because even if
+                        // shutting down a worker failed (which can happen if a a panic
+                        // occurred on that thread), we want to continue shutting down
+                        // the others regardless.
+                        if listener.send(WorkerMsg::Shutdown).is_err() {
+                            log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
+                        }
                     }
                 };
             }
@@ -1788,6 +1842,36 @@ fn load_multi_threaded<'a>(
                         state = new_state;
                         continue;
                     }
+                    Err(LoadingProblem::ChannelProblem(ChannelProblem::FailedToEnqueueTask(
+                        info,
+                    ))) => {
+                        let PanicReportInfo {
+                            can_problems,
+                            type_problems,
+                            sources,
+                            interns,
+                        } = *info;
+
+                        // Record these for later.
+                        can_problems_recorded = can_problems;
+                        type_problems_recorded = type_problems;
+                        sources_recorded = sources;
+                        interns_recorded = interns;
+
+                        shut_down_worker_threads!();
+
+                        return Err(LoadingProblem::ChannelProblem(
+                            ChannelProblem::FailedToEnqueueTask(Box::new(PanicReportInfo {
+                                // This return value never gets used, so don't bother
+                                // cloning these in order to be able to return them.
+                                // Really, anything could go here.
+                                can_problems: Default::default(),
+                                type_problems: Default::default(),
+                                sources: Default::default(),
+                                interns: Default::default(),
+                            })),
+                        ));
+                    }
                     Err(e) => {
                         shut_down_worker_threads!();
 
@@ -1795,9 +1879,33 @@ fn load_multi_threaded<'a>(
                     }
                 }
             }
+        });
+
+        thread_result.unwrap_or_else(|_| {
+            // This most likely means a panic occurred in one of the threads.
+            // Therefore, print all the error info we've accumulated, and note afterwards
+            // that there was a compiler crash.
+            //
+            // Unfortunately, this often has no information to report if there's a panic in mono.
+            // Consequently, the following ends up being more misleading than helpful.
+            //
+            // roc_reporting::cli::report_problems(
+            //     &sources_recorded,
+            //     &mut interns_recorded,
+            //     &mut can_problems_recorded,
+            //     &mut type_problems_recorded,
+            // )
+            // .print_to_stdout(Duration::default()); // TODO determine total elapsed time and use it here
+
+            Err(LoadingProblem::FormattedReport(
+                concat!(
+                    "\n\nThere was an unrecoverable error in the Roc compiler. The `roc check` ",
+                    "command can sometimes give a more helpful error report than other commands.\n\n"
+                )
+                .to_string(),
+            ))
         })
     }
-    .unwrap()
 }
 
 fn worker_task_step<'a>(
@@ -1843,8 +1951,8 @@ fn worker_task_step<'a>(
 
                         match result {
                             Ok(()) => {}
-                            Err(LoadingProblem::MsgChannelDied) => {
-                                panic!("Msg channel closed unexpectedly.")
+                            Err(LoadingProblem::ChannelProblem(problem)) => {
+                                panic!("Channel problem: {problem:?}");
                             }
                             Err(LoadingProblem::ParsingFailed(problem)) => {
                                 msg_tx.send(Msg::FailedToParse(problem)).unwrap();
@@ -1942,8 +2050,8 @@ fn worker_task<'a>(
 
                     match result {
                         Ok(()) => {}
-                        Err(LoadingProblem::MsgChannelDied) => {
-                            panic!("Msg channel closed unexpectedly.")
+                        Err(LoadingProblem::ChannelProblem(problem)) => {
+                            panic!("Channel problem: {problem:?}");
                         }
                         Err(LoadingProblem::ParsingFailed(problem)) => {
                             msg_tx.send(Msg::FailedToParse(problem)).unwrap();
@@ -1976,8 +2084,10 @@ fn start_tasks<'a>(
     worker_listeners: &'a [Sender<WorkerMsg>],
 ) -> Result<(), LoadingProblem<'a>> {
     for (module_id, phase) in work {
-        for task in start_phase(module_id, phase, arena, state) {
-            enqueue_task(injector, worker_listeners, task)?
+        let tasks = start_phase(module_id, phase, arena, state);
+
+        for task in tasks {
+            enqueue_task(injector, worker_listeners, task, state)?
         }
     }
 
@@ -2086,9 +2196,9 @@ fn update<'a>(
         Many(messages) => {
             // enqueue all these message
             for msg in messages {
-                msg_tx
-                    .send(msg)
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                msg_tx.send(msg).map_err(|_| {
+                    LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendManyMsg)
+                })?;
             }
 
             Ok(state)
@@ -2175,7 +2285,6 @@ fn update<'a>(
 
                 match header.header_type {
                     App { to_platform, .. } => {
-                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
                     Package {
@@ -2237,7 +2346,7 @@ fn update<'a>(
                         // If we're building an app module, and this was the platform
                         // specified in its header's `to` field, record it as our platform.
                         if state.opt_platform_shorthand == Some(config_shorthand) {
-                            debug_assert!(matches!(state.platform_data, None));
+                            debug_assert!(state.platform_data.is_none());
 
                             state.platform_data = Some(PlatformData {
                                 module_id: header.module_id,
@@ -2358,24 +2467,9 @@ fn update<'a>(
                 .sources
                 .insert(parsed.module_id, (parsed.module_path.clone(), parsed.src));
 
-            // If this was an app module, set the output path to be
-            // the module's declared "name".
-            //
-            // e.g. for `app "blah"` we should generate an output file named "blah"
-            if let HeaderType::App { output_name, .. } = &parsed.header_type {
-                match output_name {
-                    StrLiteral::PlainLine(path) => {
-                        state.output_path = Some(path);
-                    }
-                    _ => {
-                        todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
-                    }
-                }
-            }
-
             let module_id = parsed.module_id;
 
-            state.module_cache.parsed.insert(parsed.module_id, parsed);
+            state.module_cache.parsed.insert(module_id, parsed);
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
 
@@ -2552,7 +2646,11 @@ fn update<'a>(
                         #[cfg(debug_assertions)]
                         checkmate,
                     })
-                    .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                    .map_err(|_| {
+                        LoadingProblem::ChannelProblem(
+                            ChannelProblem::FailedToSendFinishedTypeCheckingMsg,
+                        )
+                    })?;
 
                 // bookkeeping
                 state.declarations_by_id.insert(module_id, decls);
@@ -2594,6 +2692,14 @@ fn update<'a>(
                         .typechecked
                         .insert(module_id, typechecked);
                 } else {
+                    state.module_cache.checked.insert(
+                        module_id,
+                        CheckedModule {
+                            solved_subs,
+                            decls,
+                            abilities_store,
+                        },
+                    );
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                     state.timings.insert(module_id, module_timing);
                 }
@@ -2874,7 +2980,11 @@ fn update<'a>(
                             exposed_to_host: state.exposed_to_host.clone(),
                             module_expectations,
                         })
-                        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+                        .map_err(|_| {
+                            LoadingProblem::ChannelProblem(
+                                ChannelProblem::FailedToSendFinishedSpecializationsMsg,
+                            )
+                        })?;
 
                     Ok(state)
                 }
@@ -3110,7 +3220,6 @@ fn finish_specialization<'a>(
         procedures,
         host_exposed_lambda_sets,
         module_cache,
-        output_path,
         platform_data,
         ..
     } = state;
@@ -3128,12 +3237,6 @@ fn finish_specialization<'a>(
         .collect();
 
     let module_id = state.root_id;
-
-    let output_path = match output_path {
-        Some(path_str) => Path::new(path_str).into(),
-        None => current_dir().unwrap().join(DEFAULT_APP_OUTPUT_PATH).into(),
-    };
-
     let uses_prebuilt_platform = match platform_data {
         Some(data) => data.is_prebuilt,
         // If there's no platform data (e.g. because we're building an interface module)
@@ -3144,7 +3247,6 @@ fn finish_specialization<'a>(
     Ok(MonomorphizedModule {
         can_problems,
         type_problems,
-        output_path,
         expectations: module_expectations,
         exposed_to_host,
         module_id,
@@ -3224,6 +3326,8 @@ fn finish(
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
+    let declarations_by_id = state.declarations_by_id;
+
     roc_checkmate::dump_checkmate!(checkmate);
 
     LoadedModule {
@@ -3232,7 +3336,8 @@ fn finish(
         solved,
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
-        declarations_by_id: state.declarations_by_id,
+        declarations_by_id,
+        typechecked: state.module_cache.checked,
         dep_idents,
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
@@ -6308,7 +6413,7 @@ fn run_task<'a>(
 
     msg_tx
         .send(msg)
-        .map_err(|_| LoadingProblem::MsgChannelDied)?;
+        .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendTaskMsg))?;
 
     Ok(())
 }

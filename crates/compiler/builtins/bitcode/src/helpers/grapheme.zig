@@ -42,32 +42,32 @@ pub const BoundClass = enum(u8) {
 };
 
 test "Bound Class" {
-    try expectEqual(0, @enumToInt(BoundClass.START));
+    try expectEqual(0, @intFromEnum(BoundClass.START));
 }
 
 // https://github.com/JuliaStrings/utf8proc/blob/master/utf8proc.c#L261
 fn graphemeBreakSimple(lbc: BoundClass, tbc: BoundClass) bool {
-    const lbc_u8 = @enumToInt(lbc);
-    const tbc_u8 = @enumToInt(tbc);
-    return (if (lbc_u8 == @enumToInt(BoundClass.START)) // GB1
+    const lbc_u8 = @intFromEnum(lbc);
+    const tbc_u8 = @intFromEnum(tbc);
+    return (if (lbc_u8 == @intFromEnum(BoundClass.START)) // GB1
         true
-    else if (lbc_u8 == @enumToInt(BoundClass.CR) and tbc_u8 == @enumToInt(BoundClass.LF)) // GB3
+    else if (lbc_u8 == @intFromEnum(BoundClass.CR) and tbc_u8 == @intFromEnum(BoundClass.LF)) // GB3
         false
-    else if (lbc_u8 >= @enumToInt(BoundClass.CR) and lbc_u8 <= @enumToInt(BoundClass.CONTROL)) // GB4
+    else if (lbc_u8 >= @intFromEnum(BoundClass.CR) and lbc_u8 <= @intFromEnum(BoundClass.CONTROL)) // GB4
         true
-    else if (tbc_u8 >= @enumToInt(BoundClass.CR) and tbc_u8 <= @enumToInt(BoundClass.CONTROL)) // GB5
+    else if (tbc_u8 >= @intFromEnum(BoundClass.CR) and tbc_u8 <= @intFromEnum(BoundClass.CONTROL)) // GB5
         true
-    else if (lbc_u8 == @enumToInt(BoundClass.L) and (tbc_u8 == @enumToInt(BoundClass.L) or tbc_u8 == @enumToInt(BoundClass.V) or tbc_u8 == @enumToInt(BoundClass.LV) or tbc_u8 == @enumToInt(BoundClass.LVT))) // GB6
+    else if (lbc_u8 == @intFromEnum(BoundClass.L) and (tbc_u8 == @intFromEnum(BoundClass.L) or tbc_u8 == @intFromEnum(BoundClass.V) or tbc_u8 == @intFromEnum(BoundClass.LV) or tbc_u8 == @intFromEnum(BoundClass.LVT))) // GB6
         false
-    else if ((lbc_u8 == @enumToInt(BoundClass.LV) or lbc_u8 == @enumToInt(BoundClass.V)) and (tbc_u8 == @enumToInt(BoundClass.V) or tbc_u8 == @enumToInt(BoundClass.T))) // GB7
+    else if ((lbc_u8 == @intFromEnum(BoundClass.LV) or lbc_u8 == @intFromEnum(BoundClass.V)) and (tbc_u8 == @intFromEnum(BoundClass.V) or tbc_u8 == @intFromEnum(BoundClass.T))) // GB7
         false
-    else if ((lbc_u8 == @enumToInt(BoundClass.LVT) or lbc_u8 == @enumToInt(BoundClass.T)) and tbc_u8 == @enumToInt(BoundClass.T)) // GB8
+    else if ((lbc_u8 == @intFromEnum(BoundClass.LVT) or lbc_u8 == @intFromEnum(BoundClass.T)) and tbc_u8 == @intFromEnum(BoundClass.T)) // GB8
         false
-    else if (tbc_u8 == @enumToInt(BoundClass.EXTEND) or tbc_u8 == @enumToInt(BoundClass.ZWJ) or tbc_u8 == @enumToInt(BoundClass.SPACINGMARK) or lbc_u8 == @enumToInt(BoundClass.PREPEND)) // GB9a
+    else if (tbc_u8 == @intFromEnum(BoundClass.EXTEND) or tbc_u8 == @intFromEnum(BoundClass.ZWJ) or tbc_u8 == @intFromEnum(BoundClass.SPACINGMARK) or lbc_u8 == @intFromEnum(BoundClass.PREPEND)) // GB9a
         false
-    else if (lbc_u8 == @enumToInt(BoundClass.E_ZWG) and tbc_u8 == @enumToInt(BoundClass.EXTENDED_PICTOGRAPHIC)) // GB11 (requires additional handling below)
+    else if (lbc_u8 == @intFromEnum(BoundClass.E_ZWG) and tbc_u8 == @intFromEnum(BoundClass.EXTENDED_PICTOGRAPHIC)) // GB11 (requires additional handling below)
         false
-    else if (lbc_u8 == @enumToInt(BoundClass.REGIONAL_INDICATOR) and tbc_u8 == @enumToInt(BoundClass.REGIONAL_INDICATOR)) // GB12/13 (requires additional handling below)
+    else if (lbc_u8 == @intFromEnum(BoundClass.REGIONAL_INDICATOR) and tbc_u8 == @intFromEnum(BoundClass.REGIONAL_INDICATOR)) // GB12/13 (requires additional handling below)
         false
     else // GB999
         true);

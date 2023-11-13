@@ -17,12 +17,9 @@ use roc_region::all::Region;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const BUILD_DIR: &str = "./generated-docs";
-
 const LINK_SVG: &str = include_str!("./static/link.svg");
 
-pub fn generate_docs_html(root_file: PathBuf) {
-    let build_dir = Path::new(BUILD_DIR);
+pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     let loaded_module = load_module_for_docs(root_file);
 
     // TODO get these from the platform's source file rather than hardcoding them!
@@ -43,7 +40,6 @@ pub fn generate_docs_html(root_file: PathBuf) {
     struct Assets<S: AsRef<str>> {
         search_js: S,
         styles_css: S,
-        favicon_svg: S,
         raw_template_html: S,
     }
 
@@ -51,13 +47,11 @@ pub fn generate_docs_html(root_file: PathBuf) {
     let assets = {
         let search_js = include_str!("./static/search.js");
         let styles_css = include_str!("./static/styles.css");
-        let favicon_svg = include_str!("./static/favicon.svg");
         let raw_template_html = include_str!("./static/index.html");
 
         Assets {
             search_js,
             styles_css,
-            favicon_svg,
             raw_template_html,
         }
     };
@@ -71,13 +65,11 @@ pub fn generate_docs_html(root_file: PathBuf) {
         // Read the assets from the filesystem
         let search_js = fs::read_to_string(static_dir.join("search.js")).unwrap();
         let styles_css = fs::read_to_string(static_dir.join("styles.css")).unwrap();
-        let favicon_svg = fs::read_to_string(static_dir.join("favicon.svg")).unwrap();
         let raw_template_html = fs::read_to_string(static_dir.join("index.html")).unwrap();
 
         Assets {
             search_js,
             styles_css,
-            favicon_svg,
             raw_template_html,
         }
     };
@@ -87,7 +79,6 @@ pub fn generate_docs_html(root_file: PathBuf) {
     for (file, contents) in [
         ("search.js", assets.search_js),
         ("styles.css", assets.styles_css),
-        ("favicon.svg", assets.favicon_svg),
     ] {
         let dir = build_dir.join(file);
         fs::write(&dir, contents).unwrap_or_else(|error| {

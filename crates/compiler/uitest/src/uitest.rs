@@ -39,23 +39,23 @@ lazy_static! {
 
     /// # +set <setting>
     static ref RE_SETTING: Regex =
-        Regex::new(r#"# \+set (?P<setting>.*?)=(?P<value>.*)"#).unwrap();
+        Regex::new(r"# \+set (?P<setting>.*?)=(?P<value>.*)").unwrap();
 
     /// # +opt can:<opt>
     static ref RE_OPT_CAN: Regex =
-        Regex::new(r#"# \+opt can:(?P<opt>.*)"#).unwrap();
+        Regex::new(r"# \+opt can:(?P<opt>.*)").unwrap();
 
     /// # +opt infer:<opt>
     static ref RE_OPT_INFER: Regex =
-        Regex::new(r#"# \+opt infer:(?P<opt>.*)"#).unwrap();
+        Regex::new(r"# \+opt infer:(?P<opt>.*)").unwrap();
 
     /// # +opt mono:<opt>
     static ref RE_OPT_MONO: Regex =
-        Regex::new(r#"# \+opt mono:(?P<opt>.*)"#).unwrap();
+        Regex::new(r"# \+opt mono:(?P<opt>.*)").unwrap();
 
     /// # +emit:<opt>
     static ref RE_EMIT: Regex =
-        Regex::new(r#"# \+emit:(?P<opt>.*)"#).unwrap();
+        Regex::new(r"# \+emit:(?P<opt>.*)").unwrap();
 
     /// ## module <name>
     static ref RE_MODULE: Regex =

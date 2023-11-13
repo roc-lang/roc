@@ -58,8 +58,8 @@ impl<'ctx> RocStruct<'ctx> {
         let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner);
 
         if passed_by_ref {
-            let alloca = env.builder.build_alloca(struct_type, "struct_alloca");
-            env.builder.build_store(alloca, struct_val);
+            let alloca = env.builder.new_build_alloca(struct_type, "struct_alloca");
+            env.builder.new_build_store(alloca, struct_val);
             RocStruct::ByReference(alloca)
         } else {
             RocStruct::ByValue(struct_val)
@@ -156,8 +156,7 @@ fn index_struct_ptr<'a, 'ctx>(
     let name = format!("struct_field_access_record_{index}");
     let field_value = env
         .builder
-        .new_build_struct_gep(struct_type, ptr, index as u32, &name)
-        .unwrap();
+        .new_build_struct_gep(struct_type, ptr, index as u32, &name);
 
     load_roc_value(
         env,

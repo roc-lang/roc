@@ -34,3 +34,17 @@ bumpalo.workspace = true
 
 [target.'cfg(not(windows))'.build-dependencies]
 roc_load_internal = { path = "../load_internal" }
+
+[dev-dependencies]
+roc_constrain = { path = "../constrain" }
+roc_derive = { path = "../derive" }
+roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_solve_problem = { path = "../solve_problem" }
+ven_pretty = { path = "../../vendor/pretty" }
+roc_test_utils = { path = "../../test_utils" }
+
+indoc.workspace = true
+insta.workspace = true
+pretty_assertions.workspace = true

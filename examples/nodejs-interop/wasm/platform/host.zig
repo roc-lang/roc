@@ -24,13 +24,13 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
     _ = old_size;
     _ = alignment;
 
-    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
 
-    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
 // NOTE roc_panic is provided in the JS file, so it can throw an exception

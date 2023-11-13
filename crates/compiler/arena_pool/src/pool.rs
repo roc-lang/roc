@@ -205,7 +205,7 @@ impl<T> ArenaPool<T> {
         // Add the arena's extra chunks to our own, so their memory remains live
         // after the arena gets dropped. This is important, because at this
         // point their pointers can still potentially be dereferenced!
-        self.extra_chunks.extend(arena.extra_chunks.into_iter());
+        self.extra_chunks.extend(arena.extra_chunks);
 
         self.num_leased -= 1;
     }

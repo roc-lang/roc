@@ -3856,7 +3856,7 @@ mod solve_expr {
                 List.dropLast
                 "#
             ),
-            "List elem -> List elem",
+            "List elem, Nat -> List elem",
         );
     }
 

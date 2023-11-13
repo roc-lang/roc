@@ -7,7 +7,9 @@ use inkwell::{
 use roc_mono::layout::{InLayout, LambdaName, LayoutInterner, STLayoutInterner};
 
 use super::{
-    build::{function_value_by_func_spec, Env, FuncBorrowSpec, FunctionSpec, RocReturn},
+    build::{
+        function_value_by_func_spec, BuilderExt, Env, FuncBorrowSpec, FunctionSpec, RocReturn,
+    },
     convert::{argument_type_from_layout, basic_type_from_layout},
 };
 
@@ -43,6 +45,6 @@ pub fn cast_to_function_ptr_type<'ctx>(
     function_pointer_type: PointerType<'ctx>,
 ) -> PointerValue<'ctx> {
     env.builder
-        .build_bitcast(pointer, function_pointer_type, "cast_to_function_ptr")
+        .new_build_bitcast(pointer, function_pointer_type, "cast_to_function_ptr")
         .into_pointer_value()
 }

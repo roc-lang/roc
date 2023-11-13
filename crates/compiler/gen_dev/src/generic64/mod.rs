@@ -1048,9 +1048,6 @@ impl<
 
         // now, this gives a pointer to the value
         ASM::data_pointer(&mut self.buf, &mut self.relocs, data_name, reg);
-
-        // dereference
-        ASM::mov_reg64_mem64_offset32(&mut self.buf, reg, reg, 0);
     }
 
     fn build_fn_call(
@@ -1803,6 +1800,11 @@ impl<
 
                 self.free_symbol(tmp);
             }
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
+                // This instruction will never execute, but we need a value the symbol
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
+            }
             _ => {
                 let ident_ids = self
                     .interns
@@ -1879,6 +1881,11 @@ impl<
 
                 self.free_symbol(tmp)
             }
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
+                // This instruction will never execute, but we need a value the symbol
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
+            }
             _ => {
                 // defer to equality
 
@@ -1904,11 +1911,13 @@ impl<
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
 
-                // Not would usually be implemented as `xor src, -1` followed by `and src, 1`
-                // but since our booleans are represented as `0x101010101010101` currently, we can simply XOR with that
-                let bool_val = [true as u8; 8];
-                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i64::from_ne_bytes(bool_val));
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
                 ASM::xor_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+
+                // we may need to mask out other bits in the end? but a boolean should be 0 or 1.
+                // if that invariant is upheld, this mask should not be required
+                // ASM::and_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
             x => todo!("Not: layout, {:?}", x),
@@ -3153,9 +3162,10 @@ impl<
     ) {
         let element_layout = self.layout_interner.get_repr(*element_in_layout);
         let element_width = self.layout_interner.stack_size(*element_in_layout) as u64;
+        let element_alignment = self.layout_interner.alignment_bytes(*element_in_layout) as u64;
 
         // load the total size of the data we want to store (excludes refcount)
-        let data_bytes_symbol = Symbol::DEV_TMP;
+        let data_bytes_symbol = self.debug_symbol("data_bytes");
         let data_bytes = element_width * elements.len() as u64;
         self.load_literal(
             &data_bytes_symbol,
@@ -3164,7 +3174,7 @@ impl<
         );
 
         // Load allocation alignment (u32)
-        let element_alignment_symbol = Symbol::DEV_TMP2;
+        let element_alignment_symbol = self.debug_symbol("element_alignment");
         self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
         let allocation_symbol = self.debug_symbol("list_allocation");
@@ -3177,6 +3187,33 @@ impl<
         self.free_symbol(&data_bytes_symbol);
         self.free_symbol(&element_alignment_symbol);
 
+        enum Origin {
+            S(Symbol),
+            L(Symbol),
+        }
+
+        let mut element_symbols = std::vec::Vec::new();
+
+        // NOTE: this realizes all the list elements on the stack before they are put into the
+        // list. This turns out to be important. Creating the literals as we go causes issues with
+        // register usage.
+        //
+        // Of course this is inefficient when there are many elements (causes lots of stack
+        // spillage.
+        for (i, elem) in elements.iter().enumerate() {
+            match elem {
+                ListLiteralElement::Symbol(sym) => {
+                    self.load_literal_symbols(&[*sym]);
+                    element_symbols.push(Origin::S(*sym));
+                }
+                ListLiteralElement::Literal(lit) => {
+                    let sym = self.debug_symbol(&format!("lit_{i}"));
+                    self.load_literal(&sym, element_in_layout, lit);
+                    element_symbols.push(Origin::L(sym));
+                }
+            }
+        }
+
         // The pointer already points to the first element
         let ptr_reg = self
             .storage_manager
@@ -3184,21 +3221,9 @@ impl<
 
         // Copy everything into output array.
         let mut element_offset = 0;
-        for elem in elements {
-            // TODO: this could be a lot faster when loading large lists
-            // if we move matching on the element layout to outside this loop.
-            // It also greatly bloats the code here.
-            // Refactor this and switch to one external match.
-            // We also could make loadining indivitual literals much faster
+        for elem in element_symbols {
             let element_symbol = match elem {
-                ListLiteralElement::Symbol(sym) => {
-                    self.load_literal_symbols(&[*sym]);
-                    *sym
-                }
-                ListLiteralElement::Literal(lit) => {
-                    self.load_literal(&Symbol::DEV_TMP, element_in_layout, lit);
-                    Symbol::DEV_TMP
-                }
+                Origin::S(s) | Origin::L(s) => s,
             };
 
             Self::ptr_write(
@@ -3213,7 +3238,7 @@ impl<
             );
 
             element_offset += element_width as i32;
-            if element_symbol == Symbol::DEV_TMP {
+            if let Origin::L(element_symbol) = elem {
                 self.free_symbol(&element_symbol);
             }
         }
@@ -3222,7 +3247,9 @@ impl<
         self.storage_manager.with_tmp_general_reg(
             &mut self.buf,
             |storage_manager, buf, tmp_reg| {
-                let base_offset = storage_manager.claim_stack_area_with_alignment(*sym, 24, 8);
+                let alignment = Ord::max(8, element_alignment) as u32;
+                let base_offset =
+                    storage_manager.claim_stack_area_with_alignment(*sym, 24, alignment);
                 ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
 
                 ASM::mov_reg64_imm64(buf, tmp_reg, elements.len() as i64);
@@ -3904,7 +3931,7 @@ impl<
                     // it's just a null pointer
                     self.load_literal_i64(sym, 0);
                 } else {
-                    let (largest_variant, _largest_variant_size) = other_tags
+                    let (largest_variant_fields, _largest_variant_size) = other_tags
                         .iter()
                         .map(|fields| {
                             let struct_layout = self
@@ -3918,6 +3945,16 @@ impl<
                         })
                         .max_by(|(_, a), (_, b)| a.cmp(b))
                         .unwrap();
+
+                    let largest_variant =
+                        if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                            self.layout_interner
+                                .insert_direct_no_semantic(LayoutRepr::Struct(
+                                    self.env.arena.alloc([largest_variant_fields, Layout::U8]),
+                                ))
+                        } else {
+                            largest_variant_fields
+                        };
 
                     let other_fields = if tag_id < nullable_id {
                         other_tags[tag_id as usize]
@@ -4029,7 +4066,7 @@ impl<
                 let stores_tag_id_as_data =
                     union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
 
-                let (largest_variant, _largest_variant_size) = tags
+                let (largest_variant_fields, _largest_variant_size) = tags
                     .iter()
                     .map(|fields| {
                         let struct_layout = self
@@ -4043,6 +4080,15 @@ impl<
                     })
                     .max_by(|(_, a), (_, b)| a.cmp(b))
                     .unwrap();
+
+                let largest_variant = if stores_tag_id_as_data {
+                    self.layout_interner
+                        .insert_direct_no_semantic(LayoutRepr::Struct(
+                            self.env.arena.alloc([largest_variant_fields, Layout::U8]),
+                        ))
+                } else {
+                    largest_variant_fields
+                };
 
                 // construct the payload as a struct on the stack
                 let data_struct_layout = self

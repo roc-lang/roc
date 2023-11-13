@@ -530,6 +530,8 @@ stoplightStr =
 
 This lets us more concisely handle multiple cases. However, it has the downside that if we add a new case - for example, if we introduce the possibility of `stoplightColor` being `Orange`, the compiler can no longer tell us we forgot to handle that possibility in our `when`. After all, we are handling it - just maybe not in the way we'd decide to if the compiler had drawn our attention to it!
 
+## [Exhaustiveness](#exhaustiveness) {#exhaustiveness}
+
 We can make this `when` _exhaustive_ (that is, covering all possibilities) without using `_ ->` by using `|` to specify multiple matching conditions for the same branch:
 
 ```roc
@@ -1564,6 +1566,8 @@ task =
 
     Stdout.line "You just entered: \(text)"
 ```
+
+## [Backpassing](#backpassing) {#backpassing}
 
 This `<-` syntax is called _backpassing_. The `<-` is a way to define an anonymous function, just like `\ ... ->` is.
 

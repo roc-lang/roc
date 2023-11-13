@@ -655,8 +655,8 @@ expect
 
 decodeBool = Decode.custom \bytes, @Json {} ->
     when bytes is
-        ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.drop bytes 5 }
-        ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.drop bytes 4 }
+        ['f', 'a', 'l', 's', 'e', ..] -> { result: Ok Bool.false, rest: List.dropFirst bytes 5 }
+        ['t', 'r', 'u', 'e', ..] -> { result: Ok Bool.true, rest: List.dropFirst bytes 4 }
         _ -> { result: Err TooShort, rest: bytes }
 
 # Test decode of Bool
@@ -763,7 +763,7 @@ takeJsonNumber = \bytes ->
                 |> List.dropIf \b -> b == '+'
                 |> List.map \b -> if b == 'E' then 'e' else b
 
-            { taken, rest: List.drop bytes n }
+            { taken, rest: List.dropFirst bytes n }
 
         _ ->
             { taken: [], rest: bytes }
@@ -952,7 +952,7 @@ expect
 decodeString = Decode.custom \bytes, @Json {} ->
     when bytes is
         ['n', 'u', 'l', 'l', ..] ->
-            { result: Ok "null", rest: List.drop bytes 4 }
+            { result: Ok "null", rest: List.dropFirst bytes 4 }
 
         _ ->
             { taken: strBytes, rest } = takeJsonString bytes
@@ -987,7 +987,7 @@ takeJsonString = \bytes ->
         Finish n ->
             {
                 taken: List.sublist bytes { start: 0, len: n },
-                rest: List.drop bytes n,
+                rest: List.dropFirst bytes n,
             }
 
         _ ->
@@ -1119,8 +1119,8 @@ replaceEscapedChars = \{ inBytes, outBytes } ->
 
     firstByte = List.get inBytes 0
     secondByte = List.get inBytes 1
-    inBytesWithoutFirstTwo = List.drop inBytes 2
-    inBytesWithoutFirstSix = List.drop inBytes 6
+    inBytesWithoutFirstTwo = List.dropFirst inBytes 2
+    inBytesWithoutFirstSix = List.dropFirst inBytes 6
 
     when Pair firstByte secondByte is
         Pair (Ok a) (Ok b) if a == '\\' && b == 'u' ->
@@ -1151,7 +1151,7 @@ replaceEscapedChars = \{ inBytes, outBytes } ->
         Pair (Ok a) _ ->
             # Process next character
             replaceEscapedChars {
-                inBytes: List.dropFirst inBytes,
+                inBytes: List.dropFirst inBytes 1,
                 outBytes: List.append outBytes a,
             }
 
@@ -1206,7 +1206,7 @@ decodeList = \elemDecoder -> Decode.custom \bytes, @Json {} ->
 
         result =
             when List.walkUntil bytes (BeforeOpeningBracket 0) arrayOpeningHelp is
-                AfterOpeningBracket n -> Ok (List.drop bytes n)
+                AfterOpeningBracket n -> Ok (List.dropFirst bytes n)
                 _ -> Err ExpectedOpeningBracket
 
         when result is
@@ -1228,14 +1228,14 @@ arrayElemDecoder = \elemDecoder ->
         when List.walkUntil bytes state arrayClosingHelp is
             AfterClosingBracket n ->
                 # Eat remaining whitespace
-                rest = List.drop bytes n
+                rest = List.dropFirst bytes n
 
                 # Return List of decoded elements
                 { result: Ok accum, rest }
 
             BeforeNextElement n ->
                 # Eat any whitespace before element
-                elemBytes = List.drop bytes n
+                elemBytes = List.dropFirst bytes n
 
                 # Decode current element
                 { result, rest } = Decode.decodeWith elemBytes elemDecoder json
@@ -1349,7 +1349,7 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                     AfterColon n -> n
                     _ -> 0
 
-            valueBytes = List.drop bytesAfterField countBytesBeforeValue
+            valueBytes = List.dropFirst bytesAfterField countBytesBeforeValue
 
             when objectNameResult is
                 Err TooShort ->
@@ -1382,13 +1382,13 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
                     # Check if another field or '}' for end of object
                     when List.walkUntil bytesAfterValue (AfterObjectValue 0) objectHelp is
                         ObjectFieldNameStart n ->
-                            rest = List.drop bytesAfterValue n
+                            rest = List.dropFirst bytesAfterValue n
 
                             # Decode the next field and value
                             decodeFields updatedRecord rest
 
                         AfterClosingBrace n ->
-                            rest = List.drop bytesAfterValue n
+                            rest = List.dropFirst bytesAfterValue n
 
                             # Build final record from decoded fields and values
                             when finalizer updatedRecord is
@@ -1408,7 +1408,7 @@ decodeRecord = \initialState, stepField, finalizer -> Decode.custom \bytes, @Jso
             # Invalid object, expected opening brace '{' followed by a field
             { result: Err TooShort, rest: bytes }
         else
-            bytesBeforeFirstField = List.drop bytes countBytesBeforeFirstField
+            bytesBeforeFirstField = List.dropFirst bytes countBytesBeforeFirstField
 
             # Begin decoding field:value pairs
             decodeFields initialState bytesBeforeFirstField
@@ -1583,7 +1583,7 @@ snakeToCamel = \str ->
     when segments is
         [first, ..] ->
             segments
-            |> List.dropFirst
+            |> List.dropFirst 1
             |> List.map uppercaseFirst
             |> List.prepend first
             |> Str.joinWith ""
@@ -1598,7 +1598,7 @@ pascalToCamel = \str ->
     when segments is
         [a, ..] ->
             first = toLowercase a
-            rest = List.dropFirst segments
+            rest = List.dropFirst segments 1
 
             Str.joinWith (List.prepend rest first) ""
 
@@ -1612,7 +1612,7 @@ kebabToCamel = \str ->
     when segments is
         [first, ..] ->
             segments
-            |> List.dropFirst
+            |> List.dropFirst 1
             |> List.map uppercaseFirst
             |> List.prepend first
             |> Str.joinWith ""
@@ -1627,7 +1627,7 @@ camelToPascal = \str ->
     when segments is
         [a, ..] ->
             first = toUppercase a
-            rest = List.dropFirst segments
+            rest = List.dropFirst segments 1
 
             Str.joinWith (List.prepend rest first) ""
 
@@ -1651,13 +1651,13 @@ camelToKebabHelp = \{ taken, rest } ->
         [a, ..] if isUpperCase a ->
             camelToKebabHelp {
                 taken: List.concat taken ["-", toLowercase a],
-                rest: List.dropFirst rest,
+                rest: List.dropFirst rest 1,
             }
 
         [a, ..] ->
             camelToKebabHelp {
                 taken: List.append taken a,
-                rest: List.dropFirst rest,
+                rest: List.dropFirst rest 1,
             }
 
 expect camelToKebeb "someCaseString" == "some-case-string"
@@ -1678,13 +1678,13 @@ camelToSnakeHelp = \{ taken, rest } ->
         [a, ..] if isUpperCase a ->
             camelToSnakeHelp {
                 taken: List.concat taken ["_", toLowercase a],
-                rest: List.dropFirst rest,
+                rest: List.dropFirst rest 1,
             }
 
         [a, ..] ->
             camelToSnakeHelp {
                 taken: List.append taken a,
-                rest: List.dropFirst rest,
+                rest: List.dropFirst rest 1,
             }
 
 expect camelToSnake "someCaseString" == "some_case_string"
@@ -1695,7 +1695,7 @@ uppercaseFirst = \str ->
     when segments is
         [a, ..] ->
             first = toUppercase a
-            rest = List.dropFirst segments
+            rest = List.dropFirst segments 1
 
             Str.joinWith (List.prepend rest first) ""
 

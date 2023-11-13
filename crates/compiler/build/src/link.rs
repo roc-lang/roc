@@ -54,14 +54,20 @@ pub fn link(
 }
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
-pub fn legacy_host_filename(target: &Triple) -> Option<String> {
+pub fn legacy_host_file(target: &Triple, platform_main_roc: &Path) -> Option<PathBuf> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
-    let ext = os.object_file_ext();
+    let lib_ext = os.static_library_file_ext();
 
-    Some(
-        roc_linker::preprocessed_host_filename(target)?
-            .replace(roc_linker::PRECOMPILED_HOST_EXT, ext),
-    )
+    let file_name = roc_linker::preprocessed_host_filename(target)?
+        .replace(roc_linker::PRECOMPILED_HOST_EXT, lib_ext);
+
+    let lib_path = platform_main_roc.with_file_name(file_name);
+    if lib_path.exists() {
+        Some(lib_path)
+    } else {
+        let obj_ext = os.object_file_ext();
+        Some(lib_path.with_extension(obj_ext))
+    }
 }
 
 // Attempts to find a file that is stored relative to the roc executable.
@@ -163,10 +169,10 @@ pub fn build_zig_host_native(
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={emit_bin}"),
-        "--pkg-begin",
+        "--mod",
+        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+        "--deps",
         "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
         // include libc
         "-lc",
         // cross-compile?
@@ -193,7 +199,7 @@ pub fn build_zig_host_native(
     if matches!(opt_level, OptLevel::Optimize) {
         zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall", "-fno-strip"]);
     }
 
     zig_cmd
@@ -235,10 +241,10 @@ pub fn build_zig_host_native(
     zig_cmd.args(&[
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
-        "--pkg-begin",
+        "--mod",
+        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+        "--deps",
         "glue",
-        find_zig_glue_path().to_str().unwrap(),
-        "--pkg-end",
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
@@ -282,10 +288,10 @@ pub fn build_zig_host_wasm32(
             "build-obj",
             zig_host_src,
             emit_bin,
-            "--pkg-begin",
+            "--mod",
+            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+            "--deps",
             "glue",
-            find_zig_glue_path().to_str().unwrap(),
-            "--pkg-end",
             // include the zig runtime
             // "-fcompiler-rt",
             // include libc
@@ -295,7 +301,7 @@ pub fn build_zig_host_wasm32(
             "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli_testing_examples/benchmarks/platform/host.ll",
             "-fPIC",
-            "--strip",
+            "-fstrip",
         ]);
 
     if matches!(opt_level, OptLevel::Optimize) {
@@ -461,7 +467,7 @@ pub fn rebuild_host(
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
+        legacy_host_file(target, platform_main_roc).unwrap()
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
@@ -891,8 +897,8 @@ fn link_linux(
     lib_dirs.extend([
         usr_lib_arch_path,
         lib_arch_path,
-        strs_to_path(&["/usr", "lib"]),
         strs_to_path(&["/usr", "lib64"]),
+        strs_to_path(&["/usr", "lib"]),
     ]);
 
     // Look for the libraries we'll need
@@ -918,10 +924,15 @@ fn link_linux(
                     eprintln!("You may need to install libgcc\n");
                 }
                 if maybe_crti.is_none() | maybe_crtn.is_none() | maybe_scrt1.is_none() {
-                    eprintln!("Couldn't find the glibc development files!");
-                    eprintln!("We need the objects crti.o, crtn.o, and Scrt1.o");
-                    eprintln!("You may need to install the glibc development package");
-                    eprintln!("(probably called glibc-dev or glibc-devel)\n");
+                    eprintln!("Couldn't find the libc development files!");
+                    eprintln!("We need the files crti.o, crtn.o, and Scrt1.o");
+                    eprintln!();
+                    eprintln!("On Ubuntu/Debian execute:");
+                    eprintln!("\tsudo apt install libc-dev\n");
+                    eprintln!("On ArchLinux/Manjaro execute:");
+                    eprintln!("\tsudo pacman -S glibc\n");
+                    eprintln!("On Fedora execute:");
+                    eprintln!("\tsudo dnf install glibc-devel\n");
                 }
 
                 let dirs = lib_dirs
@@ -1179,7 +1190,7 @@ fn get_macos_version() -> String {
     full_version_string
         .trim_end()
         .split('.')
-        .take(2)
+        .take(3)
         .collect::<Vec<&str>>()
         .join(".")
 }
@@ -1203,11 +1214,11 @@ fn link_wasm32(
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",
-            "--pkg-begin",
+            "--mod",
+            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+            "--deps",
             "glue",
-            find_zig_glue_path().to_str().unwrap(),
-            "--pkg-end",
-            "--strip",
+            "-fstrip",
             "-O",
             "ReleaseSmall",
             // useful for debugging
@@ -1234,11 +1245,10 @@ fn link_windows(
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
                     "native",
-                    "--pkg-begin",
+                    "--mod",
+                    &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
+                    "--deps",
                     "glue",
-                    find_zig_glue_path().to_str().unwrap(),
-                    "--pkg-end",
-                    "--strip",
                     "-O",
                     "Debug",
                     "-dynamic",

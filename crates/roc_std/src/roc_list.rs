@@ -78,13 +78,15 @@ impl<T> RocList<T> {
     }
 
     fn elems_from_allocation(allocation: NonNull<c_void>) -> NonNull<ManuallyDrop<T>> {
+        let offset = Self::alloc_alignment() - core::mem::size_of::<*const u8>() as u32;
         let alloc_ptr = allocation.as_ptr();
 
         unsafe {
             let elem_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr).cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
-            alloc_ptr
+            let rc_ptr = alloc_ptr.offset(offset as isize);
+            rc_ptr
                 .cast::<Storage>()
                 .write(Storage::new_reference_counted());
 
@@ -815,5 +817,42 @@ mod tests {
 
         drop(a);
         drop(b);
+    }
+
+    #[test]
+    fn compare_list_str() {
+        let a = RocList::from_slice(&[crate::RocStr::from("ab")]);
+        let b = RocList::from_slice(&[crate::RocStr::from("ab")]);
+
+        assert_eq!(a, b);
+
+        drop(a);
+        drop(b);
+    }
+
+    #[test]
+    fn readonly_list_is_sendsafe() {
+        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
+        unsafe { x.set_readonly() };
+        assert!(x.is_readonly());
+
+        let y = x.clone();
+        let z = y.clone();
+
+        let safe_x = SendSafeRocList::from(x);
+        let new_x = RocList::from(safe_x);
+        assert!(new_x.is_readonly());
+        assert!(y.is_readonly());
+        assert!(z.is_readonly());
+        assert_eq!(new_x.as_slice(), &[1, 2, 3, 4, 5]);
+
+        let ptr = new_x.ptr_to_allocation();
+
+        drop(y);
+        drop(z);
+        drop(new_x);
+
+        // free the underlying memory
+        unsafe { crate::roc_dealloc(ptr, std::mem::align_of::<usize>() as u32) }
     }
 }

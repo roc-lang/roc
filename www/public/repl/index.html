@@ -17,24 +17,23 @@
 
 <body>
   <div id="top-bar">
-    <nav><a class="home-link" href="/" title="The Roc Programming Language">roc</a>
+    <nav><a id="nav-home-link" href="/" title="The Roc Programming Language">roc</a>
       <div id="top-bar-links"><a href="/tutorial">tutorial</a><a
           href="https://github.com/roc-lang/roc/tree/main/getting_started">install</a><a href="/repl">repl</a><a
           href="/builtins">docs</a></div>
     </nav>
   </div>
-  <main>
+  <main id="repl">
     <h1>The rockin’ Roc REPL</h1>
     <code class="history">
       <div id="help-text"></div>
       <div id="history-text"><div id="loading-message">Loading REPL WebAssembly module…please wait!</div></div>
     </code>
-    <section id="source-input-wrapper">
-      <textarea rows="5" autofocus id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
+    <div id="repl-prompt" role="presentation">»</div>
+    <textarea rows="5" id="source-input" placeholder="You can enter Roc code here once the REPL loads!"
         disabled></textarea>
-    </section>
-    </div>
-    <script type="module" src="/repl/repl.js"></script>
+  </main>
+  <script type="module" src="/repl/repl.js"></script>
 </body>
 
 </html>

@@ -1520,20 +1520,18 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrFromUtf8Range => self.build_fn_call(
-                sym,
-                bitcode::STR_FROM_UTF8_RANGE.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            //            LowLevel::StrToUtf8 => self.build_fn_call(
-            //                sym,
-            //                bitcode::STR_TO_UTF8.to_string(),
-            //                args,
-            //                arg_layouts,
-            //                ret_layout,
-            //            ),
+            LowLevel::StrFromUtf8Range => {
+                let update_mode = self.debug_symbol("update_mode");
+                self.load_literal_i8(&update_mode, UpdateMode::Immutable as i8);
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::STR_FROM_UTF8_RANGE.to_string(),
+                    &[args[0], args[1], args[2], update_mode],
+                    &[arg_layouts[0], arg_layouts[1], arg_layouts[2], Layout::U8],
+                    ret_layout,
+                )
+            }
             LowLevel::StrRepeat => self.build_fn_call(
                 sym,
                 bitcode::STR_REPEAT.to_string(),
@@ -1943,7 +1941,12 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
+            Symbol::LIST_GET
+            | Symbol::LIST_SET
+            | Symbol::LIST_REPLACE
+            | Symbol::LIST_APPEND
+            | Symbol::LIST_APPEND_IF_OK
+            | Symbol::LIST_PREPEND_IF_OK => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let fn_name = self.lambda_name_to_string(
                     func_name,

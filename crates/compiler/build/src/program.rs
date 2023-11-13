@@ -1,5 +1,5 @@
 use crate::link::{
-    legacy_host_filename, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
+    legacy_host_file, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
 };
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
@@ -17,7 +17,7 @@ use roc_reporting::{
     cli::{report_problems, Problems},
     report::{RenderTarget, DEFAULT_PALETTE},
 };
-use roc_target::TargetInfo;
+use roc_target::{OperatingSystem, TargetInfo};
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
@@ -41,7 +41,6 @@ pub struct CodeGenTiming {
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
     report_problems(
-        loaded.total_problems(),
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -51,7 +50,6 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Proble
 
 pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> Problems {
     report_problems(
-        loaded.total_problems(),
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
@@ -775,6 +773,7 @@ pub fn build_file<'a>(
     wasm_dev_stack_bytes: Option<u32>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
+    out_path: Option<&Path>,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
 
@@ -795,6 +794,7 @@ pub fn build_file<'a>(
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
+        out_path,
     )
 }
 
@@ -806,11 +806,12 @@ fn build_loaded_file<'a>(
     code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
-    linking_strategy: LinkingStrategy,
+    mut linking_strategy: LinkingStrategy,
     prebuilt_requested: bool,
     wasm_dev_stack_bytes: Option<u32>,
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
+    out_path: Option<&Path>,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let operating_system = roc_target::OperatingSystem::from(target.operating_system);
 
@@ -819,6 +820,20 @@ fn build_loaded_file<'a>(
         _ => unreachable!(),
     };
 
+    // For example, if we're loading the platform from a URL, it's automatically prebuilt
+    // even if the --prebuilt-platform CLI flag wasn't set.
+    let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
+
+    if is_platform_prebuilt && linking_strategy == LinkingStrategy::Surgical {
+        // Fallback to legacy linking if the preprocessed host file does not exist, but a legacy host does exist.
+        let preprocessed_host_path = platform_main_roc
+            .with_file_name(roc_linker::preprocessed_host_filename(target).unwrap());
+        let legacy_host_path = legacy_host_file(target, &platform_main_roc).unwrap();
+        if !preprocessed_host_path.exists() && legacy_host_path.exists() {
+            linking_strategy = LinkingStrategy::Legacy;
+        }
+    }
+
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
         if let roc_target::OperatingSystem::Wasi = operating_system {
@@ -826,22 +841,47 @@ fn build_loaded_file<'a>(
             // and has a file called "host.zig"
             platform_main_roc.with_file_name("host.zig")
         } else {
-            platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
+            legacy_host_file(target, &platform_main_roc).unwrap()
         }
     } else {
         platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target).unwrap())
     };
 
-    // For example, if we're loading the platform from a URL, it's automatically prebuilt
-    // even if the --prebuilt-platform CLI flag wasn't set.
-    let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
+    let mut output_exe_path = match out_path {
+        Some(path) => {
+            // true iff the path ends with a directory separator,
+            // e.g. '/' on UNIX, '/' or '\\' on Windows
+            let ends_with_sep = {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
 
-    let cwd = app_module_path.parent().unwrap();
-    let mut output_exe_path = cwd.join(&*loaded.output_path);
+                    path.as_os_str().as_bytes().ends_with(&[b'/'])
+                }
 
-    if let Some(extension) = operating_system.executable_file_ext() {
-        output_exe_path.set_extension(extension);
-    }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::ffi::OsStrExt;
+
+                    let last = path.as_os_str().encode_wide().last();
+
+                    last == Some(0x002f)// UTF-16 slash
+                        || last == Some(0x005c) // UTF-16 backslash
+                }
+            };
+
+            // If you specified a path that ends in in a directory separator, then
+            // use that directory, but use the app module's filename for the filename.
+            if ends_with_sep {
+                let filename = app_module_path.file_name().unwrap_or_default();
+
+                with_executable_extension(&path.join(filename), operating_system)
+            } else {
+                path.to_path_buf()
+            }
+        }
+        None => with_executable_extension(&app_module_path, operating_system),
+    };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
     let rebuild_thread = if matches!(link_type, LinkType::Dylib | LinkType::None) {
@@ -1324,5 +1364,10 @@ pub fn build_str_test<'a>(
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
+        None,
     )
+}
+
+fn with_executable_extension(path: &Path, os: OperatingSystem) -> PathBuf {
+    path.with_extension(os.executable_file_ext().unwrap_or_default())
 }

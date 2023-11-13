@@ -1064,8 +1064,8 @@ mod test_reporting {
 
     Every element in a list must have the same type!
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1532,7 +1532,7 @@ mod test_reporting {
     5│      x = if Bool.true then 3.14 else 4
                                   ^^^^
 
-    The 1st branch is a fraction of type:
+    This branch is a fraction of type:
 
         Frac *
 
@@ -1540,8 +1540,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1575,8 +1575,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1607,8 +1607,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -1928,8 +1928,8 @@ mod test_reporting {
 
         { x : Int * }
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -2485,8 +2485,8 @@ mod test_reporting {
 
         Int *
 
-    Tip: You can convert between Int and Frac using functions like
-    `Num.toFrac` and `Num.round`.
+    Tip: You can convert between integers and fractions using functions
+    like `Num.toFrac` and `Num.round`.
     "###
     );
 
@@ -11001,7 +11001,7 @@ In roc, functions are always written as a lambda, like{}
     5│      f = if Bool.true then {a: ""} else {a: "b", b: ""}
                                   ^^^^^^^
 
-    The 1st branch is a record of type:
+    This branch is a record of type:
 
         { a : Str }
 

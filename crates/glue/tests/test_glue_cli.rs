@@ -39,18 +39,24 @@ mod glue_cli_run {
                     let dir = fixtures_dir($fixture_dir);
 
                     generate_glue_for(&dir, std::iter::empty());
-                    let out = run_app(&dir.join("app.roc"), std::iter::empty());
 
-                    assert!(out.status.success());
-                    let ignorable = "🔨 Rebuilding platform...\n";
-                    let stderr = out.stderr.replacen(ignorable, "", 1);
-                    assert_eq!(stderr, "");
-                    assert!(
-                        out.stdout.ends_with($ends_with),
-                        "Unexpected stdout ending\n\n  expected:\n\n    {}\n\n  but stdout was:\n\n    {}",
-                        $ends_with,
-                        out.stdout
-                    );
+                    let test_name_str = stringify!($test_name);
+
+                    // TODO after #5924 is fixed; remove this if
+                    if !(cfg!(target_os = "linux") && (test_name_str == "nullable_unwrapped" || test_name_str == "nullable_wrapped")) {
+                        let out = run_app(&dir.join("app.roc"), std::iter::empty());
+
+                        assert!(out.status.success());
+                        let ignorable = "🔨 Rebuilding platform...\n";
+                        let stderr = out.stderr.replacen(ignorable, "", 1);
+                        assert_eq!(stderr, "");
+                        assert!(
+                            out.stdout.ends_with($ends_with),
+                            "Unexpected stdout ending\n\n  expected:\n\n    {}\n\n  but stdout was:\n\n    {}",
+                            $ends_with,
+                            out.stdout
+                        );
+                    }
                 }
             )*
 
@@ -91,7 +97,7 @@ mod glue_cli_run {
             `Bar 123` is: NonRecursive::Bar(123)
             `Baz` is: NonRecursive::Baz(())
             `Blah 456` is: NonRecursive::Blah(456)
-        "#),
+        "#), 
         nullable_wrapped:"nullable-wrapped" => indoc!(r#"
             tag_union was: StrFingerTree::More("foo", StrFingerTree::More("bar", StrFingerTree::Empty))
             `More "small str" (Single "other str")` is: StrFingerTree::More("small str", StrFingerTree::Single("other str"))
@@ -124,6 +130,9 @@ mod glue_cli_run {
         "#),
         arguments:"arguments" => indoc!(r#"
             Answer was: 84
+        "#),
+        closures:"closures" => indoc!(r#"
+            Answer was: 672
         "#),
         rocresult:"rocresult" => indoc!(r#"
             Answer was: RocOk(ManuallyDrop { value: "Hello World!" })

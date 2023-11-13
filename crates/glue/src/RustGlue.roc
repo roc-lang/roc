@@ -20,7 +20,7 @@ app "rust-glue"
 makeGlue : List Types -> Result (List File) Str
 makeGlue = \typesByArch ->
     modFileContent =
-        List.walk typesByArch "" \content, types ->
+        List.walk typesByArch fileHeader \content, types ->
             arch = (Types.target types).architecture
             archStr = archName arch
 
@@ -151,7 +151,7 @@ generateEntryPoint = \buf, types, name, id ->
                 ret = typeName types id
                 "() -> \(ret)"
 
-    externSignature =
+    (externSignature, returnTypeName, returnsFn) =
         when Types.shape types id is
             Function rocFn ->
                 arguments =
@@ -164,11 +164,15 @@ generateEntryPoint = \buf, types, name, id ->
                             "_: &mut core::mem::ManuallyDrop<\(type)>"
 
                 ret = typeName types rocFn.ret
-                "(_: *mut \(ret), \(arguments))"
+                when Types.shape types rocFn.ret is
+                    Function _ ->
+                        ("(_: *mut u8, \(arguments))", ret, Bool.true)
+                    _ -> 
+                        ("(_: *mut \(ret), \(arguments))", ret, Bool.false)
 
             _ ->
                 ret = typeName types id
-                "(_: *mut \(ret))"
+                ("(_: *mut \(ret))", ret, Bool.false)
 
     externArguments =
         when Types.shape types id is
@@ -184,30 +188,53 @@ generateEntryPoint = \buf, types, name, id ->
             _ ->
                 ""
 
-    """
-    \(buf)
+    if returnsFn then
+        """
+        \(buf)
 
-    pub fn \(name)\(publicSignature) {
-        extern "C" {
-            fn roc__\(name)_1_exposed_generic\(externSignature);
+        pub fn \(name)\(publicSignature) {
+            extern "C" {
+                fn roc__\(name)_1_exposed_generic\(externSignature);
+                fn roc__\(name)_1_exposed_size() -> i64;
+            }
+
+            unsafe {
+                let capacity = roc__\(name)_1_exposed_size() as usize;
+
+                let mut ret = \(returnTypeName) {
+                    closure_data: Vec::with_capacity(capacity),
+                };
+                ret.closure_data.resize(capacity, 0);
+
+                roc__\(name)_1_exposed_generic(ret.closure_data.as_mut_ptr(), \(externArguments));
+
+                ret
+            }
         }
+        """
+    else
+        """
+        \(buf)
 
-        let mut ret = core::mem::MaybeUninit::uninit();
+        pub fn \(name)\(publicSignature) {
+            extern "C" {
+                fn roc__\(name)_1_exposed_generic\(externSignature);
+            }
 
-        unsafe {
-            roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
+            let mut ret = core::mem::MaybeUninit::uninit();
 
-            ret.assume_init()
+            unsafe {
+                roc__\(name)_1_exposed_generic(ret.as_mut_ptr(), \(externArguments));
+
+                ret.assume_init()
+            }
         }
-    }
-    """
+        """
 
 generateFunction : Str, Types, RocFn -> Str
 generateFunction = \buf, types, rocFn ->
     name = rocFn.functionName
     externName = rocFn.externName
-
-    lambdaSet = typeName types rocFn.lambdaSet
 
     publicArguments =
         toArgStr rocFn.args types \argId, _shape, index ->
@@ -251,23 +278,21 @@ generateFunction = \buf, types, rocFn ->
     \(buf)
 
     #[repr(C)]
-    #[derive(Debug, Clone)]
+    #[derive(Debug)]
     pub struct \(name) {
-        closure_data: \(lambdaSet),
+        closure_data: Vec<u8>,
     }
 
     impl \(name) {
-        pub fn force_thunk(self\(publicComma)\(publicArguments)) -> \(ret) {
+        pub fn force_thunk(mut self\(publicComma)\(publicArguments)) -> \(ret) {
             extern "C" {
                 fn \(externName)(\(externDefArguments), closure_data: *mut u8, output: *mut \(ret));
             }
 
             let mut output = core::mem::MaybeUninit::uninit();
-            let closure_ptr =
-                (&mut core::mem::ManuallyDrop::new(self.closure_data)) as *mut _ as *mut u8;
 
             unsafe {
-                \(externName)(\(externCallArguments), closure_ptr, output.as_mut_ptr());
+                \(externName)(\(externCallArguments), self.closure_data.as_mut_ptr(), output.as_mut_ptr());
 
                 output.assume_init()
             }

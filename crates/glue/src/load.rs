@@ -71,21 +71,30 @@ pub fn generate(
                 LinkingStrategy::Legacy
             };
 
-            let res_binary_path = build_file(
-                &arena,
-                &triple,
-                spec_path.to_path_buf(),
-                code_gen_options,
-                false,
-                link_type,
-                linking_strategy,
-                true,
-                None,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                load_config,
-            );
+            let tempdir_res = tempfile::tempdir();
 
-            match res_binary_path {
+            let res_binary_path = match tempdir_res {
+                Ok(dylib_dir) => build_file(
+                    &arena,
+                    &triple,
+                    spec_path.to_path_buf(),
+                    code_gen_options,
+                    false,
+                    link_type,
+                    linking_strategy,
+                    true,
+                    None,
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    load_config,
+                    Some(dylib_dir.path()),
+                ),
+                Err(_) => {
+                    eprintln!("`roc glue` was unable to create a tempdir.");
+                    std::process::exit(1);
+                }
+            };
+
+            let answer = match res_binary_path {
                 Ok(BuiltFile {
                     binary_path,
                     problems,
@@ -196,7 +205,13 @@ pub fn generate(
                     handle_error_module(module, total_time, spec_path.as_os_str(), true)
                 }
                 Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
-            }
+            };
+
+            // Extend the lifetime of the tempdir to after we're done with everything,
+            // so it doesn't get dropped before we're done reading from it!
+            let _ = tempdir_res;
+
+            answer
         }
         Err(err) => match err.kind() {
             ErrorKind::NotFound => {

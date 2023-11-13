@@ -1,11 +1,13 @@
 //! The `roc` binary that brings together all functionality in the Roc toolset.
+use bumpalo::Bump;
 use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
-    build_app, format, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS,
-    CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION,
-    DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME,
-    GLUE_DIR, GLUE_SPEC, ROC_FILE,
+    build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
+    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
+    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
+    GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -13,9 +15,9 @@ use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{FunctionKind, LoadingProblem, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_target::Target;
+use roc_target::{get_target_triple_str, Target};
 use std::fs::{self, FileType};
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use target_lexicon::Triple;
@@ -48,6 +50,7 @@ fn main() -> io::Result<()> {
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
+                    None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
@@ -62,6 +65,7 @@ fn main() -> io::Result<()> {
                     &subcommands,
                     BuildConfig::BuildAndRun,
                     Triple::host(),
+                    None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
@@ -87,6 +91,7 @@ fn main() -> io::Result<()> {
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
+                    None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
@@ -127,7 +132,38 @@ fn main() -> io::Result<()> {
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &target.to_triple(),
                 function_kind,
-            )
+            );
+            Ok(0)
+        }
+        Some((CMD_PREPROCESS_HOST, matches)) => {
+            let input_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            let target = matches
+                .get_one::<String>(FLAG_TARGET)
+                .and_then(|s| Target::from_str(s).ok())
+                .unwrap_or_default();
+
+            let triple = target.to_triple();
+            let function_kind = FunctionKind::LambdaSet;
+            let (platform_path, stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib(
+                &input_path,
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                &triple,
+                function_kind,
+            );
+
+            // TODO: pipeline the executable location through here.
+            // Currently it is essentally hardcoded as platform_path/dynhost.
+            roc_linker::preprocess_host(
+                &triple,
+                &platform_path.with_file_name("main.roc"),
+                // The target triple string must be derived from the triple to convert from the generic
+                // `system` target to the exact specific target.
+                &platform_path
+                    .with_file_name(format!("{}.rh", get_target_triple_str(&triple).unwrap())),
+                &stub_lib,
+                &stub_dll_symbols,
+            );
+            Ok(0)
         }
         Some((CMD_BUILD, matches)) => {
             let target = matches
@@ -140,18 +176,22 @@ fn main() -> io::Result<()> {
                 (false, true) => LinkType::None,
                 (false, false) => LinkType::Executable,
             };
+            let out_path = matches
+                .get_one::<OsString>(FLAG_OUTPUT)
+                .map(OsString::as_ref);
 
             Ok(build(
                 matches,
                 &subcommands,
                 BuildConfig::BuildOnly,
                 target.to_triple(),
+                out_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 link_type,
             )?)
         }
         Some((CMD_CHECK, matches)) => {
-            let arena = bumpalo::Bump::new();
+            let arena = Bump::new();
 
             let emit_timings = matches.get_flag(FLAG_TIME);
             let roc_file_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
@@ -213,52 +253,109 @@ fn main() -> io::Result<()> {
         Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
         Some((CMD_DOCS, matches)) => {
             let root_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
+            let out_dir = matches.get_one::<OsString>(FLAG_OUTPUT).unwrap();
 
-            generate_docs_html(root_path.to_owned());
+            generate_docs_html(root_path.to_owned(), out_dir.as_ref());
 
             Ok(0)
         }
         Some((CMD_FORMAT, matches)) => {
-            let maybe_values = matches.get_many::<OsString>(DIRECTORY_OR_FILES);
-
-            let mut values: Vec<OsString> = Vec::new();
-
-            match maybe_values {
-                None => {
-                    let mut os_string_values: Vec<OsString> = Vec::new();
-                    read_all_roc_files(
-                        &std::env::current_dir()?.as_os_str().to_os_string(),
-                        &mut os_string_values,
-                    )?;
-                    for os_string in os_string_values {
-                        values.push(os_string);
-                    }
+            let from_stdin = matches.get_flag(FLAG_STDIN);
+            let to_stdout = matches.get_flag(FLAG_STDOUT);
+            let format_mode = if to_stdout {
+                FormatMode::WriteToStdout
+            } else {
+                match matches.get_flag(FLAG_CHECK) {
+                    true => FormatMode::CheckOnly,
+                    false => FormatMode::WriteToFile,
                 }
-                Some(os_values) => {
-                    for os_string in os_values {
-                        values.push(os_string.to_owned());
-                    }
-                }
-            }
-
-            let mut roc_files = Vec::new();
-
-            // Populate roc_files
-            for os_str in values {
-                let metadata = fs::metadata(os_str.clone())?;
-                roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
-            }
-
-            let format_mode = match matches.get_flag(FLAG_CHECK) {
-                true => FormatMode::CheckOnly,
-                false => FormatMode::Format,
             };
 
-            let format_exit_code = match format(roc_files, format_mode) {
-                Ok(_) => 0,
-                Err(message) => {
-                    eprintln!("{message}");
-                    1
+            if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
+                eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");
+                std::process::exit(1);
+            }
+
+            let roc_files = {
+                let mut roc_files = Vec::new();
+
+                let mut values: Vec<OsString> = Vec::new();
+
+                match matches.get_many::<OsString>(DIRECTORY_OR_FILES) {
+                    Some(os_values) => {
+                        for os_string in os_values {
+                            values.push(os_string.to_owned());
+                        }
+                    }
+                    None => {
+                        let mut os_string_values: Vec<OsString> = Vec::new();
+
+                        read_all_roc_files(
+                            &std::env::current_dir()?.as_os_str().to_os_string(),
+                            &mut os_string_values,
+                        )?;
+
+                        for os_string in os_string_values {
+                            values.push(os_string);
+                        }
+                    }
+                }
+
+                // Populate roc_files
+                for os_str in values {
+                    let metadata = fs::metadata(os_str.clone())?;
+                    roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
+                }
+
+                roc_files
+            };
+
+            let format_exit_code = if from_stdin {
+                let mut buf = Vec::new();
+                let arena = Bump::new();
+
+                io::stdin().read_to_end(&mut buf)?;
+
+                let src = std::str::from_utf8(&buf).unwrap_or_else(|err| {
+                    eprintln!("Stdin contained invalid UTF-8 bytes: {err:?}");
+                    std::process::exit(1);
+                });
+
+                match format_src(&arena, src) {
+                    Ok(formatted_src) => {
+                        match format_mode {
+                            FormatMode::CheckOnly => {
+                                if src == formatted_src {
+                                    eprintln!("One or more files need to be reformatted.");
+                                    1
+                                } else {
+                                    0
+                                }
+                            }
+                            FormatMode::WriteToStdout => {
+                                std::io::stdout().lock().write_all(src.as_bytes()).unwrap();
+
+                                0
+                            }
+                            FormatMode::WriteToFile => {
+                                // We would have errored out already if you specified --stdin
+                                // without either --stdout or --check specified as well.
+                                unreachable!()
+                            }
+                        }
+                    }
+                    Err(problem) => {
+                        eprintln!("`roc format` failed: {problem:?}");
+                        1
+                    }
+                }
+            } else {
+                match format_files(roc_files, format_mode) {
+                    Ok(()) => 0,
+                    Err(message) => {
+                        eprintln!("{message}");
+                        1
+                    }
                 }
             };
 

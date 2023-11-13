@@ -35,7 +35,7 @@ use target_lexicon::{Architecture, Triple};
 use tempfile::TempDir;
 
 mod format;
-pub use format::format;
+pub use format::{format_files, format_src, FormatMode};
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -48,6 +48,7 @@ pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
+pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_BUNDLE: &str = "bundle";
@@ -62,7 +63,10 @@ pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
 pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
+pub const FLAG_STDIN: &str = "stdin";
+pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
+pub const FLAG_OUTPUT: &str = "output";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -71,6 +75,7 @@ pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 const VERSION: &str = include_str!("../../../version.txt");
+const DEFAULT_GENERATED_DOCS_DIR: &str = "generated-docs";
 
 pub fn build_app() -> Command {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
@@ -148,6 +153,12 @@ pub fn build_app() -> Command {
         .args_conflicts_with_subcommands(true)
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
+            .arg(Arg::new(FLAG_OUTPUT)
+                .long(FLAG_OUTPUT)
+                .help("The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash).")
+                .value_parser(value_parser!(OsString))
+                .required(false)
+            )
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -258,6 +269,20 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false),
             )
+            .arg(
+                Arg::new(FLAG_STDIN)
+                    .long(FLAG_STDIN)
+                    .help("Read file to format from stdin")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_STDOUT)
+                    .long(FLAG_STDOUT)
+                    .help("Print formatted file to stdout")
+                    .action(ArgAction::SetTrue)
+                    .required(false),
+            )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
@@ -276,6 +301,13 @@ pub fn build_app() -> Command {
         .subcommand(
             Command::new(CMD_DOCS)
                 .about("Generate documentation for a Roc package")
+                .arg(Arg::new(FLAG_OUTPUT)
+                    .long(FLAG_OUTPUT)
+                    .help("Output directory for the generated documentation files.")
+                    .value_parser(value_parser!(OsString))
+                    .required(false)
+                    .default_value(DEFAULT_GENERATED_DOCS_DIR),
+                )
                 .arg(Arg::new(ROC_FILE)
                     .help("The package's main .roc file")
                     .value_parser(value_parser!(PathBuf))
@@ -319,6 +351,23 @@ pub fn build_app() -> Command {
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
                     .default_value(Into::<&'static str>::into(Target::default()))
+                    .value_parser(build_target_values_parser.clone())
+                    .required(false),
+            )
+        )
+        .subcommand(Command::new(CMD_PREPROCESS_HOST)
+            .about("Runs the surgical linker preprocessor to generate `.rh` and `.rm` files.")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for an app using the platform")
+                    .value_parser(value_parser!(PathBuf))
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Into::<&'static str>::into(Target::default()))
                     .value_parser(build_target_values_parser)
                     .required(false),
             )
@@ -340,11 +389,6 @@ pub enum BuildConfig {
     BuildOnly,
     BuildAndRun,
     BuildAndRunIfNoErrors,
-}
-
-pub enum FormatMode {
-    Format,
-    CheckOnly,
 }
 
 fn opt_level_from_flags(matches: &ArgMatches) -> OptLevel {
@@ -528,6 +572,7 @@ pub fn build(
     subcommands: &[String],
     config: BuildConfig,
     triple: Triple,
+    out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
@@ -716,6 +761,7 @@ pub fn build(
         wasm_dev_stack_bytes,
         roc_cache_dir,
         load_config,
+        out_path,
     );
 
     match res_binary_path {
@@ -1065,14 +1111,20 @@ fn roc_dev_native(
 
             std::process::exit(1)
         }
-        1.. => {
+        pid @ 1.. => {
             let sigchld = Arc::new(AtomicBool::new(false));
             signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
                 .unwrap();
 
-            loop {
+            let exit_code = loop {
                 match memory.wait_for_child(sigchld.clone()) {
-                    ChildProcessMsg::Terminate => break,
+                    ChildProcessMsg::Terminate => {
+                        let mut status = 0;
+                        let options = 0;
+                        unsafe { libc::waitpid(pid, &mut status, options) };
+
+                        break status;
+                    }
                     ChildProcessMsg::Expect => {
                         roc_repl_expect::run::render_expects_in_memory(
                             &mut writer,
@@ -1100,9 +1152,9 @@ fn roc_dev_native(
                         memory.reset();
                     }
                 }
-            }
+            };
 
-            std::process::exit(0)
+            std::process::exit(exit_code)
         }
         _ => unreachable!(),
     }

@@ -1,7 +1,7 @@
 use crate::docs::ModuleDocumentation;
 use crate::module::{
-    ConstrainedModule, FoundSpecializationsModule, LateSpecializationsModule, ModuleHeader,
-    ParsedModule, TypeCheckedModule,
+    CheckedModule, ConstrainedModule, FoundSpecializationsModule, LateSpecializationsModule,
+    ModuleHeader, ParsedModule, TypeCheckedModule,
 };
 use roc_can::abilities::PendingAbilitiesStore;
 use roc_collections::{MutMap, MutSet, VecMap};
@@ -25,6 +25,7 @@ pub(crate) struct ModuleCache<'a> {
     pub(crate) pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
     pub(crate) constrained: MutMap<ModuleId, ConstrainedModule>,
     pub(crate) typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
+    pub(crate) checked: MutMap<ModuleId, CheckedModule>,
     pub(crate) found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     pub(crate) late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     pub(crate) external_specializations_requested:
@@ -97,6 +98,7 @@ impl Default for ModuleCache<'_> {
             pending_abilities: Default::default(),
             constrained: Default::default(),
             typechecked: Default::default(),
+            checked: Default::default(),
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),

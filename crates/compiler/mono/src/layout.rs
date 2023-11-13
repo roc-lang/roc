@@ -1937,7 +1937,7 @@ impl<'a> LambdaSet<'a> {
                     // it to both vectors.
                     let mut joined = set
                         .into_iter()
-                        .zip(set_with_variables.into_iter())
+                        .zip(set_with_variables)
                         .collect::<std::vec::Vec<_>>();
                     joined.sort_by(|(lam_and_captures1, _), (lam_and_captures2, _)| {
                         lam_and_captures1.cmp(lam_and_captures2)

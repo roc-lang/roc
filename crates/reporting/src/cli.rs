@@ -46,13 +46,12 @@ impl Problems {
                 1 => "warning",
                 _ => "warnings",
             },
-            total_time.as_millis(),
+            total_time.as_millis()
         );
     }
 }
 
 pub fn report_problems(
-    total_problems: usize,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     interns: &Interns,
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -60,7 +59,17 @@ pub fn report_problems(
 ) -> Problems {
     use crate::report::{can_problem, type_problem, Report, RocDocAllocator, DEFAULT_PALETTE};
     use roc_problem::Severity::*;
+
     let palette = DEFAULT_PALETTE;
+    let mut total_problems = 0;
+
+    for problems in can_problems.values() {
+        total_problems += problems.len();
+    }
+
+    for problems in type_problems.values() {
+        total_problems += problems.len();
+    }
 
     // This will often over-allocate total memory, but it means we definitely
     // never need to re-allocate either the warnings or the errors vec!
@@ -125,6 +134,9 @@ pub fn report_problems(
             }
         }
     }
+
+    debug_assert!(can_problems.is_empty() && type_problems.is_empty(), "After reporting problems, there were {:?} can_problems and {:?} type_problems that could not be reported because they did not have corresponding entries in `sources`.", can_problems.len(), type_problems.len());
+    debug_assert_eq!(errors.len() + warnings.len(), total_problems);
 
     let problems_reported;
 

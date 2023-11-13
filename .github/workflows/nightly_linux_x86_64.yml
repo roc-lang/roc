@@ -1,4 +1,5 @@
 on:
+#  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
@@ -10,8 +11,15 @@ jobs:
     name: build and package nightly release
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
+    
     steps:
       - uses: actions/checkout@v3
+
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+      
+      - run: zig version
 
       - name: create version.txt
         run: ./ci/write_version.sh

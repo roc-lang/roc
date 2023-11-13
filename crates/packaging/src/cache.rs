@@ -70,6 +70,8 @@ pub fn install_package<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
+    use std::io::ErrorKind;
+
     let PackageMetadata {
         cache_subdir,
         content_hash,
@@ -110,10 +112,24 @@ pub fn install_package<'a>(
                     // Now that we've verified the hash, rename the tempdir to the real dir.
 
                     // Create the destination dir's parent dir, since it may not exist yet.
-                    fs::create_dir_all(parent_dir).map_err(Problem::IoErr)?;
+                    fs::create_dir_all(parent_dir).or_else(|err| match err.kind() {
+                        // It's fine if the destination dir's parent already exists
+                        ErrorKind::AlreadyExists => Ok(()),
+                        _ => Err(Problem::IoErr(err)),
+                    })?;
 
                     // This rename should be super cheap if it succeeds - just an inode change.
-                    if fs::rename(tempdir_path, &dest_dir).is_err() {
+                    let rename_err_kind = fs::rename(tempdir_path, &dest_dir)
+                        .err()
+                        .map(|err| err.kind());
+
+                    // It's okay if the rename failed because the destination already existed.
+                    // This could be a race condition between multiple downloads happening concurrently.
+                    // (This has happened in our test suite, for example!) Both downloads should have
+                    // the same content, so the rename failing for that reason should be no problem.
+                    if rename_err_kind.is_some()
+                        && rename_err_kind != Some(ErrorKind::AlreadyExists)
+                    {
                         // If the rename failed, try a recursive copy -
                         // it could have failed due to std::io::ErrorKind::CrossesDevices
                         // (e.g. if the source an destination directories are on different disks)
@@ -122,7 +138,12 @@ pub fn install_package<'a>(
                         // but if that's what happened, this should work!
 
                         // fs_extra::dir::copy needs the destination directory to exist already.
-                        fs::create_dir(&dest_dir).map_err(Problem::IoErr)?;
+                        fs::create_dir(&dest_dir).or_else(|err| match err.kind() {
+                            // It's fine if the destination dir already exists
+                            ErrorKind::AlreadyExists => Ok(()),
+                            _ => Err(Problem::IoErr(err)),
+                        })?;
+
                         fs_extra::dir::copy(
                             tempdir_path,
                             &dest_dir,
@@ -131,7 +152,12 @@ pub fn install_package<'a>(
                                 ..Default::default()
                             },
                         )
-                        .map_err(Problem::FsExtraErr)?;
+                        .or_else(|err| match err.kind {
+                            // It's fine if the destination file already exists; this could be the same
+                            // as the rename race condition mentioned above.
+                            fs_extra::error::ErrorKind::AlreadyExists => Ok(0),
+                            _ => Err(Problem::FsExtraErr(err)),
+                        })?;
                     }
 
                     #[cfg(target_os = "linux")]

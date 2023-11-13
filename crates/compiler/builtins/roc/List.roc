@@ -6,6 +6,9 @@ interface List
         replace,
         update,
         append,
+        appendIfOk,
+        prepend,
+        prependIfOk,
         map,
         len,
         withCapacity,
@@ -15,7 +18,6 @@ interface List
         single,
         repeat,
         reverse,
-        prepend,
         join,
         keepIf,
         contains,
@@ -34,20 +36,19 @@ interface List
         walkFromUntil,
         range,
         sortWith,
-        drop,
         swap,
         dropAt,
-        dropLast,
         min,
         max,
         map4,
         mapTry,
         walkTry,
-        dropFirst,
         joinMap,
         any,
         takeFirst,
         takeLast,
+        dropFirst,
+        dropLast,
         findFirst,
         findLast,
         findFirstIndex,
@@ -67,6 +68,7 @@ interface List
         releaseExcessCapacity,
         walkBackwardsUntil,
         countIf,
+        chunksOf,
     ]
     imports [
         Bool.{ Bool, Eq },
@@ -218,7 +220,7 @@ interface List
 ##
 ## List.isEmpty []
 ## ```
-isEmpty : List a -> Bool
+isEmpty : List * -> Bool
 isEmpty = \list ->
     List.len list == 0
 
@@ -320,6 +322,21 @@ append = \list, element ->
     |> List.reserve 1
     |> List.appendUnsafe element
 
+## If the given [Result] is `Ok`, add it to the end of a list.
+## Otherwise, return the list unmodified.
+##
+## ```
+## List.appendIfOk [1, 2, 3] (Ok 4)
+##
+## [0, 1, 2]
+##     |> List.appendIfOk (Err 3)
+## ```
+appendIfOk : List a, Result a * -> List a
+appendIfOk = \list, result ->
+    when result is
+        Ok elem -> append list elem
+        Err _ -> list
+
 ## Writes the element after the current last element unconditionally.
 ## In other words, it is assumed that
 ##
@@ -336,15 +353,30 @@ appendUnsafe : List a, a -> List a
 ## ```
 prepend : List a, a -> List a
 
+## If the given [Result] is `Ok`, add it to the beginning of a list.
+## Otherwise, return the list unmodified.
+##
+## ```
+## List.prepend [1, 2, 3] (Ok 0)
+##
+## [2, 3, 4]
+##     |> List.prepend (Err 1)
+## ```
+prependIfOk : List a, Result a * -> List a
+prependIfOk = \list, result ->
+    when result is
+        Ok elem -> prepend list elem
+        Err _ -> list
+
 ## Returns the length of the list - the number of elements it contains.
 ##
 ## One [List] can store up to 2,147,483,648 elements (just over 2 billion), which
 ## is exactly equal to the highest valid #I32 value. This means the #U32 this function
 ## returns can always be safely converted to an #I32 without losing any data.
-len : List a -> Nat
+len : List * -> Nat
 
 ## Create a list with space for at least capacity elements
-withCapacity : Nat -> List a
+withCapacity : Nat -> List *
 
 ## Enlarge the list for at least capacity additional elements
 reserve : List a, Nat -> List a
@@ -911,20 +943,6 @@ first = \list ->
         Ok v -> Ok v
         Err _ -> Err ListWasEmpty
 
-## Remove the first element from the list.
-##
-## Returns the new list (with the removed element missing).
-dropFirst : List elem -> List elem
-dropFirst = \list ->
-    List.dropAt list 0
-
-## Remove the last element from the list.
-##
-## Returns the new list (with the removed element missing).
-dropLast : List elem -> List elem
-dropLast = \list ->
-    List.dropAt list (Num.subSaturated (List.len list) 1)
-
 ## Returns the given number of elements from the beginning of the list.
 ## ```
 ## List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
@@ -966,11 +984,18 @@ takeLast = \list, outputLength ->
     List.sublist list { start: Num.subSaturated (List.len list) outputLength, len: outputLength }
 
 ## Drops n elements from the beginning of the list.
-drop : List elem, Nat -> List elem
-drop = \list, n ->
+dropFirst : List elem, Nat -> List elem
+dropFirst = \list, n ->
     remaining = Num.subSaturated (List.len list) n
 
     List.takeLast list remaining
+
+## Drops n elements from the end of the list.
+dropLast : List elem, Nat -> List elem
+dropLast = \list, n ->
+    remaining = Num.subSaturated (List.len list) n
+
+    List.takeFirst list remaining
 
 ## Drops the element at the given index from the list.
 ##
@@ -1120,7 +1145,7 @@ intersperse = \list, sep ->
             |> List.appendUnsafe elem
             |> List.appendUnsafe sep
 
-    List.dropLast newList
+    List.dropLast newList 1
 
 ## Returns `Bool.true` if the first list starts with the second list.
 ##
@@ -1196,6 +1221,26 @@ splitLast = \list, delimiter ->
             Ok { before, after }
 
         Err NotFound -> Err NotFound
+
+## Splits the list into many chunks, each of which is length of the given chunk
+## size. The last chunk will be shorter if the list does not evenly divide by the
+## chunk size. If the provided list is empty or if the chunk size is 0 then the
+## result is an empty list.
+chunksOf : List a, Nat -> List (List a)
+chunksOf = \list, chunkSize ->
+    if chunkSize == 0 || List.isEmpty list then
+        []
+    else
+        chunkCapacity = Num.divCeil (List.len list) chunkSize
+        chunksOfHelp list chunkSize (List.withCapacity chunkCapacity)
+
+chunksOfHelp : List a, Nat, List (List a) -> List (List a)
+chunksOfHelp = \listRest, chunkSize, chunks ->
+    if List.isEmpty listRest then
+        chunks
+    else
+        { before, others } = List.split listRest chunkSize
+        chunksOfHelp others chunkSize (List.append chunks before)
 
 ## Like [List.map], except the transformation function returns a [Result].
 ## If that function ever returns `Err`, [mapTry] immediately returns that `Err`.

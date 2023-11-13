@@ -14,7 +14,7 @@ pub enum TypeError {
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     CircularDef(Vec<CycleEntry>),
-    UnexposedLookup(Symbol),
+    UnexposedLookup(Region, Symbol),
     UnfulfilledAbility(Unfulfilled),
     BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
     BadPatternMissingAbility(Region, PatternCategory, ErrorType, Vec<Unfulfilled>),
@@ -43,7 +43,7 @@ impl TypeError {
             TypeError::BadPattern(..) => RuntimeError,
             TypeError::CircularType(..) => RuntimeError,
             TypeError::CircularDef(_) => RuntimeError,
-            TypeError::UnexposedLookup(_) => RuntimeError,
+            TypeError::UnexposedLookup(..) => RuntimeError,
             TypeError::UnfulfilledAbility(_) => RuntimeError,
             TypeError::BadExprMissingAbility(_, _, _, _) => RuntimeError,
             TypeError::BadPatternMissingAbility(_, _, _, _) => RuntimeError,
@@ -54,6 +54,24 @@ impl TypeError {
             TypeError::WrongSpecialization { .. } => RuntimeError,
             TypeError::IngestedFileBadUtf8(..) => Fatal,
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
+        }
+    }
+
+    pub fn region(&self) -> Option<Region> {
+        match self {
+            TypeError::BadExpr(region, ..)
+            | TypeError::BadPattern(region, ..)
+            | TypeError::CircularType(region, ..)
+            | TypeError::UnexposedLookup(region, ..)
+            | TypeError::BadExprMissingAbility(region, ..)
+            | TypeError::StructuralSpecialization { region, .. }
+            | TypeError::WrongSpecialization { region, .. }
+            | TypeError::BadPatternMissingAbility(region, ..) => Some(*region),
+            TypeError::UnfulfilledAbility(ab, ..) => ab.region(),
+            TypeError::Exhaustive(e) => Some(e.region()),
+            TypeError::CircularDef(c) => c.first().map(|ce| ce.symbol_region),
+            TypeError::IngestedFileBadUtf8(_, _) => None,
+            TypeError::IngestedFileUnsupportedType(_, _) => None,
         }
     }
 }
@@ -76,6 +94,16 @@ pub enum Unfulfilled {
         derive_region: Region,
         reason: UnderivableReason,
     },
+}
+
+impl Unfulfilled {
+    fn region(&self) -> Option<Region> {
+        match self {
+            Unfulfilled::OpaqueDoesNotImplement { .. } => None,
+            Unfulfilled::AdhocUnderivable { .. } => None,
+            Unfulfilled::OpaqueUnderivable { derive_region, .. } => Some(*derive_region),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

@@ -405,67 +405,63 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32 {
+        let frame_pointer_link_register = 16;
+
         // Full size is upcast to i64 to make sure we don't overflow here.
         let full_stack_size = match requested_stack_size
-            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32 + 8) // The extra 8 is space to store the frame pointer.
+            .checked_add(8 * (saved_general_regs.len() + saved_float_regs.len()) as i32)
+            // space for the frame pointer FP and the link register LR
+            .and_then(|size| size.checked_add(frame_pointer_link_register))
+            // extra space for arguments that did not fit into registers
             .and_then(|size| size.checked_add(fn_call_stack_size))
         {
             Some(size) => size,
             _ => internal_error!("Ran out of stack space"),
         };
 
-        let alignment = if full_stack_size <= 0 {
-            0
-        } else {
-            full_stack_size % STACK_ALIGNMENT as i32
-        };
-
-        let offset = if alignment == 0 {
-            0
-        } else {
-            STACK_ALIGNMENT - alignment as u8
-        };
-
-        if let Some(aligned_stack_size) = full_stack_size.checked_add(offset as i32) {
-            if aligned_stack_size > 0 {
-                // sub     sp, sp, #0x10
-                AArch64Assembler::sub_reg64_reg64_imm32(
-                    buf,
-                    AArch64GeneralReg::ZRSP,
-                    AArch64GeneralReg::ZRSP,
-                    aligned_stack_size,
-                );
-
-                // All the following stores could be optimized by using `STP` to store pairs.
-                let mut offset = aligned_stack_size;
-                offset -= 8;
-                AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::LR);
-                offset -= 8;
-                AArch64Assembler::mov_stack32_reg64(buf, offset, AArch64GeneralReg::FP);
-
-                // update the frame pointer
-                AArch64Assembler::add_reg64_reg64_imm32(
-                    buf,
-                    AArch64GeneralReg::FP,
-                    AArch64GeneralReg::ZRSP,
-                    offset,
-                );
-
-                offset = aligned_stack_size - fn_call_stack_size;
-                for reg in saved_general_regs {
-                    offset -= 8;
-                    AArch64Assembler::mov_base32_reg64(buf, offset, *reg);
-                }
-                for reg in saved_float_regs {
-                    offset -= 8;
-                    AArch64Assembler::mov_base32_freg64(buf, offset, *reg);
-                }
-                aligned_stack_size
-            } else {
-                0
+        const fn next_multiple_of(lhs: i32, rhs: i32) -> i32 {
+            match lhs % rhs {
+                0 => lhs,
+                r => lhs + (rhs - r),
             }
+        }
+
+        let aligned_stack_size = next_multiple_of(full_stack_size, STACK_ALIGNMENT as i32);
+
+        if aligned_stack_size > 0 {
+            // sub     sp, sp, #0x10
+            AArch64Assembler::sub_reg64_reg64_imm32(
+                buf,
+                AArch64GeneralReg::ZRSP,
+                AArch64GeneralReg::ZRSP,
+                aligned_stack_size,
+            );
+
+            // All the following stores could be optimized by using `STP` to store pairs.
+            let w = aligned_stack_size;
+            AArch64Assembler::mov_stack32_reg64(buf, w - 0x10, AArch64GeneralReg::FP);
+            AArch64Assembler::mov_stack32_reg64(buf, w - 0x08, AArch64GeneralReg::LR);
+
+            // update the frame pointer
+            AArch64Assembler::add_reg64_reg64_imm32(
+                buf,
+                AArch64GeneralReg::FP,
+                AArch64GeneralReg::ZRSP,
+                w - frame_pointer_link_register,
+            );
+
+            let mut offset = aligned_stack_size - fn_call_stack_size - frame_pointer_link_register;
+            for reg in saved_general_regs {
+                AArch64Assembler::mov_base32_reg64(buf, -offset, *reg);
+                offset -= 8;
+            }
+            for reg in saved_float_regs {
+                AArch64Assembler::mov_base32_freg64(buf, -offset, *reg);
+                offset -= 8;
+            }
+            aligned_stack_size
         } else {
-            internal_error!("Ran out of stack space");
+            0
         }
     }
 
@@ -477,23 +473,26 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         aligned_stack_size: i32,
         fn_call_stack_size: i32,
     ) {
+        let frame_pointer_link_register = 16;
+
         if aligned_stack_size > 0 {
             // All the following stores could be optimized by using `STP` to store pairs.
-            let mut offset = aligned_stack_size;
-            offset -= 8;
-            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, offset);
-            offset -= 8;
-            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, offset);
+            let mut offset = aligned_stack_size - fn_call_stack_size - frame_pointer_link_register;
 
-            offset = aligned_stack_size - fn_call_stack_size;
             for reg in saved_general_regs {
+                AArch64Assembler::mov_reg64_base32(buf, *reg, -offset);
                 offset -= 8;
-                AArch64Assembler::mov_reg64_base32(buf, *reg, offset);
             }
+
             for reg in saved_float_regs {
+                AArch64Assembler::mov_freg64_base32(buf, *reg, -offset);
                 offset -= 8;
-                AArch64Assembler::mov_freg64_base32(buf, *reg, offset);
             }
+
+            let w = aligned_stack_size;
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::FP, w - 0x10);
+            AArch64Assembler::mov_reg64_stack32(buf, AArch64GeneralReg::LR, w - 0x08);
+
             AArch64Assembler::add_reg64_reg64_imm32(
                 buf,
                 AArch64GeneralReg::ZRSP,
@@ -511,6 +510,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         args: &'a [(InLayout<'a>, Symbol)],
         ret_layout: &InLayout<'a>,
     ) {
+        // loading arguments occurs at an offset (but storing arguments does not)
         let mut state = AArch64CallLoadArgs {
             general_i: 0,
             float_i: 0,
@@ -551,10 +551,11 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             );
         }
 
+        // storing arguments does not have a stack offset (loading arguments does)
         let mut state = AArch64CallStoreArgs {
             general_i: 0,
             float_i: 0,
-            tmp_stack_offset: Self::SHADOW_SPACE_SIZE as i32,
+            tmp_stack_offset: 0,
         };
 
         for (sym, in_layout) in args.iter().zip(arg_layouts.iter()) {
@@ -647,16 +648,145 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         }
     }
 
-    fn setjmp(_buf: &mut Vec<'_, u8>) {
-        eprintln!("setjmp is not implemented on this target!");
+    fn setjmp(buf: &mut Vec<'_, u8>) {
+        use AArch64GeneralReg::*;
+        type ASM = AArch64Assembler;
+
+        // based on the musl libc setjmp implementation
+        //
+        // 0000000000211570 <__setjmp>:
+        //   211570:       a9005013        stp     x19, x20, [x0]
+        //   211574:       a9015815        stp     x21, x22, [x0, #16]
+        //   211578:       a9026017        stp     x23, x24, [x0, #32]
+        //   21157c:       a9036819        stp     x25, x26, [x0, #48]
+        //   211580:       a904701b        stp     x27, x28, [x0, #64]
+        //   211584:       a905781d        stp     x29, x30, [x0, #80]
+        //   211588:       910003e2        mov     x2, sp
+        //   21158c:       f9003402        str     x2, [x0, #104]
+        //   211590:       6d072408        stp     d8, d9, [x0, #112]
+        //   211594:       6d082c0a        stp     d10, d11, [x0, #128]
+        //   211598:       6d09340c        stp     d12, d13, [x0, #144]
+        //   21159c:       6d0a3c0e        stp     d14, d15, [x0, #160]
+        //   2115a0:       d2800000        mov     x0, #0x0                        // #0
+        //   2115a4:       d65f03c0        ret
+
+        let env = X0;
+
+        // store caller-saved (i.e. non-volatile) registers
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x00, X19);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x08, X20);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x10, X21);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x18, X22);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x20, X23);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x28, X24);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x30, X25);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x38, X26);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x40, X27);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x48, X28);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x50, FP);
+        ASM::mov_mem64_offset32_reg64(buf, env, 0x58, LR);
+
+        // mov of sp requires an addition with zero
+        ASM::add_reg64_reg64_imm32(buf, X2, ZRSP, 0);
+        ASM::mov_mem64_offset32_reg64(buf, env, 104, X2);
+
+        ASM::mov_mem64_offset32_freg64(buf, env, 112, AArch64FloatReg::V8);
+        ASM::mov_mem64_offset32_freg64(buf, env, 120, AArch64FloatReg::V9);
+        ASM::mov_mem64_offset32_freg64(buf, env, 128, AArch64FloatReg::V10);
+        ASM::mov_mem64_offset32_freg64(buf, env, 136, AArch64FloatReg::V11);
+        ASM::mov_mem64_offset32_freg64(buf, env, 144, AArch64FloatReg::V12);
+        ASM::mov_mem64_offset32_freg64(buf, env, 152, AArch64FloatReg::V13);
+        ASM::mov_mem64_offset32_freg64(buf, env, 160, AArch64FloatReg::V14);
+        ASM::mov_mem64_offset32_freg64(buf, env, 168, AArch64FloatReg::V15);
+
+        ASM::mov_reg64_imm64(buf, X0, 0);
+
+        ASM::ret(buf)
     }
 
-    fn longjmp(_buf: &mut Vec<'_, u8>) {
-        eprintln!("longjmp is not implemented on this target!");
+    fn longjmp(buf: &mut Vec<'_, u8>) {
+        use AArch64GeneralReg::*;
+        type ASM = AArch64Assembler;
+
+        // 0000000000211534 <_longjmp>:
+        //   211534:       a9405013        ldp     x19, x20, [x0]
+        //   211538:       a9415815        ldp     x21, x22, [x0, #16]
+        //   21153c:       a9426017        ldp     x23, x24, [x0, #32]
+        //   211540:       a9436819        ldp     x25, x26, [x0, #48]
+        //   211544:       a944701b        ldp     x27, x28, [x0, #64]
+        //   211548:       a945781d        ldp     x29, x30, [x0, #80]
+        //   21154c:       f9403402        ldr     x2, [x0, #104]
+        //   211550:       9100005f        mov     sp, x2
+        //   211554:       6d472408        ldp     d8, d9, [x0, #112]
+        //   211558:       6d482c0a        ldp     d10, d11, [x0, #128]
+        //   21155c:       6d49340c        ldp     d12, d13, [x0, #144]
+        //   211560:       6d4a3c0e        ldp     d14, d15, [x0, #160]
+        //   211564:       7100003f        cmp     w1, #0x0
+        //   211568:       1a9f1420        csinc   w0, w1, wzr, ne  // ne = any
+        //   21156c:       d61f03c0        br      x30
+
+        // load the caller-saved registers
+        let env = X0;
+
+        ASM::mov_reg64_mem64_offset32(buf, X19, env, 0x00);
+        ASM::mov_reg64_mem64_offset32(buf, X20, env, 0x08);
+        ASM::mov_reg64_mem64_offset32(buf, X21, env, 0x10);
+        ASM::mov_reg64_mem64_offset32(buf, X22, env, 0x18);
+        ASM::mov_reg64_mem64_offset32(buf, X23, env, 0x20);
+        ASM::mov_reg64_mem64_offset32(buf, X24, env, 0x28);
+        ASM::mov_reg64_mem64_offset32(buf, X25, env, 0x30);
+        ASM::mov_reg64_mem64_offset32(buf, X26, env, 0x38);
+        ASM::mov_reg64_mem64_offset32(buf, X27, env, 0x40);
+        ASM::mov_reg64_mem64_offset32(buf, X28, env, 0x48);
+        ASM::mov_reg64_mem64_offset32(buf, FP, env, 0x50);
+        ASM::mov_reg64_mem64_offset32(buf, LR, env, 0x58);
+
+        ASM::mov_reg64_mem64_offset32(buf, X2, env, 104);
+        ASM::add_reg64_reg64_imm32(buf, ZRSP, X2, 0);
+
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V8, env, 112);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V9, env, 120);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V10, env, 128);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V11, env, 136);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V12, env, 144);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V13, env, 152);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V14, env, 160);
+        ASM::mov_freg64_mem64_offset32(buf, AArch64FloatReg::V15, env, 168);
+
+        // Move the string pointer into X0
+        // Move the panic tag into X1
+        ASM::mov_reg64_reg64(buf, X0, X1);
+        ASM::mov_reg64_reg64(buf, X1, X10);
+
+        // Break to the value of the link register
+        jmp_reg64(buf, LR);
     }
 
-    fn roc_panic(_buf: &mut Vec<'_, u8>, _relocs: &mut Vec<'_, Relocation>) {
-        eprintln!("roc_panic is not implemented on this target!");
+    fn roc_panic(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>) {
+        use AArch64GeneralReg::*;
+        type ASM = AArch64Assembler;
+
+        // move the first argument to roc_panic (a *RocStr) into x9
+        ASM::mov_reg64_reg64(buf, X9, X0);
+
+        // move the crash tag into the second return register. We add 1 to it because the 0 value
+        // is already used for "no crash occurred"
+        ASM::add_reg64_reg64_imm32(buf, X10, X1, 1);
+
+        // the setlongjmp_buffer
+        ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), X0);
+
+        // the value to return from the longjmp. It is a pointer to the last 3 words of the setlongjmp_buffer
+        // they represent the error message. (168 + 8) which is after V15 register.
+        ASM::mov_reg64_imm64(buf, X1, 176);
+        ASM::add_reg64_reg64_reg64(buf, X1, X1, X0);
+
+        for offset in [0, 8, 16] {
+            ASM::mov_reg64_mem64_offset32(buf, X11, X9, offset);
+            ASM::mov_mem64_offset32_reg64(buf, X1, offset, X11);
+        }
+
+        Self::longjmp(buf)
     }
 }
 
@@ -743,18 +873,48 @@ impl AArch64CallLoadArgs {
         sym: Symbol,
         in_layout: InLayout<'a>,
     ) {
+        use Builtin::{Decimal, Int};
+
         let stack_size = layout_interner.stack_size(in_layout);
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.load_arg_general(storage_manager, sym),
             pointer_layouts!() => self.load_arg_general(storage_manager, sym),
             single_register_floats!() => self.load_arg_float(storage_manager, sym),
+            LayoutRepr::Builtin(Int(IntWidth::U128 | IntWidth::I128) | Decimal) => {
+                self.load_arg_general_128bit(buf, storage_manager, layout_interner, sym, in_layout);
+            }
             _ if stack_size == 0 => {
                 storage_manager.no_data(&sym);
             }
             _ if stack_size > 16 => {
-                // TODO: Double check this.
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
+                match AArch64Call::GENERAL_PARAM_REGS.get(self.general_i) {
+                    Some(ptr_reg) => {
+                        // if there is a general purpose register available, use it to store a pointer to the value
+                        let base_offset = storage_manager.claim_stack_area_layout(
+                            layout_interner,
+                            sym,
+                            in_layout,
+                        );
+
+                        let tmp_reg = AArch64GeneralReg::X15;
+
+                        super::x86_64::copy_to_base_offset::<_, _, AArch64Assembler>(
+                            buf,
+                            base_offset,
+                            stack_size,
+                            *ptr_reg,
+                            tmp_reg,
+                            0,
+                        );
+
+                        self.general_i += 1;
+                    }
+                    None => {
+                        // else, pass the value implicitly by copying to the stack (of the new frame)
+                        storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                        self.argument_offset += stack_size as i32;
+                    }
+                }
             }
             LayoutRepr::LambdaSet(lambda_set) => self.load_arg(
                 buf,
@@ -763,21 +923,26 @@ impl AArch64CallLoadArgs {
                 sym,
                 lambda_set.runtime_representation(),
             ),
-            LayoutRepr::Struct { .. } => {
-                // for now, just also store this on the stack
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
-            }
-            LayoutRepr::Builtin(Builtin::Int(IntWidth::U128 | IntWidth::I128)) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
-            }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.load_arg_general_128bit(buf, storage_manager, sym);
-            }
-            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                // for now, just also store this on the stack
-                storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
-                self.argument_offset += stack_size as i32;
+            LayoutRepr::Struct { .. } | LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                if stack_size <= 8 {
+                    self.load_arg_general_64bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
+                } else if stack_size <= 16 {
+                    self.load_arg_general_128bit(
+                        buf,
+                        storage_manager,
+                        layout_interner,
+                        sym,
+                        in_layout,
+                    );
+                } else {
+                    unreachable!("covered by an earlier branch")
+                }
             }
             _ => {
                 todo!(
@@ -802,11 +967,41 @@ impl AArch64CallLoadArgs {
         }
     }
 
+    fn load_arg_general_64bit(
+        &mut self,
+        buf: &mut Vec<u8>,
+        storage_manager: &mut AArch64StorageManager<'_, '_>,
+        layout_interner: &mut STLayoutInterner<'_>,
+        sym: Symbol,
+        in_layout: InLayout<'_>,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let reg1 = AArch64Call::GENERAL_PARAM_REGS.get(self.general_i);
+
+        match reg1 {
+            Some(reg1) => {
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
+
+                ASM::mov_base32_reg64(buf, offset, *reg1);
+
+                self.general_i += 1;
+            }
+            None => {
+                storage_manager.complex_stack_arg(&sym, self.argument_offset, 8);
+                self.argument_offset += 8;
+            }
+        }
+    }
+
     fn load_arg_general_128bit(
         &mut self,
         buf: &mut Vec<u8>,
         storage_manager: &mut AArch64StorageManager<'_, '_>,
+        layout_interner: &mut STLayoutInterner<'_>,
         sym: Symbol,
+        in_layout: InLayout<'_>,
     ) {
         type ASM = AArch64Assembler;
 
@@ -815,7 +1010,8 @@ impl AArch64CallLoadArgs {
 
         match (reg1, reg2) {
             (Some(reg1), Some(reg2)) => {
-                let offset = storage_manager.claim_stack_area_with_alignment(sym, 16, 16);
+                let offset =
+                    storage_manager.claim_stack_area_layout(layout_interner, sym, in_layout);
 
                 ASM::mov_base32_reg64(buf, offset, *reg1);
                 ASM::mov_base32_reg64(buf, offset + 8, *reg2);
@@ -848,7 +1044,6 @@ struct AArch64CallStoreArgs {
 
 impl AArch64CallStoreArgs {
     const GENERAL_PARAM_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_PARAM_REGS;
-    const GENERAL_RETURN_REGS: &'static [AArch64GeneralReg] = AArch64Call::GENERAL_RETURN_REGS;
 
     const FLOAT_PARAM_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_PARAM_REGS;
     const FLOAT_RETURN_REGS: &'static [AArch64FloatReg] = AArch64Call::FLOAT_RETURN_REGS;
@@ -865,51 +1060,41 @@ impl AArch64CallStoreArgs {
         type ASM = AArch64Assembler;
 
         // we use the return register as a temporary register; it will be overwritten anyway
-        let tmp_reg = Self::GENERAL_RETURN_REGS[0];
+        let tmp_reg = AArch64GeneralReg::X15;
 
         match layout_interner.get_repr(in_layout) {
             single_register_integers!() => self.store_arg_general(buf, storage_manager, sym),
             pointer_layouts!() => self.store_arg_general(buf, storage_manager, sym),
             single_register_floats!() => self.store_arg_float(buf, storage_manager, sym),
             LayoutRepr::I128 | LayoutRepr::U128 | LayoutRepr::DEC => {
-                let (offset, _) = storage_manager.stack_offset_and_size(&sym);
-
-                if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
-                    let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
-                    let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
-
-                    ASM::mov_reg64_base32(buf, reg1, offset);
-                    ASM::mov_reg64_base32(buf, reg2, offset + 8);
-
-                    self.general_i += 2;
-                } else {
-                    // Copy to stack using return reg as buffer.
-                    let reg = Self::GENERAL_RETURN_REGS[0];
-
-                    ASM::mov_reg64_base32(buf, reg, offset);
-                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
-
-                    ASM::mov_reg64_base32(buf, reg, offset + 8);
-                    ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
-
-                    self.tmp_stack_offset += 16;
-                }
+                self.store_arg_128bit(buf, storage_manager, sym)
             }
             _ if layout_interner.stack_size(in_layout) == 0 => {}
             _ if layout_interner.stack_size(in_layout) > 16 => {
-                // TODO: Double check this.
-                // Just copy onto the stack.
-                let stack_offset = self.tmp_stack_offset;
+                match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+                    Some(reg) => {
+                        // if there is a general purpose register available, use it to store a pointer to the value
+                        let (base_offset, _size) = storage_manager.stack_offset_and_size(&sym);
 
-                let size = copy_symbol_to_stack_offset::<CC>(
-                    buf,
-                    storage_manager,
-                    sym,
-                    tmp_reg,
-                    stack_offset,
-                );
+                        ASM::add_reg64_reg64_imm32(buf, *reg, AArch64GeneralReg::FP, base_offset);
 
-                self.tmp_stack_offset += size as i32;
+                        self.general_i += 1;
+                    }
+                    None => {
+                        // else, pass the value implicitly by copying to the stack (of the new frame)
+                        let stack_offset = self.tmp_stack_offset;
+
+                        let size = copy_symbol_to_stack_offset::<CC>(
+                            buf,
+                            storage_manager,
+                            sym,
+                            tmp_reg,
+                            stack_offset,
+                        );
+
+                        self.tmp_stack_offset += size as i32;
+                    }
+                }
             }
             LayoutRepr::LambdaSet(lambda_set) => self.store_arg(
                 buf,
@@ -918,31 +1103,15 @@ impl AArch64CallStoreArgs {
                 sym,
                 lambda_set.runtime_representation(),
             ),
-            LayoutRepr::Struct { .. } => {
-                let stack_offset = self.tmp_stack_offset;
-
-                let size = copy_symbol_to_stack_offset::<CC>(
-                    buf,
-                    storage_manager,
-                    sym,
-                    tmp_reg,
-                    stack_offset,
-                );
-
-                self.tmp_stack_offset += size as i32;
-            }
-            LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
-                let stack_offset = self.tmp_stack_offset;
-
-                let size = copy_symbol_to_stack_offset::<CC>(
-                    buf,
-                    storage_manager,
-                    sym,
-                    tmp_reg,
-                    stack_offset,
-                );
-
-                self.tmp_stack_offset += size as i32;
+            LayoutRepr::Struct { .. } | LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
+                let stack_size = layout_interner.stack_size(in_layout);
+                if stack_size <= 8 {
+                    self.store_arg_64bit(buf, storage_manager, sym);
+                } else if stack_size <= 16 {
+                    self.store_arg_128bit(buf, storage_manager, sym);
+                } else {
+                    unreachable!("covered by earlier branch");
+                }
             }
             _ => {
                 todo!(
@@ -950,6 +1119,62 @@ impl AArch64CallStoreArgs {
                     layout_interner.dbg(in_layout)
                 );
             }
+        }
+    }
+
+    fn store_arg_64bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        match Self::GENERAL_PARAM_REGS.get(self.general_i) {
+            Some(reg) => {
+                ASM::mov_reg64_base32(buf, *reg, offset);
+
+                self.general_i += 1;
+            }
+            None => {
+                let tmp = AArch64GeneralReg::X15;
+                ASM::mov_reg64_base32(buf, tmp, offset);
+                ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
+
+                self.tmp_stack_offset += 8;
+            }
+        }
+    }
+
+    fn store_arg_128bit<'a>(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut AArch64StorageManager<'a, '_>,
+        sym: Symbol,
+    ) {
+        type ASM = AArch64Assembler;
+
+        let (offset, _) = storage_manager.stack_offset_and_size(&sym);
+
+        if self.general_i + 1 < Self::GENERAL_PARAM_REGS.len() {
+            let reg1 = Self::GENERAL_PARAM_REGS[self.general_i];
+            let reg2 = Self::GENERAL_PARAM_REGS[self.general_i + 1];
+
+            ASM::mov_reg64_base32(buf, reg1, offset);
+            ASM::mov_reg64_base32(buf, reg2, offset + 8);
+
+            self.general_i += 2;
+        } else {
+            let reg = AArch64GeneralReg::X15;
+            ASM::mov_reg64_base32(buf, reg, offset);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset, reg);
+
+            ASM::mov_reg64_base32(buf, reg, offset + 8);
+            ASM::mov_stack32_reg64(buf, self.tmp_stack_offset + 8, reg);
+
+            self.tmp_stack_offset += 16;
         }
     }
 
@@ -965,8 +1190,7 @@ impl AArch64CallStoreArgs {
                 self.general_i += 1;
             }
             None => {
-                // Copy to stack using return reg as buffer.
-                let tmp = Self::GENERAL_RETURN_REGS[0];
+                let tmp = AArch64GeneralReg::X15;
 
                 storage_manager.load_to_specified_general_reg(buf, &sym, tmp);
                 AArch64Assembler::mov_stack32_reg64(buf, self.tmp_stack_offset, tmp);
@@ -1072,22 +1296,44 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn function_pointer(
-        _buf: &mut Vec<'_, u8>,
-        _relocs: &mut Vec<'_, Relocation>,
-        _fn_name: String,
-        _dst: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: AArch64GeneralReg,
     ) {
-        todo!("function pointer for AArch64");
+        // a function pointer is the same as a data pointer on AArch64
+        Self::data_pointer(buf, relocs, fn_name, dst)
     }
 
     #[inline(always)]
     fn data_pointer(
-        _buf: &mut Vec<'_, u8>,
-        _relocs: &mut Vec<'_, Relocation>,
-        _fn_name: String,
-        _dst: AArch64GeneralReg,
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        fn_name: String,
+        dst: AArch64GeneralReg,
     ) {
-        eprintln!("data_pointer not implemented for this target");
+        // an `adrp` instruction and an addition to add in the lower bits
+        buf.extend((0x9000_0000u32 | dst.id() as u32).to_le_bytes());
+        Self::add_reg64_reg64_imm32(buf, dst, dst, 0);
+
+        // with elf
+        //
+        //     700: 90000001     	adrp	x1, 0x0 <std.builtin.default_panic>
+        //		0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21	.rodata+0x650
+        //     704: 91000021     	add	x1, x1, #0x0
+        //		0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC	.rodata+0x650
+        //
+        // with macho
+        //
+        //     4dc: 90000001     	adrp	x1, 0x0 <ltmp0>
+        //		00000000000004dc:  ARM64_RELOC_PAGE21	___unnamed_6
+        //     4e0: 91000021     	add	x1, x1, #0x0
+        //		00000000000004e0:  ARM64_RELOC_PAGEOFF12	___unnamed_6
+
+        relocs.push(Relocation::LinkedData {
+            offset: buf.len() as u64 - 8,
+            name: fn_name,
+        });
     }
 
     #[inline(always)]
@@ -1240,10 +1486,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         if imm < (1 << 12) {
             cmp_reg64_imm12(buf, reg, imm as u16);
         } else {
-            todo!(
-                "cmp immediate with value over 12 bits for AArch64: {:#x}",
-                imm
-            );
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, i64::from_ne_bytes(imm.to_ne_bytes()));
+            cmp_reg64_reg64(buf, reg, tmp);
         }
 
         if (-(1 << 20)..(1 << 20)).contains(&offset) {
@@ -1478,7 +1723,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         offset: i32,
         src: AArch64FloatReg,
     ) {
-        if offset < 0 {
+        if (-256..256).contains(&offset) {
             stur_freg64_reg64_imm9(buf, src, dst, offset as i16)
         } else if (0..=u16::MAX as i32).contains(&offset) {
             debug_assert!(offset % 8 == 0);
@@ -1810,13 +2055,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src: AArch64GeneralReg,
         offset: i32,
     ) {
-        if offset < 0 {
+        if (-256..256).contains(&offset) {
             ldur_freg64_reg64_imm9(buf, dst, src, offset as i16)
         } else if (0..=u16::MAX as i32).contains(&offset) {
             debug_assert!(offset % 8 == 0);
             ldr_freg64_reg64_imm12(buf, dst, src, (offset as u16) >> 3);
         } else {
-            todo!("base offsets over 32k for AArch64");
+            let tmp = AArch64GeneralReg::X15;
+            Self::mov_reg64_imm64(buf, tmp, offset as i64);
+            Self::add_reg64_reg64_reg64(buf, tmp, tmp, src);
+            ldr_freg64_reg64_imm12(buf, dst, tmp, 0);
         }
     }
 
@@ -3976,6 +4224,13 @@ fn scvtf_freg_reg64(
     );
 
     buf.extend(inst.bytes());
+}
+
+#[inline(always)]
+fn jmp_reg64(buf: &mut Vec<'_, u8>, base: AArch64GeneralReg) {
+    let inst = 0b11010110000111110000000000000000 | ((base as u32) << 5);
+
+    buf.extend(inst.to_le_bytes());
 }
 
 #[cfg(test)]

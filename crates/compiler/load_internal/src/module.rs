@@ -20,7 +20,6 @@ use roc_solve::module::Solved;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
-use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(target_family = "wasm")]
@@ -46,6 +45,7 @@ pub struct LoadedModule {
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
+    pub typechecked: MutMap<ModuleId, CheckedModule>,
 }
 
 impl LoadedModule {
@@ -131,6 +131,13 @@ pub struct TypeCheckedModule<'a> {
 }
 
 #[derive(Debug)]
+pub struct CheckedModule {
+    pub solved_subs: Solved<Subs>,
+    pub decls: Declarations,
+    pub abilities_store: AbilitiesStore,
+}
+
+#[derive(Debug)]
 pub(crate) struct FoundSpecializationsModule<'a> {
     pub(crate) ident_ids: IdentIds,
     pub(crate) layout_cache: LayoutCache<'a>,
@@ -163,7 +170,6 @@ pub struct MonomorphizedModule<'a> {
     pub interns: Interns,
     pub subs: Subs,
     pub layout_interner: STLayoutInterner<'a>,
-    pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -221,22 +227,6 @@ pub struct ExposedToHost {
     /// lambda_sets
     pub lambda_sets: Vec<(Symbol, LambdaSetId)>,
     pub getters: Vec<Symbol>,
-}
-
-impl<'a> MonomorphizedModule<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
-
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
-
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
-    }
 }
 
 #[derive(Debug)]

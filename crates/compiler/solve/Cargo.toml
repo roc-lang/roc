@@ -35,7 +35,6 @@ roc_load = { path = "../load" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_reporting = { path = "../../reporting" }
-roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
 test_solve_helpers = { path = "../test_solve_helpers" }
 

@@ -21,7 +21,7 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://www.rwx.com/rwx_banner.svg" height="60" alt="RWX logo"/>](https://www.rwx.com)
+[<img src="https://github.com/roc-lang/roc/assets/1094080/82c0868e-d23f-42a0-ac2d-c6e6b2e16575" height="60" alt="RWX logo"/>](https://www.rwx.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
 
@@ -29,6 +29,7 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+* [James Birtles](https://github.com/jamesbirtles)
 * [Ivo Balbaert](https://github.com/Ivo-Balbaert)
 * [Lucas Rosa](https://github.com/rvcas)
 * [Jonas Schell](https://github.com/Ocupe)

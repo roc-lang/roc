@@ -1,7 +1,7 @@
 //! Traversals over the can ast.
 
 use roc_module::{ident::Lowercase, symbol::Symbol};
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 use roc_types::{subs::Variable, types::MemberImpl};
 
 use crate::{
@@ -657,6 +657,35 @@ impl Visitor for TypeAtVisitor {
     }
 }
 
+struct TypeAtPositionVisitor {
+    position: Position,
+    region_typ: Option<(Region, Variable)>,
+}
+
+impl Visitor for TypeAtPositionVisitor {
+    fn should_visit(&mut self, region: Region) -> bool {
+        region.contains_pos(self.position)
+    }
+
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+        if region.contains_pos(self.position) {
+            self.region_typ = Some((region, var));
+
+            walk_expr(self, expr, var);
+        }
+    }
+
+    fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
+        if region.contains_pos(self.position) {
+            if let Some(var) = opt_var {
+                self.region_typ = Some((region, var));
+            }
+
+            walk_pattern(self, pat);
+        }
+    }
+}
+
 /// Attempts to find the type of an expression at `region`, if it exists.
 pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
     let mut visitor = TypeAtVisitor { region, typ: None };
@@ -674,7 +703,42 @@ pub enum FoundSymbol {
     Symbol(Symbol),
 }
 
+impl FoundSymbol {
+    pub fn implementation_symbol(&self) -> Symbol {
+        match self {
+            FoundSymbol::Specialization(_, sym)
+            | FoundSymbol::AbilityMember(_, sym)
+            | FoundSymbol::Symbol(sym) => *sym,
+        }
+    }
+}
+
 /// Given an ability Foo implements foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// Like [find_type_at], but descends into the narrowest node containing [position].
+pub fn find_closest_type_at(
+    position: Position,
+    decls: &Declarations,
+) -> Option<(Region, Variable)> {
+    let mut visitor = TypeAtPositionVisitor {
+        position,
+        region_typ: None,
+    };
+    visitor.visit_decls(decls);
+    visitor.region_typ
+}
+
+/// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
+/// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
+pub fn find_closest_symbol_at(
+    position: Position,
+    decls: &Declarations,
+    abilities_store: &AbilitiesStore,
+) -> Option<FoundSymbol> {
+    find_symbol_at_impl(Region::from_pos(position), decls, abilities_store, true)
+}
+
+/// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
 /// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
 /// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
 pub fn find_symbol_at(
@@ -682,10 +746,20 @@ pub fn find_symbol_at(
     decls: &Declarations,
     abilities_store: &AbilitiesStore,
 ) -> Option<FoundSymbol> {
+    find_symbol_at_impl(region, decls, abilities_store, false)
+}
+
+pub fn find_symbol_at_impl(
+    region: Region,
+    decls: &Declarations,
+    abilities_store: &AbilitiesStore,
+    allow_subregion: bool,
+) -> Option<FoundSymbol> {
     let mut visitor = Finder {
         region,
         found: None,
         abilities_store,
+        allow_subregion,
     };
     visitor.visit_decls(decls);
     return visitor.found;
@@ -694,6 +768,17 @@ pub fn find_symbol_at(
         region: Region,
         abilities_store: &'a AbilitiesStore,
         found: Option<FoundSymbol>,
+        allow_subregion: bool,
+    }
+
+    impl<'a> Finder<'a> {
+        fn is_at_wanted_region(&self, region: Region) -> bool {
+            if self.allow_subregion {
+                region.contains(&self.region)
+            } else {
+                region == self.region
+            }
+        }
     }
 
     impl Visitor for Finder<'_> {
@@ -702,7 +787,7 @@ pub fn find_symbol_at(
         }
 
         fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
-            if region == self.region {
+            if self.is_at_wanted_region(region) {
                 match pattern {
                     Pattern::AbilityMemberSpecialization {
                         ident: spec_symbol,
@@ -723,7 +808,7 @@ pub fn find_symbol_at(
         }
 
         fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
-            if region == self.region {
+            if self.is_at_wanted_region(region) {
                 match expr {
                     &Expr::AbilityMember(member_symbol, specialization_id, _var) => {
                         debug_assert!(self.found.is_none());

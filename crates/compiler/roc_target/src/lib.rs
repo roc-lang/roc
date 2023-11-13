@@ -34,6 +34,14 @@ impl OperatingSystem {
         }
     }
 
+    pub const fn static_library_file_ext(&self) -> &str {
+        match self {
+            OperatingSystem::Windows => "lib",
+            OperatingSystem::Unix => "a",
+            OperatingSystem::Wasi => "wasm",
+        }
+    }
+
     pub const fn executable_file_ext(&self) -> Option<&str> {
         match self {
             OperatingSystem::Windows => Some("exe"),

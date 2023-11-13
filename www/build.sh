@@ -17,6 +17,19 @@ cd $SCRIPT_RELATIVE_DIR
 
 rm -rf build/
 cp -r public/ build/
+mkdir build/wip # for WIP site
+
+# download the latest code for the examples
+echo 'Downloading latest examples...'
+curl -fLJO https://github.com/roc-lang/examples/archive/refs/heads/main.zip
+unzip examples-main.zip
+cp -R examples-main/examples/ wip_new_website/content/examples/
+
+# relace links in wip_new_website/content/examples/index.md to work on the WIP site
+sed -i 's|](/|](/wip/examples/|g' wip_new_website/content/examples/index.md
+
+# clean up examples artifacts
+rm -rf examples-main examples-main.zip
 
 # download fonts just-in-time so we don't have to bloat the repo with them.
 DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
@@ -36,13 +49,14 @@ curl -fLJO https://github.com/roc-lang/roc/archive/www.tar.gz
 REPL_TARFILE="roc_repl_wasm.tar.gz"
 curl -fLJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
 tar -xzf $REPL_TARFILE -C repl
+tar -xzf $REPL_TARFILE -C wip # note we also need this for WIP repl
 rm $REPL_TARFILE
 ls -lh repl
+ls -lh wip
 
 popd
 
 pushd ..
-echo 'Generating builtin docs...'
 cargo --version
 
 # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
@@ -91,11 +105,10 @@ $roc version
 $roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
-# for new wip site
-mkdir www/build/wip
-$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
-cp -r www/wip_new_website/static/site.css www/build/wip
-cp -r www/build/fonts www/build/wip/fonts
+# For WIP site
+echo 'Building WIP site...'
+$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip/
+cp -r www/wip_new_website/static/* www/build/wip/
 
 # cleanup
 rm -rf roc_nightly roc_releases.json

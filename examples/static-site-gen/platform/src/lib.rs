@@ -1,7 +1,7 @@
 use core::ffi::c_void;
 use libc;
 use pulldown_cmark::{html, Options, Parser};
-use roc_std::RocStr;
+use roc_std::{RocBox, RocStr};
 use std::env;
 use std::ffi::CStr;
 use std::fs;
@@ -16,7 +16,7 @@ use syntect::util::LinesWithEndings;
 
 extern "C" {
     #[link_name = "roc__transformFileContentForHost_1_exposed"]
-    fn roc_transformFileContentForHost(relPath: &RocStr, content: &RocStr) -> RocStr;
+    fn roc_transformFileContentForHost(relPath: RocBox<RocStr>, content: RocBox<RocStr>) -> RocStr;
 }
 
 #[no_mangle]
@@ -299,8 +299,9 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
     let roc_content_html = RocStr::from(content_html.as_str());
-    let roc_output_str =
-        unsafe { roc_transformFileContentForHost(&roc_relpath, &roc_content_html) };
+    let roc_output_str = unsafe {
+        roc_transformFileContentForHost(RocBox::new(roc_relpath), RocBox::new(roc_content_html))
+    };
 
     let output_file = output_dir.join(&output_relpath);
     let rust_output_str: &str = &roc_output_str;

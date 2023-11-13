@@ -2,17 +2,13 @@
 
 ## How to install Roc
 
-:warning: We do not yet officially support MacOS 13. But, as long as you are not using a zig or wasm platform most things should work fine.
-
 In order to develop in Roc, you need to install the Roc CLI,
 which includes the Roc compiler and some helpful utilities.
 
-1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
-
-1. To prevent "roc can't be opened because Apple can't check it...":
+1. Download the latest roc nightly using the terminal:
 
     ```sh
-    xattr -d com.apple.quarantine roc_nightly-macos_x86_64-latest.tar.gz
+    curl -OL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
     ```
 
 1. Untar the archive:
@@ -42,7 +38,7 @@ you'll need to install one or more of these platform languages too.
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. If you'd like to use Zig-based platforms: download [zig 0.9.1](https://ziglang.org/download/0.9.1/zig-macos-x86_64-0.9.1.tar.xz), extract the archive and add `export PATH=$PATH:~/path/to/zig` to your shell startup script (.profile, .zshrc, …). Note: zig 0.9.1 is not available on homebrew.
+1. If you'd like to use Zig-based platforms: download [zig 0.11.0](https://ziglang.org/download/0.11.0/zig-macos-x86_64-0.11.0.tar.xz), extract the archive and add `export PATH=$PATH:~/path/to/zig` to your shell startup script (.profile, .zshrc, …). Note: zig 0.11.0 is not available on homebrew.
 
 1. Run examples:
 
