@@ -6,7 +6,13 @@ set -euxo pipefail
 git clone https://github.com/roc-lang/basic-cli.git
 
 if [ "$(uname -s)" == "Linux" ]; then
-    sudo apt-get install -y musl-tools
+
+    # check if musl-tools is installed
+    if ! dpkg -l | grep -q musl-tools; then
+        # install musl-tools with timeout for sudo problems with CI
+        timeout 300s sudo apt-get install -y musl-tools
+    fi
+    
     cd basic-cli/src # we cd to install the target for the right rust version
     if [ "$(uname -m)" == "x86_64" ]; then
         rustup target add x86_64-unknown-linux-musl
