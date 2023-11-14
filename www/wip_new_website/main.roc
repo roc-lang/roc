@@ -1,7 +1,7 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ Node, html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
+        pf.Html.{ Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script },
         pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, type, role },
         InteractiveExample,
     ]
@@ -107,7 +107,9 @@ viewNavbar = \page ->
         if isHomepage then
             div [role "presentation"] [] # This is a spacer for the nav bar
         else
-            a [id "nav-home-link", href "/wip/", title "The Roc Programming Language"] [rocLogo]
+            a
+                [id "nav-home-link", href "/wip/", title "The Roc Programming Language"]
+                [rocLogo, span [class "home-link-text"] [text "Roc"]]
 
     header [id "top-bar"] [
         nav [ariaLabel "primary"] [
