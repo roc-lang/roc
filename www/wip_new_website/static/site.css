@@ -207,10 +207,13 @@ h2 {
     font-size: 3rem;
     border-bottom: 4px solid var(--dark-cyan);
     margin: 0;
-    margin-top: 72px;
     margin-bottom: 36px;
     padding: 36px 0;
     color: var(--heading-color);
+}
+
+#homepage-main h2 {
+    margin-top: 72px; /* On the homepage, these need to be spaced out more. */
 }
 
 h2 a {

@@ -56,6 +56,12 @@ view = \page, htmlContent ->
         else
             [text htmlContent]
 
+    bodyAttrs =
+        if page == "index.html" then
+            [id "homepage-main"]
+        else
+            []
+
     html [lang "en", class "no-js"] [
         head [] [
             meta [charset "utf-8"],
@@ -81,7 +87,7 @@ view = \page, htmlContent ->
             #          Otherwise, this will work locally and then fail in production!
             script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"],
         ],
-        body [] [
+        body bodyAttrs [
             viewNavbar page,
             main [] mainBody,
             footer [] [

@@ -49,3 +49,9 @@ Windows ARM                |             |                   |
 Once we have full coverage, `roc build` (and `roc run` and `roc test`, which also perform builds) should take only a bit longer than `roc check`.
 
 The next major performance improvement will be caching. Currently, `roc` always builds everything from scratch. Most of the time, it could benefit from caching some of the work it had done in a previous build, but today it doesn't do that. There's a design for the caching system, but essentially none of the implementation has started yet. Hot code loading will be the next major improvement after caching, but it requires full dev backend coverage, and does not have a concrete design yet.
+
+## Friendly
+
+In addition to being fast, Roc also aims to be a friendly programming language.
+
+[What does _friendly_ mean here?](/wip/friendly)
