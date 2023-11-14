@@ -253,6 +253,11 @@ h3 {
     padding: 4px;
 }
 
+.home-link-text {
+    padding: 8px;
+    font-size: 24px;
+}
+
 #top-bar-links {
     display: flex;
 }
