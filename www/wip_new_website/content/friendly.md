@@ -4,7 +4,7 @@ Roc prioritizes being a user-friendly language. This impacts the syntax, semanti
 
 ## Syntax and source code formatter
 
-Roc's syntax isn't trivial, but there also isn't much of it to learn. Its design is generally uncluttered and unambiguous. A goal is that you can normally look at a piece of code and quickly get an accurate mental model of what it means, without having to think through several layers of indirection. Here are some examples:
+Roc's syntax isn't trivial, but there also isn't much of it to learn. It's designed to be uncluttered and unambiguous. A goal is that you can normally look at a piece of code and quickly get an accurate mental model of what it means, without having to think through several layers of indirection. Here are some examples:
 
 - `x = combine y z` always declares a new constant `x` (Roc has [no mutable variables, reassignment, or shadowing](/functional)) to be whatever the `combine` function returns when passed the arguments `y` and `z`. (Function calls in Roc don't need parentheses or commas.)
 - `user.email` always accesses the `email` field of a record named `user`. (Roc has no inheritance, subclassing, or proxying.)
@@ -70,3 +70,9 @@ In the future, there are plans to add built-in support for [benchmarking](https:
 - Customizable "linter" (e.g. code mods, project-specific rules to enforce)
 - Editor plugin ecosystem that works across editors, where plugins ship with packages
 - `roc edit`
+
+## Functional
+
+Besides being designed to be [fast](/wip/fast) and friendly, Roc is also a functional programming language.
+
+[What does _functional_ mean here?](/wip/functional)
