@@ -3205,21 +3205,31 @@ fn to_header_report<'a>(
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
-            let doc = alloc.stack([
-                alloc.reflow(r"I am expecting a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([
-                    alloc.reflow("I am expecting a module keyword next, one of "),
-                    alloc.keyword("interface"),
-                    alloc.reflow(", "),
-                    alloc.keyword("app"),
-                    alloc.reflow(", "),
-                    alloc.keyword("package"),
-                    alloc.reflow(" or "),
-                    alloc.keyword("platform"),
-                    alloc.reflow("."),
-                ]),
-            ]);
+            let is_utf8 = alloc
+                .src_lines
+                .iter()
+                .all(|line| std::str::from_utf8(line.as_bytes()).is_ok());
+
+            let preamble = if is_utf8 {
+                vec![
+                    alloc.reflow(r"I am expecting a header, but got stuck here:"),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                ]
+            } else {
+                vec![alloc.reflow(r"I am expecting a header, but the file is not UTF-8 encoded.")]
+            };
+
+            let doc = alloc.stack(preamble.into_iter().chain([alloc.concat([
+                alloc.reflow("I am expecting a module keyword next, one of "),
+                alloc.keyword("interface"),
+                alloc.reflow(", "),
+                alloc.keyword("app"),
+                alloc.reflow(", "),
+                alloc.keyword("package"),
+                alloc.reflow(" or "),
+                alloc.keyword("platform"),
+                alloc.reflow("."),
+            ])]));
 
             Report {
                 filename,
