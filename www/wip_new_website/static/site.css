@@ -33,7 +33,6 @@
     --font-size-normal: 18px;
     --body-max-width: 1024px;
     --top-bar-height: 50px;
-    --homepage-intro-box-width: 367px;
     --dark-code-bg: #202746;
 }
 
@@ -258,6 +257,10 @@ h3 {
     font-size: 24px;
 }
 
+.home-examples-title {
+    margin-bottom: 4px;
+}
+
 #top-bar-links {
     display: flex;
 }
@@ -446,10 +449,15 @@ li {
 }
 
 /* Homepage */
+#homepage-intro-outer {
+    margin: 60px auto;
+    text-align: center;
+}
+
 #homepage-intro-box {
     position: relative;
-    margin: 60px auto;
-    width: var(--homepage-intro-box-width);
+    display: inline-block;
+    text-align: left;
 }
 
 #homepage-h1 {
@@ -472,7 +480,6 @@ li {
 }
 
 #first-code-sample {
-    width: var(--homepage-intro-box-width);
     margin-top: 60px;
     line-height: 1.85em;
     color: #fcf9fd;
