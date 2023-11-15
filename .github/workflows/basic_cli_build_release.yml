@@ -7,9 +7,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
   
-# use .tar.gz for quick testing
 env:
+  # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.gz
+  BASIC_CLI_BRANCH: main
 
 jobs:
   fetch-releases:
@@ -187,24 +188,24 @@ jobs:
           cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
           ls | grep "tar$" | xargs tar -xf
 
-      - name: prep testing http-get.roc
+      - name: Install expect for tests if we dont have it yet
+        run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect
+
+      - name: prep testing
         run: |
           mv roc_nightly basic-cli-platform/.
           cd basic-cli-platform
-          mkdir examples
-          cd examples
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
-          sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
+          mkdir src
+          find . -maxdepth 1 -type f -exec mv {} src/ \;
+          
+          mkdir temp-basic-cli
+          cd temp-basic-cli
+          git clone https://github.com/roc-lang/basic-cli.git
+          git checkout ${{ env.BASIC_CLI_BRANCH }}
+          cp -r examples ..
+          cp -r ci ..
           
           cd ..
           
-          ./roc_nightly/roc build examples/http-get.roc --prebuilt-platform
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
-
-      - run: sudo apt install -y expect
-
-      - name: execute test
-        run: |
-          cd basic-cli-platform
-          expect http-get.exp
+          ROC=./roc_nightly/roc EXAMPLES_DIR=./examples ./ci/all_tests.sh
 
