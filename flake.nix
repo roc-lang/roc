@@ -34,8 +34,8 @@
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) zigPkg llvmPkgs llvmVersion 
-            llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
+        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
+          llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
         # DevInputs are not necessary to build roc as a user 
         linuxDevInputs = with pkgs;
@@ -155,6 +155,12 @@
         formatter = pkgs.nixpkgs-fmt;
 
         # You can build this package (the roc CLI) with the `nix build` command.
-        packages.default = rocBuild.roc-cli;
+        packages = {
+          default = rocBuild.roc-cli;
+
+          cli = rocBuild.roc-cli;
+
+          lang-server = rocBuild.roc-lang-server;
+        };
       });
 }
