@@ -2,22 +2,26 @@
 
 This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!
 
-- [Strings and Numbers](#strings-and-numbers)
-- [Building an Application](#building-an-application)
-- [Debugging](#debugging)
-- [Records](#records)
-- [Optional Record Fields](#optional-record-fields)
-- [Tags](#tags)
-- [Booleans](#booleans)
-- [Lists](#lists)
-- [Types](#types)
-- [Numeric types](#numeric-types)
-- [Crashing](#crashing)
-- [Modules](#modules)
-- [Tasks](#tasks)
-- [Backpassing](#backpassing)
-- [Abilities](#abilities)
-- [Appendix: Advanced Concepts](#appendix-advanced-concepts)
+<div id="tutorial-toc">
+    <ul>
+        <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
+        <li><a href="#building-an-application">Building an Application</a></li>
+        <li><a href="#debugging">Debugging</a></li>
+        <li><a href="#records">Records</a></li>
+        <li><a href="#optional-record-fields">Optional Record Fields</a></li>
+        <li><a href="#tags">Tags</a></li>
+        <li><a href="#booleans">Booleans</a></li>
+        <li><a href="#lists">Lists</a></li>
+        <li><a href="#types">Types</a></li>
+        <li><a href="#numeric-types">Numeric types</a></li>
+        <li><a href="#crashing">Crashing</a></li>
+        <li><a href="#modules">Modules</a></li>
+        <li><a href="#tasks">Tasks</a></li>
+        <li><a href="#backpassing">Backpassing</a></li>
+        <li><a href="#abilities">Abilities</a></li>
+        <li><a href="#appendix-advanced-concepts">Appendix: Advanced Concepts</a></li>
+    </ul>
+</div>
 
 ## [Strings and Numbers](#strings-and-numbers) {#strings-and-numbers}
 

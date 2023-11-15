@@ -25,8 +25,8 @@
     --faded-color: #4c4c4c;
     --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
         sans-serif;
-    --font-mono: "Source Code Pro", SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
-        monospace;
+    --font-mono: "Source Code Pro", SFMono-Regular, Consolas, "Liberation Mono",
+        Menlo, Courier, monospace;
     --top-header-height: 67px;
     --sidebar-width: 280px;
 
@@ -106,27 +106,27 @@ hr {
 }
 
 .btn-small:hover {
-   background: #9b6bf2;
-   border-color: #7c38f5;
+    background: #9b6bf2;
+    border-color: #7c38f5;
 }
 
 #individual-sponsors {
-   list-style-type: none;
-   padding: 24px 40px;
+    list-style-type: none;
+    padding: 24px 40px;
 }
 
 #individual-sponsors li {
-  display: inline;
-  white-space: nowrap;
+    display: inline;
+    white-space: nowrap;
 }
 
 #individual-sponsors li::after {
-  content: ",";
-  white-space: pre; /* Preserve the space after the comma */
+    content: ",";
+    white-space: pre; /* Preserve the space after the comma */
 }
 
 #individual-sponsors li:last-child::after {
-  content: ""; /* No comma after the last one */
+    content: ""; /* No comma after the last one */
 }
 
 #sponsor-logos {
@@ -153,10 +153,6 @@ hr {
 
 #sponsor-logos + p {
     margin-bottom: 3em;
-}
-
-#final-tutorial-link {
-    padding-top: 12px;
 }
 
 /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile.
@@ -557,36 +553,13 @@ li {
         font-size: 16px;
     }
 
-    .home-goals-container, .home-examples-container {
+    .home-goals-container,
+    .home-examples-container {
         /* It's unclear why this !important is necessary, since its specificity
          should theoretically be higher than what it's overriding. In practice,
          at least in Chrome, removing the !important breaks this. */
         display: grid !important;
         grid-template-columns: 1fr;
-    }
-
-    /* Tutorial */
-
-    #tutorial-toc-toggle-label,
-    #close-tutorial-toc {
-        display: block;
-    }
-
-    #tutorial-toc-toggle:checked + #tutorial-toc {
-        display: block;
-    }
-
-    #tutorial-toc {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        overflow-y: auto;
-        margin: 0;
-        padding-right: 120px;
-        border: 0;
     }
 
     h1,
@@ -638,8 +611,10 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2") format("woff2"),
-        url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff") format("woff");
+    src: url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2")
+            format("woff2"),
+        url("/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff")
+            format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
         U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
@@ -650,7 +625,8 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2") format("woff2"),
+    src: url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2")
+            format("woff2"),
         url("/fonts/lato-v23-latin/lato-v23-latin-regular.woff") format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
@@ -663,8 +639,10 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2") format("woff2"),
-        url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff") format("woff");
+    src: url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2")
+            format("woff2"),
+        url("/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff")
+            format("woff");
     unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB,
         U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
@@ -675,8 +653,10 @@ li {
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2") format("woff2"),
-        url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff") format("woff");
+    src: url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2")
+            format("woff2"),
+        url("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff")
+            format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
         U+2215, U+FEFF, U+FFFD;
@@ -948,7 +928,8 @@ code .dim {
     padding-bottom: 42px;
     padding-top: 2px;
     font-style: italic;
-    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000,
+        1px 1px 0 #000;
     letter-spacing: 1px;
     word-spacing: 3px;
     margin: 0;
@@ -1050,4 +1031,33 @@ code .dim {
     color: #222;
     background: var(--light-cyan);
     border-color: var(--light-cyan);
+}
+
+/* Tutorial Table of Contents */
+
+#tutorial-toc {
+    background-color: var(--gray-bg);
+}
+
+#tutorial-toc > ul {
+    display: flex;
+    flex-wrap: wrap;
+    list-style-type: none;
+    padding: 16px 16px;
+    margin: 0px;
+}
+
+#tutorial-toc > ul > li {
+    flex: 1 1 50%; /* Adjust the percentage to control how many items per row */
+    margin-bottom: 0; /* Reset the margin as they are now side by side */
+    white-space: nowrap;
+    overflow: hidden; /* Ensures content doesn't overflow its container */
+    text-overflow: ellipsis; /* Adds an ellipsis if the content overflows */
+}
+
+/* for larger screens */
+@media only screen and (min-width: 768px) {
+    #tutorial-toc > ul > li {
+        flex: 1 1 33%; /* Adjust the percentage to control how many items per row */
+    }
 }
