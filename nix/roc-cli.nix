@@ -1,4 +1,4 @@
-{ pkgs, rustPlatform, compile-deps }:
+{ pkgs, rustPlatform, compile-deps, subPackage ? null }:
 let
   inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 in
@@ -6,10 +6,12 @@ rustPlatform.buildRustPackage {
   pname = "roc";
   version = "0.0.1";
 
-  src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
+  buildAndTestSubdir = subPackage;
+
+  src = pkgs.nix-gitignore.gitignoreSource [ ] ../.;
 
   cargoLock = {
-    lockFile = ./Cargo.lock;
+    lockFile = ../Cargo.lock;
     outputHashes = {
       "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
       "inkwell-0.2.0" = "sha256-VhTapYGonoSQ4hnDoLl4AAgj0BppAhPNA+UPuAJSuAU=";
@@ -41,7 +43,7 @@ rustPlatform.buildRustPackage {
     python3
     llvmPkgs.clang
     llvmPkgs.llvm.dev
-    llvmPkgs.bintools-unwrapped # contains lld      
+    llvmPkgs.bintools-unwrapped # contains lld
     zigPkg
   ]);
 

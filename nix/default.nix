@@ -5,11 +5,12 @@ let
     cargo = rustVersion;
     rustc = rustVersion;
   };
-  compile-deps = pkgs.callPackage ./compile-deps.nix {};
+  compile-deps = pkgs.callPackage ./compile-deps.nix { };
 in
 {
   inherit rustPlatform compile-deps;
   rust-shell =
     (rustVersion.override { extensions = [ "rust-src" "rust-analyzer" ]; });
   roc-cli = pkgs.callPackage ./roc-cli.nix { inherit compile-deps rustPlatform; };
+  roc-lang-server = {};
 }

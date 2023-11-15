@@ -18,9 +18,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
+
+    # for non flake backwards compatibility 
+    flake-compat.url = "https://flakehub.com/f/edolstra/flake-compat/1.tar.gz";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
     let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
@@ -31,7 +34,8 @@
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+        inherit (compile-deps) zigPkg llvmPkgs llvmVersion 
+            llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
         # DevInputs are not necessary to build roc as a user 
         linuxDevInputs = with pkgs;
@@ -47,16 +51,6 @@
             xorg.libXi
             xorg.libxcb
           ];
-
-        darwinInputs = with pkgs;
-          lib.optionals stdenv.isDarwin
-            (with pkgs.darwin.apple_sdk.frameworks; [
-              AppKit
-              CoreFoundation
-              CoreServices
-              Foundation
-              Security
-            ]);
 
         # DevInputs are not necessary to build roc as a user 
         darwinDevInputs = with pkgs;

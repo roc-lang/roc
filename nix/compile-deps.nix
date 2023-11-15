@@ -12,4 +12,14 @@ let
 in
 {
   inherit zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+
+  darwinInputs = with pkgs;
+    lib.optionals stdenv.isDarwin
+      (with pkgs.darwin.apple_sdk.frameworks; [
+        AppKit
+        CoreFoundation
+        CoreServices
+        Foundation
+        Security
+      ]);
 }
