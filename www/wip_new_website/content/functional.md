@@ -120,4 +120,4 @@ Pure functions are notably amenable to compiler optimizations. Roc already takes
 
 ## Get started
 
-If this design sounds interesting to you, you can give Roc a try by heading over to the [tutorial](https://www.roc-lang.org/tutorial)!
+If this design sounds interesting to you, you can give Roc a try by heading over to the [tutorial](/tutorial)!
