@@ -208,5 +208,5 @@ jobs:
           
           cd ../..
           
-          ROC=./roc_nightly/roc EXAMPLES_DIR=./examples ./ci/all_tests.sh
+          ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
 
