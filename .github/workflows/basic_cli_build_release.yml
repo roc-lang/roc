@@ -189,7 +189,7 @@ jobs:
           ls | grep "tar$" | xargs tar -xf
 
       - name: Install expect for tests if we dont have it yet
-        run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect
+        run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
 
       - name: prep testing
         run: |
