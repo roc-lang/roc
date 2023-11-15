@@ -201,11 +201,12 @@ jobs:
           mkdir temp-basic-cli
           cd temp-basic-cli
           git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
           git checkout ${{ env.BASIC_CLI_BRANCH }}
-          cp -r examples ..
-          cp -r ci ..
+          cp -r examples ../..
+          cp -r ci ../..
           
-          cd ..
+          cd ../..
           
           ROC=./roc_nightly/roc EXAMPLES_DIR=./examples ./ci/all_tests.sh
 
