@@ -28,17 +28,10 @@
           ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
 
-        # When updating the zig or llvm version, make sure they stay in sync.
-        # Also update in default.nix (TODO: maybe we can use nix code to sync this)
-        zigPkg = pkgs.zig_0_11;
-        llvmPkgs = pkgs.llvmPackages_16;
-        llvmVersion = builtins.splitVersion llvmPkgs.release_version;
-        llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
+        rocBuild = import ./nix { inherit pkgs; };
 
-        # get current working directory
-        cwd = builtins.toString ./.;
-        rust =
-          pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
+        compile-deps = rocBuild.compile-deps;
+        inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
         # DevInputs are not necessary to build roc as a user 
         linuxDevInputs = with pkgs;
@@ -111,7 +104,7 @@
           zlib
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
-          rust
+          rocBuild.rust-shell
         ]);
 
         sharedDevInputs = (with pkgs; [
@@ -168,6 +161,6 @@
         formatter = pkgs.nixpkgs-fmt;
 
         # You can build this package (the roc CLI) with the `nix build` command.
-        packages.default = import ./. { inherit pkgs; };
+        packages.default = rocBuild.roc-cli;
       });
 }
