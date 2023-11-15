@@ -156,10 +156,10 @@
 
         # You can build this package (the roc CLI) with the `nix build` command.
         packages = {
-          default = rocBuild.roc-cli;
+          default = rocBuild.roc-full;
+          full = rocBuild.roc-full;
 
           cli = rocBuild.roc-cli;
-
           lang-server = rocBuild.roc-lang-server;
         };
       });

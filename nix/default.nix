@@ -16,8 +16,9 @@ let
     rust-shell =
       (rustVersion.override { extensions = [ "rust-src" "rust-analyzer" ]; });
 
-    roc-cli = callPackage ./builder.nix { }; # TODO: this builds the language server as `roc_ls`
+    roc-full = callPackage ./builder.nix { };
     roc-lang-server = callPackage ./builder.nix { subPackage = "lang_srv"; };
+    roc-cli = callPackage ./builder.nix { subPackage = "cli"; };
   };
 
 in

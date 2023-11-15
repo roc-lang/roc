@@ -1,12 +1,14 @@
-{ pkgs, rustPlatform, compile-deps, subPackage ? null }:
+{ pkgs, lib, rustPlatform, compile-deps, subPackage ? null }:
 let
   inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+
+  subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
 in
 rustPlatform.buildRustPackage {
-  pname = "roc";
+  pname = "roc" + lib.optionalString (subPackage != null) "_${subPackage}";
   version = "0.0.1";
 
-  buildAndTestSubdir = subPackage;
+  buildAndTestSubdir = subPackagePath;
 
   src = pkgs.nix-gitignore.gitignoreSource [ ] ../.;
 
@@ -68,13 +70,18 @@ rustPlatform.buildRustPackage {
   # cp: to copy str.zig,list.zig...
   # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
   postInstall =
-    if pkgs.stdenv.isLinux then ''
-      wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${glibcPath} --set NIX_LIBGCC_S_PATH ${libGccSPath} --prefix PATH : ${
-        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-      }
-    '' else ''
-      wrapProgram $out/bin/roc --prefix PATH : ${
-        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-      }
+    let
+      binPath =
+        lib.makeBinPath [ pkgs.stdenv.cc ];
+      linuxArgs = lib.optionalString pkgs.stdenv.isLinux
+        "--set NIX_GLIBC_PATH ${glibcPath} --set NIX_LIBGCC_S_PATH ${libGccSPath}";
+      rocPath = "$out/bin/roc";
+      wrapRoc = "wrapProgram ${rocPath} ${linuxArgs} --prefix PATH : ${binPath}";
+    in
+    # need to check if roc bin exists since it might not if subPackage is set
+    ''
+      if test -f ${rocPath}; then
+        ${wrapRoc}
+      fi
     '';
 }
