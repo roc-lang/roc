@@ -83,18 +83,23 @@ Here are some examples of how it can be used today.
 
 <div role="presentation" class="home-examples-container">
     <div role="presentation" class="home-examples-column">
-        <h3 class="home-examples-title">Command-Line Interfaces</h3>
-        <p>You can use Roc to create command-line interfaces (CLIs) and scripts. For example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc source code repository.</p>
-        <p>For a more flexible starting point, <a href="https://github.com/roc-lang/basic-cli">roc-lang/basic-cli</a> is a popular platform for building your own CLI tools. It's the most mature Roc platform today.</p>
+        <h3 class="home-examples-title">Web Servers</h3>
+        <p>You can use Roc to build web servers. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a platform with
+        a simple interface: you write a function which takes a <code>Request</code>, performs I/O, and returns a <code>Response</code>.</p>
+        <p>Behind the scenes, the platform uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
+        <p>For database access, <a href="https://github.com/agu-z/roc-pg">roc-pg</a> offers a way to access a <a href="https://www.postgresql.org/">PostgreSQL</a> database with your Roc types checked against the types in the database's schema.</p>
     </div>
     <div role="presentation" class="home-examples-column">
-        <h3 class="home-examples-title">Web Servers</h3>
-        <p>You can also use Roc to build web servers. <a href="https://github.com/roc-lang/basic-webserver">roc-lang/basic-webserver</a> is an upcoming platform for doing this.</>
+        <h3 class="home-examples-title">Command-Line Interfaces</h3>
+        <p>You can also use Roc to create command-line interfaces (CLIs) and scripts. Roc compiles to binary executables, so these can run on devices that don't have Roc installed.</p>
+        <p>For example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
+        <p>For a more flexible starting point, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform for building your own CLI tools. It's the most mature Roc platform today.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Embedding</h3>
-        <p>You can call Roc functions from other languages. See <a href="https://github.com/roc-lang/roc/tree/main/examples">basic examples</a> of how to call Roc functions from Python, Node.js, Swift, WebAssembly, and JVM languages. Any function that supports C interop can call Roc functions, using similar techniques to the ones these examples use.</p>
-        <p>Most of those examples are minimal proofs of concept. <a href="https://github.com/vendrinc/roc-esbuild">roc-esbuild</a> is a work in progress that’s used at <a href="https://www.vendr.com/careers">Vendr</a> to call Roc functions from Node.js.</p>
+        <p>You can call Roc functions from other languages. There are several <a href="https://github.com/roc-lang/roc/tree/main/examples">basic examples</a> of how to call Roc functions from Python, Node.js, Swift, WebAssembly, and JVM languages.</p>
+        <p>Any language that supports C interop can call Roc functions, using similar techniques to the ones found in these examples.</p>
+        <p>Most of those are minimal proofs of concept, but <a href="https://github.com/vendrinc/roc-esbuild">roc-esbuild</a> is a work in progress that’s used at <a href="https://www.vendr.com/careers">Vendr</a> to call Roc functions from Node.js.</p>
     </div>
 </div>
 
