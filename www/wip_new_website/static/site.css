@@ -739,7 +739,7 @@ li {
     }
 
     h3 {
-        color: var(--primary-2);
+        color: #fff;
     }
 
     h1,
@@ -917,7 +917,7 @@ code .dim {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    gap: 48px;
+    gap: 24px;
     width: 100%;
 }
 
@@ -926,6 +926,11 @@ code .dim {
     flex-direction: column;
     flex: 1;
     width: 100%;
+}
+
+.home-examples-column:not(:last-of-type) {
+    padding-right: 24px;
+    border-right: 2px solid var(--primary-1);
 }
 
 /* Wider screens */
