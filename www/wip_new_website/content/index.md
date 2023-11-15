@@ -71,18 +71,18 @@ Here are some examples of how it can be used today.
         <h3 class="home-examples-title">Command-Line Interfaces</h3>
     <pre><samp class="code-snippet">main <span class="kw">=</span>
     Stdout<span class="punctuation section">.</span>line <span class="literal">"Hello!"</span></samp></pre>
-        <p>You can use Roc to create command-line interfaces (CLIs) and scripts. Roc compiles to binary executables, so these can run on devices that don't have Roc installed.</p>
-        <p>For example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
-        <p>For a more flexible starting point, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform for building your own CLI tools. It's the most mature Roc platform today.</p>
+        <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
+        <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
+        <p>If you’re looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform to check out.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Web Servers</h3>
 <pre><samp class="code-snippet">handleReq <span class="kw">=</span> <span class="kw">\</span>request <span class="kw">-&gt;</span>
     Task<span class="punctuation section">.</span>ok <span class="literal">{</span> body: <span class="comment">…</span> <span class="literal">}</span></samp></pre>
-        <p>You can also use Roc to build web servers. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a platform with
-        a simple interface: you write a function which takes a <code>Request</code>, does I/O, and returns a <code>Response</code>.</p>
-        <p>Behind the scenes, the platform uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
-        <p>For database access, <a href="https://github.com/agu-z/roc-pg">roc-pg</a> offers a way to access a <a href="https://www.postgresql.org/">PostgreSQL</a> database with your Roc types checked against the types in the database's schema.</p>
+        <p>You can also build web servers in Roc. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a platform with
+        a simple interface: you write a function which takes a <code>Request</code>, does some I/O, and returns a <code>Response</code>.</p>
+        <p>Behind the scenes, it uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
+        <p>For database access, <a href="https://github.com/agu-z/roc-pg">roc-pg</a> lets you access a <a href="https://www.postgresql.org/">PostgreSQL</a> database&mdash;with your Roc types checked against the types in your database's schema.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Embedding</h3>
