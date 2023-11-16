@@ -2,6 +2,27 @@
 
 This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!
 
+<div id="tutorial-toc">
+    <ul>
+        <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
+        <li><a href="#building-an-application">Building an Application</a></li>
+        <li><a href="#debugging">Debugging</a></li>
+        <li><a href="#records">Records</a></li>
+        <li><a href="#optional-record-fields">Optional Record Fields</a></li>
+        <li><a href="#tags">Tags</a></li>
+        <li><a href="#booleans">Booleans</a></li>
+        <li><a href="#lists">Lists</a></li>
+        <li><a href="#types">Types</a></li>
+        <li><a href="#numeric-types">Numeric types</a></li>
+        <li><a href="#crashing">Crashing</a></li>
+        <li><a href="#modules">Modules</a></li>
+        <li><a href="#tasks">Tasks</a></li>
+        <li><a href="#backpassing">Backpassing</a></li>
+        <li><a href="#abilities">Abilities</a></li>
+        <li><a href="#appendix-advanced-concepts">Appendix: Advanced Concepts</a></li>
+    </ul>
+</div>
+
 ## [Strings and Numbers](#strings-and-numbers) {#strings-and-numbers}
 
 Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short. Run this in a terminal:
