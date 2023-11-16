@@ -14,7 +14,7 @@
     <div role="presentation" class="home-goals-column">
         <a href="/wip/fast.html" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
+            <p class="home-goals-description">Roc code is designed to build fast and <span class="nobreak-on-mobile">run fast</span>. It compiles to machine code <span class="nobreak-on-mobile">or WebAssembly</span>.</p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
@@ -29,7 +29,7 @@
         <a href="/wip/functional.html" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
+             Roc has a small number of simple language primitives. It’s a <span class="nobreak-on-mobile">single-paradigm</span> <span class="nobreak-on-mobile">functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
         </a>
     </div>
@@ -138,7 +138,7 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
-We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
+We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
     <li><a href="https://github.com/aaronwhite">Aaron White</a></li>
@@ -154,7 +154,7 @@ We'd also like to express our gratitude to each and every one of our fantastic [
     <li><a href="https://github.com/popara">Zeljko Nesic</a></li>
 </ul>
 
-Thank you all so much for helping Roc progress! 💜
+Thank you all for your contributions! Roc would not be what it is without your generosity. 💜
 
 We are currently trying to raise $4,000 USD/month in donations to fund one longtime Roc contributor to continue his work on Roc full-time. We are a small group trying to do big things, and every donation helps! You can donate using:
 - [GitHub Sponsors](https://github.com/sponsors/roc-lang)

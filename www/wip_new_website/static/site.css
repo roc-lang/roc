@@ -63,7 +63,7 @@ footer {
     font-size: var(--font-size-normal);
     padding: 20px;
     box-sizing: border-box;
-    margin-top: 48px;
+    margin-top: 24px;
 }
 
 #footer {
@@ -152,7 +152,7 @@ hr {
 #sponsor-logos .logo-tweede-golf {
     position: relative;
     top: 18px;
-    height: 76px;
+    height: 4rem;
 }
 
 #sponsor-logos + p {
@@ -507,10 +507,10 @@ li {
 }
 
 /* Mobile-friendly screen width */
-@media only screen and (max-width: 1024px) {
+@media only screen and (max-width: 1023px) {
     :root {
         --font-size-normal: 16px;
-        --body-max-width: 1024px;
+        --body-max-width: none;
     }
 
     #homepage-logo {
@@ -520,6 +520,15 @@ li {
         position: absolute;
         left: 227px;
         top: -28px;
+    }
+
+    #sponsor-logos {
+        padding: 4px;
+    }
+
+    .home-examples-column {
+        padding-right: 0 !important;
+        border-right: none !important;
     }
 
     /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile. */
@@ -900,7 +909,7 @@ code .dim {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    gap: 48px;
+    gap: 45px;
     width: 100%;
 }
 
