@@ -2,7 +2,7 @@ app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script },
-        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, type, role },
+        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type, role },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -103,23 +103,24 @@ viewNavbar : Str -> Html.Node
 viewNavbar = \page ->
     isHomepage = page == "index.html"
 
-    homeLink =
-        if isHomepage then
-            div [role "presentation"] [] # This is a spacer for the nav bar
-        else
-            a
-                [id "nav-home-link", href "/wip/", title "The Roc Programming Language"]
-                [rocLogo, span [class "home-link-text"] [text "Roc"]]
+    homeLinkAttrs =
+        [id "nav-home-link", href "/wip/", title "The Roc Programming Language Homepage"]
+        |> List.concat (if isHomepage then [ariaHidden "true"] else [])
 
     header [id "top-bar"] [
         nav [ariaLabel "primary"] [
-            homeLink,
+            a homeLinkAttrs [rocLogo, span [class "home-link-text"] [text "Roc"]],
             div [id "top-bar-links"] [
-                a [href "/wip/tutorial"] [text "tutorial"],
-                a [href "/wip/install"] [text "install"],
-                a [href "/wip/community"] [text "community"],
-                a [href "/wip/docs"] [text "docs"],
-                a [href "/wip/donate"] [text "donate"],
+                span [class "inline-block", role "presentation"] [
+                    a [href "/wip/tutorial"] [text "tutorial"],
+                    a [href "/wip/install"] [text "install"],
+                    a [href "/wip/examples"] [text "examples"],
+                ],
+                span [class "inline-block", role "presentation"] [
+                    a [href "/wip/community"] [text "community"],
+                    a [href "/wip/docs"] [text "docs"],
+                    a [href "/wip/donate"] [text "donate"],
+                ],
             ],
         ],
     ]

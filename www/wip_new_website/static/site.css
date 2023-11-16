@@ -63,11 +63,16 @@ footer {
     font-size: var(--font-size-normal);
     padding: 20px;
     box-sizing: border-box;
+    margin-top: 48px;
 }
 
 #footer {
     max-width: var(--body-max-width);
     margin: 0 auto;
+}
+
+.inline-block {
+    display: inline-block;
 }
 
 hr {
@@ -228,13 +233,14 @@ h3 {
     font-size: 1.5rem;
 }
 
-#top-bar {
+#top-bar, #top-bar nav {
     background-color: var(--gray-bg);
+}
+
+#top-bar {
     height: var(--top-bar-height);
     box-sizing: border-box;
     width: 100%;
-    /* On iPhone SE, without this, we end up with  */
-    min-width: 392px;
 }
 
 #top-bar nav {
@@ -246,10 +252,14 @@ h3 {
 }
 
 #nav-home-link {
-    display: flex;
+    display: inline-block;
     color: var(--top-bar-fg);
     font-size: 1.8rem;
     padding: 4px;
+}
+
+#homepage-main #nav-home-link {
+    visibility: hidden;
 }
 
 .home-link-text {
@@ -261,16 +271,11 @@ h3 {
     margin-bottom: 4px;
 }
 
-#top-bar-links {
-    display: flex;
-}
-
 #top-bar-links a,
 #top-bar-links label {
     box-sizing: border-box;
     color: var(--top-bar-fg);
-    font-size: var(--font-size-normal);
-    display: block;
+    display: inline-block;
     height: var(--top-bar-height);
     padding: 12px 16px;
     margin: 0 2px;
@@ -322,7 +327,7 @@ a:visited code {
 pre {
     position: relative;
     margin-bottom: 16px;
-    padding: 8px 16px;
+    padding: 0 0.35rem;
     box-sizing: border-box;
     background-color: var(--gray-bg);
     overflow-x: hidden;
@@ -505,7 +510,18 @@ li {
 @media only screen and (max-width: 1024px) {
     :root {
         --font-size-normal: 16px;
+        --body-max-width: 1024px;
     }
+
+    #homepage-logo {
+        /* The bird runs off the screen unless we shrink it */
+        height: 80px;
+        width: auto;
+        position: absolute;
+        left: 227px;
+        top: -28px;
+    }
+
     /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile. */
     .desktop {
         display: none;
@@ -522,6 +538,10 @@ li {
     h2 {
         margin-top: 48px;
         padding: 12px 0;
+    }
+
+    .home-link-text {
+        display: none; /* Don't show "Roc" in the header next to the logo, to save space */
     }
 
     h1 code,
@@ -558,14 +578,9 @@ li {
         text-align: left;
     }
 
-    #homepage-logo {
-        height: 116px;
-        left: 262px;
-        top: -14px;
-    }
-
     #first-code-sample {
         margin: 64px auto;
+        margin-bottom: 0;
     }
 
     #homepage-tagline {
@@ -626,7 +641,8 @@ li {
 
     #top-bar-links a,
     #top-bar-links label {
-        padding: 12px 8px;
+        font-size: 1.2rem;
+        padding: 12px 0.5rem;
         margin: 0;
     }
 
@@ -636,14 +652,16 @@ li {
 }
 
 /* iPhone SE and similar */
-@media only screen and (max-width: 350px) {
+@media only screen and (max-width: 320px) {
     #homepage-logo {
         /* The bird runs off the screen unless we shrink it */
-        height: 75px;
-        width: auto;
-        position: absolute;
-        left: 227px;
-        top: -14px;
+        left: 188px;
+        top: -30px;
+    }
+
+    :root {
+        --font-size-normal: 14px;
+        --body-max-width: 320px;
     }
 }
 
