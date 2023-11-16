@@ -2914,7 +2914,6 @@ fn update<'a>(
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
                     debug_check_ir!(state, arena, layout_interner, ROC_CHECK_MONO_IR);
 
-                    dbg!("**************************");
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
                     roc_mono::tail_recursion::apply_trmc(

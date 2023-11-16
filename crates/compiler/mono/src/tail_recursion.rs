@@ -55,7 +55,6 @@ pub fn apply_trmc<'a, 'i>(
             let trmc_candidate_symbols = trmc_candidates(env.interner, proc);
 
             if !trmc_candidate_symbols.is_empty() {
-                println!("\n\n{:#?}\n\n", trmc_candidate_symbols);
                 let new_proc =
                     crate::tail_recursion::TrmcEnv::init(env, proc, trmc_candidate_symbols);
                 *proc = new_proc;
