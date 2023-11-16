@@ -20,7 +20,10 @@
     };
 
     # for non flake backwards compatibility 
-    flake-compat.url = "https://flakehub.com/f/edolstra/flake-compat/1.tar.gz";
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
+    };
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
