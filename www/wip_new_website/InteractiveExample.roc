@@ -18,23 +18,6 @@ Token : [
 view : Html.Node
 view =
     output =
-        # # Select anything here to see an explanation.
-        # main =
-        #     Path.fromStr "url.txt"
-        #     |> storeEmail
-        #     |> Task.onErr handleErr
-        #
-        # storeEmail = \filename ->
-        #     url <- File.readUtf8 filename |> Task.await
-        #     { name, email } <- Http.get url Json.codec |> Task.await
-        #
-        #     File.writeUtf8 (Path.fromStr "\(name).txt") email
-        #
-        # handleUrl = \err ->
-        #     when err is
-        #         HttpErr url _ -> Stderr.line "Error fetching URL \(url)"
-        #         FileReadErr path _ -> Stderr.line "Error reading \(Path.display path)"
-        #         FileWriteErr path _ -> Stderr.line "Error writing \(Path.display path)"
         sectionsToStr [
             Desc [Comment "<span class='desktop'>Click anything here to see an explanation.</span><span class='mobile'>Tap anything here to\n# see an explanation.</span>"] "<p><a href=\"/tutorial#comments\">Comments</a> in Roc begin with a <code>#</code> and go to the end of the line.</p>",
             Newline,
@@ -44,21 +27,20 @@ view =
             Newline,
             Desc [Kw "|>", Ident "storeEmail"] "<p>The <a href=\"/tutorial#the-pipe-operator\">pipe operator</a> (<code>|></code>) is syntax sugar for passing the previous value to the next function in the “pipeline.”</p><p>This line takes the value that <code>Path.fromStr \"url.txt\"</code> returns and passes it to <code>storeEmail</code>.</p><p>The next <code>|></code> continues the pipeline.</p>",
             Newline,
-            Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>If the task returned by the previous step in the pipeline fails, pass its error to <code>handleErr</code>.</p><p>The pipeline essentially does this:</p><pre><code>val1 = Path.fromStr \"url.txt\"\nval2 = storeEmail val1\n\nTask.onErr val2 handleErr</code></pre><p>It creates a <code>Path</code> from a string, stores an email based on that path, and then does error handling.</p>",
+            Desc [Kw "|>", Ident "Task.onErr", Ident "handleErr"] "<p>If the task returned by the previous step in the pipeline fails, pass its error to <code>handleErr</code>.</p><p>The pipeline essentially does this:</p><pre><code>a = Path.fromStr \"url.txt\"\nb = storeEmail a\n\nTask.onErr b handleErr</code></pre><p>It creates a <code>Path</code> from a string, stores an email based on that path, and then does error handling.</p>",
             Outdent,
             Newline,
-            Desc [Ident "storeEmail", Kw "=", Lambda ["filename"]] "<p>This <a href=\"/tutorial#defining-functions\">defines a function</a> named <code>storeEmail</code>.</p><p>In Roc, functions are ordinary values, so we assign names to them using <code>=</code> like with any other value.</p><p>The <code>\\arg1, arg2 -&gt;</code> syntax begins a function, and the part after <code>-&gt;</code> is the function's body.</p>",
+            Desc [Ident "storeEmail", Kw "=", Lambda ["path"]] "<p>This <a href=\"/tutorial#defining-functions\">defines a function</a> named <code>storeEmail</code>. It takes one argument, named <code>path</code>.</p><p>In Roc, functions are ordinary values, so we assign names to them using <code>=</code> like with any other value.</p><p>The <code>\\arg1, arg2 -&gt;</code> syntax begins a function, and the part after <code>-&gt;</code> is the function's body.</p>",
             Indent,
-            Desc [Ident "url", Kw "&lt;-", Ident "File.readUtf8", Ident "filename", Kw "|>", Ident "Task.await"] "<p>This reads the contents of the file (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p><p>The <code>&lt;-</code> does <a href=\"/tutorial#backpassing\">backpassing</a>, which is syntax sugar for defining a function. This line desugars to:</p><pre><code>Task.await\n    (File.readUtf8 filename)\n    \\url -&gt;</code></pre><p>The lines after this one form the body of the <code>\\url -&gt;</code> <a href=\"https://en.wikipedia.org/wiki/Callback_(computer_programming)\">callback</a>, which runs if the file read succeeds.</p>",
+            Desc [Ident "url", Kw "&lt;-", Ident "File.readUtf8", Ident "path", Kw "|>", Ident "Task.await"] "<p>This reads the contents of the file (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p><p>The <code>&lt;-</code> does <a href=\"/tutorial#backpassing\">backpassing</a>, which is syntax sugar for defining a function. This line desugars to:</p><pre><code>Task.await\n    (File.readUtf8 path)\n    \\url -&gt;</code></pre><p>The lines after this one form the body of the <code>\\url -&gt;</code> <a href=\"https://en.wikipedia.org/wiki/Callback_(computer_programming)\">callback</a>, which runs if the file read succeeds.</p>",
             Newline,
             Desc [Ident "user", Kw "&lt;-", Ident "Http.get", Ident "url", Ident "Json.codec", Kw "|>", Ident "Task.await"] "<p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p><p>If the shape of the JSON isn’t compatible with the type of <code>user</code> (based on type inference), this will give a decoding error immediately.</p><p>As with all the other lines ending in <code>|> Task.await</code>, if there’s an error, nothing else in <code>storeEmail</code> will be run, and <code>handleErr</code> will end up handling the error.</p>",
             Newline,
-            Desc [Ident "dest", Kw "=", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\\(user.name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
+            Desc [Ident "dest", Kw "=", Ident "Path.fromStr", StrInterpolation "\"" "user.name" ".txt\""] "<p>The <code>\\(user.name)</code> in this string literal will be replaced with the value in <code>name</code>. This is <a href=\"/tutorial#string-interpolation\">string interpolation</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. Earlier lines needed that because they were I/O <a href=\"/tutorial#tasks\">tasks</a>, but this is a plain old <a href=\"/tutorial#defs\">definition</a>, so there's no task to await.</p>",
             Newline,
-            Desc [Literal "_"] "<p>In Roc, if you don’t want to bother naming something, you can always choose the name <code>_</code>.</p><p>You can name as many things as you like <code>_</code>, but you can never reference anything named <code>_</code>.</p><p>So it’s only useful for when you don’t want to choose a name.</p>",
-            Desc [Kw "&lt;-", Ident "File.writeUtf8", ParensAround [Ident "Path.fromStr dest"], Ident "user.email", Kw "|>", Ident "Task.await"] "<p>This writes the <code>user.email</code> string to the file encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>The parentheses here show where the nested call to <code>Path.fromStr</code> begins and ends.</p>",
+            Desc [Literal "_", Kw "&lt;-", Ident "File.writeUtf8", Ident "dest", Ident "user.email", Kw "|>", Ident "Task.await"] "<p>This writes <code>user.email</code> to the file, encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p><p>We won’t be using the output of <code>writeUtf8</code>, so we name it <code>_</code>. The special name <code>_</code> is for when you don’t want to use something.</p><p>You can name as many things as you like <code>_</code>, but you can never reference anything named <code>_</code>. So it’s only useful for when you don’t want to choose a name.</p>",
             Newline,
-            Desc [Ident "Stdout.line", StrInterpolation "\"Wrote email to " "dest" "\""] "<p>This prints what we did to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)\">stdout</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. That’s because, although <code>Stdout.line</code> returns a <a href=\"/tutorial#tasks\">task</a>, we don’t need to await it because nothing happens after it.</p>",
+            Desc [Ident "Stdout.line", StrInterpolation "\"Wrote email to " "Path.display dest" "\""] "<p>This prints what we did to <a href=\"https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)\">stdout</a>.</p><p>Note that this line doesn't end with <code>|> Task.await</code>. That’s because, although <code>Stdout.line</code> returns a <a href=\"/tutorial#tasks\">task</a>, we don’t need to await it because nothing happens after it.</p>",
             Outdent,
             Newline,
             Desc [Ident "handleErr", Kw "=", Lambda ["err"]] "<p>Like <code>storeEmail</code>, <code>handleErr</code> is also a function.</p><p>Although type annotations are optional everywhere in Roc—because the language has 100% type inference—you could add type annotations to <code>main</code>, <code>storeEmail</code>, and <code>handleErr</code> if you wanted to.</p>",
@@ -77,9 +59,9 @@ view =
             samp [] [text output],
         ],
         p [] [
-            text "To get started learning the language, try the ",
+            text "To get started with the language, try the ",
             a [href "/tutorial"] [text "tutorial"],
-            text " next!",
+            text "!",
         ],
         p [id "final-tutorial-link"] [
             a [class "btn-small", href "/tutorial"] [text "Start Tutorial"]

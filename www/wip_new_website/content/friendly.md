@@ -2,9 +2,9 @@
 
 Roc prioritizes being a user-friendly language. This impacts the syntax, semantics, and tools Roc ships with.
 
-## Syntax and source code formatter
+## Syntax and Formatter
 
-Roc's syntax isn't trivial, but there also isn't much of it to learn. Its design is generally uncluttered and unambiguous. A goal is that you can normally look at a piece of code and quickly get an accurate mental model of what it means, without having to think through several layers of indirection. Here are some examples:
+Roc's syntax isn't trivial, but there also isn't much of it to learn. It's designed to be uncluttered and unambiguous. A goal is that you can normally look at a piece of code and quickly get an accurate mental model of what it means, without having to think through several layers of indirection. Here are some examples:
 
 - `x = combine y z` always declares a new constant `x` (Roc has [no mutable variables, reassignment, or shadowing](/functional)) to be whatever the `combine` function returns when passed the arguments `y` and `z`. (Function calls in Roc don't need parentheses or commas.)
 - `user.email` always accesses the `email` field of a record named `user`. (Roc has no inheritance, subclassing, or proxying.)
@@ -13,7 +13,7 @@ Roc's syntax isn't trivial, but there also isn't much of it to learn. Its design
 
 Roc also ships with a source code formatter that helps you maintain a consistent style with little effort. The `roc format` command neatly formats your source code according to a common style, and it's designed with the time-saving feature of having no configuration options. This feature saves you all the time that would otherwise be spent debating which stylistic tweaks to settle on!
 
-## Helpful compiler
+## Helpful Compiler
 
 Roc's compiler is designed to help you out. It does complete type inference across all your code, and the type system is *sound*. This means you'll never get a runtime type mismatch if everything type-checked (including null exceptions; Roc doesn't have the [billion-dollar mistake](https://en.wikipedia.org/wiki/Null_pointer#History)), and you also don't have to write any type annotations for the compiler to be able to infer all the types in your program.
 
@@ -44,7 +44,7 @@ Tip: You can convert between integers and fractions using functions like
 
 If you like, you can run a program that has compile-time errors like this. (If the program reaches the error at runtime, it will crash.) This lets you do things like trying out code that's only partially finished, or running tests for one part of your code base while other parts have compile errors. (Note that this feature is only partially completed, and often errors out; it has a ways to go before it works for all compile errors!)
 
-## Serialization inference
+## Serialization Inference
 
 - Type inference is used for schema inference, but you can also spell it out if you like
 - Reports errors immediately
@@ -64,9 +64,16 @@ In the future, there are plans to add built-in support for [benchmarking](https:
 
 - also note: future plan to cache tests so we only re-run tests whose answers could possibly have changed. also maybe note: tests that don't perform I/O are guaranteed not to flake b/c pure functions.
 
-## Future plans
+## Future Plans
+
 - Package manager (Currently just URLs, content-hashed to make them immutable) with searchable index and no installation step, global cache of immutable downloads instead of per-project folders (no need to .gitignore anything)
 - Step debugger with replay
 - Customizable "linter" (e.g. code mods, project-specific rules to enforce)
 - Editor plugin ecosystem that works across editors, where plugins ship with packages
 - `roc edit`
+
+## Functional
+
+Besides being designed to be [fast](/wip/fast) and friendly, Roc is also a functional programming language.
+
+[What does _functional_ mean here?](/wip/functional)

@@ -101,6 +101,13 @@ where
     }
 }
 
+impl<T, E> Eq for RocResult<T, E>
+where
+    T: Eq,
+    E: Eq,
+{
+}
+
 impl<T, E> PartialEq for RocResult<T, E>
 where
     T: PartialEq,
@@ -108,6 +115,37 @@ where
 {
     fn eq(&self, other: &Self) -> bool {
         self.as_result_of_refs() == other.as_result_of_refs()
+    }
+}
+
+impl<T, E> Ord for RocResult<T, E>
+where
+    T: Ord,
+    E: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_result_of_refs().cmp(&other.as_result_of_refs())
+    }
+}
+
+impl<T, E> PartialOrd for RocResult<T, E>
+where
+    T: PartialOrd,
+    E: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.as_result_of_refs()
+            .partial_cmp(&other.as_result_of_refs())
+    }
+}
+
+impl<T, E> Hash for RocResult<T, E>
+where
+    T: Hash,
+    E: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_result_of_refs().hash(state)
     }
 }
 

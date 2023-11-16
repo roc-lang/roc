@@ -32,8 +32,6 @@
 
     --font-size-normal: 18px;
     --body-max-width: 1024px;
-    --top-bar-height: 50px;
-    --homepage-intro-box-width: 367px;
     --dark-code-bg: #202746;
 }
 
@@ -51,6 +49,7 @@ body {
     width: 100%;
     height: 100%;
     box-sizing: border-box;
+    overflow-x: hidden; /* This shouldn't be necessary, but without it, mobile has a right gutter. */
 }
 
 p {
@@ -64,12 +63,14 @@ footer {
     font-size: var(--font-size-normal);
     padding: 20px;
     box-sizing: border-box;
+    margin-top: 24px;
 }
 
 #footer {
     max-width: var(--body-max-width);
     margin: 0 auto;
 }
+
 
 hr {
     color: var(--primary-1);
@@ -148,7 +149,7 @@ hr {
 #sponsor-logos .logo-tweede-golf {
     position: relative;
     top: 18px;
-    height: 76px;
+    height: 4rem;
 }
 
 #sponsor-logos + p {
@@ -203,10 +204,17 @@ h2 {
     font-size: 3rem;
     border-bottom: 4px solid var(--dark-cyan);
     margin: 0;
-    margin-top: 72px;
     margin-bottom: 36px;
     padding: 36px 0;
     color: var(--heading-color);
+}
+
+#homepage-main h2 {
+    margin-top: 60px; /* On the homepage, these need to be spaced out more. */
+}
+
+#homepage-main #nav-home-link {
+    visibility: hidden;
 }
 
 h2 a {
@@ -222,13 +230,13 @@ h3 {
     font-size: 1.5rem;
 }
 
-#top-bar {
+#top-bar, #top-bar nav {
     background-color: var(--gray-bg);
-    height: var(--top-bar-height);
+}
+
+#top-bar {
     box-sizing: border-box;
     width: 100%;
-    /* On iPhone SE, without this, we end up with  */
-    min-width: 392px;
 }
 
 #top-bar nav {
@@ -240,23 +248,28 @@ h3 {
 }
 
 #nav-home-link {
-    display: flex;
+    display: inline-block;
     color: var(--top-bar-fg);
     font-size: 1.8rem;
     padding: 4px;
 }
 
-#top-bar-links {
-    display: flex;
+.home-link-text {
+    padding: 8px;
+    font-size: 24px;
+    position: relative;
+    top: -0.6rem;
+}
+
+.home-examples-title {
+    margin-bottom: 4px;
 }
 
 #top-bar-links a,
 #top-bar-links label {
     box-sizing: border-box;
     color: var(--top-bar-fg);
-    font-size: var(--font-size-normal);
-    display: block;
-    height: var(--top-bar-height);
+    display: inline-block;
     padding: 12px 16px;
     margin: 0 2px;
 }
@@ -307,7 +320,7 @@ a:visited code {
 pre {
     position: relative;
     margin-bottom: 16px;
-    padding: 8px 16px;
+    padding: 0 0.35rem;
     box-sizing: border-box;
     background-color: var(--gray-bg);
     overflow-x: hidden;
@@ -434,10 +447,15 @@ li {
 }
 
 /* Homepage */
+#homepage-intro-outer {
+    margin: 60px auto;
+    text-align: center;
+}
+
 #homepage-intro-box {
     position: relative;
-    margin: 60px auto;
-    width: var(--homepage-intro-box-width);
+    display: inline-block;
+    text-align: left;
 }
 
 #homepage-h1 {
@@ -460,7 +478,6 @@ li {
 }
 
 #first-code-sample {
-    width: var(--homepage-intro-box-width);
     margin-top: 60px;
     line-height: 1.85em;
     color: #fcf9fd;
@@ -483,10 +500,34 @@ li {
 }
 
 /* Mobile-friendly screen width */
-@media only screen and (max-width: 1024px) {
+@media only screen and (max-width: 1023px) {
     :root {
         --font-size-normal: 16px;
+        --body-max-width: none;
     }
+
+    #homepage-logo {
+        /* The bird runs off the screen unless we shrink it */
+        height: 80px;
+        width: auto;
+        position: absolute;
+        left: 227px;
+        top: -28px;
+    }
+
+    #homepage-main #nav-home-link {
+        display: none;
+    }
+
+    #sponsor-logos {
+        padding: 4px;
+    }
+
+    .home-examples-column {
+        padding-right: 0 !important;
+        border-right: none !important;
+    }
+
     /* Used for e.g. displaying the instruction "Click" on desktop and "Touch" on mobile. */
     .desktop {
         display: none;
@@ -503,6 +544,10 @@ li {
     h2 {
         margin-top: 48px;
         padding: 12px 0;
+    }
+
+    .home-link-text {
+        display: none; /* Don't show "Roc" in the header next to the logo, to save space */
     }
 
     h1 code,
@@ -539,14 +584,9 @@ li {
         text-align: left;
     }
 
-    #homepage-logo {
-        height: 116px;
-        left: 262px;
-        top: -14px;
-    }
-
     #first-code-sample {
         margin: 64px auto;
+        margin-bottom: 0;
     }
 
     #homepage-tagline {
@@ -582,9 +622,30 @@ li {
         font-size: 2rem !important;
     }
 
+    #top-bar-links {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr; /* Three equal-width columns */
+        grid-template-rows: auto auto; /* Two rows */
+    }
+
+    /* Left-align the first link in each row, right-align the last one, and center the middle one. */
+    #top-bar-links > :nth-child(3n+1) {
+        text-align: left;
+    }
+
+    #top-bar-links > :nth-child(3n+2) {
+        text-align: center;
+    }
+
+    #top-bar-links > :nth-child(3n+3) {
+        text-align: right;
+    }
+
     #top-bar-links a,
     #top-bar-links label {
-        padding: 12px 8px;
+        font-size: 1.2rem;
+        padding: 12px 0.5rem;
         margin: 0;
     }
 
@@ -594,14 +655,16 @@ li {
 }
 
 /* iPhone SE and similar */
-@media only screen and (max-width: 350px) {
+@media only screen and (max-width: 320px) {
     #homepage-logo {
         /* The bird runs off the screen unless we shrink it */
-        height: 75px;
-        width: auto;
-        position: absolute;
-        left: 227px;
-        top: -14px;
+        left: 188px;
+        top: -30px;
+    }
+
+    :root {
+        --font-size-normal: 14px;
+        --body-max-width: 320px;
     }
 }
 
@@ -704,7 +767,7 @@ li {
     }
 
     h3 {
-        color: var(--primary-2);
+        color: #fff;
     }
 
     h1,
@@ -847,7 +910,7 @@ code .dim {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    gap: 48px;
+    gap: 45px;
     width: 100%;
 }
 
@@ -874,23 +937,15 @@ code .dim {
     background-color: var(--light-cyan);
 }
 
-.home-goals-content:hover h3 {
-    color: #fff;
-}
-
 .home-goals-learn-more {
     text-decoration: underline;
-}
-
-.home-goals-content:hover .home-goals-learn-more {
-    color: var(--primary-2);
 }
 
 .home-examples-container {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
-    gap: 48px;
+    gap: 24px;
     width: 100%;
 }
 
@@ -899,6 +954,11 @@ code .dim {
     flex-direction: column;
     flex: 1;
     width: 100%;
+}
+
+.home-examples-column:not(:last-of-type) {
+    padding-right: 24px;
+    border-right: 2px solid var(--primary-1);
 }
 
 /* Wider screens */
@@ -928,27 +988,10 @@ code .dim {
     padding-bottom: 42px;
     padding-top: 2px;
     font-style: italic;
-    text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000,
-        1px 1px 0 #000;
     letter-spacing: 1px;
     word-spacing: 3px;
     margin: 0;
-    color: var(--light-cyan);
-}
-
-.home-goals-title a {
-    color: var(--light-cyan);
-    text-decoration: none;
-}
-
-.home-goals-title a:hover {
-    color: black;
-    text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff,
-        1px 1px 0 #fff;
-}
-
-.home-goals-learn-more a:hover {
-    text-decoration: none;
+    color: var(--text-color);
 }
 
 .home-goals-description {

@@ -1,8 +1,8 @@
 app "roc-website"
     packages { pf: "../../examples/static-site-gen/platform/main.roc" }
     imports [
-        pf.Html.{ Node, html, head, body, header, footer, div, main, text, nav, a, link, meta, script },
-        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, type, role },
+        pf.Html.{ Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script },
+        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf
@@ -56,6 +56,12 @@ view = \page, htmlContent ->
         else
             [text htmlContent]
 
+    bodyAttrs =
+        if page == "index.html" then
+            [id "homepage-main"]
+        else
+            []
+
     html [lang "en", class "no-js"] [
         head [] [
             meta [charset "utf-8"],
@@ -81,7 +87,7 @@ view = \page, htmlContent ->
             #          Otherwise, this will work locally and then fail in production!
             script [] [text "document.documentElement.className = document.documentElement.className.replace('no-js', '');"],
         ],
-        body [] [
+        body bodyAttrs [
             viewNavbar page,
             main [] mainBody,
             footer [] [
@@ -97,18 +103,17 @@ viewNavbar : Str -> Html.Node
 viewNavbar = \page ->
     isHomepage = page == "index.html"
 
-    homeLink =
-        if isHomepage then
-            div [role "presentation"] [] # This is a spacer for the nav bar
-        else
-            a [id "nav-home-link", href "/wip/", title "The Roc Programming Language"] [rocLogo]
+    homeLinkAttrs =
+        [id "nav-home-link", href "/wip/", title "The Roc Programming Language Homepage"]
+        |> List.concat (if isHomepage then [ariaHidden "true"] else [])
 
     header [id "top-bar"] [
         nav [ariaLabel "primary"] [
-            homeLink,
+            a homeLinkAttrs [rocLogo, span [class "home-link-text"] [text "Roc"]],
             div [id "top-bar-links"] [
                 a [href "/wip/tutorial"] [text "tutorial"],
                 a [href "/wip/install"] [text "install"],
+                a [href "/wip/examples"] [text "examples"],
                 a [href "/wip/community"] [text "community"],
                 a [href "/wip/docs"] [text "docs"],
                 a [href "/wip/donate"] [text "donate"],
