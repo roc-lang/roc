@@ -77,9 +77,9 @@ view =
             samp [] [text output],
         ],
         p [] [
-            text "To get started learning the language, try the ",
+            text "To get started with the language, try the ",
             a [href "/tutorial"] [text "tutorial"],
-            text " next!",
+            text "!",
         ],
         p [id "final-tutorial-link"] [
             a [class "btn-small", href "/tutorial"] [text "Start Tutorial"]

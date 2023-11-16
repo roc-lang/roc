@@ -1,35 +1,20 @@
+<div role="presentation" id="homepage-intro-outer">
 <div role="presentation" id="homepage-intro-box">
-  <h1 id="homepage-h1">Roc</h1>
-  <svg id="homepage-logo" aria-labelledby="logo-svg-title logo-svg-desc" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <title id="logo-svg-title">The Roc logo</title>
-        <desc id="logo-svg-desc">A purple origami bird made of six triangles</desc>
-      <path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" class="logo-dark"/>
-      <path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" class="logo-light"/>
-      <path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" class="logo-light"/>
-      <path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" class="logo-light"/>
-      <path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" class="logo-dark"/>
-      <path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" class="logo-dark"/>
-  </svg>
+<h1 id="homepage-h1">Roc</h1>
+<svg id="homepage-logo" aria-labelledby="logo-svg-title logo-svg-desc" width="240" height="240" viewBox="0 0 51 53" fill="none" xmlns="http://www.w3.org/2000/svg"><title id="logo-svg-title">The Roc logo</title><desc id="logo-svg-desc">A purple origami bird made of six triangles</desc><path d="M23.6751 22.7086L17.655 53L27.4527 45.2132L26.4673 39.3424L23.6751 22.7086Z" class="logo-dark"/><path d="M37.2438 19.0101L44.0315 26.3689L45 22L45.9665 16.6324L37.2438 19.0101Z" class="logo-light"/><path d="M23.8834 3.21052L0 0L23.6751 22.7086L23.8834 3.21052Z" class="logo-light"/><path d="M44.0315 26.3689L23.6751 22.7086L26.4673 39.3424L44.0315 26.3689Z" class="logo-light"/><path d="M50.5 22L45.9665 16.6324L45 22H50.5Z" class="logo-dark"/><path d="M23.6751 22.7086L44.0315 26.3689L37.2438 19.0101L23.8834 3.21052L23.6751 22.7086Z" class="logo-dark"/>
+</svg>
 
-  <p id="homepage-tagline">A fast, friendly, functional language.</p>
-
-  <!-- This exact sample was chosen for several reasons:
-
-  1. It's plausible to figure out what it's doing even if you don't know the language yet.
-  2. It uses a higher-order function, giving a functional first impression.
-  3. It shows some things not found in most mainstream languages, e.g. function calls without parens, lambda syntax.
-  4. It shows some things not found in most FP languages, e.g. string interpolation, passing a lambda without `<|` or `$`
-  5. It's horizontally small enough that it can be read on mobile without a scroll bar or shrinking the font size.
-  -->
-  <pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
-      <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+<p id="homepage-tagline">A fast, friendly, functional language.</p>
+<pre id="first-code-sample"><samp class="code-snippet">list <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
+    <span class="string">"Artist: </span><span class="kw">\(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+</div>
 </div>
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
     <div role="presentation" class="home-goals-column">
         <a href="/wip/fast.html" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and run fast. <span class="nobreak-on-mobile">It compiles to machine code or WebAssembly.</span></p>
+            <p class="home-goals-description">Roc code is designed to build fast and <span class="nobreak-on-mobile">run fast</span>. It compiles to machine code <span class="nobreak-on-mobile">or WebAssembly</span>.</p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
@@ -44,7 +29,7 @@
         <a href="/wip/functional.html" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. <span class="nobreak-on-mobile">It’s a single-paradigm functional language.</span></p>
+             Roc has a small number of simple language primitives. It’s a <span class="nobreak-on-mobile">single-paradigm</span> <span class="nobreak-on-mobile">functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
         </a>
     </div>
@@ -83,20 +68,26 @@ Here are some examples of how it can be used today.
 
 <div role="presentation" class="home-examples-container">
     <div role="presentation" class="home-examples-column">
-        <h3 class="home-examples-title">Web Servers</h3>
-        <p>You can use Roc to build web servers. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a platform with
-        a simple interface: you write a function which takes a <code>Request</code>, performs I/O, and returns a <code>Response</code>.</p>
-        <p>Behind the scenes, the platform uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
-        <p>For database access, <a href="https://github.com/agu-z/roc-pg">roc-pg</a> offers a way to access a <a href="https://www.postgresql.org/">PostgreSQL</a> database with your Roc types checked against the types in the database's schema.</p>
+        <h3 class="home-examples-title">Command-Line Interfaces</h3>
+    <pre><samp class="code-snippet">main <span class="kw">=</span>
+    Stdout<span class="punctuation section">.</span>line <span class="literal">"Hello!"</span></samp></pre>
+        <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
+        <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
+        <p>If you’re looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform to check out.</p>
     </div>
     <div role="presentation" class="home-examples-column">
-        <h3 class="home-examples-title">Command-Line Interfaces</h3>
-        <p>You can also use Roc to create command-line interfaces (CLIs) and scripts. Roc compiles to binary executables, so these can run on devices that don't have Roc installed.</p>
-        <p>For example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
-        <p>For a more flexible starting point, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform for building your own CLI tools. It's the most mature Roc platform today.</p>
+        <h3 class="home-examples-title">Web Servers</h3>
+<pre><samp class="code-snippet">handleReq <span class="kw">=</span> <span class="kw">\</span>request <span class="kw">-&gt;</span>
+    Task<span class="punctuation section">.</span>ok <span class="literal">{</span> body: <span class="comment">…</span> <span class="literal">}</span></samp></pre>
+        <p>You can also build web servers in Roc. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a platform with
+        a simple interface: you write a function which takes a <code>Request</code>, does some I/O, and returns a <code>Response</code>.</p>
+        <p>Behind the scenes, it uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
+        <p>For database access, <a href="https://github.com/agu-z/roc-pg">roc-pg</a> lets you access a <a href="https://www.postgresql.org/">PostgreSQL</a> database&mdash;with your Roc types checked against the types in your database's schema.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Embedding</h3>
+        <pre><samp class="code-snippet">fn <span class="kw">=</span> require(<span class="string">"foo.roc"</span>)<span class="kw">;</span>
+log(<span class="string">`Roc says </span><span class="kw">${</span>fn()<span class="kw">}</span><span class="string">`</span>)<span class="kw">;</span></samp></pre>
         <p>You can call Roc functions from other languages. There are several <a href="https://github.com/roc-lang/roc/tree/main/examples">basic examples</a> of how to call Roc functions from Python, Node.js, Swift, WebAssembly, and JVM languages.</p>
         <p>Any language that supports C interop can call Roc functions, using similar techniques to the ones found in these examples.</p>
         <p>Most of those are minimal proofs of concept, but <a href="https://github.com/vendrinc/roc-esbuild">roc-esbuild</a> is a work in progress that’s used at <a href="https://www.vendr.com/careers">Vendr</a> to call Roc functions from Node.js.</p>
@@ -147,7 +138,7 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
-We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
+We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
     <li><a href="https://github.com/aaronwhite">Aaron White</a></li>
@@ -163,7 +154,7 @@ We'd also like to express our gratitude to each and every one of our fantastic [
     <li><a href="https://github.com/popara">Zeljko Nesic</a></li>
 </ul>
 
-Thank you all so much for helping Roc progress! 💜
+Thank you all for your contributions! Roc would not be what it is without your generosity. 💜
 
 We are currently trying to raise $4,000 USD/month in donations to fund one longtime Roc contributor to continue his work on Roc full-time. We are a small group trying to do big things, and every donation helps! You can donate using:
 - [GitHub Sponsors](https://github.com/sponsors/roc-lang)

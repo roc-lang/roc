@@ -27,7 +27,7 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
-We'd also like to express our gratitude to each and every one of our fantastic [GitHub sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
+We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 * [James Birtles](https://github.com/jamesbirtles)
 * [Ivo Balbaert](https://github.com/Ivo-Balbaert)
