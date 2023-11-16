@@ -32,7 +32,6 @@
 
     --font-size-normal: 18px;
     --body-max-width: 1024px;
-    --top-bar-height: 50px;
     --dark-code-bg: #202746;
 }
 
@@ -239,7 +238,6 @@ h3 {
 }
 
 #top-bar {
-    height: var(--top-bar-height);
     box-sizing: border-box;
     width: 100%;
 }
@@ -277,7 +275,6 @@ h3 {
     box-sizing: border-box;
     color: var(--top-bar-fg);
     display: inline-block;
-    height: var(--top-bar-height);
     padding: 12px 16px;
     margin: 0 2px;
 }
