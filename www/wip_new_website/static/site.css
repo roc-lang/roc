@@ -56,6 +56,10 @@ p {
     margin-top: 0;
 }
 
+p, li {
+    max-width: 720px;
+}
+
 footer {
     width: 100%;
     color: var(--text-color);
@@ -114,11 +118,13 @@ hr {
 #individual-sponsors {
     list-style-type: none;
     padding: 24px 40px;
+    max-width: 720px;
 }
 
 #individual-sponsors li {
     display: inline;
     white-space: nowrap;
+    margin: 0.2rem;
 }
 
 #individual-sponsors li::after {
@@ -201,12 +207,21 @@ h1 {
 
 h2 {
     display: inline-block;
-    font-size: 3rem;
+    font-size: 2.5rem;
+    line-height: 5rem;
     border-bottom: 4px solid var(--dark-cyan);
+    padding: 0;
     margin: 0;
-    margin-bottom: 36px;
-    padding: 36px 0;
+    margin-bottom: 2rem;
     color: var(--heading-color);
+}
+
+.article-layout main {
+    max-width: 720px;
+}
+
+.article-layout p, .article-layout li, .article-layout pre {
+    font-size: 20px;
 }
 
 #homepage-main h2 {
@@ -217,7 +232,7 @@ h2 {
     visibility: hidden;
 }
 
-h2 a {
+h2 a, h3 a {
     color: var(--heading-color);
 }
 
@@ -412,6 +427,7 @@ table {
     border-collapse: collapse;
     overflow-x: auto;
     border: 2px solid #f0f0f0;
+    margin-bottom: 1rem;
 }
 
 thead {
@@ -499,6 +515,10 @@ li {
     font-size: 20px;
 }
 
+.nowrap {
+    white-space: nowrap;
+}
+
 /* Mobile-friendly screen width */
 @media only screen and (max-width: 1023px) {
     :root {
@@ -560,10 +580,6 @@ li {
 
     code {
         white-space: normal;
-    }
-
-    .nobreak-on-mobile {
-        white-space: nowrap;
     }
 
     /* Homepage */
@@ -859,6 +875,11 @@ code .meta.block,
 samp .lowerident,
 code .lowerident {
     color: white;
+}
+
+samp .error,
+code .error {
+    color: hsl(0, 96%, 67%);
 }
 
 /* Types, Tags, and Modules */

@@ -12,24 +12,24 @@
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
     <div role="presentation" class="home-goals-column">
-        <a href="/wip/fast.html" class="home-goals-content">
+        <a href="/wip/fast" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and <span class="nobreak-on-mobile">run fast</span>. It compiles to machine code <span class="nobreak-on-mobile">or WebAssembly</span>.</p>
+            <p class="home-goals-description">Roc code is designed to build fast and <span class="nowrap">run fast</span>. It compiles to machine code <span class="nowrap">or WebAssembly</span>.</p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
     <div role="presentation" class="home-goals-column">
-        <a href="/wip/friendly.html" class="home-goals-content">
+        <a href="/wip/friendly" class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nobreak-on-mobile">all prioritize user-friendliness.</span></p>
+            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nowrap">all prioritize user-friendliness.</span></p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
     <div role="presentation" class="home-goals-column">
-        <a href="/wip/functional.html" class="home-goals-content">
+        <a href="/wip/functional" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It’s a <span class="nobreak-on-mobile">single-paradigm</span> <span class="nobreak-on-mobile">functional language.</span></p>
+             Roc has a small number of simple language primitives. It’s a <span class="nowrap">single-paradigm</span> <span class="nowrap">functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
         </a>
     </div>
@@ -62,7 +62,7 @@
 
 ## [Examples](#examples) {#examples}
 
-Roc is a very young language (it doesn’t even have a numbered release yet, just nightly builds!) but it can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
+Roc is a young language (it doesn’t even have a numbered release yet, just nightly builds!) <span class="nowrap">but it</span> can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
 
 Here are some examples of how it can be used today.
 
