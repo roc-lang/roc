@@ -32,7 +32,6 @@
 
     --font-size-normal: 18px;
     --body-max-width: 1024px;
-    --top-bar-height: 50px;
     --dark-code-bg: #202746;
 }
 
@@ -72,9 +71,6 @@ footer {
     margin: 0 auto;
 }
 
-.inline-block {
-    display: inline-block;
-}
 
 hr {
     color: var(--primary-1);
@@ -221,6 +217,10 @@ h2 {
     margin-top: 60px; /* On the homepage, these need to be spaced out more. */
 }
 
+#homepage-main #nav-home-link {
+    visibility: hidden;
+}
+
 h2 a {
     color: var(--heading-color);
 }
@@ -239,7 +239,6 @@ h3 {
 }
 
 #top-bar {
-    height: var(--top-bar-height);
     box-sizing: border-box;
     width: 100%;
 }
@@ -259,13 +258,11 @@ h3 {
     padding: 4px;
 }
 
-#homepage-main #nav-home-link {
-    visibility: hidden;
-}
-
 .home-link-text {
     padding: 8px;
     font-size: 24px;
+    position: relative;
+    top: -0.6rem;
 }
 
 .home-examples-title {
@@ -277,7 +274,6 @@ h3 {
     box-sizing: border-box;
     color: var(--top-bar-fg);
     display: inline-block;
-    height: var(--top-bar-height);
     padding: 12px 16px;
     margin: 0 2px;
 }
@@ -523,6 +519,10 @@ li {
         top: -28px;
     }
 
+    #homepage-main #nav-home-link {
+        display: none;
+    }
+
     #sponsor-logos {
         padding: 4px;
     }
@@ -647,6 +647,26 @@ li {
     h5 {
         line-height: 1.2em !important;
         font-size: 2rem !important;
+    }
+
+    #top-bar-links {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr; /* Three equal-width columns */
+        grid-template-rows: auto auto; /* Two rows */
+    }
+
+    /* Left-align the first link in each row, right-align the last one, and center the middle one. */
+    #top-bar-links > :nth-child(3n+1) {
+        text-align: left;
+    }
+
+    #top-bar-links > :nth-child(3n+2) {
+        text-align: center;
+    }
+
+    #top-bar-links > :nth-child(3n+3) {
+        text-align: right;
     }
 
     #top-bar-links a,
