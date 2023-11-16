@@ -840,7 +840,7 @@ impl<'a> TrmcEnv<'a> {
 
         match stmt {
             Stmt::Let(symbol, expr, layout, next) => {
-                // if this is a TRMC call, remember what the call looks like, so we can turn it
+                // if this is a TRMC call, save what the call expr looks like into trmc_calls, so we can turn it
                 // into a jump later. The call is then removed from the Stmt
                 if let Some(opt_call) = self.trmc_calls.get_mut(symbol) {
                     debug_assert!(
@@ -861,7 +861,7 @@ impl<'a> TrmcEnv<'a> {
                 if let Some(call) =
                     Self::is_tail_recursive_call(self.lambda_name, *symbol, expr, next)
                 {
-                    // turn the call into a jump. Just re-use the existing hole
+                    // turn the tail recursive call (but not modulo cons) into a jump. Just re-use the existing hole
                     let mut arguments = Vec::new_in(arena);
                     arguments.extend(call.arguments);
                     arguments.push(self.hole_symbol);
@@ -874,6 +874,7 @@ impl<'a> TrmcEnv<'a> {
 
                 if let Some(cons_info) = Self::is_terminal_constructor(stmt) {
                     // figure out which TRMC call to use here. We pick the first one that works
+                    // TODO: allow structs here
                     let opt_recursive_call = cons_info.arguments.iter().find_map(|arg| {
                         self.trmc_calls
                             .get(arg)
