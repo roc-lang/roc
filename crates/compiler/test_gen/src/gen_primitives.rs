@@ -4614,6 +4614,39 @@ fn linked_list_trmc() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn linked_list_with_record_trmc() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            LinkedList a : [Nil, Cons { first : a, rest : LinkedList a }]
+
+            repeat : a, Nat -> LinkedList a
+            repeat = \value, n ->
+                when n is
+                    0 -> Nil
+                    _ -> Cons { first: value, rest: repeat value (n - 1) }
+
+            length : LinkedList a -> I64
+            length = \list ->
+                when list is
+                    Nil -> 0
+                    Cons { rest } -> 1 + length rest
+
+            main : I64
+            main =
+                repeat "foo" 5
+                    |> length
+            "#
+        ),
+        5,
+        i64
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn many_arguments() {
     // exhausts all argument registers on x86 and aarch
