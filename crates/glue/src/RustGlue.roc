@@ -404,16 +404,25 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
-deriveCloneTagUnion : Str, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
-deriveCloneTagUnion = \buf, tagUnionType, tags ->
+deriveCloneTagUnion : Str, Types, Str, List { name : Str, payload : [Some TypeId, None] } -> Str
+deriveCloneTagUnion = \buf, types, tagUnionType, tags ->
     clones =
-        List.walk tags "" \accum, { name: tagName } ->
-            """
-            \(accum)
-                            \(tagName) => union_\(tagUnionType) {
-                                \(tagName): self.payload.\(tagName).clone(),
-                            },
-            """
+        List.walk tags "" \accum, { name: tagName, payload } ->
+            hasNonZeroSizedPayload =
+                when payload is
+                    Some id -> typeName types id |> Result.isOk
+                    None -> Bool.false
+
+            if hasNonZeroSizedPayload then
+                """
+                \(accum)
+                                \(tagName) => core::mem::MaybeUninit::new(union_\(tagUnionType) {
+                                    \(tagName): self.payload.assume_init_ref().\(tagName).clone(),
+                                }),
+                """
+            else
+                accum
+
 
     """
     \(buf)
@@ -424,6 +433,7 @@ deriveCloneTagUnion = \buf, tagUnionType, tags ->
 
             let payload = unsafe {
                 match self.discriminant {\(clones)
+                    _ => core::mem::MaybeUninit::uninit(),
                 }
             };
 
@@ -446,14 +456,26 @@ deriveDebugTagUnion = \buf, types, tagUnionType, tags ->
                             """
                             \(accum)
                                             \(tagName) => {
-                                                let field: &\(type) = &self.payload.\(tagName);
+                                                let field: &\(type) = &self.payload.assume_init_ref().\(tagName);
                                                 f.debug_tuple("\(tagUnionType)::\(tagName)").field(field).finish()
                                             },
                             """
 
-                        Err ZeroSized -> accum
+                        Err ZeroSized ->
+                            """
+                            \(accum)
+                                            \(tagName) => {
+                                                write!(f, "\(tagUnionType)::\(tagName)")
+                                            },
+                            """
 
-                None -> accum
+                None ->
+                    """
+                    \(accum)
+                                    \(tagName) => {
+                                        write!(f, "\(tagUnionType)::\(tagName)")
+                                    },
+                    """
 
     """
     \(buf)
@@ -485,10 +507,21 @@ derivePartialEqTagUnion : Str, Types, Shape, Str, List { name : Str, payload : [
 derivePartialEqTagUnion = \buf, types, shape, tagUnionType, tags ->
     if canSupportPartialEqOrd types shape then
         checks =
-            List.walk tags "" \accum, { name: tagName } ->
+            List.walk tags "" \accum, { name: tagName, payload } ->
+                hasNonZeroSizedPayload =
+                    when payload is
+                        Some id -> typeName types id |> Result.isOk
+                        None -> Bool.false
+
+                branchBody =
+                    if hasNonZeroSizedPayload then
+                        "self.payload.assume_init_ref().\(tagName) == other.payload.assume_init_ref().\(tagName)"
+                    else
+                        "true"
+
                 """
                 \(accum)
-                                \(tagName) => self.payload.\(tagName) == other.payload.\(tagName),
+                                \(tagName) => \(branchBody),
                 """
 
         """
@@ -531,10 +564,21 @@ derivePartialOrdTagUnion : Str, Types, Shape, Str, List { name : Str, payload : 
 derivePartialOrdTagUnion = \buf, types, shape, tagUnionType, tags ->
     if canSupportPartialEqOrd types shape then
         checks =
-            List.walk tags "" \accum, { name: tagName } ->
+            List.walk tags "" \accum, { name: tagName, payload } ->
+                hasNonZeroSizedPayload =
+                    when payload is
+                        Some id -> typeName types id |> Result.isOk
+                        None -> Bool.false
+
+                branchBody =
+                    if hasNonZeroSizedPayload then
+                        "self.payload.assume_init_ref().\(tagName).partial_cmp(&other.payload.assume_init_ref().\(tagName))"
+                    else
+                        "Option::Some(core::cmp::Ordering::Equal)"
+
                 """
                 \(accum)
-                                    \(tagName) => self.payload.\(tagName).partial_cmp(&other.payload.\(tagName)),
+                                    \(tagName) => \(branchBody),
                 """
 
         """
@@ -564,10 +608,21 @@ deriveHashTagUnion : Str, Types, Shape, Str, List { name : Str, payload : [Some 
 deriveHashTagUnion = \buf, types, shape, tagUnionType, tags ->
     if canSupportEqHashOrd types shape then
         checks =
-            List.walk tags "" \accum, { name: tagName } ->
+            List.walk tags "" \accum, { name: tagName, payload } ->
+                hasNonZeroSizedPayload =
+                    when payload is
+                        Some id -> typeName types id |> Result.isOk
+                        None -> Bool.false
+
+                branchBody =
+                    if hasNonZeroSizedPayload then
+                        "self.payload.assume_init_ref().\(tagName).hash(state)"
+                    else
+                        "{}"
+
                 """
                 \(accum)
-                                \(tagName) => self.payload.\(tagName).hash(state),
+                                \(tagName) => \(branchBody),
                 """
 
         """
@@ -611,9 +666,7 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 pub fn \(name)() -> Self {
                     Self {
                         discriminant: discriminant_\(tagUnionType)::\(name),
-                        payload: union_\(tagUnionType) {
-                            \(name): (),
-                        }
+                        payload: core::mem::MaybeUninit::uninit(),
                     }
                 }
             """
@@ -631,9 +684,9 @@ generateConstructorFunction = \buf, types, tagUnionType, name, optPayload ->
                 pub fn \(name)(payload: \(payloadName)) -> Self {
                     Self {
                         discriminant: discriminant_\(tagUnionType)::\(name),
-                        payload: union_\(tagUnionType) {
+                        payload: core::mem::MaybeUninit::new(union_\(tagUnionType) {
                             \(name): \(new),
-                        }
+                        }),
                     }
                 }
             """
@@ -667,9 +720,9 @@ generateDestructorFunction = \buf, types, tagUnionType, name, optPayload ->
         Ok (payloadName, shape) ->
             take =
                 if canDeriveCopy types shape then
-                    "unsafe { self.payload.\(name) }"
+                    "unsafe { self.payload.assume_init_mut().\(name) }"
                 else
-                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.\(name)) }"
+                    "unsafe { core::mem::ManuallyDrop::take(&mut self.payload.assume_init_mut().\(name)) }"
 
             """
             \(buf)
@@ -752,11 +805,11 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
         #[repr(C)]
         pub struct \(escapedName) {
-            payload: union_\(escapedName),
             discriminant: discriminant_\(escapedName),
+            payload: core::mem::MaybeUninit<union_\(escapedName)>,
         }
         """
-    |> deriveCloneTagUnion escapedName tags
+    |> deriveCloneTagUnion types escapedName tags
     |> deriveDebugTagUnion types escapedName tags
     |> deriveEqTagUnion types shape escapedName
     |> derivePartialEqTagUnion types shape escapedName tags
@@ -833,7 +886,7 @@ generateNonNullableUnwrapped = \buf, types, name, tagName, payload, discriminant
         pub fn \(tagName)(\(constructorArguments)) -> Self {
             let payload = \(name)_\(tagName) { \(payloadFieldNames) };
 
-            Self(roc_std::RocBox::new(payload))
+            Self(roc_std::RocBox::new(payload.assume_init()))
         }
     }
 
@@ -931,12 +984,12 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                     shape = Types.shape types payload
 
                     if canDeriveCopy types shape then
-                        "payload"
+                        "payload.assume_init()"
                     else
-                        "core::mem::ManuallyDrop::new(payload)"
+                        "core::mem::ManuallyDrop::new(payload.assume_init())"
 
                 None ->
-                    "payload"
+                    "payload.assume_init()"
 
         if Some (Num.intCast index) == nullTagIndex then
             """
@@ -979,8 +1032,13 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
         |> List.mapWithIndex isFunction
         |> Str.joinWith "\n\n"
 
-    cloneCase = \{ name: tagName }, index ->
-        if Some (Num.intCast index) == nullTagIndex then
+    cloneCase = \{ name: tagName, payload }, index ->
+        hasNonZeroSizedPayload =
+            when payload is
+                Some payloadId -> typeName types payloadId |> Result.isOk
+                None -> Bool.false
+
+        if Some (Num.intCast index) == nullTagIndex && !hasNonZeroSizedPayload then
             """
                         \(tagName) => Self::\(tagName)(),
             """
@@ -994,7 +1052,7 @@ generateRecursiveTagUnion = \buf, types, id, tagUnionName, tags, discriminantSiz
                                 \(tagName): unsafe { payload_union.\(tagName).clone() },
                             };
 
-                            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+                            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload.assume_init())) };
 
                             Self((ptr as usize | tag_id as usize) as *mut _)
                         },
@@ -1287,7 +1345,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotSupportCopy types (Types.shape types id) ->
-                    "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.\(name)) },"
+                    "unsafe { core::mem::ManuallyDrop::drop(&mut \(selfMut).payload.assume_init_mut().\(name)) },"
 
                 _ ->
                     # If it had no payload, or if the payload had no pointers,
@@ -1460,7 +1518,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
         pub fn \(nonNullTag)(\(constructorArguments)) -> Self {
             let payload = \(name)_\(nonNullTag) { \(payloadFieldNames) };
 
-            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+            let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload.assume_init())) };
 
             Self(ptr)
         }
@@ -1503,7 +1561,7 @@ generateNullableUnwrapped = \buf, types, tagUnionid, name, nullTag, nonNullTag, 
                 let node_ref = core::mem::ManuallyDrop::new(unsafe { std::ptr::read(self.0) });
                 let payload : \(name)_\(nonNullTag) = (node_ref.deref()).clone();
 
-                let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload)) };
+                let ptr = unsafe { roc_std::RocBox::leak(roc_std::RocBox::new(payload.assume_init())) };
 
                 Self(ptr)
             }
@@ -2064,6 +2122,7 @@ fileHeader =
     #![allow(non_snake_case)]
     #![allow(non_camel_case_types)]
     #![allow(non_upper_case_globals)]
+    #![allow(unreachable_patterns)]
     #![allow(clippy::undocumented_unsafe_blocks)]
     #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::unused_unit)]

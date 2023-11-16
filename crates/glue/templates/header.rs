@@ -16,6 +16,7 @@
 #![allow(clippy::redundant_static_lifetimes)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
+#![allow(clippy::unreachable_pattern)]
 
 type Op_StderrWrite = roc_std::RocStr;
 type Op_StdoutWrite = roc_std::RocStr;
