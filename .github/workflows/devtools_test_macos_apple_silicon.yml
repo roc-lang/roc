@@ -27,7 +27,7 @@ jobs:
                 fi
 
             - name: test devtools/flake.nix
-              if: env.flake_changed == 'true'
+              if: env.nix_changed == 'true'
               id: devtools_test_step
               run: |
                 sed -i '' "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
