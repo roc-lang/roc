@@ -16,8 +16,8 @@ jobs:
             - uses: actions/checkout@v3
 
             - name: Only run all steps if flake.lock or flake.nix changed
-              id: checklock
               run: |
+                git fetch origin ${{ github.base_ref }}
                 if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'flake'; then
                   echo "A flake file was changed. Testing devtools nix files..."
                   echo "flake_changed=true" >> $GITHUB_ENV
@@ -41,7 +41,7 @@ jobs:
                 nix develop --show-trace
 
             - name: Print tip on fail
-              if: env.flake_changed == 'true'
+              if: steps.devtools_test_step.outcome == 'failure'
               run: |
                 echo "The devtools test failed, this can likely be fixed by"
                 echo "locally deleting devtools/flake.lock and following the"

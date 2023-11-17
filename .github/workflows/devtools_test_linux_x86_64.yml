@@ -16,8 +16,8 @@ jobs:
             - uses: actions/checkout@v3
 
             - name: Only run all steps if a nix file changed
-              id: checklock
               run: |
+                git fetch origin ${{ github.base_ref }}
                 if git diff --name-only origin/${{ github.base_ref }} HEAD | grep 'nix'; then
                   echo "A nix file was changed. Testing devtools nix files..."
                   echo "nix_changed=true" >> $GITHUB_ENV
