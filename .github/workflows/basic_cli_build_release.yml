@@ -191,6 +191,9 @@ jobs:
       - name: Install expect for tests if we dont have it yet
         run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
 
+      - name: Install ncat (included with nmap) for tests if we dont have it yet
+        run: if ! dpkg -l | grep -qw nmap; then sudo apt install -y nmap; fi
+
       - name: prep testing
         run: |
           mv roc_nightly basic-cli-platform/.
