@@ -16,8 +16,10 @@ let
     rust-shell =
       (rustVersion.override { extensions = [ "rust-src" "rust-analyzer" ]; });
 
+    # all rust crates in workspace.members of Cargo.toml
     roc-full = callPackage ./builder.nix { };
     roc-lang-server = callPackage ./builder.nix { subPackage = "lang_srv"; };
+    # only the CLI crate = executable provided in nightly releases
     roc-cli = callPackage ./builder.nix { subPackage = "cli"; };
   };
 

@@ -159,9 +159,11 @@
 
         # You can build this package (the roc CLI) with the `nix build` command.
         packages = {
-          default = rocBuild.roc-full;
+          default = rocBuild.roc-cli;
+          
+          # all rust crates in workspace.members of Cargo.toml
           full = rocBuild.roc-full;
-
+          # only the CLI crate = executable provided in nightly releases
           cli = rocBuild.roc-cli;
           lang-server = rocBuild.roc-lang-server;
         };
