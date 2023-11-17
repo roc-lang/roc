@@ -60,7 +60,7 @@ view = \page, htmlContent ->
         if page == "index.html" then
             [id "homepage-main"]
         else
-            []
+            [class "article-layout"]
 
     html [lang "en", class "no-js"] [
         head [] [
