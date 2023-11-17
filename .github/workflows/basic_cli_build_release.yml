@@ -205,6 +205,8 @@ jobs:
           git checkout ${{ env.BASIC_CLI_BRANCH }}
           cp -r examples ../..
           cp -r ci ../..
+          cp -r LICENSE ../..
+          # LICENSE is necessary for command test
           
       - name: run tests
         run: |
