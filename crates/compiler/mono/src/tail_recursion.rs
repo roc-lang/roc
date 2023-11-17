@@ -52,9 +52,11 @@ pub fn apply_trmc<'a, 'i>(
     for proc in procs.values_mut() {
         use self::SelfRecursive::*;
         if let SelfRecursive(id) = proc.is_self_recursive {
-            let trmc_candidate_symbols = trmc_candidates(env.interner, proc);
+            let trmc_candidate_symbols = trmc_candidates(env.interner, env.arena, proc);
 
             if !trmc_candidate_symbols.is_empty() {
+                println!("{:#?}", trmc_candidate_symbols);
+                println!("{:?}", trmc_candidate_symbols);
                 let new_proc =
                     crate::tail_recursion::TrmcEnv::init(env, proc, trmc_candidate_symbols);
                 *proc = new_proc;
@@ -403,15 +405,29 @@ fn insert_jumps<'a>(
     }
 }
 
-#[derive(Debug, Default)]
-struct TrmcCandidateSet {
+#[derive(Debug)]
+struct TrmcCandidateSet<'a> {
     interner: arrayvec::ArrayVec<Symbol, 64>,
+    indices: [Option<&'a [u64]>; 64],
+    // indices: arrayvec::ArrayVec<&'a [u64], 64>,
     confirmed: u64,
     active: u64,
     invalid: u64,
 }
 
-impl TrmcCandidateSet {
+impl<'a> Default for TrmcCandidateSet<'a> {
+    fn default() -> Self {
+        Self {
+            interner: Default::default(),
+            indices: [None; 64],
+            confirmed: Default::default(),
+            active: Default::default(),
+            invalid: Default::default(),
+        }
+    }
+}
+
+impl<'a> TrmcCandidateSet<'a> {
     fn confirmed(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.interner
             .iter()
@@ -456,6 +472,22 @@ impl TrmcCandidateSet {
         }
     }
 
+    fn confirm_with_struct_index(&mut self, symbol: Symbol, indices: &'a [u64]) {
+        match self.position(symbol) {
+            None => debug_assert_eq!(0, 1, "confirm of invalid symbol"),
+            Some(index) => {
+                let mask = 1 << index;
+                debug_assert_eq!(self.invalid & mask, 0);
+                debug_assert_ne!(self.active & mask, 0);
+
+                self.active &= !mask;
+                self.confirmed |= mask;
+
+                self.indices[index] = Some(indices)
+            }
+        }
+    }
+
     fn confirm(&mut self, symbol: Symbol) {
         match self.position(symbol) {
             None => debug_assert_eq!(0, 1, "confirm of invalid symbol"),
@@ -476,7 +508,11 @@ impl TrmcCandidateSet {
     }
 }
 
-fn trmc_candidates<'a, I>(interner: &'_ I, proc: &'_ Proc<'a>) -> TrmcCandidateSet
+fn trmc_candidates<'a, I>(
+    interner: &'_ I,
+    arena: &'a Bump,
+    proc: &'_ Proc<'a>,
+) -> TrmcCandidateSet<'a>
 where
     I: LayoutInterner<'a>,
 {
@@ -495,14 +531,15 @@ where
     }
 
     let mut candidate_set = TrmcCandidateSet::default();
-    trmc_candidates_help(proc.name, &proc.body, &mut candidate_set);
+    trmc_candidates_help(proc.name, &proc.body, arena, &mut candidate_set);
     candidate_set
 }
 
-fn trmc_candidates_help(
+fn trmc_candidates_help<'a>(
     function_name: LambdaName,
     stmt: &'_ Stmt<'_>,
-    candidates: &mut TrmcCandidateSet,
+    arena: &'a Bump,
+    candidates: &mut TrmcCandidateSet<'a>,
 ) {
     // a TRMC opportunity is a tail tag appliaction and return on a:
     // 1) recursive call's return value, or
@@ -514,15 +551,35 @@ fn trmc_candidates_help(
                 candidates
                     .active()
                     .find(|call| cons_info.arguments.contains(call))
-            }),
-        Some((struct_symbol, next, call)) => TrmcEnv::is_terminal_constructor(next)
+            })
+            .map(|call| (call, None)),
+        Some(StructWithRecCall {
+            struct_symbol,
+            next,
+            rec_call_value,
+            index_of_rec_call_value,
+        }) => TrmcEnv::is_terminal_constructor(next)
             // case 2), the tail tag application must directly use the struct
-            .and_then(|cons_info| cons_info.arguments.contains(struct_symbol).then_some(call)),
+            .and_then(|cons_info| {
+                cons_info
+                    .arguments
+                    .contains(struct_symbol)
+                    .then_some(rec_call_value)
+            })
+            .map(|call| (*call, Some(index_of_rec_call_value))),
     };
 
     // if we find a usage, this is a confirmed TRMC call
-    if let Some(recursive_call) = recursive_call {
-        candidates.confirm(recursive_call);
+    if let Some((recursive_call, index_opt)) = recursive_call {
+        match index_opt {
+            Some(index) => {
+                // seems unnecessary, but will need it when we'll be able to detect usage of
+                // recursive call return values in nested records
+                let indices = vec![in arena; index].into_bump_slice();
+                candidates.confirm_with_struct_index(recursive_call, indices)
+            }
+            None => candidates.confirm(recursive_call),
+        }
 
         return;
     }
@@ -546,7 +603,7 @@ fn trmc_candidates_help(
                 candidates.insert(*symbol);
             }
 
-            trmc_candidates_help(function_name, next, candidates)
+            trmc_candidates_help(function_name, next, arena, candidates)
         }
         Stmt::Switch {
             branches,
@@ -559,32 +616,54 @@ fn trmc_candidates_help(
                 .chain([default_branch.1]);
 
             for next in it {
-                trmc_candidates_help(function_name, next, candidates);
+                trmc_candidates_help(function_name, next, arena, candidates)
             }
         }
-        Stmt::Refcounting(_, next) => trmc_candidates_help(function_name, next, candidates),
+        Stmt::Refcounting(_, next) => trmc_candidates_help(function_name, next, arena, candidates),
         Stmt::Expect { remainder, .. }
         | Stmt::ExpectFx { remainder, .. }
-        | Stmt::Dbg { remainder, .. } => trmc_candidates_help(function_name, remainder, candidates),
+        | Stmt::Dbg { remainder, .. } => {
+            trmc_candidates_help(function_name, remainder, arena, candidates)
+        }
         Stmt::Join {
             body, remainder, ..
         } => {
-            trmc_candidates_help(function_name, body, candidates);
-            trmc_candidates_help(function_name, remainder, candidates);
+            trmc_candidates_help(function_name, body, arena, candidates);
+            trmc_candidates_help(function_name, remainder, arena, candidates);
         }
         Stmt::Ret(_) | Stmt::Jump(_, _) | Stmt::Crash(_, _) => { /* terminal */ }
     }
 }
 
+struct StructWithRecCall<'a> {
+    struct_symbol: &'a Symbol,
+    index_of_rec_call_value: u64,
+    next: &'a Stmt<'a>,
+    rec_call_value: &'a Symbol,
+}
+
 fn is_struct_with_value_of_rec_call<'a>(
     stmt: &'a Stmt<'a>,
     candidates: &mut TrmcCandidateSet,
-) -> Option<(&'a Symbol, &'a Stmt<'a>, Symbol)> {
+) -> Option<StructWithRecCall<'a>> {
     match stmt {
         Stmt::Let(symbol, Expr::Struct(values), _, next) => candidates
             .active()
-            .find(|call| values.iter().any(|value| call == value))
-            .map(|call| (symbol, *next, call)),
+            .find_map(|call| {
+                values.iter().enumerate().find_map(|(i, value)| {
+                    if call == *value {
+                        Some((i, value))
+                    } else {
+                        None
+                    }
+                })
+            })
+            .map(|(i, call)| StructWithRecCall {
+                struct_symbol: symbol,
+                index_of_rec_call_value: i as u64,
+                next,
+                rec_call_value: call,
+            }),
         _ => None,
     }
 }
