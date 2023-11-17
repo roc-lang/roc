@@ -10,4 +10,4 @@ Something that needs figuring out between now and then is how to keep the langua
 
 (This would be easy to solve if zero happened to be the optimal number of new features to add over time, but unfortunately the programming landscape will change around the language, so remaining static is unlikely to be best. As such, the goal becomes finding a system which keeps the number of new features low without artificially forcing it to zero.)
 
-I don't have any plans for when the transition away from BDFN will happen, other than that I certainly imagine it being well after a 1.0 release of the language.
+I don't have any plans for when the transition away from BDFN will happen, other than that I expect it to be well after a 1.0 release of the language!

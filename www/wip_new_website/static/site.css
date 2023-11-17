@@ -140,6 +140,7 @@ hr {
     padding: 24px 36px;
     padding-bottom: 36px;
     min-width: 308px; /* Widest logo plus padding - Firefox on Android needs this */
+    max-width: none !important;
 }
 
 #sponsor-logos svg {
@@ -154,8 +155,8 @@ hr {
 
 #sponsor-logos .logo-tweede-golf {
     position: relative;
-    top: 18px;
-    height: 4rem;
+    top: 14px;
+    height: 4.5rem;
 }
 
 #sponsor-logos + p {
