@@ -1,13 +1,16 @@
 # Install Roc
 
-Roc is a work in progress. It doesn't have a numbered release yet, but it does have nightly builds that you can download.
+Roc is a very young language with many incomplete features and known bugs. It doesn't even have a numbered release yet, but it does have [nightly builds](https://github.com/roc-lang/roc/releases) that you can download if you’d like to try it out without [building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)!
 
-There are currently a few OS-specific issues:
-* macOS: There are no known compatibility issues, but the compiler doesn't run as fast as it does on Linux or Windows, because we don't (yet) do our own linking like we do on those targets. (Linking works similarly on Linux and Windows, but the way macOS does it is both different and significantly more complicated.)
-* Windows: There are some known Windows-specific compiler bugs, and probably some other unknown ones because more people have tried out Roc on Mac and Linux than on Windows.
-* Linux: The nightlies are built with glibc, so they aren't usable on distros that don't use (dynamically linked) glibc, like Alpine or NixOS. In the future we plan to build Linux releases with [musl libc](https://wiki.musl-libc.org/) to address this, but this requires [building LLVM from source with musl](https://wiki.musl-libc.org/building-llvm.html).
-* Other operating systems: Roc has not been built on any other operating systems. Building from source on them might work, but hasn't been tried.
+There are currently a few known OS-specific issues:
+* **macOS:** There are no known compatibility issues, but the compiler doesn't run as fast as it does on Linux or Windows, because we don't (yet) do our own linking like we do on those targets. (Linking works similarly on Linux and Windows, but the way macOS does it is both different and significantly more complicated.)
+* **Windows:** There are some known Windows-specific compiler bugs, and probably some other unknown ones because more people have tried out Roc on Mac and Linux than on Windows.
+* **Linux:** The nightlies are built with glibc, so they aren't usable on distros that don't use (dynamically linked) glibc, like Alpine or NixOS. In the future we plan to build Linux releases with [musl libc](https://wiki.musl-libc.org/) to address this, but this requires [building LLVM from source with musl](https://wiki.musl-libc.org/building-llvm.html).
+* **Other operating systems:** Roc has not been built on any other operating systems. [Building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md) on another OS might work, but you might very well be the first person ever to try it!
 
+### [Getting Started](#getting-started) {#getting-started}
+
+Here are some Getting Started guides for different operating systems:
 <!-- TODO detect current OS with browser and only show link for that, provide other button for others  -->
 
 - [Linux x86-64](https://github.com/roc-lang/roc/blob/main/getting_started/linux_x86_64.md)
@@ -16,65 +19,14 @@ There are currently a few OS-specific issues:
 - [Windows](https://github.com/roc-lang/roc/blob/main/getting_started/windows.md)
 - [Other Systems](https://github.com/roc-lang/roc/blob/main/getting_started/other.md)
 
-## Nightly
+### [Editor Extensions](#editor-extensions) {#editor-extensions}
 
-<!-- link to nightly for currently detected OS(browser) and provide "other" button to reveal all -->
+There is currently a [VS Code extension](https://marketplace.visualstudio.com/items?itemName=IvanDemchenko.roc-lang-unofficial) for Roc which includes instructions in its README for how to enable a Roc language server.
 
-## Roc CLI
+Currently that language server has to be built from source; it would be a fantastic contribution if anyone could get it incorporated it into the extension directly. If you'd like to help with this, just make a post in [the "new contributors" topic on Zulip](https://roc.zulipchat.com/#narrow/stream/316715-contributing/topic/new.20contributors) and say hello!
 
-<!-- brief description on how to use the cli -->
-- Script `roc myApp.roc`
-- Develop `roc dev`
-- Test `roc test`
-- Run `roc run`
-- Build `roc build`
-- Format `roc format`
-- Documentation `roc docs`
+### [Tutorial](#tutorial) {#tutorial}
 
-## Package Management
+Once you've installed <code>roc</code>, check out the [tutorial](/tutorial) to learn how to Roc!
 
-You can include packages using an URL:
-
-```roc
-app "hello"
-    packages {
-        # basic-cli platform
-        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br",
-        # json package
-        # TODO update to json 0.3.0
-        json: "https://github.com/lukewilliamboswell/roc-json/releases/download/0.2.0/gh4zvR8xyEsef0R961Fcv5vxFEZJ-GJF-7bQwgL2Xz8.tar.br",
-    }
-    imports [
-        pf.Stdout,
-        json.Core,
-    ]
-    provides [main] to pf
-```
-
-A full Roc package manager will be developed in the future.
-
-<!--
-
-explain package manager design is still a work in progress
-the plan is to create a centralised index
-- ergonomicly integration
-- a fact that every language will have one
-
-in the meantime you can use package URLs
-
-TODO Add an explanation for the URLs with the SHA and the tar.br. This explanation should only be revealed on click.
--->
-
-## Editor Support
-
-<!--
-explain that the high level design is a work in progress
-- Design goals for editor - we want Roc to ship with an awesome editor
-- Beginners learning to get up an running with an editor
-- Want it to run really fast etc
-
-- Also link to VScode plugin
--->
-
-- Language Server
-- Neo(Vim)
+<a class="btn-small" href="/tutorial">Start Tutorial</a>

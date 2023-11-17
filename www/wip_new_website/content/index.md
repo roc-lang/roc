@@ -14,14 +14,14 @@
     <div role="presentation" class="home-goals-column">
         <a href="/wip/fast" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
-            <p class="home-goals-description">Roc code is designed to build fast and <span class="nowrap">run fast</span>. It compiles to machine code <span class="nowrap">or WebAssembly</span>.</p>
+            <p class="home-goals-description">Roc code is designed to build fast and <span class="nowrap">run fast</span>. It compiles to machine code or WebAssembly.</p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
     <div role="presentation" class="home-goals-column">
         <a href="/wip/friendly" class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset <span class="nowrap">all prioritize user-friendliness.</span></p>
+            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset all prioritize user-friendliness.</p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
@@ -29,7 +29,7 @@
         <a href="/wip/functional" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It’s a <span class="nowrap">single-paradigm</span> <span class="nowrap">functional language.</span></p>
+             Roc has a small number of simple language primitives. It’s a single-paradigm <span class="nowrap">functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
         </a>
     </div>
@@ -62,7 +62,10 @@
 
 ## [Examples](#examples) {#examples}
 
-Roc is a young language (it doesn’t even have a numbered release yet, just nightly builds!) <span class="nowrap">but it</span> can already be used for several things if you’re up for being an early adopter—with all the bugs and missing features which come with that territory.
+Roc is a young language. It doesn’t even have a numbered release yet, just nightly builds!
+
+However, it can already be used for several things if you’re up for being an early adopter—<br>
+with all the bugs and missing features which come with that territory.
 
 Here are some examples of how it can be used today.
 
@@ -94,9 +97,8 @@ log(<span class="string">`Roc says </span><span class="kw">${</span>fn()<span cl
     </div>
 </div>
 
-### Other Examples
-
-There are a variety of [other examples](/wip/examples) you can check out, if you’d like to get a feel for some different ways people write Roc code.
+### [Other Examples](#other-examples) {#other-examples}
+You can find more use cases and examples on the [examples page](/wip/examples)!
 </section>
 
 
@@ -108,7 +110,7 @@ Here’s a code sample that shows a few different aspects of Roc:
 * JSON deserialization via type inference
 * Common syntax sugar: string interpolation, pipelines, and backpassing
 
-The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives you a brief overview.
+The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives a brief overview.
 
 <!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->
 
@@ -136,7 +138,7 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
     <a href="https://tweedegolf.nl/en"><svg class="logo-tweede-golf" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 175.12 40.4"><path class="svg-text" d="M54.42,27.74a4.55,4.55,0,0,1-.73.27,5.47,5.47,0,0,1-1.34.1A3,3,0,0,1,49.83,27a4.44,4.44,0,0,1-.86-2.9V17.26H47.54V14.12H49V11.57l3.11-1.34v3.89h2.36v3.14H52.08v6.48a1.17,1.17,0,0,0,.32.94,1.28,1.28,0,0,0,.89.26,2.15,2.15,0,0,0,.83-.16,2.88,2.88,0,0,0,.78-.45Z"></path><path class="svg-text" d="M59.23,27.88l-3.6-13.75H59l2,8.46,2-8.46h3.27l2,8.46,2-8.46h3.39L69.81,27.88H66.48L64.57,20.6l-2,7.28Z"></path><path class="svg-text" d="M77.7,22.8a2.34,2.34,0,0,0,.35.92,3,3,0,0,0,.62.67,1.87,1.87,0,0,0,.78.4,2.25,2.25,0,0,0,.86.13,3.07,3.07,0,0,0,1.12-.19,2.45,2.45,0,0,0,.89-.77l2.15,2a4.88,4.88,0,0,1-4.24,2.15A5.12,5.12,0,0,1,76,26.37a8,8,0,0,1-1.48-5.15A10.08,10.08,0,0,1,75,18.13a7.38,7.38,0,0,1,1.16-2.31,4.6,4.6,0,0,1,1.82-1.42,4.88,4.88,0,0,1,2.34-.51,5.94,5.94,0,0,1,2.2.43,4.59,4.59,0,0,1,1.72,1.31,6.07,6.07,0,0,1,1.1,2.18,10.35,10.35,0,0,1,.4,3.08c0,.57,0,1,0,1.27s-.06.51-.08.64ZM80.25,17a2.09,2.09,0,0,0-1.72.78,3.3,3.3,0,0,0-.83,2h4.83a4,4,0,0,0-.75-2A1.79,1.79,0,0,0,80.25,17Z"></path><path class="svg-text" d="M91.14,22.8a2.34,2.34,0,0,0,.35.92,3,3,0,0,0,.62.67,2.71,2.71,0,0,0,1.63.53,3.09,3.09,0,0,0,1.13-.19,2.85,2.85,0,0,0,.92-.77l2.12,2a4.88,4.88,0,0,1-4.24,2.15,5.12,5.12,0,0,1-4.22-1.75A8,8,0,0,1,88,21.22a10.08,10.08,0,0,1,.43-3.09,7.38,7.38,0,0,1,1.16-2.31,4.6,4.6,0,0,1,1.82-1.42,4.86,4.86,0,0,1,2.33-.51,5.58,5.58,0,0,1,2.21.43,4.56,4.56,0,0,1,1.71,1.31,5.76,5.76,0,0,1,1.1,2.18,9.74,9.74,0,0,1,.4,3.08c0,.57,0,1,0,1.27a2.8,2.8,0,0,1-.08.64ZM93.69,17a2.09,2.09,0,0,0-1.72.78,3.3,3.3,0,0,0-.83,2H96a4,4,0,0,0-.75-2A1.8,1.8,0,0,0,93.69,17Z"></path><path class="svg-text" d="M109.28,27a7.32,7.32,0,0,1-1.13.78,3.3,3.3,0,0,1-1.74.37,4.57,4.57,0,0,1-2-.48,5.12,5.12,0,0,1-1.58-1.42,6.71,6.71,0,0,1-1-2.2,10.77,10.77,0,0,1-.38-2.82,11.22,11.22,0,0,1,.38-2.88,6.39,6.39,0,0,1,1-2.31,5,5,0,0,1,1.64-1.55,4.34,4.34,0,0,1,2.17-.57,6.29,6.29,0,0,1,1.56.19,4.23,4.23,0,0,1,1.1.56V11l3.17-1.37V27.84h-3.17V27Zm0-7.9a2.55,2.55,0,0,0-.86-1.21,1.85,1.85,0,0,0-1.29-.48,2.13,2.13,0,0,0-2,1,5.73,5.73,0,0,0-.56,2.82,4.52,4.52,0,0,0,.64,2.66,2.16,2.16,0,0,0,1.86,1,2.13,2.13,0,0,0,1.42-.54,3.35,3.35,0,0,0,.78-1.24Z"></path><path class="svg-text" d="M118.34,22.8a2.34,2.34,0,0,0,.35.92,3,3,0,0,0,.62.67,2.22,2.22,0,0,0,.78.4,2.61,2.61,0,0,0,.88.13,2.93,2.93,0,0,0,1.1-.19A2.85,2.85,0,0,0,123,24l2.12,2a4.89,4.89,0,0,1-4.25,2.15,5.11,5.11,0,0,1-4.21-1.75,8,8,0,0,1-1.48-5.15,11.09,11.09,0,0,1,.43-3.09,7.38,7.38,0,0,1,1.16-2.31,4.68,4.68,0,0,1,1.82-1.42,4.88,4.88,0,0,1,2.34-.51,5.57,5.57,0,0,1,2.2.43,4.52,4.52,0,0,1,1.72,1.31,5.91,5.91,0,0,1,1.1,2.18,10,10,0,0,1,.4,3.08c0,.57,0,1,0,1.27a2.8,2.8,0,0,1-.08.64ZM120.89,17a2.09,2.09,0,0,0-1.72.78,3.53,3.53,0,0,0-.83,2h4.83a4,4,0,0,0-.75-2,1.8,1.8,0,0,0-1.53-.78Z"></path><path class="svg-text" d="M140.58,30.34a3.86,3.86,0,0,0,2-.91,3.12,3.12,0,0,0,1-2,2.39,2.39,0,0,1-.91.43,6.71,6.71,0,0,1-1.48.16,4.55,4.55,0,0,1-2.34-.56,4.48,4.48,0,0,1-1.61-1.54,8,8,0,0,1-.94-2.3,12.59,12.59,0,0,1-.32-2.8,8.13,8.13,0,0,1,.43-2.68,7.21,7.21,0,0,1,1.1-2.2,5.86,5.86,0,0,1,1.66-1.48,4.55,4.55,0,0,1,2.1-.54,4,4,0,0,1,2.39.81v-.59h3.14V26.63a7.73,7.73,0,0,1-.35,2.39,7.07,7.07,0,0,1-1.1,2.15,6.16,6.16,0,0,1-1.77,1.64,6.55,6.55,0,0,1-2.39.83Zm3-11.84a1.55,1.55,0,0,0-.7-1.05,1.89,1.89,0,0,0-1.1-.32,2.27,2.27,0,0,0-2,.94,4.94,4.94,0,0,0-.62,2.79,6.65,6.65,0,0,0,.56,3,1.88,1.88,0,0,0,1.8,1,2.08,2.08,0,0,0,2.07-1.13Z"></path><path class="svg-text" d="M155.17,28.12a4.45,4.45,0,0,1-2.29-.54,5.56,5.56,0,0,1-1.77-1.5A7.16,7.16,0,0,1,150,23.8a9.81,9.81,0,0,1,0-5.58A7.06,7.06,0,0,1,151.11,16a5.56,5.56,0,0,1,1.77-1.5,4.92,4.92,0,0,1,4.57,0,5.23,5.23,0,0,1,1.74,1.5,7.13,7.13,0,0,1,1.16,2.26,9.81,9.81,0,0,1,0,5.58,7.23,7.23,0,0,1-1.16,2.28,5.45,5.45,0,0,1-1.74,1.5A4.44,4.44,0,0,1,155.17,28.12Zm0-3.25A2.09,2.09,0,0,0,157,23.8a6.59,6.59,0,0,0,0-5.59,2.12,2.12,0,0,0-2.89-.76h0a2.24,2.24,0,0,0-.75.75,6.38,6.38,0,0,0,0,5.59,2.09,2.09,0,0,0,1.82,1.07Z"></path><path class="svg-text" d="M163.44,11l3.17-1.37V27.87h-3.17Z"></path><path class="svg-text" d="M172.81,17.26V27.87h-3.14V17.26h-1.29V14.12h1.29v-.4a4.57,4.57,0,0,1,1-3.22,3.7,3.7,0,0,1,2.87-1.08,4.1,4.1,0,0,1,.86.06,2.84,2.84,0,0,1,.7.16v2.9l-.56-.16h-.68a1.14,1.14,0,0,0-1,.32,1.63,1.63,0,0,0-.27,1.05v.4h2.47v3.14Z"></path><path class="svg-text" d="M20.26,0A20.2,20.2,0,1,0,40.4,20.26V20.2h0A20.18,20.18,0,0,0,20.26,0Zm-10,29.67H7.5c1.69-1.4,4.16-4.38,5.19-9.85,1.18-6.27,5.82-9.67,10.1-9.1h0c-3.62,1-6.39,4.47-7.25,9.07-1.07,5.66-3.65,8.49-5.1,9.7Zm.73,0c1.5-1.34,4-4.28,5-9.8.86-4.52,3.62-7.89,7.22-8.77a7.09,7.09,0,0,1,7.44,2.74,6.18,6.18,0,0,1,1.4,5.28,5.71,5.71,0,0,1-2.31,3.53,2.18,2.18,0,0,0,.14-.84,2.55,2.55,0,1,0-5.1-.14v.14S24.46,27.47,33,29.7ZM25.9,20.2h0a2.05,2.05,0,0,1,2.87.11h0a6.41,6.41,0,0,1-2.76,3A2.42,2.42,0,0,0,25.9,20.2Z"></path></svg></a>
 </p>
 
-If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
+If you would like your organization to become an official sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
