@@ -206,7 +206,8 @@ jobs:
           cp -r examples ../..
           cp -r ci ../..
           
-          cd ../..
-          
-          ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
+      - name: run tests
+        run: |
+          cd basic-cli-platform
+          ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ROC_BUILD_FLAGS=--prebuilt-platform ./ci/all_tests.sh
 
