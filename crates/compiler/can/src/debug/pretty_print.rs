@@ -74,14 +74,25 @@ fn print_declarations_help<'a>(
     f.intersperse(defs, f.hardline().append(f.hardline()))
 }
 
+fn always_true() -> bool {
+    true
+}
+
 macro_rules! maybe_paren {
     ($paren_if_above:expr, $my_prec:expr, $doc:expr) => {
-        maybe_paren!($paren_if_above, $my_prec, || true, $doc)
+        maybe_paren!($paren_if_above, $my_prec, always_true, $doc)
     };
     ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {
-        if $my_prec > $paren_if_above && $extra_cond() {
-            $doc.parens().group()
-        } else {
+        'blk: {
+            if $my_prec > $paren_if_above {
+                #[allow(clippy::redundant_closure_call)]
+                let extra_cond = $extra_cond();
+
+                if extra_cond {
+                    break 'blk $doc.parens().group();
+                }
+            }
+
             $doc
         }
     };
