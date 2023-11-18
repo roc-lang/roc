@@ -3370,6 +3370,7 @@ pub enum Reason {
     FnArg {
         name: Option<Symbol>,
         arg_index: HumanIndex,
+        called_via: CalledVia,
     },
     TypedArg {
         name: Option<Symbol>,

@@ -658,17 +658,17 @@ fn too_few_args() {
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn type_problem() {
+fn type_problem_function() {
     expect_failure(
-        "1 + \"\"",
+        "Num.add 1 \"not a num\"",
         indoc!(
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This 2nd argument to add has an unexpected type:
 
-                4│      1 + ""
-                            ^^
+                4│      Num.add 1 "not a num"
+                                  ^^^^^^^^^^^
 
                 The argument is a string of type:
 
@@ -677,6 +677,84 @@ fn type_problem() {
                 But add needs its 2nd argument to be:
 
                     Num *
+                "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn type_problem_binary_operator() {
+    expect_failure(
+        "1 + \"\"",
+        indoc!(
+            r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This 2nd argument to + has an unexpected type:
+
+                4│      1 + ""
+                            ^^
+
+                The argument is a string of type:
+
+                    Str
+
+                But + needs its 2nd argument to be:
+
+                    Num *
+                "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn type_problem_unary_operator() {
+    expect_failure(
+        "!\"not a bool\"",
+        indoc!(
+            r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This 1st argument to ! has an unexpected type:
+
+                4│      !"not a bool"
+                         ^^^^^^^^^^^^
+
+                The argument is a string of type:
+
+                    Str
+
+                But ! needs its 1st argument to be:
+
+                    Bool
+                "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn type_problem_string_interpolation() {
+    expect_failure(
+        "\"This is not a string -> \\(1)\"",
+        indoc!(
+            r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This argument to this string interpolation has an unexpected type:
+
+                4│      "This is not a string -> \(1)"
+                                                   ^
+
+                The argument is a number of type:
+
+                    Num *
+
+                But this string interpolation needs its argument to be:
+
+                    Str
                 "#
         ),
     );
