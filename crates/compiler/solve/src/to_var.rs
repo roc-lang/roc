@@ -540,6 +540,7 @@ pub(crate) fn type_to_var_help(
                 )
                 .expect("extension var could not be seen as a tag union");
 
+                #[allow(clippy::never_loop)]
                 for _ in it {
                     unreachable!("we assert that the ext var is empty; otherwise we'd already know it was a tag union!");
                 }

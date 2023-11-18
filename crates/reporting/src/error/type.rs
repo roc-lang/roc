@@ -711,9 +711,9 @@ fn to_expr_report<'b>(
             let thing = match annotation_source {
                 TypedIfBranch {
                     index,
-                    num_branches,
+                    num_branches: 2,
                     ..
-                } if num_branches == 2 => alloc.concat([
+                } => alloc.concat([
                     alloc.keyword(if index == HumanIndex::FIRST {
                         "then"
                     } else {
