@@ -145,7 +145,7 @@ fn main() -> io::Result<()> {
             let triple = target.to_triple();
             let function_kind = FunctionKind::LambdaSet;
             let (platform_path, stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib(
-                &input_path,
+                input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &triple,
                 function_kind,
