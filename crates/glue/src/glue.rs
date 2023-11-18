@@ -15,8 +15,6 @@
 #![allow(clippy::redundant_static_lifetimes)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
-#![allow(clippy::non_canonical_clone_impl)]
-#![allow(clippy::non_canonical_partial_ord_impl)]
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
