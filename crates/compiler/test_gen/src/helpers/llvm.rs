@@ -720,8 +720,5 @@ pub fn identity<T>(value: T) -> T {
     value
 }
 
-pub(crate) use assert_evals_to;
-pub(crate) use assert_evals_to_erased;
-pub(crate) use assert_llvm_evals_to;
 #[cfg(feature = "gen-llvm-wasm")]
 pub(crate) use assert_wasm_evals_to;
