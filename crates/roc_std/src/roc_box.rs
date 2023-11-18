@@ -48,7 +48,7 @@ impl<T> RocBox<T> {
     ///
     /// The box must be unique in order to leak it safely
     pub unsafe fn leak(self) -> *mut T {
-        let ptr = self.contents.as_ptr() as *mut T;
+        let ptr = self.contents.as_ptr();
         core::mem::forget(self);
         ptr
     }
@@ -59,7 +59,7 @@ impl<T> RocBox<T> {
     }
 
     pub fn into_inner(self) -> T {
-        unsafe { ptr::read(self.contents.as_ptr() as *mut T) }
+        unsafe { ptr::read(self.contents.as_ptr()) }
     }
 
     fn storage(&self) -> &Cell<Storage> {
