@@ -1,6 +1,6 @@
-# Install Roc
+# Install
 
-Roc is a very young language with many incomplete features and known bugs. It doesn't even have a numbered release yet, but it does have [nightly builds](https://github.com/roc-lang/roc/releases) that you can download if you’d like to try it out without [building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)!
+Roc is a very young language with many incomplete features and known bugs. It doesn't even have a numbered release yet, but it does have [nightly builds](https://github.com/roc-lang/roc/releases) that you can download if you'd like to try it out without [building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)!
 
 There are currently a few known OS-specific issues:
 * **macOS:** There are no known compatibility issues, but the compiler doesn't run as fast as it does on Linux or Windows, because we don't (yet) do our own linking like we do on those targets. (Linking works similarly on Linux and Windows, but the way macOS does it is both different and significantly more complicated.)

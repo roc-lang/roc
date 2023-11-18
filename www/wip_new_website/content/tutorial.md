@@ -31,7 +31,7 @@ Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en
 
 If Roc is [installed](/wip/install.html), you should see this:
 
-<pre><samp>The rockin’ roc repl</samp></pre>
+<pre><samp>The rockin' roc repl</samp></pre>
 
 So far, so good!
 

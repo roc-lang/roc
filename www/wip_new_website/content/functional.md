@@ -23,9 +23,9 @@ Roc has ways of detecting uniqueness at compile time, so this optimization will 
 
 ## [Everything is immutable (semantically)](#everything-is-immutable) {#everything-is-immutable}
 
-Since mutation is only ever done when it wouldn’t change the behavior of the program, all Roc values are semantically immutable—even though they can still benefit from the performance of in-place mutation.
+Since mutation is only ever done when it wouldn't change the behavior of the program, all Roc values are semantically immutable—even though they can still benefit from the performance of in-place mutation.
 
-In many languages, this is reversed; everything is mutable by default, and it's up to the programmer to “defensively” clone to avoid undesirable modification. Roc's approach means that cloning happens automatically, which can be less error-prone than defensive cloning (which might be forgotten), but <span class="nowrap">which—to be fair—can</span> also increase unintentional cloning. It's a different default with different tradeoffs.
+In many languages, this is reversed; everything is mutable by default, and it's up to the programmer to "defensively" clone to avoid undesirable modification. Roc's approach means that cloning happens automatically, which can be less error-prone than defensive cloning (which might be forgotten), but <span class="nowrap">which—to be fair—can</span> also increase unintentional cloning. It's a different default with different tradeoffs.
 
 A reliability benefit of semantic immutability everywhere is that it rules out [data races](https://en.wikipedia.org/wiki/Race_condition#Data_race). These concurrency bugs can be difficult to reproduce and time-consuming to debug, and they are only possible through direct mutation. Roc's semantic immutability rules out this category of bugs.
 
