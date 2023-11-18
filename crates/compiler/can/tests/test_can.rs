@@ -1368,7 +1368,7 @@ mod test_can {
     //    );
     //}
 
-    //// UNUSED
+    // // UNUSED
 
     //#[test]
     //fn mutual_unused_circular_vars() {
@@ -1483,7 +1483,7 @@ mod test_can {
     //    );
     //}
 
-    //// ASSIGNMENT REORDERING
+    // // ASSIGNMENT REORDERING
 
     //#[test]
     //fn reorder_assignments() {
@@ -1623,7 +1623,7 @@ mod test_can {
     //    }
     //}
 
-    //// CIRCULAR ASSIGNMENT
+    // // CIRCULAR ASSIGNMENT
 
     //#[test]
     //fn circular_assignment() {
@@ -1663,74 +1663,74 @@ mod test_can {
     //    assert_eq!(problems, vec![]);
     //}
 
-    //// TODO verify that Apply handles output.references.calls correctly
+    // // TODO verify that Apply handles output.references.calls correctly
 
-    //// UNSUPPORTED PATTERNS
+    // // UNSUPPORTED PATTERNS
 
-    //// TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
+    // // TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
 
-    //// OPERATOR PRECEDENCE
+    // // OPERATOR PRECEDENCE
 
-    //// fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
-    ////     parse_without_loc(input)
-    ////         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
-    //// }
+    // // fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+    // //     parse_without_loc(input)
+    // //         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
+    // // }
 
-    //// #[test]
-    //// fn two_operator_precedence() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x + y * 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(var("x")),
-    ////                 loc(Plus),
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("y")),
-    ////                         loc(Star),
-    ////                         loc_box(Int(5))
-    ////                     )
-    ////                 ),
-    ////             ),
-    ////         ""))
-    ////     );
+    // // #[test]
+    // // fn two_operator_precedence() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x + y * 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(var("x")),
+    // //                 loc(Plus),
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("y")),
+    // //                         loc(Star),
+    // //                         loc_box(Int(5))
+    // //                     )
+    // //                 ),
+    // //             ),
+    // //         ""))
+    // //     );
 
-    ////     assert_eq!(
-    ////         parse_with_precedence("x * y + 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(Star),
-    ////                         loc_box(var("y")),
-    ////                     )
-    ////                 ),
-    ////                 loc(Plus),
-    ////                 loc_box(Int(5))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // //     assert_eq!(
+    // //         parse_with_precedence("x * y + 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(Star),
+    // //                         loc_box(var("y")),
+    // //                     )
+    // //                 ),
+    // //                 loc(Plus),
+    // //                 loc_box(Int(5))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// #[test]
-    //// fn compare_and() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x > 1 || True"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(GreaterThan),
-    ////                         loc_box(Int(1))
-    ////                     )
-    ////                 ),
-    ////                 loc(Or),
-    ////                 loc_box(ApplyVariant(vname("True"), None))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // // #[test]
+    // // fn compare_and() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x > 1 || True"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(GreaterThan),
+    // //                         loc_box(Int(1))
+    // //                     )
+    // //                 ),
+    // //                 loc(Or),
+    // //                 loc_box(ApplyVariant(vname("True"), None))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// HELPERS
+    // // HELPERS
 
     //#[test]
     //fn sort_cyclic_idents() {
