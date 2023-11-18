@@ -4,7 +4,7 @@ Roc code is designed to build fast and run fast...but what does "fast" mean here
 
 ## [Fast programs](#fast-programs) {#fast-programs}
 
-What "fast" means in embedded systems is different from what it means in games, which in turn is different from what it means on the Web. To better understand Roc’s performance capabilities, let's look at the upper bound of how fast optimized Roc programs are capable of running, and the lower bound of what types of languages Roc should generally outperform.
+What "fast" means in embedded systems is different from what it means in games, which in turn is different from what it means on the Web. To better understand Roc's performance capabilities, let's look at the upper bound of how fast optimized Roc programs are capable of running, and the lower bound of what types of languages Roc should generally outperform.
 
 ### [Limiting factors: memory management and async I/O](#limiting-factors) {#limiting-factors}
 
@@ -22,21 +22,21 @@ When [benchmarking compiled Roc programs](https://www.youtube.com/watch?v=vzfy4E
 
 ### [Domain-specific memory management](#domain-specific-memory-management) {#domain-specific-memory-management}
 
-Roc’s “platforms and applications” design means its automatic memory management can take advantage of domain-specific properties to improve performance.
+Roc's "platforms and applications" design means its automatic memory management can take advantage of domain-specific properties to improve performance.
 
-For example, if you build an application on the [`basic-cli` platform](https://github.com/roc-lang/basic-cli) compared to the [`basic-webserver` platform](https://github.com/roc-lang/basic-webserver), each of those platforms may use a different memory management strategy under the hood that’s tailored to their respective use cases. Your application's performance can benefit from this, even though building on either of those platforms feels like using ordinary automatic memory management.
+For example, if you build an application on the [`basic-cli` platform](https://github.com/roc-lang/basic-cli) compared to the [`basic-webserver` platform](https://github.com/roc-lang/basic-webserver), each of those platforms may use a different memory management strategy under the hood that's tailored to their respective use cases. Your application's performance can benefit from this, even though building on either of those platforms feels like using ordinary automatic memory management.
 
 This is because Roc _platforms_ get to determine how memory gets allocated and deallocated in applications built on them. ([`basic-cli`](https://github.com/roc-lang/basic-cli) and [`basic-webserver`](https://github.com/roc-lang/basic-webserver) are examples of platforms, but anyone can build their own platform.) Here are some examples of how platforms can use this to improve application performance:
 
 - A platform for noninteractive command-line scripts can skip deallocations altogether, since any allocated memory will be cheaply reclaimed by the operating system anyway once the script exits. (This strategy is domain-specific; it would not work well for a long-running, interactive program!)
-- A platform for Web servers can put all allocations for each request into a particular [region of memory](https://en.wikipedia.org/wiki/Region-based_memory_management) (this is known as “arena allocation” or ”bump allocation”) and then deallocate the entire region in one cheap operation after the response has been sent. This would essentially drop memory reclamation times to zero. (This strategy relies on Web servers’ request/response architecture, and wouldn't make sense in other use cases. [`nea`](https://github.com/tweedegolf/nea) is a platform in early development that is working towards implementing this.)
+- A platform for Web servers can put all allocations for each request into a particular [region of memory](https://en.wikipedia.org/wiki/Region-based_memory_management) (this is known as "arena allocation" or "bump allocation") and then deallocate the entire region in one cheap operation after the response has been sent. This would essentially drop memory reclamation times to zero. (This strategy relies on Web servers' request/response architecture, and wouldn't make sense in other use cases. [`nea`](https://github.com/tweedegolf/nea) is a platform in early development that is working towards implementing this.)
 - A platform for applications that have very long-lived state could implement [meshing compaction](https://youtu.be/c1UBJbfR-H0?si=D9Gp0cdpjZ_Is5v8) to decrease memory fragmentation. (Compaction would probably be a net negative for performance in the previous two examples.)
 
 [This talk](https://www.youtube.com/watch?v=cpQwtwVKAfU&t=75s) has more information about platforms and applications, including demos and examples of other benefits they unlock besides performance.
 
 ### [Current progress](#current-progress) {#current-progress}
 
-Roc's “platforms and applications” design already works, including the domain-specific memory management. Most of Roc’s data structures are already close to their theoretical limit in terms of performance, at least without changing their behavior or introducing memory unsafety. [This talk](https://vimeo.com/653510682) explains how they’re implemented under the hood.
+Roc's "platforms and applications" design already works, including the domain-specific memory management. Most of Roc's data structures are already close to their theoretical limit in terms of performance, at least without changing their behavior or introducing memory unsafety. [This talk](https://vimeo.com/653510682) explains how they're implemented under the hood.
 
 That said, [the current implementation](https://ayazhafiz.com/articles/23/a-lambda-calculus-with-coroutines-and-heapless-closures) of [defunctionalization](https://blog.sigplan.org/2019/12/30/defunctionalization-everybody-does-it-nobody-talks-about-it/) (based on [this paper](https://dl.acm.org/doi/pdf/10.1145/3591260))—which unlocks stack-allocated closures, among other optimizations—has [significant known gaps](https://github.com/roc-lang/roc/issues/5969), and has a ways to go before it works across the board. (If you're interested in getting involved in that implementation, [we'd love to hear from you](https://roc.zulipchat.com)!)
 

@@ -21,7 +21,7 @@
     <div role="presentation" class="home-goals-column">
         <a href="/wip/friendly" class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
-            <p class="home-goals-description">Roc’s syntax, semantics, and included toolset all prioritize user-friendliness.</p>
+            <p class="home-goals-description">Roc's syntax, semantics, and included toolset all prioritize user-friendliness.</p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
@@ -29,7 +29,7 @@
         <a href="/wip/functional" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
-             Roc has a small number of simple language primitives. It’s a single-paradigm <span class="nowrap">functional language.</span></p>
+             Roc has a small number of simple language primitives. It's a single-paradigm <span class="nowrap">functional language.</span></p>
             <p class="home-goals-learn-more">What does <i>functional</i> mean here?</p>
         </a>
     </div>
@@ -62,9 +62,9 @@
 
 ## [Examples](#examples) {#examples}
 
-Roc is a young language. It doesn’t even have a numbered release yet, just nightly builds!
+Roc is a young language. It doesn't even have a numbered release yet, just nightly builds!
 
-However, it can already be used for several things if you’re up for being an early adopter—<br>
+However, it can already be used for several things if you're up for being an early adopter—<br>
 with all the bugs and missing features which come with that territory.
 
 Here are some examples of how it can be used today.
@@ -76,7 +76,7 @@ Here are some examples of how it can be used today.
     Stdout<span class="punctuation section">.</span>line <span class="literal">"Hello!"</span></samp></pre>
         <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
         <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
-        <p>If you’re looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform to check out.</p>
+        <p>If you're looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform to check out.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Web Servers</h3>
@@ -93,7 +93,7 @@ Here are some examples of how it can be used today.
 log(<span class="string">`Roc says </span><span class="kw">${</span>fn()<span class="kw">}</span><span class="string">`</span>)<span class="kw">;</span></samp></pre>
         <p>You can call Roc functions from other languages. There are several <a href="https://github.com/roc-lang/roc/tree/main/examples">basic examples</a> of how to call Roc functions from Python, Node.js, Swift, WebAssembly, and JVM languages.</p>
         <p>Any language that supports C interop can call Roc functions, using similar techniques to the ones found in these examples.</p>
-        <p>Most of those are minimal proofs of concept, but <a href="https://github.com/vendrinc/roc-esbuild">roc-esbuild</a> is a work in progress that’s used at <a href="https://www.vendr.com/careers">Vendr</a> to call Roc functions from Node.js.</p>
+        <p>Most of those are minimal proofs of concept, but <a href="https://github.com/vendrinc/roc-esbuild">roc-esbuild</a> is a work in progress that's used at <a href="https://www.vendr.com/careers">Vendr</a> to call Roc functions from Node.js.</p>
     </div>
 </div>
 
@@ -104,7 +104,7 @@ You can find more use cases and examples on the [examples page](/wip/examples)!
 
 ## [Code Sample with Explanations](#code-sample) {#code-sample}
 
-Here’s a code sample that shows a few different aspects of Roc:
+Here's a code sample that shows a few different aspects of Roc:
 * File I/O and HTTP requests
 * Pattern matching for error handling
 * JSON deserialization via type inference
