@@ -80,14 +80,6 @@ table tr td {
   margin-bottom: 24px;
   padding: 8px 16px;
   border-left: 2px solid var(--violet);
-  /* Negative indent plus padding means all lines after the first will be indented. */
-  text-indent: -3.15em;
-  padding-left: 4em;
-}
-
-.entry-name a {
-  position: relative;
-  left: 3.6rem;
 }
 
 .entry-name a {
