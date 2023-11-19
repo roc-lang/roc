@@ -25,7 +25,7 @@ unzip examples-main.zip
 cp -R examples-main/examples/ content/examples/
 
 # relace links in content/examples/index.md to work on the WIP site
-sed -i '' 's|](/|](/examples/|' content/examples/index.md
+sed -i'' 's|](/|](/examples/|' content/examples/index.md
 
 # clean up examples artifacts
 rm -rf examples-main examples-main.zip
