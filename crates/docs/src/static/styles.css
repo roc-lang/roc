@@ -173,8 +173,9 @@ main {
   line-height: 1.85em;
   margin-top: 2px;
   padding: 48px;
-
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  max-width: 740px;
+  /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
 }
 
 /* Module links on the package index page (/index.html) */
@@ -254,7 +255,8 @@ padding: 0px 16px;
   font-family: var(--font-sans);
   font-size: 24px;
   height: 100%;
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
+  min-width: 1024px;
 }
 
 .top-header-triangle {
@@ -548,6 +550,8 @@ pre>samp {
   .top-header {
       justify-content: space-between;
       width: auto;
+      /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+      min-width: 0;
   }
 
   .pkg-full-name {
@@ -591,6 +595,7 @@ pre>samp {
       grid-row-end: above-footer;
       padding: 18px;
       font-size: 16px;
+      max-width: none;
   }
 
   #sidebar-nav {

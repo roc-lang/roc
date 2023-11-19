@@ -200,7 +200,7 @@ fn render_package_index(root_module: &LoadedModule) -> String {
     // The HTML for the index page
     let mut index_buf = String::new();
 
-    push_html(&mut index_buf, "h2", vec![], "Exposed Modules");
+    push_html(&mut index_buf, "h2", vec![("class", "module-name")], "Exposed Modules");
     push_html(
         &mut index_buf,
         "ul",
@@ -222,7 +222,7 @@ fn render_module_documentation(
     push_html(&mut buf, "h2", vec![("class", "module-name")], {
         let mut link_buf = String::new();
 
-        push_html(&mut link_buf, "a", vec![("href", "/#")], module_name);
+        push_html(&mut link_buf, "a", vec![("href", "/")], module_name);
 
         link_buf
     });
