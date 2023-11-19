@@ -1,5 +1,6 @@
 :root {
     /* WCAG AAA Compliant colors */
+    --code-bg: #f4f8f9;
     --gray-bg: #f4f8f9;
     --gray: #717171;
     --orange: #bf5000;
@@ -33,6 +34,11 @@
     --font-size-normal: 18px;
     --body-max-width: 1024px;
     --dark-code-bg: #202746;
+
+    /* Tutorial */
+    --header-link-color: #107F79;
+    --header-link-hover: #222;
+    --h1-color: #8055E4;
 }
 
 html {
@@ -217,7 +223,7 @@ h2 {
     color: var(--heading-color);
 }
 
-.article-layout main {
+.article-layout main, .article-layout pre {
     max-width: 720px;
 }
 
@@ -360,27 +366,27 @@ pre > code {
     display: none !important;
 }
 
-#repl-container {
+#homepage-repl-container {
     display: flex;
     flex-direction: row-reverse;
 }
 
-#repl-container #repl-description {
+#homepage-repl-container #repl-description {
     padding: 0 30px;
     margin-top: 2px;
     flex: 1;
 }
 
-#repl-container #repl-description a {
+#homepage-repl-container #repl-description a {
     color: inherit;
     text-decoration: underline;
 }
 
-#repl-container #repl-description a:hover {
+#homepage-repl-container #repl-description a:hover {
     color: var(--primary-1);
 }
 
-#repl-container #repl {
+#homepage-repl-container #repl {
     flex: 1;
     border: 2px solid #444;
     font-size: var(--font-size-normal);
@@ -389,24 +395,24 @@ pre > code {
     max-width: 50%;
 }
 
-#repl-container #repl,
-#repl-container #repl code {
+#homepage-repl-container #repl,
+#homepage-repl-container #repl code {
     color: white;
     background-color: var(--dark-code-bg);
 }
 
-#repl-container #source-input {
+#homepage-repl-container #source-input {
     margin-bottom: 0;
     margin-top: 6px;
     font-size: var(--font-size-normal);
     height: 57px;
 }
 
-#repl-container p {
+#homepage-repl-container p {
     position: relative; /* Needed for the repl arrow's position: absolute */
 }
 
-#repl-container #repl-arrow {
+#homepage-repl-container #repl-arrow {
     cursor: default;
     font-weight: bold;
     font-size: 48px;
@@ -527,6 +533,10 @@ li {
         --body-max-width: none;
     }
 
+    #tutorial-main main {
+        max-width: none;
+    }
+
     #homepage-logo {
         /* The bird runs off the screen unless we shrink it */
         height: 80px;
@@ -637,6 +647,7 @@ li {
     h5 {
         line-height: 1.2em !important;
         font-size: 2rem !important;
+        width: auto;
     }
 
     #top-bar-links {
@@ -666,7 +677,7 @@ li {
         margin: 0;
     }
 
-    #repl-container #repl {
+    #homepage-repl-container #repl {
         max-width: none;
     }
 }
@@ -683,6 +694,19 @@ li {
         --font-size-normal: 14px;
         --body-max-width: 320px;
     }
+}
+
+
+@font-face {
+    font-family: "Permanent Marker";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2") format("woff2"),
+        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff") format("woff");
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+        U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
+        U+2215, U+FEFF, U+FFFD;
 }
 
 /* latin-ext */
@@ -745,7 +769,7 @@ li {
 @media (prefers-color-scheme: dark) {
     :root {
         /* WCAG AAA Compliant colors */
-        /* WCAG AAA Compliant colors */
+        --code-bg: #202746;
         --gray-bg: #202746;
         --gray: #b6b6b6;
         --orange: #fd6e08;
@@ -765,6 +789,11 @@ li {
         --faded-color: #bbbbbb;
         --gray: #6e6e6e;
         --heading-color: #eee;
+
+        /* Tutorial */
+        --header-link-color: #9C7CEA;
+        --header-link-hover: #ddd;
+        --h1-color: #1bc6bd;
     }
 
     .logo-dark {
@@ -807,7 +836,7 @@ li {
     }
 
     #first-code-sample,
-    #repl-container #repl {
+    #homepage-repl-container #repl {
         border: 1px solid #ddd;
     }
 
@@ -1100,10 +1129,85 @@ code .dim {
     border-color: var(--light-cyan);
 }
 
-/* Tutorial Table of Contents */
+/* Tutorial */
+
+#tutorial-main main {
+    display: flex;
+    flex-direction: row-reverse;
+    max-width: 1024px;
+}
+
+#tutorial-main h1,
+#tutorial-main h2,
+#tutorial-main h3,
+#tutorial-main h4,
+#tutorial-main h5 {
+    font-family: "Permanent Marker";
+    line-height: 1rem;
+    margin-top: 1.75rem;
+    margin-bottom: 0;
+    border: none;
+}
+
+#tutorial-main h1 a,
+#tutorial-main h2 a,
+#tutorial-main h3 a,
+#tutorial-main h4 a,
+#tutorial-main h5 a {
+    color: var(--header-link-color);
+}
+
+#tutorial-main h1 a:hover,
+#tutorial-main h2 a:hover,
+#tutorial-main h3 a:hover,
+#tutorial-main h4 a:hover,
+#tutorial-main h5 a:hover {
+    text-decoration: none;
+    color: var(--header-link-hover);
+}
+
+#tutorial-main h1 {
+    font-size: 7rem;
+    line-height: 7rem;
+    color: var(--h1-color);
+    margin-top: 24px;
+    margin-bottom: 1.75rem;
+    text-shadow: 1px 1px 1px #010101;
+}
+
+#tutorial-main h2 {
+    font-size: 4rem;
+    line-height: 4rem;
+    text-shadow: 1px 1px 1px #010101;
+    padding: 0.8rem 0;
+    margin-top: 2.5rem;
+    width: 60rem; /* Without this, "Building an application" wraps and looks awkward */
+}
+
+#tutorial-main h3 {
+    font-size: 3rem;
+    line-height: 3rem;
+    text-shadow: 1px 1px 1px #010101;
+    margin-bottom: 0.5rem;
+}
+
+#tutorial-main h4 {
+    font-size: 2rem;
+    text-shadow: 1px 1px 1px #010101;
+}
+
+#tutorial-body, #tutorial-body pre {
+    max-width: 646px;
+}
 
 #tutorial-toc {
     background-color: var(--gray-bg);
+    flex: 0 0 auto; /* Take up as much space as it needs */
+    margin-top: 30px;
+    background: var(--code-bg);
+    padding: 12px 24px;
+    margin-left: 64px;
+    align-self: flex-start; /* Aligns to the start, not stretching in height */
 }
 
 #tutorial-toc > ul {
@@ -1120,6 +1224,62 @@ code .dim {
     white-space: nowrap;
     overflow: hidden; /* Ensures content doesn't overflow its container */
     text-overflow: ellipsis; /* Adds an ellipsis if the content overflows */
+}
+
+#tutorial-toc code {
+    background: none;
+    color: inherit;
+    margin: 0;
+    padding: 0;
+}
+
+#tutorial-toc ol {
+    padding: 3px;
+    margin: 8px 0;
+    list-style: none;
+    padding-bottom: 0;
+    margin-bottom: 0;
+}
+
+#tutorial-toc h2 {
+    font-family: inherit;
+    font-size: 2em;
+    text-shadow: none;
+    margin: 0;
+    padding: 16px 0;
+}
+
+#toc-search {
+    background-color: var(--toc-search-bg);
+    border: 1px solid var(--toc-search-border);
+    color: inherit;
+    padding: 6px 8px;
+    margin-top: 16px;
+    margin-bottom: 4px;
+    box-sizing: border-box;
+    width: 100%;
+    font-size: inherit;
+}
+
+#tutorial-toc-toggle,
+#tutorial-toc-toggle-label,
+#close-tutorial-toc {
+    display: none;
+    /* This may be overridden on mobile-friendly screen widths */
+}
+
+#tutorial-toc-toggle,
+#tutorial-toc-toggle-label {
+    font-size: 1.1rem;
+    float: right;
+}
+
+#close-tutorial-toc {
+    position: absolute;
+    top: 20px;
+    right: 8px;
+    font-size: 18px;
+    padding: 12px 24px;
 }
 
 /* for larger screens */
