@@ -1,5 +1,5 @@
 app "roc-website"
-    packages { pf: "../../examples/static-site-gen/platform/main.roc" }
+    packages { pf: "../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script },
         pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type },
@@ -74,7 +74,7 @@ view = \page, htmlContent ->
             preloadWoff2 "/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2",
             preloadWoff2 "/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2",
             link [rel "prefetch", href "/repl/roc_repl_wasm.js"],
-            link [rel "stylesheet", href "/wip/site.css"],
+            link [rel "stylesheet", href "/site.css"],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
             link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"],
@@ -103,19 +103,19 @@ viewNavbar = \page ->
     isHomepage = page == "index.html"
 
     homeLinkAttrs =
-        [id "nav-home-link", href "/wip/", title "The Roc Programming Language Homepage"]
+        [id "nav-home-link", href "/", title "The Roc Programming Language Homepage"]
         |> List.concat (if isHomepage then [ariaHidden "true"] else [])
 
     header [id "top-bar"] [
         nav [ariaLabel "primary"] [
             a homeLinkAttrs [rocLogo, span [class "home-link-text"] [text "Roc"]],
             div [id "top-bar-links"] [
-                a [href "/wip/tutorial"] [text "tutorial"],
-                a [href "/wip/install"] [text "install"],
-                a [href "/wip/examples"] [text "examples"],
-                a [href "/wip/community"] [text "community"],
-                a [href "/wip/docs"] [text "docs"],
-                a [href "/wip/donate"] [text "donate"],
+                a [href "/tutorial"] [text "tutorial"],
+                a [href "/install"] [text "install"],
+                a [href "/examples"] [text "examples"],
+                a [href "/community"] [text "community"],
+                a [href "/docs"] [text "docs"],
+                a [href "/donate"] [text "donate"],
             ],
         ],
     ]

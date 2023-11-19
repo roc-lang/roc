@@ -61,9 +61,6 @@ roc_linux_x86_64.tar.gz
 # nix
 result
 
-# tutorial
-www/src/roc-tutorial
-
 # Only keep Cargo.lock dependencies for the main compiler.
 # Examples and test only crates should be fine to be unlocked.
 # This remove unneccessary lock file versioning.
@@ -77,7 +74,11 @@ www/src/roc-tutorial
 # checkmate
 checkmate_*.json
 
+www/build/
+www/main
+www/dist
+
 # ignore the examples folder in the WIP website, this is copied from roc-lang/examples in when building the site
-www/wip_new_website/content/examples
+www/content/examples
 www/examples-main.zip
 www/examples-main
