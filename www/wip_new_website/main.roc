@@ -56,10 +56,10 @@ view = \page, htmlContent ->
             [text htmlContent]
 
     bodyAttrs =
-        if page == "index.html" then
-            [id "homepage-main"]
-        else
-            [class "article-layout"]
+        when page is
+            "index.html" -> [id "homepage-main"]
+            "tutorial.html" -> [id "tutorial-main", class "article-layout"]
+            _ -> [class "article-layout"]
 
     html [lang "en", class "no-js"] [
         head [] [
@@ -72,6 +72,7 @@ view = \page, htmlContent ->
             # The homepage doesn't actually use latin-ext
             preloadWoff2 "/fonts/lato-v23-latin/lato-v23-latin-regular.woff2",
             preloadWoff2 "/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2",
+            preloadWoff2 "/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2",
             link [rel "prefetch", href "/repl/roc_repl_wasm.js"],
             link [rel "stylesheet", href "/wip/site.css"],
             link [rel "stylesheet", href "/wip/repl.css"],
