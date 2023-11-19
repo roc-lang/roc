@@ -149,11 +149,11 @@
         margin: 0;
     }
 
-    #homepage-repl-container {
+    #repl-container {
         flex-direction: column;
     }
 
-    #homepage-repl-container #repl-description {
+    #repl-container #repl-description {
         padding: 0;
         margin-bottom: 1.5em;
     }
