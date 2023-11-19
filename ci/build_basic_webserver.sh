@@ -9,7 +9,10 @@ cd basic-webserver
 git checkout more-features
 cd ..
 
-if [ "$(uname -s)" == "Linux" ]; then
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+if [ "$OS" == "Linux" ]; then
 
     # check if musl-tools is installed
     if ! dpkg -l | grep -q musl-tools; then
@@ -18,9 +21,9 @@ if [ "$(uname -s)" == "Linux" ]; then
     fi
     
     cd basic-webserver/platform # we cd to install the target for the right rust version
-    if [ "$(uname -m)" == "x86_64" ]; then
+    if [ "$ARCH" == "x86_64" ]; then
         rustup target add x86_64-unknown-linux-musl
-    elif [ "$(uname -m)" == "aarch64" ]; then
+    elif [ "$ARCH" == "aarch64" ]; then
         rustup target add aarch64-unknown-linux-musl
     fi
     cd ../..
@@ -39,8 +42,11 @@ mv roc_nightly* roc_nightly
 
 cd roc_nightly
 
-# build the basic-webserver platform
-./roc build ../basic-webserver/examples/echo.roc
+# prevent https://github.com/roc-lang/basic-webserver/issues/9
+if [ "$OS" != "Linux" ] || [ "$ARCH" != "x86_64" ]; then
+    # build the basic-webserver platform
+    ./roc build ../basic-webserver/examples/echo.roc
+fi
 
 # We need this extra variable so we can safely check if $2 is empty later
 EXTRA_ARGS=${2:-}
