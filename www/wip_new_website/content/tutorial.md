@@ -17,6 +17,7 @@
     <li><a href="#tasks">Tasks</a></li>
     <li><a href="#abilities">Abilities</a></li>
     <li><a href="#appendix-advanced-concepts">Advanced Concepts</a></li>
+    <li><a href="#reserved-keywords">Reserved Keywords</a></li>
     <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
     </ol>
 </nav>
@@ -1989,6 +1990,12 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
+### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
+
+These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
+
+`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `interface`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
+
 ### [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
 Here are various Roc expressions involving operators, and what they desugar to.
@@ -2011,10 +2018,5 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | <code>a \|> b</code>          |       `b a`        |
 | <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
 
- ### [Language Keywords](#language-keywords) {#language-keywords}
-
-These are all of the language keywords supported by Roc;
-
-`if`,`then`,`else`,`when`,`as`,`is`,`dbg`,`expect`,`expect-fx`,`crash`,`interface`,`app`,`package`,`platform`,`hosted`,`exposes`,`imports`,`with`,`generates`,`packages`,`requires`,`provides`,`to`
 
 </section>
