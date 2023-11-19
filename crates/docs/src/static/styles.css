@@ -9,6 +9,7 @@
   --violet: #7c38f5;
   --violet-bg: #ece2fd;
   --magenta: #a20031;
+  --light-cyan: #8af4e6;
 
   --link-color: var(--violet);
   --code-link-color: var(--violet);
@@ -53,7 +54,7 @@ table tr td {
 }
 
 .logo svg:hover {
-  fill: var(--green);
+  fill: var(--light-cyan);
 }
 
 .pkg-full-name {
@@ -79,6 +80,14 @@ table tr td {
   margin-bottom: 24px;
   padding: 8px 16px;
   border-left: 2px solid var(--violet);
+  /* Negative indent plus padding means all lines after the first will be indented. */
+  text-indent: -3.15em;
+  padding-left: 4em;
+}
+
+.entry-name a {
+  position: relative;
+  left: 3.6rem;
 }
 
 .entry-name a {
@@ -130,7 +139,7 @@ a:hover code {
 }
 
 .pkg-and-logo a:hover {
-  color: var(--green);
+  color: var(--light-cyan);
   text-decoration: none;
 }
 
@@ -342,7 +351,7 @@ color: inherit;
 }
 
 .module-name a:hover {
-  color: var(--green);
+  color: var(--light-cyan);
 }
 
 .sidebar-module-link {
@@ -744,6 +753,6 @@ code .dim {
 }
 
 .copy-button:hover {
-  border-color: var(--green);
-  color: var(--green);
+  border-color: var(--light-cyan);
+  color: var(--light-cyan);
 }
