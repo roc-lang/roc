@@ -9,13 +9,12 @@ app "roc-website"
 
 pageData =
     Dict.empty {}
-    |> Dict.insert "community.html" { title: "Community", description: "The Roc community" }
-    |> Dict.insert "design_goals.html" { title: "Design Goals", description: "Roc's design goals" }
-    |> Dict.insert "docs.html" { title: "Documentation", description: "Learn the Roc programming language" }
-    |> Dict.insert "index.html" { title: "Roc", description: "The Roc programming language" }
-    |> Dict.insert "install.html" { title: "Install", description: "Getting started with the Roc programming language" }
-    |> Dict.insert "donate.html" { title: "Donate", description: "Sponsor Roc" }
-    |> Dict.insert "tutorial.html" { title: "Tutorial", description: "The Roc tutorial" }
+    |> Dict.insert "community.html" { title: "Roc Community", description: "Connect with the Roc programming language community" }
+    |> Dict.insert "docs.html" { title: "Roc Docs", description: "Documentation for the Roc programming language, including builtins" }
+    |> Dict.insert "index.html" { title: "The Roc Programming Language", description: "A fast, friendly, functional language" }
+    |> Dict.insert "install.html" { title: "Install Roc", description: "Install the Roc programming language" }
+    |> Dict.insert "donate.html" { title: "Donate to Roc", description: "Support the Roc programming language by donating or sponsoring" }
+    |> Dict.insert "tutorial.html" { title: "Roc Tutorial", description: "Learn the Roc programming language" }
 
 getPage : Str -> { title : Str, description : Str }
 getPage = \current ->

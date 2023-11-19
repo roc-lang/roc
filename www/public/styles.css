@@ -164,8 +164,8 @@ main {
   font-family: var(--font-sans);
   font-size: 24px;
   height: 100%;
-  min-width: 0;
-  /* necessary for text-overflow: ellipsis to work in descendants */
+  /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
+  min-width: 1024px;
 }
 
 .top-header-triangle {
@@ -403,10 +403,6 @@ pre {
     /* This is only visible in mobile. */
   }
 
-  .top-header {
-    width: auto;
-  }
-
   .pkg-full-name {
     margin-left: 8px;
     margin-right: 12px;
@@ -478,7 +474,10 @@ pre {
   }
 
   .top-header {
+    width: auto;
     justify-content: space-between;
+    /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+    min-width: 0;
   }
 
   .content {
