@@ -9,7 +9,7 @@
   --violet: #7c38f5;
   --violet-bg: #ece2fd;
   --magenta: #a20031;
-  --light-cyan: #8af4e6;
+  --link-hover-color: #333;
 
   --link-color: var(--violet);
   --code-link-color: var(--violet);
@@ -54,7 +54,7 @@ table tr td {
 }
 
 .logo svg:hover {
-  fill: var(--light-cyan);
+  fill: var(--link-hover-color);
 }
 
 .pkg-full-name {
@@ -131,7 +131,7 @@ a:hover code {
 }
 
 .pkg-and-logo a:hover {
-  color: var(--light-cyan);
+  color: var(--link-hover-color);
   text-decoration: none;
 }
 
@@ -343,7 +343,7 @@ color: inherit;
 }
 
 .module-name a:hover {
-  color: var(--light-cyan);
+  color: var(--link-hover-color);
 }
 
 .sidebar-module-link {
@@ -522,6 +522,7 @@ pre>samp {
       --violet: #CAADFB;
       --violet-bg: #332944;
       --magenta: #f39bac;
+      --link-hover-color: #fff;
 
       --link-color: var(--violet);
       --code-link-color: var(--violet);
@@ -745,6 +746,6 @@ code .dim {
 }
 
 .copy-button:hover {
-  border-color: var(--light-cyan);
-  color: var(--light-cyan);
+  border-color: var(--link-hover-color);
+  color: var(--link-hover-color);
 }
