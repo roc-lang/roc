@@ -59,7 +59,17 @@ view = \page, htmlContent ->
         when page is
             "index.html" -> [id "homepage-main"]
             "tutorial.html" -> [id "tutorial-main", class "article-layout"]
-            _ -> [class "article-layout"]
+            _ ->
+                if Str.startsWith page "examples/" && page != "examples/index.html" then
+                    # Individual examples should render wider than articles.
+                    # Otherwise the width is unreasonably low for the code blocks,
+                    # and those pages don't tend to have big paragraphs anyway.
+                    # Keep the article width on examples/index.html though,
+                    # because otherwise when you're clicking through the top nav links,
+                    # /examples has a surprisingly different width from the other links.
+                    [id "example-main"]
+                else
+                    [class "article-layout"]
 
     html [lang "en", class "no-js"] [
         head [] [
