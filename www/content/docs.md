@@ -1,7 +1,7 @@
 # Documentation
 
 - [builtins](/builtins) - docs for modules built into the language—`Str`, `Num`, etc.
-- basic-webserver - a platform for making Web servers ([source code](https://github.com/roc-lang/basic-webserver))
+- [basic-webserver](https://roc-lang.github.io/basic-webserver/) - a platform for making Web servers ([source code](https://github.com/roc-lang/basic-webserver))
 - [basic-cli](/packages/basic-cli) - a platform for making command-line interfaces ([source code](https://github.com/roc-lang/basic-cli))
 
 In the future, a language reference will be on this page too.
