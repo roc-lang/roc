@@ -907,7 +907,9 @@ code .kw {
 samp .op,
 code .op,
 samp .keyword.operator,
-code .keyword.operator {
+code .keyword.operator,
+samp .colon,
+code .colon {
     color: var(--primary-1);
 }
 
