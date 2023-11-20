@@ -10,7 +10,7 @@ concurrency:
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
-  BASIC_WEBSERVER_BRANCH: more-features
+  BASIC_WEBSERVER_BRANCH: main
 
 jobs:
   fetch-releases:

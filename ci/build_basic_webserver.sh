@@ -5,10 +5,6 @@ set -euxo pipefail
 
 git clone https://github.com/roc-lang/basic-webserver.git
 
-cd basic-webserver
-git checkout more-features
-cd ..
-
 OS=$(uname -s)
 ARCH=$(uname -m)
 
