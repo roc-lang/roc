@@ -38,7 +38,7 @@
 <section id="try-roc">
 <h2><a href="#try-roc">Try Roc</a></h2>
 
-<div id="repl-container" role="presentation">
+<div id="homepage-repl-container" role="presentation">
     <div id="repl-description" role="presentation">
         <p>You can try Roc using this read-eval-print loop (<a href="https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop">REPL</a>), which is running in your browser in <a href="https://webassembly.org">WebAssembly</a>.</p>
         <p><code>Shift-Enter</code> adds a newline.</p>

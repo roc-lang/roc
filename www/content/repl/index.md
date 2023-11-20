@@ -1,5 +1,5 @@
 
-# The rockin’ Roc REPL
+## The rockin' Roc REPL
 
 <div id="repl-container" role="presentation">
     <div id="repl" role="presentation">

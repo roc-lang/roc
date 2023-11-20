@@ -38,7 +38,7 @@
     /* Tutorial */
     --header-link-color: #1bbcb3;
     --header-link-hover: #222;
-    --h1-color: #8055E4;
+    --h1-color: #8055e4;
 }
 
 html {
@@ -62,7 +62,8 @@ p {
     margin-top: 0;
 }
 
-p, li {
+p,
+li {
     max-width: 720px;
 }
 
@@ -80,7 +81,6 @@ footer {
     max-width: var(--body-max-width);
     margin: 0 auto;
 }
-
 
 hr {
     color: var(--primary-1);
@@ -223,11 +223,14 @@ h2 {
     color: var(--heading-color);
 }
 
-.article-layout main, .article-layout pre {
+.article-layout main,
+.article-layout pre {
     max-width: 720px;
 }
 
-.article-layout p, .article-layout li, .article-layout pre {
+.article-layout p,
+.article-layout li,
+.article-layout pre {
     font-size: 20px;
 }
 
@@ -239,7 +242,8 @@ h2 {
     visibility: hidden;
 }
 
-h2 a, h3 a {
+h2 a,
+h3 a {
     color: var(--heading-color);
 }
 
@@ -252,7 +256,8 @@ h3 {
     font-size: 1.5rem;
 }
 
-#top-bar, #top-bar nav {
+#top-bar,
+#top-bar nav {
     background-color: var(--gray-bg);
 }
 
@@ -276,7 +281,7 @@ h3 {
     padding: 4px;
 }
 
-#tutorial-toc-toggle:checked+#tutorial-toc {
+#tutorial-toc-toggle:checked + #tutorial-toc {
     display: block;
 }
 
@@ -400,7 +405,8 @@ pre > code {
 }
 
 #homepage-repl-container #repl,
-#homepage-repl-container #repl code {
+#homepage-repl-container #repl code,
+#homepage-repl-container #source-input {
     color: white;
     background-color: var(--dark-code-bg);
 }
@@ -537,7 +543,9 @@ li {
         --body-max-width: none;
     }
 
-    #tutorial-main main, #tutorial-toc-toggle-label, #close-tutorial-toc {
+    #tutorial-main main,
+    #tutorial-toc-toggle-label,
+    #close-tutorial-toc {
         display: block !important;
     }
 
@@ -671,15 +679,15 @@ li {
     }
 
     /* Left-align the first link in each row, right-align the last one, and center the middle one. */
-    #top-bar-links > :nth-child(3n+1) {
+    #top-bar-links > :nth-child(3n + 1) {
         text-align: left;
     }
 
-    #top-bar-links > :nth-child(3n+2) {
+    #top-bar-links > :nth-child(3n + 2) {
         text-align: center;
     }
 
-    #top-bar-links > :nth-child(3n+3) {
+    #top-bar-links > :nth-child(3n + 3) {
         text-align: right;
     }
 
@@ -709,14 +717,15 @@ li {
     }
 }
 
-
 @font-face {
     font-family: "Permanent Marker";
     font-style: normal;
     font-weight: 400;
     font-display: swap;
-    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2") format("woff2"),
-        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff") format("woff");
+    src: url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2")
+            format("woff2"),
+        url("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff")
+            format("woff");
     unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
         U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212,
         U+2215, U+FEFF, U+FFFD;
@@ -804,7 +813,7 @@ li {
         --heading-color: #eee;
 
         /* Tutorial */
-        --header-link-color: #9C7CEA;
+        --header-link-color: #9c7cea;
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
     }
@@ -1209,7 +1218,8 @@ code .dim {
     text-shadow: 1px 1px 1px #010101;
 }
 
-#tutorial-body, #tutorial-body pre {
+#tutorial-body,
+#tutorial-body pre {
     max-width: 646px;
 }
 
@@ -1311,5 +1321,181 @@ code .dim {
 @media only screen and (min-width: 768px) {
     #tutorial-toc > ul > li {
         flex: 1 1 33%; /* Adjust the percentage to control how many items per row */
+    }
+}
+
+/* REPL */
+
+#repl {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    font-size: 18px;
+}
+
+#homepage-repl-container #repl-prompt, #homepage-repl-container .input-line-prefix {
+    top: 1.25rem;
+    color: var(--light-cyan);
+}
+
+.input-line-prefix, #repl-prompt {
+    color: var(--cyan);
+    color: var(--primary-2);
+}
+
+#repl-prompt {
+    position: relative;
+    left: 16px;
+    top: 0.95rem;
+    font-size: 1.25rem;
+    height: 0;
+    z-index: 2;
+    font-family: var(--font-mono);
+    /* Let clicks pass through to the textarea */
+    pointer-events: none;
+    user-select: none;
+}
+
+#homepage-repl-container #source-input {
+    color: var(--code-color);
+}
+
+#source-input {
+    width: 100%;
+    font-family: var(--font-mono);
+    background-color: var(--code-bg);
+    display: inline-block;
+    height: 78px;
+    padding: 16px;
+    padding-left: 36px;
+    border: 1px solid transparent;
+    margin: 0;
+    margin-bottom: 2em;
+    box-sizing: border-box;
+    font-size: 18px;
+    resize: none;
+    color: inherit;
+}
+
+#source-input:focus {
+    outline: 2px solid var(--primary-1);
+    box-sizing: border-box;
+}
+
+.history {
+    padding: 1em;
+    padding-bottom: 0;
+    flex: 1;
+}
+
+#help-text,
+#history-text {
+    white-space: pre-wrap;
+}
+
+#history-text {
+    margin-top: 16px;
+    min-height: 26px;
+}
+
+#loading-message {
+    text-align: center;
+    /* approximately match height after loading and printing help message */
+    height: 96px;
+}
+
+.history-item {
+    margin-bottom: 24px;
+    overflow-x: hidden;
+}
+
+.history-item .input {
+    margin: 0;
+    margin-bottom: 8px;
+}
+
+.history-item .output {
+    margin: 0;
+}
+
+.panic {
+    color: #ff6666;
+}
+
+.color-red {
+    color: #ff6666;
+}
+
+.color-green {
+    color: var(--green);
+}
+
+.color-yellow {
+    color: var(--orange);
+}
+
+.color-blue {
+    color: var(--cyan);
+}
+
+.color-magenta {
+    color: var(--primary-1);
+}
+
+.color-cyan {
+    color: var(--cyan);
+}
+
+.color-white {
+    /* Really this isn't white so much as "default text color." For the repl, this should be black
+    in a light color scheme, and only white in dark mode. The name could be better! */
+    color: black;
+}
+
+@media (prefers-color-scheme: dark) {
+    .color-white {
+        color: white;
+    }
+}
+
+.bold {
+    font-weight: bold;
+}
+
+.underline {
+    text-decoration: underline;
+}
+
+/* Mobile-friendly screen width */
+@media only screen and (max-width: 767px) {
+    #repl {
+        margin: 0;
+        padding: 0;
+        min-height: calc(100vh - var(--top-bar-height));
+    }
+
+    code.history {
+        flex-grow: 1;
+    }
+
+    #source-input {
+        margin: 0;
+    }
+
+    #loading-message {
+        margin: 0;
+    }
+
+    #homepage-repl-container {
+        flex-direction: column;
+    }
+
+    #homepage-repl-container #repl-description {
+        padding: 0;
+        margin-bottom: 1.5em;
+    }
+
+    #repl-arrow {
+        display: none;
     }
 }

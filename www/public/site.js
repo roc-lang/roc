@@ -204,7 +204,7 @@ function setInput(value) {
 function showNextReplTutorialEntry(inputText) {
   const nextStep = repl.tutorialSteps[repl.tutorialStep];
 
-  if (typeof nextStep === "object" && nextStep.match(inputText)) {
+  if (repl.description != null && typeof nextStep === "object" && nextStep.match(inputText)) {
     repl.description.innerHTML =
       repl.description.innerHTML + "<hr/>" + nextStep.show;
 
