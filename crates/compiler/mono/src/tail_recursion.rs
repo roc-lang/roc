@@ -7,8 +7,8 @@ use crate::layout::{
     InLayout, LambdaName, Layout, LayoutInterner, LayoutRepr, STLayoutInterner, TagIdIntType,
     UnionLayout,
 };
-use bumpalo::collections::Vec;
-use bumpalo::Bump;
+use bumpalo::collections::{vec, Vec};
+use bumpalo::{vec, Bump};
 use roc_collections::{MutMap, VecMap};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -900,7 +900,8 @@ impl<'a> TrmcEnv<'a> {
         &mut self,
         env: &mut Env<'a, '_>,
         stmt: &Stmt<'a>,
-        locations: &'b [RecCallLocation],
+        // in sync with self.trmc_calls
+        trmc_call_locations: &'b [RecCallLocation],
     ) -> Stmt<'a> {
         let arena = env.arena;
 
@@ -921,7 +922,46 @@ impl<'a> TrmcEnv<'a> {
 
                     *opt_call = Some(call.clone());
 
-                    return self.walk_stmt(env, next, locations);
+                    return self.walk_stmt(env, next, trmc_call_locations);
+                }
+
+                if let Expr::Struct(args) = expr {
+                    let rec_call_struct_index_opt = args.iter().position(|arg| {
+                        self.trmc_calls.keys().enumerate().any(|(i, call)| {
+                            matches!(
+                                trmc_call_locations[i],
+                                RecCallLocation::MemberOfStruct(_, _)
+                            ) && *call == *arg
+                        })
+                    });
+
+                    if let Some(rec_call_struct_arg_index) = rec_call_struct_index_opt {
+                        let struct_arg_null_symbol = env.named_unique_symbol("struct_arg_null");
+
+                        let mut args_with_hole = vec::Vec::with_capacity_in(args.len(), arena);
+                        args_with_hole.extend_from_slice(args);
+                        args_with_hole[rec_call_struct_arg_index] = struct_arg_null_symbol;
+
+                        let struct_with_hole = Expr::Struct(args_with_hole.into_bump_slice());
+                        let let_struct_with_hole =
+                            |next| Stmt::Let(*symbol, struct_with_hole, *layout, next);
+
+                        let remaining = self.walk_stmt(env, next, trmc_call_locations);
+
+                        let output = Stmt::Let(
+                            struct_arg_null_symbol,
+                            Expr::NullPointer,
+                            self.return_layout,
+                            arena.alloc(
+                                //
+                                let_struct_with_hole(arena.alloc(
+                                    //
+                                    remaining,
+                                )),
+                            ),
+                        );
+                        return output;
+                    }
                 }
 
                 if let Some(call) =
@@ -943,17 +983,13 @@ impl<'a> TrmcEnv<'a> {
                     // TODO: allow structs here
                     let opt_recursive_call = cons_info.arguments.iter().find_map(|arg| {
                         self.trmc_calls
-                            // .get(arg)
-                            // .and_then(|x| x.as_ref())
-                            // .map(|x| (arg, x))
                             .keys()
                             .enumerate()
-                            .position(|(i, call)| {
-                                *call == *arg
-                                    || matches!(
-                                        locations[i],
-                                        RecCallLocation::MemberOfStruct(struct_symbol, _) if struct_symbol == *arg
-                                    )
+                            .position(|(i, call)| match trmc_call_locations[i] {
+                                RecCallLocation::DirectlyInTag => *arg == *call,
+                                RecCallLocation::MemberOfStruct(struct_symbol, _) => {
+                                    *arg == struct_symbol
+                                }
                             })
                             .and_then(|idx| {
                                 self.trmc_calls
@@ -961,7 +997,7 @@ impl<'a> TrmcEnv<'a> {
                                     .nth(idx)
                                     .unwrap()
                                     .as_ref()
-                                    .map(|call| (arg, call, &locations[idx]))
+                                    .map(|call| (arg, call, &trmc_call_locations[idx]))
                             })
                     });
                     match opt_recursive_call {
@@ -978,16 +1014,23 @@ impl<'a> TrmcEnv<'a> {
 
                             return output;
                         }
-                        Some((call_symbol, call, location)) => {
+                        Some((call_symbol, call, call_location)) => {
                             // we did encounter a recursive call, and can perform TRMC in this
                             // branch.
 
                             let opt_recursive_field_index =
-                                cons_info.arguments.iter().position(|s| *s == *call_symbol);
-
+                                cons_info
+                                    .arguments
+                                    .iter()
+                                    .position(|s| match call_location {
+                                        RecCallLocation::DirectlyInTag => *s == *call_symbol,
+                                        RecCallLocation::MemberOfStruct(struct_symbol, _) => {
+                                            *s == *struct_symbol
+                                        }
+                                    });
                             let recursive_field_index = match opt_recursive_field_index {
                                 None => {
-                                    let next = self.walk_stmt(env, next, locations);
+                                    let next = self.walk_stmt(env, next, trmc_call_locations);
                                     return Stmt::Let(
                                         *symbol,
                                         expr.clone(),
@@ -997,6 +1040,7 @@ impl<'a> TrmcEnv<'a> {
                                 }
                                 Some(v) => v,
                             };
+
 
                             let tag_arg_null_symbol = env.named_unique_symbol("tag_arg_null");
                             let let_tag_arg_null = |next| {
@@ -1010,16 +1054,32 @@ impl<'a> TrmcEnv<'a> {
 
                             let mut arguments =
                                 Vec::from_iter_in(cons_info.arguments.iter().copied(), env.arena);
-                            arguments[recursive_field_index] = tag_arg_null_symbol;
+                            //when the trmc call value is inside a struct, the struct will continue to be the
+                            //argument of the recursie tag
+                            // ha ez nincs itt, akkor invalid memory sigenv
+                            // arguments[recursive_field_index] = tag_arg_null_symbol;
 
-                            let tag_expr = Expr::Tag {
-                                tag_layout: cons_info.tag_layout,
-                                tag_id: cons_info.tag_id,
-                                arguments: arguments.into_bump_slice(),
-                                reuse: None,
+                            println!(
+                                "{:#?}\n\n{:#?}\n\n{:?}",
+                                call_location, arguments, recursive_field_index
+                            );
+
+                            let tag_expr = match call_location {
+                                RecCallLocation::DirectlyInTag => {
+                                    arguments[recursive_field_index] = tag_arg_null_symbol;
+                                    Expr::Tag {
+                                        tag_layout: cons_info.tag_layout,
+                                        tag_id: cons_info.tag_id,
+                                        arguments: arguments.into_bump_slice(),
+                                        reuse: None,
+                                    }
+                                }
+                                RecCallLocation::MemberOfStruct(_, _) => expr.clone(),
                             };
                             let mut indices = vec![in env.arena; cons_info.tag_id as u64, recursive_field_index as u64, ];
-                            if let RecCallLocation::MemberOfStruct(_, struct_indices) = location {
+                            if let RecCallLocation::MemberOfStruct(_, struct_indices) =
+                                call_location
+                            {
                                 indices.extend_from_slice(struct_indices);
                             }
                             let indices = indices.into_bump_slice();
@@ -1048,28 +1108,43 @@ impl<'a> TrmcEnv<'a> {
                             let jump =
                                 Stmt::Jump(self.joinpoint_id, jump_arguments.into_bump_slice());
 
-                            let output = let_tag_arg_null(arena.alloc(
-                                //
-                                let_tag(arena.alloc(
+                            let output = match call_location {
+                                RecCallLocation::DirectlyInTag => let_tag_arg_null(arena.alloc(
                                     //
-                                    let_new_hole(arena.alloc(
+                                    let_tag(arena.alloc(
                                         //
-                                        Self::ptr_write(
-                                            env,
-                                            self.hole_symbol,
-                                            *symbol,
-                                            arena.alloc(jump),
-                                        ),
+                                        let_new_hole(arena.alloc(
+                                            //
+                                            Self::ptr_write(
+                                                env,
+                                                self.hole_symbol,
+                                                *symbol,
+                                                arena.alloc(jump),
+                                            ),
+                                        )),
                                     )),
                                 )),
-                            ));
-
+                                RecCallLocation::MemberOfStruct(_, _) => {
+                                    let_tag(arena.alloc(
+                                        //
+                                        let_new_hole(arena.alloc(
+                                            //
+                                            Self::ptr_write(
+                                                env,
+                                                self.hole_symbol,
+                                                *symbol,
+                                                arena.alloc(jump),
+                                            ),
+                                        )),
+                                    ))
+                                }
+                            };
                             return output;
                         }
                     }
                 }
 
-                let next = self.walk_stmt(env, next, locations);
+                let next = self.walk_stmt(env, next, trmc_call_locations);
                 Stmt::Let(*symbol, expr.clone(), *layout, arena.alloc(next))
             }
             Stmt::Switch {
@@ -1082,13 +1157,13 @@ impl<'a> TrmcEnv<'a> {
                 let mut new_branches = Vec::with_capacity_in(branches.len(), arena);
 
                 for (id, info, stmt) in branches.iter() {
-                    let new_stmt = self.walk_stmt(env, stmt, locations);
+                    let new_stmt = self.walk_stmt(env, stmt, trmc_call_locations);
 
                     new_branches.push((*id, info.clone(), new_stmt));
                 }
 
                 let new_default_branch =
-                    &*arena.alloc(self.walk_stmt(env, default_branch.1, locations));
+                    &*arena.alloc(self.walk_stmt(env, default_branch.1, trmc_call_locations));
 
                 Stmt::Switch {
                     cond_symbol: *cond_symbol,
@@ -1104,7 +1179,7 @@ impl<'a> TrmcEnv<'a> {
                 self.non_trmc_return(env, *symbol)
             }
             Stmt::Refcounting(op, next) => {
-                let new_next = self.walk_stmt(env, next, locations);
+                let new_next = self.walk_stmt(env, next, trmc_call_locations);
                 Stmt::Refcounting(*op, arena.alloc(new_next))
             }
             Stmt::Expect {
@@ -1118,7 +1193,7 @@ impl<'a> TrmcEnv<'a> {
                 region: *region,
                 lookups,
                 variables,
-                remainder: arena.alloc(self.walk_stmt(env, remainder, locations)),
+                remainder: arena.alloc(self.walk_stmt(env, remainder, trmc_call_locations)),
             },
             Stmt::ExpectFx {
                 condition,
@@ -1131,7 +1206,7 @@ impl<'a> TrmcEnv<'a> {
                 region: *region,
                 lookups,
                 variables,
-                remainder: arena.alloc(self.walk_stmt(env, remainder, locations)),
+                remainder: arena.alloc(self.walk_stmt(env, remainder, trmc_call_locations)),
             },
             Stmt::Dbg {
                 symbol,
@@ -1140,7 +1215,7 @@ impl<'a> TrmcEnv<'a> {
             } => Stmt::Dbg {
                 symbol: *symbol,
                 variable: *variable,
-                remainder: arena.alloc(self.walk_stmt(env, remainder, locations)),
+                remainder: arena.alloc(self.walk_stmt(env, remainder, trmc_call_locations)),
             },
             Stmt::Join {
                 id,
@@ -1148,8 +1223,8 @@ impl<'a> TrmcEnv<'a> {
                 body,
                 remainder,
             } => {
-                let new_body = self.walk_stmt(env, body, locations);
-                let new_remainder = self.walk_stmt(env, remainder, locations);
+                let new_body = self.walk_stmt(env, body, trmc_call_locations);
+                let new_remainder = self.walk_stmt(env, remainder, trmc_call_locations);
 
                 Stmt::Join {
                     id: *id,
