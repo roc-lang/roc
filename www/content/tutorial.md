@@ -41,7 +41,7 @@ Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en
 
 You can use the online REPL at [roc-lang.org/repl](https://www.roc-lang.org/repl). 
 
-Or you can run this in a terminal: <code class="block">roc repl</code>, and if Roc is [installed](/wip/install.html), you should see this:
+Or you can run this in a terminal: <code class="block">roc repl</code>, and if Roc is [installed](/install), you should see this:
 
 <pre>
 <samp>
