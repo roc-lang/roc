@@ -509,6 +509,7 @@ if (isOnMobile) {
     });
 
     example.querySelectorAll(".close-desc").forEach((button) => {
+      button.style.display = "block";
       button.addEventListener("click", hideDesc);
     });
   });

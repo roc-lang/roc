@@ -568,10 +568,6 @@ li {
         display: inline;
     }
 
-    .close-desc {
-        display: block !important;
-    }
-
     h2 {
         margin-top: 48px;
         padding: 12px 0;
