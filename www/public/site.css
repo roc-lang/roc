@@ -564,7 +564,6 @@ li {
         margin: 0 !important;
         padding-right: 120px;
         border: 0;
-        z-index: 2;
     }
 
     #homepage-logo {
@@ -1239,6 +1238,7 @@ code .dim {
     padding: 12px 24px;
     margin-left: 64px;
     align-self: flex-start; /* Aligns to the start, not stretching in height */
+    z-index: 2;
 }
 
 #tutorial-toc > ul {
