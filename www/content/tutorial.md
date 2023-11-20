@@ -2026,3 +2026,4 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 
 </section>
+<script type="text/javascript" src="/builtins/search.js" defer></script>
