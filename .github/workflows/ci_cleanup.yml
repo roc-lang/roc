@@ -1,5 +1,4 @@
 on:
-  pull_request:
   schedule:
     - cron:  '0 5 * * 1'
 
@@ -52,5 +51,5 @@ jobs:
         run: nix-store --gc
 
       - name: Clean up temp roc binaries
-        run: find /private/var/folders/hq -type f -name "roc_app_binary" -exec rm {} \; 2>/dev/null
+        run: find /private/var/folders/hq -type f -name "roc_app_binary" -exec rm {} \; || true
 
