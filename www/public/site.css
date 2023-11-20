@@ -560,6 +560,7 @@ li {
         margin: 0 !important;
         padding-right: 120px;
         border: 0;
+        z-index: 2;
     }
 
     #homepage-logo {
