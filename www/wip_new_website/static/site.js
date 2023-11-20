@@ -11,7 +11,7 @@ console.error = function displayErrorInHistoryPanel(string) {
   updateHistoryEntry(repl.inputHistoryIndex, false, html);
 };
 
-import * as roc_repl_wasm from "./roc_repl_wasm.js";
+import * as roc_repl_wasm from "/repl/roc_repl_wasm.js";
 
 const isHomepage = document.getElementById("homepage-repl-container") != null;
 
@@ -65,7 +65,7 @@ resetSourceInputHeight();
 repl.elemSourceInput.addEventListener("input", resetSourceInputHeight);
 repl.elemSourceInput.addEventListener("keydown", onInputKeydown);
 repl.elemSourceInput.addEventListener("keyup", onInputKeyup);
-roc_repl_wasm.default("/wip/roc_repl_wasm_bg.wasm").then(async (instance) => {
+roc_repl_wasm.default("/repl/roc_repl_wasm_bg.wasm").then(async (instance) => {
   const loadingMessage = repl.elemHistory.querySelector("#loading-message");
 
   if (loadingMessage != null) {
