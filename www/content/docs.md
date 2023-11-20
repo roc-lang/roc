@@ -9,5 +9,6 @@ In the future, a language reference will be on this page too.
 ## [Guides](#guides) {#guides}
 
 - [FAQ (Frequently Asked Questions)](https://github.com/roc-lang/roc/blob/main/FAQ.md)
+- [Platforms & Applications](/platforms)
 - [Roc for Elm Programmers](https://github.com/roc-lang/roc/blob/main/roc-for-elm-programmers.md)
 - [Tutorial](/tutorial)
