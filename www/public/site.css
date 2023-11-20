@@ -163,12 +163,6 @@ pre>samp {
     display: block;
 }
 
-.repl-prompt:before {
-    /* Add this using CSS so it isn't selectable, which would be annoying when trying to copy/paste! */
-    color: var(--repl-prompt);
-    content: "» ";
-}
-
 .repl-err {
     color: var(--magenta);
 }
