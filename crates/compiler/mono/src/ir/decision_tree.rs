@@ -634,8 +634,10 @@ fn test_for_pattern<'a>(pattern: &Pattern<'a>) -> Option<Test<'a>> {
 
         List {
             arity,
+            list_layout: _,
             element_layout: _,
             elements: _,
+            opt_rest: _,
         } => IsListLen {
             bound: match arity {
                 ListArity::Exact(_) => ListLenBound::Exact,
@@ -908,7 +910,9 @@ fn to_relevant_branch_help<'a>(
         List {
             arity: my_arity,
             elements,
+            list_layout: _,
             element_layout: _,
+            opt_rest: _,
         } => match test {
             IsListLen {
                 bound: test_bound,

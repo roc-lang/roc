@@ -47,7 +47,7 @@ impl<'a> SemanticRepr<'a> {
     pub(super) const NONE: Self = Self(Inner::None);
     pub(super) const EMPTY_RECORD: Self = Self::record(&[]);
 
-    pub(super) const fn record(fields: &'a [&'a str]) -> Self {
+    pub(crate) const fn record(fields: &'a [&'a str]) -> Self {
         Self(Inner::Record(SemaRecord { fields }))
     }
 

@@ -1,7 +1,7 @@
 use crate::ir::{substitute_in_exprs, Env, Expr, Procs, Stmt};
 use crate::layout::{
-    self, Builtin, InLayout, Layout, LayoutCache, LayoutInterner, LayoutProblem, LayoutRepr,
-    TagIdIntType, UnionLayout, WrappedVariant,
+    self, Builtin, InLayout, LambdaName, Layout, LayoutCache, LayoutInterner, LayoutProblem,
+    LayoutRepr, LayoutWrapper, SemanticRepr, TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -61,8 +61,10 @@ pub enum Pattern<'a> {
     },
     List {
         arity: ListArity,
+        list_layout: InLayout<'a>,
         element_layout: InLayout<'a>,
         elements: Vec<'a, Pattern<'a>>,
+        opt_rest: Option<(usize, Option<Symbol>)>,
     },
 }
 
@@ -1050,10 +1052,18 @@ fn from_can_pattern_help<'a>(
         }
 
         List {
-            list_var: _,
+            list_var,
             elem_var,
             patterns,
         } => {
+            let list_layout = match layout_cache.from_var(env.arena, *list_var, env.subs) {
+                Ok(lay) => lay,
+                Err(LayoutProblem::UnresolvedTypeVar(_)) => {
+                    return Err(RuntimeError::UnresolvedTypeVar)
+                }
+                Err(LayoutProblem::Erroneous) => return Err(RuntimeError::ErroneousType),
+            };
+
             let element_layout = match layout_cache.from_var(env.arena, *elem_var, env.subs) {
                 Ok(lay) => lay,
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
@@ -1073,8 +1083,10 @@ fn from_can_pattern_help<'a>(
 
             Ok(Pattern::List {
                 arity,
+                list_layout,
                 element_layout,
                 elements: mono_patterns,
+                opt_rest: patterns.opt_rest,
             })
         }
     }
@@ -1240,8 +1252,10 @@ fn store_pattern_help<'a>(
 
         List {
             arity,
+            list_layout,
             element_layout,
             elements,
+            opt_rest,
         } => {
             return store_list_pattern(
                 env,
@@ -1249,8 +1263,10 @@ fn store_pattern_help<'a>(
                 layout_cache,
                 outer_symbol,
                 *arity,
+                *list_layout,
                 *element_layout,
                 elements,
+                opt_rest,
                 stmt,
             )
         }
@@ -1447,8 +1463,10 @@ fn store_list_pattern<'a>(
     layout_cache: &mut LayoutCache<'a>,
     list_sym: Symbol,
     list_arity: ListArity,
+    list_layout: InLayout<'a>,
     element_layout: InLayout<'a>,
     elements: &[Pattern<'a>],
+    opt_rest: &Option<(usize, Option<Symbol>)>,
     mut stmt: Stmt<'a>,
 ) -> StorePattern<'a> {
     use Pattern::*;
@@ -1524,6 +1542,68 @@ fn store_list_pattern<'a>(
         for (sym, lay, expr) in needed_stores.rev() {
             stmt = Stmt::Let(sym, expr, lay, env.arena.alloc(stmt));
         }
+    }
+
+    match opt_rest {
+        Some((index, Some(rest_sym))) => {
+            let usize_layout = Layout::usize(env.target_info);
+
+            let total_dropped = elements.len();
+
+            let total_dropped_sym = env.unique_symbol();
+            let total_dropped_expr =
+                Expr::Literal(Literal::Int((total_dropped as u128).to_ne_bytes()));
+
+            let list_len_sym = env.unique_symbol();
+            let list_len_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::ListLen,
+                    update_mode: env.next_update_mode_id(),
+                },
+                arguments: env.arena.alloc([list_sym]),
+            });
+
+            let rest_len_sym = env.unique_symbol();
+            let rest_len_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::NumSub,
+                    update_mode: env.next_update_mode_id(),
+                },
+                arguments: env.arena.alloc([list_len_sym, total_dropped_sym]),
+            });
+
+            let start_sym = env.unique_symbol();
+            let start_expr = Expr::Literal(Literal::Int((*index as u128).to_ne_bytes()));
+
+            let rest_expr = Expr::Call(Call {
+                call_type: CallType::LowLevel {
+                    op: LowLevel::ListSublist,
+                    update_mode: env.next_update_mode_id(),
+                },
+                arguments: env.arena.alloc([list_sym, start_sym, rest_len_sym]),
+            });
+            stmt = Stmt::Let(*rest_sym, rest_expr, list_layout, env.arena.alloc(stmt));
+            stmt = Stmt::Let(start_sym, start_expr, usize_layout, env.arena.alloc(stmt));
+            stmt = Stmt::Let(
+                rest_len_sym,
+                rest_len_expr,
+                usize_layout,
+                env.arena.alloc(stmt),
+            );
+            stmt = Stmt::Let(
+                list_len_sym,
+                list_len_expr,
+                usize_layout,
+                env.arena.alloc(stmt),
+            );
+            stmt = Stmt::Let(
+                total_dropped_sym,
+                total_dropped_expr,
+                usize_layout,
+                env.arena.alloc(stmt),
+            );
+        }
+        _ => {}
     }
 
     if is_productive {
