@@ -31,14 +31,14 @@ jobs:
         run: rm -rf /private/tmp/nix-shell.*
 
   clean-rpi-1:
-    runs-on: [self-hosted, pi-4-8GB-aarch64]
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 120
     steps:
       - name: Clean up nix store
         run: nix-store --gc
 
   clean-rpi-2:
-    runs-on: [self-hosted, rpiGreen]
+    runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 120
     steps:
       - name: Clean up nix store
@@ -52,4 +52,5 @@ jobs:
         run: nix-store --gc
 
       - name: Clean up temp roc binaries
-        run: find /private/var/folders/hq -type f -name "roc_app_binary" -readable -writable -exec rm {} \;
+        run: find /private/var/folders/hq -type f -name "roc_app_binary" -exec rm {} \; 2>/dev/null
+
