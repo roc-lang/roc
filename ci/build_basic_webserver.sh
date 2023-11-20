@@ -25,6 +25,7 @@ if [ "$OS" == "Linux" ]; then
     cd ../..
 fi
 
+# simplify tar name
 mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "$1") ./roc_nightly.tar.gz
 
 # decompress the tar

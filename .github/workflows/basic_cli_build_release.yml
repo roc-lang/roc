@@ -77,7 +77,7 @@ jobs:
             basic-cli/src/linux-arm64.o
 
   build-macos-x86_64-files:
-    runs-on: [macos-11] # I expect the generated files to work on macOS 12 and 13
+    runs-on: [macos-11] # I expect the generated files to work on macOS 12 and up
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
