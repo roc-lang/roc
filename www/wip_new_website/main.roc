@@ -75,7 +75,6 @@ view = \page, htmlContent ->
             preloadWoff2 "/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2",
             link [rel "prefetch", href "/repl/roc_repl_wasm.js"],
             link [rel "stylesheet", href "/wip/site.css"],
-            link [rel "stylesheet", href "/wip/repl.css"],
             # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
             # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
             link [rel "mask-icon", href "/favicon.svg", color "#7d59dd"],

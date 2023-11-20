@@ -9,7 +9,7 @@ console.error = function displayErrorInHistoryPanel(string) {
   updateHistoryEntry(repl.inputHistoryIndex, false, html);
 };
 
-import * as roc_repl_wasm from "./roc_repl_wasm.js";
+import * as roc_repl_wasm from "/repl/roc_repl_wasm.js";
 
 // ----------------------------------------------------------------------------
 // REPL state
