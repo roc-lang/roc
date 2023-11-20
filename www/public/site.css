@@ -197,6 +197,10 @@ a:hover {
     text-decoration: underline;
 }
 
+a:hover code {
+    text-decoration: inherit;
+}
+
 li {
     margin-bottom: 0.5rem;
 }
@@ -560,6 +564,7 @@ li {
         margin: 0 !important;
         padding-right: 120px;
         border: 0;
+        z-index: 2;
     }
 
     #homepage-logo {
