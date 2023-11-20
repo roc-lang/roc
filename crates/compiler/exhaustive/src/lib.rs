@@ -389,7 +389,6 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                             vector.extend(args);
                         } else {
                             // TODO turn this into an iteration over the outer loop rather than bouncing
-                            vector.extend(args);
                             for list_ctor in spec_list_ctors {
                                 let mut old_matrix = old_matrix.clone();
                                 let mut spec_matrix = Vec::with_capacity(old_matrix.len());
@@ -400,7 +399,31 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                                     &mut spec_matrix,
                                 );
 
-                                if is_useful(spec_matrix, vector.clone()) {
+                                // Add Anythings for the missing elements.
+                                let full_args = if let ListArity::Slice(before, _) = arity {
+                                    if arity.min_len() < list_ctor.min_len() {
+                                        let (before, after) = args.split_at(before);
+                                        let num_extra_wildcards =
+                                            list_ctor.min_len() - arity.min_len();
+                                        let extra_wildcards =
+                                            std::iter::repeat(&Anything).take(num_extra_wildcards);
+
+                                        before
+                                            .iter()
+                                            .chain(extra_wildcards)
+                                            .chain(after)
+                                            .cloned()
+                                            .collect()
+                                    } else {
+                                        args.clone()
+                                    }
+                                } else {
+                                    args.clone()
+                                };
+                                let mut nested_vector = vector.clone();
+                                nested_vector.extend(full_args);
+
+                                if is_useful(spec_matrix, nested_vector) {
                                     return true;
                                 }
                             }
@@ -527,9 +550,8 @@ fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
                     debug_assert!(spec_arity.min_len() > this_arity.min_len());
                     match this_arity {
                         ListArity::Exact(_) => internal_error!("exact-sized lists cannot cover lists of other minimum length"),
-                        ListArity::Slice(before, after) => {
-                            let before = &args[..before];
-                            let after = &args[this_arity.min_len() - after..];
+                        ListArity::Slice(before, _) => {
+                            let (before, after) = args.split_at(before);
                             let num_extra_wildcards = spec_arity.min_len() - this_arity.min_len();
                             let extra_wildcards = std::iter::repeat(&Anything).take(num_extra_wildcards);
 
@@ -847,7 +869,7 @@ fn build_list_ctors_covering_patterns(
                 }
                 (max_prefix_len, max_suffix_len)
             };
-            let l = inf_cover_prefix + inf_cover_suffix;
+            let l = inf_cover_prefix + inf_cover_suffix + 1;
 
             let exact_size_lists = (min_len..l) // exclusive
                 .map(ListArity::Exact);
