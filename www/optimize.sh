@@ -43,11 +43,11 @@ done
 popd
 
 # Minify the CSS file, and let esbuild add a content hash to the file name
-npm exec --yes esbuild -- --minify dist/wip/site.css --outdir=dist/wip/ --entry-names='[name]-[hash]'
+npm exec --yes esbuild -- --minify dist/site.css --outdir=dist/ --entry-names='[name]-[hash]'
 # Remove unused original file
-rm dist/wip/site.css
+rm dist/site.css
 
 # Find the new filename
-css_with_hash=$(basename dist/wip/site-*.css)
+css_with_hash=$(basename dist/site-*.css)
 # Replace all occurances in the html
-sed -i "s:/wip/site.css:/wip/${css_with_hash}:g" dist/wip/*.html
+sed -i "s:/wip/site.css:/wip/${css_with_hash}:g" dist/*.html

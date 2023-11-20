@@ -11,9 +11,8 @@ DIR="$(dirname "$0")"
 cd "$DIR" || exit
 
 rm -rf dist/
-cp -r ../build dist/
-mkdir -p dist/wip
-roc run main.roc -- content/ dist/wip/
-cp -r static/* dist/wip/
+cp -r build dist/
+cp -r public/* dist/
+roc run main.roc -- content/ dist/
 
 npx http-server dist/ -p 8080 -c-1 --cors

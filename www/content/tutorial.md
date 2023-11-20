@@ -1,12 +1,47 @@
-<!-- The welcome and installation section are located in tutorial.roc -->
+<input id="tutorial-toc-toggle" name="tutorial-toc-toggle" type= "checkbox">
+<nav id="tutorial-toc" aria-label="Table of Contents">
+    <label id="close-tutorial-toc" for="tutorial-toc-toggle">close</label>
+    <!-- TODO fix search: input [id "toc-search", type "text", placeholder "Search"] [] -->
+    <ol>
+    <li><a href="#repl">REPL</a></li>
+    <li><a href="#building-an-application">Building an Application</a></li>
+    <li><a href="#defining-functions">Defining Functions</a></li>
+    <li><a href="#if-then-else">if-then-else</a></li>
+    <li><a href="#debugging">Debugging</a></li>
+    <li><a href="#records">Records</a></li>
+    <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
+    <li><a href="#booleans">Booleans</a></li>
+    <li><a href="#lists">Lists</a></li>
+    <li><a href="#types">Types</a></li>
+    <li><a href="#numeric-types">Numeric Types</a></li>
+    <li><a href="#crashing">Crashing</a></li>
+    <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
+    <li><a href="#modules">Modules</a></li>
+    <li><a href="#tasks">Tasks</a></li>
+    <li><a href="#abilities">Abilities</a></li>
+    <li><a href="#appendix-advanced-concepts">Advanced Concepts</a></li>
+    <li><a href="#reserved-keywords">Reserved Keywords</a></li>
+    <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
+    </ol>
+</nav>
+<section id="tutorial-body">
+    <section>
+        <h1>Tutorial<label id="tutorial-toc-toggle-label" for="tutorial-toc-toggle">contents</label></h1>
+        <p>Welcome to Roc!</p>
+        <p>This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and more!</p>
+    </section>
+    <section>
+        <h2 id="installation"><a href="#installation">Installation</a></h2>
+        <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="https://github.com/roc-lang/roc/tree/main/getting_started#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
+    </section>
 
-## [Strings and Numbers](#strings-and-numbers) {#strings-and-numbers}
+## [REPL](#repl) {#repl}
 
 Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short. Run this in a terminal:
 
 <code class="block">roc repl</code>
 
-If Roc is [installed](#installation), you should see this:
+If Roc is [installed](/wip/install.html), you should see this:
 
 <pre><samp>The rockin' roc repl</samp></pre>
 
@@ -529,8 +564,6 @@ stoplightStr =
 ```
 
 This lets us more concisely handle multiple cases. However, it has the downside that if we add a new case - for example, if we introduce the possibility of `stoplightColor` being `Orange`, the compiler can no longer tell us we forgot to handle that possibility in our `when`. After all, we are handling it - just maybe not in the way we'd decide to if the compiler had drawn our attention to it!
-
-## [Exhaustiveness](#exhaustiveness) {#exhaustiveness}
 
 We can make this `when` _exhaustive_ (that is, covering all possibilities) without using `_ ->` by using `|` to specify multiple matching conditions for the same branch:
 
@@ -1960,6 +1993,12 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
+### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
+
+These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
+
+`if`, `then`, `else`, `when`, `as`, `is`, `dbg`, `expect`, `expect-fx`, `crash`, `interface`, `app`, `package`, `platform`, `hosted`, `exposes`, `imports`, `with`, `generates`, `packages`, `requires`, `provides`, `to`
+
 ### [Operator Desugaring Table](#operator-desugaring-table) {#operator-desugaring-table}
 
 Here are various Roc expressions involving operators, and what they desugar to.
@@ -1982,8 +2021,5 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | <code>a \|> b</code>          |       `b a`        |
 | <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
 
- ### [Language Keywords](#language-keywords) {#language-keywords}
 
-These are all of the language keywords supported by Roc;
-
-`if`,`then`,`else`,`when`,`as`,`is`,`dbg`,`expect`,`expect-fx`,`crash`,`interface`,`app`,`package`,`platform`,`hosted`,`exposes`,`imports`,`with`,`generates`,`packages`,`requires`,`provides`,`to`
+</section>

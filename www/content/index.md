@@ -12,21 +12,21 @@
 
 <section class="home-goals-container" aria-label="Roc's Design: Fast, Friendly, Functional">
     <div role="presentation" class="home-goals-column">
-        <a href="/wip/fast" class="home-goals-content">
+        <a href="/fast" class="home-goals-content">
             <h3 class="home-goals-title">Fast</h3>
             <p class="home-goals-description">Roc code is designed to build fast and <span class="nowrap">run fast</span>. It compiles to machine code or WebAssembly.</p>
             <p class="home-goals-learn-more">What does <i>fast</i> mean here?</p>
         </a>
     </div>
     <div role="presentation" class="home-goals-column">
-        <a href="/wip/friendly" class="home-goals-content">
+        <a href="/friendly" class="home-goals-content">
             <h3 class="home-goals-title">Friendly</h3>
             <p class="home-goals-description">Roc's syntax, semantics, and included toolset all prioritize user-friendliness.</p>
             <p class="home-goals-learn-more">What does <i>friendly</i> mean here?</p>
         </a>
     </div>
     <div role="presentation" class="home-goals-column">
-        <a href="/wip/functional" class="home-goals-content">
+        <a href="/functional" class="home-goals-content">
             <h3 class="home-goals-title">Functional</h3>
             <p class="home-goals-description">
              Roc has a small number of simple language primitives. It's a single-paradigm <span class="nowrap">functional language.</span></p>
@@ -57,7 +57,7 @@
         <textarea aria-label="Input Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Enter some Roc code here."></textarea>
     </div>
 </div>
-<script type="module" src="/wip/site.js"></script>
+<script type="module" src="/site.js"></script>
 </section>
 
 ## [Examples](#examples) {#examples}
@@ -75,14 +75,14 @@ Here are some examples of how it can be used today.
     <pre><samp class="code-snippet">main <span class="kw">=</span>
     Stdout<span class="punctuation section">.</span>line <span class="literal">"Hello!"</span></samp></pre>
         <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
-        <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/wip_new_website/main.roc">the code for it</a> in the main Roc code repository.</p>
-        <p>If you're looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular platform to check out.</p>
+        <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/generate_website/main.roc">the code for it</a> in the main Roc code repository.</p>
+        <p>If you’re looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular <a href="/platforms">platform</a> to check out.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Web Servers</h3>
 <pre><samp class="code-snippet">handleReq <span class="kw">=</span> <span class="kw">\</span>request <span class="kw">-&gt;</span>
     Task<span class="punctuation section">.</span>ok <span class="literal">{</span> body: <span class="comment">…</span> <span class="literal">}</span></samp></pre>
-        <p>You can also build web servers in Roc. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a platform with
+        <p>You can also build web servers in Roc. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a <a href="/platforms">platform</a> with
         a simple interface: you write a function which takes a <code>Request</code>, does some I/O, and returns a <code>Response</code>.</p>
         <p>Behind the scenes, it uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
         <p>For database access, <a href="https://github.com/agu-z/roc-pg">roc-pg</a> lets you access a <a href="https://www.postgresql.org/">PostgreSQL</a> database&mdash;with your Roc types checked against the types in your database's schema.</p>
@@ -98,7 +98,7 @@ log(<span class="string">`Roc says </span><span class="kw">${</span>fn()<span cl
 </div>
 
 ### [Other Examples](#other-examples) {#other-examples}
-You can find more use cases and examples on the [examples page](/wip/examples)!
+You can find more use cases and examples on the [examples page](/examples)!
 </section>
 
 
