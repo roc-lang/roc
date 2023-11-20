@@ -20,12 +20,13 @@ cp -r public/ build/
 
 # download the latest code for the examples
 echo 'Downloading latest examples...'
-curl -fLJO https://github.com/roc-lang/examples/archive/refs/heads/main.zip
-unzip examples-main.zip
+curl -fL -o examples-main.zip https://github.com/roc-lang/examples/archive/refs/heads/main.zip
+rm -rf examples-main/
+unzip -o examples-main.zip
 cp -R examples-main/examples/ content/examples/
 
 # relace links in content/examples/index.md to work on the WIP site
-sed -i'' 's|](/|](/examples/|' content/examples/index.md
+perl -pi -e 's|\]\(/|\]\(/examples/|g' content/examples/index.md
 
 # clean up examples artifacts
 rm -rf examples-main examples-main.zip
