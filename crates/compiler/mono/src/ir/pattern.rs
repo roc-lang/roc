@@ -1580,26 +1580,16 @@ fn store_list_pattern<'a>(
             },
             arguments: env.arena.alloc([list_sym, start_sym, rest_len_sym]),
         });
-        stmt = Stmt::Let(*rest_sym, rest_expr, list_layout, env.arena.alloc(stmt));
-        stmt = Stmt::Let(start_sym, start_expr, usize_layout, env.arena.alloc(stmt));
-        stmt = Stmt::Let(
-            rest_len_sym,
-            rest_len_expr,
-            usize_layout,
-            env.arena.alloc(stmt),
-        );
-        stmt = Stmt::Let(
-            list_len_sym,
-            list_len_expr,
-            usize_layout,
-            env.arena.alloc(stmt),
-        );
-        stmt = Stmt::Let(
-            total_dropped_sym,
-            total_dropped_expr,
-            usize_layout,
-            env.arena.alloc(stmt),
-        );
+        let needed_stores = [
+            (total_dropped_sym, total_dropped_expr, usize_layout),
+            (list_len_sym, list_len_expr, usize_layout),
+            (rest_len_sym, rest_len_expr, usize_layout),
+            (start_sym, start_expr, usize_layout),
+            (*rest_sym, rest_expr, list_layout),
+        ];
+        for (sym, expr, lay) in needed_stores.into_iter().rev() {
+            stmt = Stmt::Let(sym, expr, lay, env.arena.alloc(stmt));
+        }
     }
 
     if is_productive {
