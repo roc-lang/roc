@@ -1,4 +1,7 @@
-<nav id="tutorial-toc">
+<input id="tutorial-toc-toggle" name="tutorial-toc-toggle" type= "checkbox">
+<nav id="tutorial-toc" aria-label="Table of Contents">
+    <label id="close-tutorial-toc" for="tutorial-toc-toggle">close</label>
+    <!-- TODO fix search: input [id "toc-search", type "text", placeholder "Search"] [] -->
     <ol>
     <li><a href="#repl">REPL</a></li>
     <li><a href="#building-an-application">Building an Application</a></li>
