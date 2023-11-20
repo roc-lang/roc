@@ -1,6 +1,6 @@
-# Platforms & Applications
+# Platforms
 
-Something that sets Roc apart from most programming languages is its *platforms and applications* architecture.
+Something that sets Roc apart from other programming languages is its <span class="nowrap">*platforms and applications*</span> architecture.
 
 ## [Applications](#applications) {#applications}
 
@@ -22,9 +22,9 @@ Every Roc application, including this one, is built on a _platform_. This applic
 
 Roc platforms provide domain-specific functionality that multiple applications can use as a foundation to build on, much like game engines and Web frameworks do.
 
-Also like many game engines and Web frameworks, Roc platforms consist of a high-level Roc API which presents a nice interface to a lower-level implementation (written in a different language) which provides the foundational primitives that platform needs to operate—such as a C++ 3D rendering system in a game engine, or a Rust HTTP networking system in a Web framework.
+Also like many game engines and Web frameworks, Roc platforms have a high-level Roc API which presents a nice interface to a lower-level implementation (written in a different language), which provides the foundational primitives that platform needs to operate—such as a C++ 3D rendering system in a game engine, or a Rust HTTP networking system in a Web framework.
 
-Here are some example Roc platforms, along with the functionality they might provide:
+Here are some example Roc platforms, and functionality they might provide:
 
 * A Roc game engine platform might provide functionality for rendering and sound.
 * A Roc Web server platform (like [basic-webserver](https://github.com/roc-lang/basic-webserver)) probably would not provide functionality for rendering and sound, but it might provide functionality for responding to incoming HTTP requests—which a game engine platform likely would not.
@@ -37,7 +37,7 @@ Platforms can also be designed to have a single, specific application run on the
 ## [Platform scope](#scope) {#scope}
 
 Roc platforms have a broader scope of responsibility than game engines or Web frameworks. In addition to providing a nice domain-specific interface, platforms are also responsible for:
-* Tailoring automatic memory management to that domain (more on this later)
+* Tailoring memory management to that domain (more on this later)
 * Providing all I/O primitives
 
 In most languages, I/O primitives come with the standard library. In Roc, the [standard library](https://www.roc-lang.org/builtins/) contains only data structures; an application gets all of its I/O primtiives from its platform. For example, in the "Hello, World" application above, the `Stdout.line` function comes from the `basic-cli` platform itself, not from Roc's standard library.
