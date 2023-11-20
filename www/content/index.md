@@ -144,11 +144,13 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 
 <ul id="individual-sponsors">
     <li><a href="https://github.com/aaronwhite">Aaron White</a></li>
+    <li><a href="https://github.com/mrmizz">Alex Binaei</a></li>
     <li><a href="https://github.com/ayazhafiz">Ayaz Hafiz</a></li>
     <li><a href="https://github.com/cdolan">Christopher Dolan</a></li>
     <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>
     <li><a href="https://github.com/jamesbirtles">James Birtles</a></li>
     <li><a href="https://github.com/Ocupe">Jonas Schell</a></li>
+    <li><a href="https://github.com/jonomallanyk">Jono Mallanyk</a></li>
     <li><a href="https://github.com/rvcas">Lucas Rosa</a></li>
     <li><a href="https://github.com/nickgravgaard">Nick Gravgaard</a></li>
     <li><a href="https://github.com/rtfeldman">Richard Feldman</a></li>
