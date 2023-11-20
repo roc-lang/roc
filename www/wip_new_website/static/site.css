@@ -396,7 +396,8 @@ pre > code {
 }
 
 #homepage-repl-container #repl,
-#homepage-repl-container #repl code {
+#homepage-repl-container #repl code,
+#homepage-repl-container #source-input {
     color: white;
     background-color: var(--dark-code-bg);
 }
