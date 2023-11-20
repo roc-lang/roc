@@ -103,10 +103,6 @@ This is essentially what's happening behind the scenes when you run `roc build`.
 
 This process works for small platforms and large applications (for example, a very large Web server application) as well as for large platforms and small applications (for example, a very large C++ game which serves as a platform for a small amount of Roc application code that the game uses for scripting).
 
-### [Multiple platforms](#multiple) {#multiple}
-
-A common question that comes up when learning about platforms is, "Can an application have multiple platforms?" To answer that question, let's think about how platforms are implemented. Essentially, a platform is a program written in another language, which calls some compiled Roc functions. What would we call it if we had multiple programs which called compiled Roc functions? We wouldn't call it "multiple platforms," but rather "multiple programs!"
-
 ## [Summary](#summary) {#summary}
 
 Every Roc application has exactly one platform. That platform provides all the I/O primitives that the application can use; Roc's standard library provides no I/O operations, and the only way for a Roc application to execute functions in other languages is if the platform offers a way to do that.
