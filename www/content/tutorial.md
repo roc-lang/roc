@@ -37,13 +37,20 @@
 
 ## [REPL](#repl) {#repl}
 
-Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short. Run this in a terminal:
+Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short. 
 
-<code class="block">roc repl</code>
+You can use the online REPL at [roc-lang.org/repl](https://www.roc-lang.org/repl). 
 
-If Roc is [installed](/wip/install.html), you should see this:
+Or you can run this in a terminal: <code class="block">roc repl</code>, and if Roc is [installed](/install), you should see this:
 
-<pre><samp>The rockin' roc repl</samp></pre>
+<pre>
+<samp>
+  The rockin’ roc repl
+────────────────────────
+
+Enter an expression, or :help, or :q to quit.
+
+</samp></pre>
 
 So far, so good!
 
@@ -63,16 +70,12 @@ Congratulations! You've just written your first Roc code.
 
 When you entered the _expression_ `"Hello, World!"`, the REPL printed it back out. It also printed `: Str`, because `Str` is that expression's type. We'll talk about types later; for now, let's ignore the `:` and whatever comes after it whenever we see them.
 
-Let's try that out. Put this into the repl and press Enter:
+You can assign specific names to expressions. Try entering these lines:
 
-<pre><samp class="repl-prompt">val1</samp></pre>
-
-You should see the same `"Hello, World!"` line as before.
-
-You can also assign specific names to expressions. Try entering these lines:
-
-<pre><samp class="repl-prompt">greeting = <span class="literal">"Hi"</span></samp></pre>
-<pre><samp class="repl-prompt">audience = <span class="literal">"World"</span></samp></pre>
+```
+greeting = "Hi"
+audience = "World"
+```
 
 From now until you exit the REPL, you can refer to either `greeting` or `audience` by those names! We'll use these later on in the tutorial.
 
@@ -84,7 +87,7 @@ Now let's try using an _operator_, specifically the `+` operator. Enter this:
 
 You should see this output:
 
-<pre><samp>2 <span class="colon">:</span> Num * <span class="comment">               # val2</span></samp></pre>
+<pre><samp>2 <span class="colon">:</span> Num * <span class="comment"></span></samp></pre>
 
 According to the REPL, one plus one equals two. Sounds right!
 

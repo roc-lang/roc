@@ -1,6 +1,6 @@
 # Friendly
 
-Besides having a [friendly community](/wip/community), Roc also prioritizes being a user-friendly language. This impacts the syntax, semantics, and tools Roc ships with.
+Besides having a [friendly community](/community), Roc also prioritizes being a user-friendly language. This impacts the syntax, semantics, and tools Roc ships with.
 
 ## [Syntax and Formatter](#syntax) {#syntax}
 
@@ -95,6 +95,6 @@ In the future, there are plans to add built-in support for [benchmarking](https:
 
 ## Functional
 
-Besides being designed to be [fast](/wip/fast) and friendly, Roc is also a functional programming language.
+Besides being designed to be [fast](/fast) and friendly, Roc is also a functional programming language.
 
-[What does _functional_ mean here?](/wip/functional)
+[What does _functional_ mean here?](/functional)

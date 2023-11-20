@@ -29,7 +29,7 @@ There are three loose stages that a design proposal can go through in Roc: idea,
 
 In the idea stage, people are encouraged to describe their idea and explore the problem, potential solutions, and tradeoffs. It's a good idea to share the idea in [`#ideas` on Zulip](https://roc.zulipchat.com/#narrow/stream/304641-ideas). There's no prerequisite for sharing an idea (it's only an idea, after all!) and likewise there's also no obligation for any contributor to necessarily act on it.
 
-If the idea seems promising and worth developing further (as confirmed by a Roc contributor with expertise in the relevant area—not necessarily the [BDFN](/wip/bdfn)), usually the next step is to get more specific with a written proposal that details all the necessary information about what the change would involve.
+If the idea seems promising and worth developing further (as confirmed by a Roc contributor with expertise in the relevant area—not necessarily the [BDFN](/bdfn)), usually the next step is to get more specific with a written proposal that details all the necessary information about what the change would involve.
 
 A written proposal isn't always necessary (for example, it may be deemed a simple and uncontroversial enough change that we're comfortable proceeding straight to implementation), but since writing proposals can be time-consuming, it's definitely a good idea to get confirmation at the idea stage from an experienced contributor before taking the time to write one up.
 

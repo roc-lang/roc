@@ -81,4 +81,4 @@ The next major performance improvement will be caching. Currently, `roc` always 
 
 In addition to being fast, Roc also aims to be a friendly programming language.
 
-[What does _friendly_ mean here?](/wip/friendly)
+[What does _friendly_ mean here?](/friendly)
