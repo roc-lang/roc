@@ -52,4 +52,4 @@ jobs:
         run: nix-store --gc
 
       - name: Clean up temp roc binaries
-        run: find /private/var/folders/hq -type f -name "roc_app_binary" -exec rm {} \;
+        run: find /private/var/folders/hq -type f -name "roc_app_binary" -readable -writable -exec rm {} \;
