@@ -8,7 +8,7 @@ use crate::layout::{
     UnionLayout,
 };
 use bumpalo::collections::{vec, Vec};
-use bumpalo::{vec, Bump};
+use bumpalo::Bump;
 use roc_collections::{MutMap, VecMap};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -1050,8 +1050,6 @@ impl<'a> TrmcEnv<'a> {
                                 )
                             };
 
-                            let mut indices = arena
-                                .alloc([cons_info.tag_id as u64, recursive_field_index as u64]);
                             let mut jump_arguments =
                                 Vec::from_iter_in(call.arguments.iter().copied(), env.arena);
                             jump_arguments.push(new_hole_symbol);
@@ -1084,9 +1082,13 @@ impl<'a> TrmcEnv<'a> {
                                         arguments: arguments.into_bump_slice(),
                                         reuse: None,
                                     };
-                                    let indices = indices.into_bump_slice();
                                     let let_tag =
                                         |next| Stmt::Let(*symbol, tag_expr, *layout, next);
+
+                                    let indices = arena.alloc([
+                                        cons_info.tag_id as u64,
+                                        recursive_field_index as u64,
+                                    ]);
                                     let get_reference_expr = Expr::GetElementPointer {
                                         structure: *symbol,
                                         union_layout: cons_info.tag_layout,
@@ -1117,6 +1119,10 @@ impl<'a> TrmcEnv<'a> {
                                     let let_tag =
                                         |next| Stmt::Let(*symbol, expr.clone(), *layout, next);
 
+                                    let mut indices =
+                                        vec::Vec::with_capacity_in(2 + struct_indices.len(), arena);
+                                    indices.push(cons_info.tag_id as u64);
+                                    indices.push(recursive_field_index as u64);
                                     indices.extend_from_slice(struct_indices);
                                     let indices = indices.into_bump_slice();
 
@@ -1125,6 +1131,7 @@ impl<'a> TrmcEnv<'a> {
                                         union_layout: cons_info.tag_layout,
                                         indices,
                                     };
+
                                     let output = let_tag(arena.alloc(
                                         //
                                         let_new_hole(
