@@ -12638,6 +12638,19 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_no_problem!(
+        list_match_spread_as,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, .. as rest] | [.. as rest, A] -> rest
+                [.. as rest] -> rest
+            "#
+        )
+    );
+
+    test_no_problem!(
         list_match_exhaustive_empty_and_rest_with_unary_head,
         indoc!(
             r#"
