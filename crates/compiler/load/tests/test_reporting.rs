@@ -12597,6 +12597,47 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_no_problem!(
+        list_match_spread_required_front_back,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, ..] -> ""
+                [.., A] -> ""
+                [..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_spread_redundant_front_back,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [A, ..] -> ""
+                [.., A] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    
+    The 2nd pattern is redundant:
+    
+    6│       when l is
+    7│           [A, ..] -> ""
+    8│>          [.., A] -> ""
+    9│           [..] -> ""
+    
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_no_problem!(
         list_match_exhaustive_empty_and_rest_with_unary_head,
         indoc!(
             r#"
