@@ -40,7 +40,7 @@ Roc platforms have a broader scope of responsibility than game engines or Web fr
 * Tailoring memory management to that domain (more on this later)
 * Providing all I/O primitives
 
-In most languages, I/O primitives come with the standard library. In Roc, the [standard library](https://www.roc-lang.org/builtins/) contains only data structures; an application gets all of its I/O primtiives from its platform. For example, in the "Hello, World" application above, the `Stdout.line` function comes from the `basic-cli` platform itself, not from Roc's standard library.
+In most languages, I/O primitives come with the standard library. In Roc, the [standard library](https://www.roc-lang.org/builtins/) contains only data structures; an application gets all of its I/O primitives from its platform. For example, in the "Hello, World" application above, the `Stdout.line` function comes from the `basic-cli` platform itself, not from Roc's standard library.
 
 This design has a few benefits.
 
