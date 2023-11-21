@@ -48,9 +48,11 @@ jobs:
       
       - name: Get the repo of the latest basic-cli release
         run: |
-          mkdir basic-cli
+          git clone --depth 1 https://github.com/roc-lang/basic-cli
           cd basic-cli
-          ./ci/get_latest_release_git_files.sh
+          git fetch --tags
+          latestTag=$(git describe --tags $(git rev-list --tags --max-count=1))
+          git checkout $latestTag
 
       - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
