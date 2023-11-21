@@ -2,6 +2,7 @@ args
 countdown
 echo
 effects
+file
 form
 tui
 http-get

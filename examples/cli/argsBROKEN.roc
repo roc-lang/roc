@@ -1,9 +1,9 @@
 app "args"
-    packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Arg, pf.Task.{ Task }, pf.Process]
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.6.0/QOQW08n38nHHrVVkJNiPIjzjvbR3iMjXeFY5w1aT46w.tar.br" }
+    imports [pf.Stdout, pf.Arg, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Task {} []
+main : Task {} I32
 main =
     args <- Arg.list |> Task.await
     parser =
@@ -57,7 +57,7 @@ main =
 
         Err helpMenu ->
             {} <- Stdout.line helpMenu |> Task.await
-            Process.exit 1
+            Task.err 1
 
 runCmd = \cmd ->
     when cmd is

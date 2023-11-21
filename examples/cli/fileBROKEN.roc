@@ -1,7 +1,6 @@
 app "file-io"
-    packages { pf: "cli-platform/main.roc" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.6.0/QOQW08n38nHHrVVkJNiPIjzjvbR3iMjXeFY5w1aT46w.tar.br" }
     imports [
-        pf.Process,
         pf.Stdout,
         pf.Stderr,
         pf.Task.{ Task },
@@ -12,7 +11,7 @@ app "file-io"
     ]
     provides [main] to pf
 
-main : Task {} []
+main : Task {} I32
 main =
     path = Path.fromStr "out.txt"
     task =
@@ -42,4 +41,4 @@ main =
                         _ -> "Uh oh, there was an error!"
 
                 {} <- Stderr.line msg |> Task.await
-                Process.exit 1
+                Task.err 1
