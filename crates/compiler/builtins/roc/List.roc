@@ -1123,10 +1123,7 @@ findLastIndex = \list, matches ->
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : Nat, len : Nat } -> List elem
 sublist = \list, config ->
-    if config.len == 0 then
-        []
-    else
-        sublistLowlevel list config.start config.len
+    sublistLowlevel list config.start config.len
 
 ## low-level slicing operation that does no bounds checking
 sublistLowlevel : List elem, Nat, Nat -> List elem

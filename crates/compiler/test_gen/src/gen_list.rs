@@ -4039,4 +4039,27 @@ mod pattern_match {
             RocList<u8>
         )
     }
+
+    #[test]
+    fn rest_as() {
+        assert_evals_to!(
+            r#"
+            helper : List U8 -> U8
+            helper = \l -> when l is
+                [1, .. as rest, 1] -> helper rest
+                [1, .. as rest] -> helper rest
+                [.. as rest, 1] -> helper rest
+                [first, .., last] | [first as last] -> first + last
+                [] -> 0
+            [
+                helper [1, 1, 1],
+                helper [2, 1],
+                helper [1, 1, 2, 4, 1],
+                helper [1, 1, 8, 7, 3, 1, 1, 1],
+            ]
+            "#,
+            RocList::from_slice(&[0, 4, 6, 11]),
+            RocList<u8>
+        )
+    }
 }
