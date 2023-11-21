@@ -1177,7 +1177,7 @@ fn to_bad_ident_expr_report<'b>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([
-                alloc.reflow(r"I trying to parse a record field access here:"),
+                alloc.reflow(r"I am trying to parse a record field access here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow("So I expect to see a lowercase letter next, like "),
@@ -1377,7 +1377,7 @@ fn to_bad_ident_pattern_report<'b>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([
-                alloc.reflow(r"I trying to parse a record field accessor here:"),
+                alloc.reflow(r"I am trying to parse a record field accessor here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow("Something like "),
