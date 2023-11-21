@@ -44,7 +44,7 @@ colors
 
 To be fair, direct mutation primitives have benefits too. Some algorithms are more concise or otherwise easier to read when written with direct mutation, and direct mutation can make the performance characteristics of some operations clearer.
 
-As such, Roc's opportunistic mutation design means that data races and reference cycles can be ruled out, and that functions will tend to be more ameanable for chaining, but also that some algorithms will be harder to express, and that performance optimization will likely tend to involve more profiling. These tradeoffs fit well with the language's overall design goals.
+As such, Roc's opportunistic mutation design means that data races and reference cycles can be ruled out, and that functions will tend to be more amenable for chaining, but also that some algorithms will be harder to express, and that performance optimization will likely tend to involve more profiling. These tradeoffs fit well with the language's overall design goals.
 
 ## [No reassignment or shadowing](#no-reassignment) {#no-reassignment}
 

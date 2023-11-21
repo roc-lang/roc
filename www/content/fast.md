@@ -1,6 +1,6 @@
 # Fast
 
-Roc code is designed to build fast and run fast...but what does "fast" mean here? And how close is Roc's curent implementation to realizing that goal?
+Roc code is designed to build fast and run fast...but what does "fast" mean here? And how close is Roc's current implementation to realizing that goal?
 
 ## [Fast programs](#fast-programs) {#fast-programs}
 
