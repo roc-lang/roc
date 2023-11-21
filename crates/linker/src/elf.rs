@@ -1832,14 +1832,7 @@ mod tests {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args([
-                "build-obj",
-                "app.zig",
-                "-fPIC",
-                "-target",
-                "x86_64-linux-gnu",
-                "-OReleaseFast",
-            ])
+            .args(["build-obj", "app.zig", "-fPIC", "-OReleaseFast"])
             .output()
             .unwrap();
 
@@ -1878,8 +1871,6 @@ mod tests {
                 "host.zig",
                 "-fPIE",
                 "-lc",
-                "-target",
-                "x86_64-linux-gnu",
                 "-OReleaseFast",
             ])
             .output()
