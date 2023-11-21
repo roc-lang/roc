@@ -399,34 +399,19 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                                     &mut spec_matrix,
                                 );
 
-                                // Add Anythings for the missing elements.
-                                let full_args = if let ListArity::Slice(before, _) = arity {
-                                    if arity.min_len() < list_ctor.min_len() {
-                                        let (before, after) = args.split_at(before);
-                                        let num_extra_wildcards =
-                                            list_ctor.min_len() - arity.min_len();
-                                        let extra_wildcards =
-                                            std::iter::repeat(&Anything).take(num_extra_wildcards);
+                                let mut vector = vector.clone();
+                                specialize_row_with_polymorphic_list(
+                                    &mut vector,
+                                    &args,
+                                    arity,
+                                    list_ctor,
+                                );
 
-                                        before
-                                            .iter()
-                                            .chain(extra_wildcards)
-                                            .chain(after)
-                                            .cloned()
-                                            .collect()
-                                    } else {
-                                        args.clone()
-                                    }
-                                } else {
-                                    args.clone()
-                                };
-                                let mut nested_vector = vector.clone();
-                                nested_vector.extend(full_args);
-
-                                if is_useful(spec_matrix, nested_vector) {
+                                if is_useful(spec_matrix, vector) {
                                     return true;
                                 }
                             }
+
                             return false;
                         }
                     }
@@ -527,6 +512,36 @@ fn specialize_matrix_by_list(
     }
 }
 
+fn specialize_row_with_polymorphic_list(
+    row: &mut Vec<Pattern>,
+    list_element_patterns: &[Pattern],
+    polymorphic_list_ctor: ListArity,
+    specialized_list_ctor: ListArity,
+) {
+    let min_len = specialized_list_ctor.min_len();
+    if list_element_patterns.len() > min_len {
+        row.extend(list_element_patterns.iter().cloned());
+    }
+
+    let (patterns_before, patterns_after) = match polymorphic_list_ctor {
+        ListArity::Slice(before, after) => (
+            &list_element_patterns[..before],
+            &list_element_patterns[after..],
+        ),
+        ListArity::Exact(_) => (list_element_patterns, &[] as &[Pattern]),
+    };
+
+    let middle_any_patterns_needed =
+        specialized_list_ctor.min_len() - polymorphic_list_ctor.min_len();
+    let middle_patterns = std::iter::repeat(Anything).take(middle_any_patterns_needed);
+
+    row.extend(
+        (patterns_before.iter().cloned())
+            .chain(middle_patterns)
+            .chain(patterns_after.iter().cloned()),
+    );
+}
+
 // Specialize a row that matches a list's constructor(s).
 //
 // See the docs on [build_list_ctors_covering_patterns] for more information on how list
@@ -550,8 +565,9 @@ fn specialize_row_by_list(spec_arity: ListArity, mut row: Row) -> Option<Row> {
                     debug_assert!(spec_arity.min_len() > this_arity.min_len());
                     match this_arity {
                         ListArity::Exact(_) => internal_error!("exact-sized lists cannot cover lists of other minimum length"),
-                        ListArity::Slice(before, _) => {
-                            let (before, after) = args.split_at(before);
+                        ListArity::Slice(before, after) => {
+                            let before = &args[..before];
+                            let after = &args[this_arity.min_len() - after..];
                             let num_extra_wildcards = spec_arity.min_len() - this_arity.min_len();
                             let extra_wildcards = std::iter::repeat(&Anything).take(num_extra_wildcards);
 
@@ -869,7 +885,7 @@ fn build_list_ctors_covering_patterns(
                 }
                 (max_prefix_len, max_suffix_len)
             };
-            let l = inf_cover_prefix + inf_cover_suffix + 1;
+            let l = inf_cover_prefix + inf_cover_suffix;
 
             let exact_size_lists = (min_len..l) // exclusive
                 .map(ListArity::Exact);
