@@ -7,7 +7,7 @@ main : Task {} I32
 main =
     _ <- await (Stdout.line "What's your first name?")
     firstName <- await Stdin.line
-    
+
     _ <- await (Stdout.line "What's your last name?")
     lastName <- await Stdin.line
 

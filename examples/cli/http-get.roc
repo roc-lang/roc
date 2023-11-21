@@ -13,7 +13,7 @@ main =
         End ->
             Stdout.line "I received end-of-input (EOF) instead of a URL."
 
-        Input url -> 
+        Input url ->
             request = {
                 method: Get,
                 headers: [],
@@ -23,8 +23,8 @@ main =
             }
 
             output <- Http.send request
-                |> Task.onErr \err -> err 
-                    |> Http.errorToString 
+                |> Task.onErr \err -> err
+                    |> Http.errorToString
                     |> Task.ok
                 |> Task.await
 
