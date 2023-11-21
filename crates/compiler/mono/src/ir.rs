@@ -2153,19 +2153,14 @@ impl<'a> Expr<'a> {
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
             GetElementPointer {
-                structure,
-                indices,
-                ..
+                structure, indices, ..
             } => {
                 let it = indices.iter().map(|num| alloc.as_string(num));
                 let it = alloc.intersperse(it, ", ");
-                text!(
-                    alloc,
-                    "GetElementPointer (Indices [",
-                )
-                .append(it)
-                .append(alloc.text("]) "))
-                .append(symbol_to_doc(alloc, *structure, pretty))
+                text!(alloc, "GetElementPointer (Indices [",)
+                    .append(it)
+                    .append(alloc.text("]) "))
+                    .append(symbol_to_doc(alloc, *structure, pretty))
             }
             // .append(alloc.intersperse(index.iter(), ", "))},
             Alloca { initializer, .. } => match initializer {
