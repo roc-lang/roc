@@ -800,6 +800,13 @@ fn gen_div_checked_by_zero_dec() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Decimal divison by 0"#)]
+fn gen_div_dec_by_zero() {
+    assert_evals_to!("1dec / 0", RocDec::from_str_to_i128_unsafe("-1"), i128);
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn gen_int_eq() {
     assert_evals_to!(
@@ -1162,6 +1169,22 @@ fn gen_div_checked_i64() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_div_checked_by_zero_i64() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                    when Num.divTruncChecked 1000 0 is
+                        Err DivByZero -> 99
+                        _ -> -24
+                "#
+        ),
+        99,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn gen_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
             r#"
