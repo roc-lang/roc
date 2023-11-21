@@ -369,7 +369,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            roc_panic("Decimal divison by 0", 0);
+            roc_panic("Decimal divison by 0!", 0);
         }
 
         // If they're both negative, or if neither is negative, the final answer
@@ -397,7 +397,7 @@ pub const RocDec = extern struct {
             if (denominator_i128 == one_point_zero_i128) {
                 return self;
             } else {
-                roc_panic("Decimal divison overflow in numerator", 0);
+                roc_panic("Decimal divison overflow in numerator!", 0);
                 unreachable;
             }
         };
@@ -411,7 +411,7 @@ pub const RocDec = extern struct {
             if (numerator_i128 == one_point_zero_i128) {
                 return other;
             } else {
-                roc_panic("Decimal divison overflow in denominator", 0);
+                roc_panic("Decimal divison overflow in denominator!", 0);
                 unreachable;
             }
         };
@@ -424,7 +424,7 @@ pub const RocDec = extern struct {
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
             unsigned_answer = @as(i128, @intCast(answer.lo));
         } else {
-            roc_panic("Decimal divison overflow", 0);
+            roc_panic("Decimal divison overflow!", 0);
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
@@ -634,7 +634,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     const d = answer[0];
 
     if (overflowed == 1) {
-        roc_panic("Decimal multiplication overflow", 0);
+        roc_panic("Decimal multiplication overflow!", 0);
     }
 
     // Final 512bit value is d, c, b, a
@@ -1210,7 +1210,7 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
-        roc_panic("Decimal conversion from f64", 0);
+        roc_panic("Decimal conversion from f64!", 0);
         unreachable;
     }
 }
@@ -1220,7 +1220,7 @@ pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
         return dec.num;
     } else {
-        roc_panic("Decimal conversion from f32", 0);
+        roc_panic("Decimal conversion from f32!", 0);
         unreachable;
     }
 }
@@ -1236,7 +1236,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
             if (answer[1] == 1) {
-                roc_panic("Decimal conversion from integer", 0);
+                roc_panic("Decimal conversion from integer!", 0);
                 unreachable;
             } else {
                 return answer[0];
@@ -1264,14 +1264,14 @@ pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
 
 pub fn negateC(arg: RocDec) callconv(.C) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
-        roc_panic("Decimal negation overflow", 0);
+        roc_panic("Decimal negation overflow!", 0);
         unreachable;
     };
 }
 
 pub fn absC(arg: RocDec) callconv(.C) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
-        roc_panic("Decimal absolute value overflow", 0);
+        roc_panic("Decimal absolute value overflow!", 0);
         unreachable;
     };
     return result.num;
