@@ -233,7 +233,12 @@ pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const 
 pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(a: T, b: T) callconv(.C) T {
-            return math.divCeil(T, a, b) catch @panic("TODO runtime exception for dividing by 0!");
+            return math.divCeil(T, a, b) catch {
+                roc_panic("integer divison by 0", 0);
+                unreachable;
+            };
+
+            // return math.divCeil(T, a, b) catch @panic("TODO runtime exception for dividing by 0!");
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
