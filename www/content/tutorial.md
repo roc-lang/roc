@@ -214,7 +214,7 @@ A definition names an expression.
 
 Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are \(total) animals."` refers to `total`.
 
-You can name a def using any combination of letters and numbers, but they have to start with a letter.
+You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
 **Note:** Defs are constant; they can't be reassigned. We'd get an error if we wrote these two defs in the same scope:
 
