@@ -526,7 +526,7 @@ fn specialize_row_with_polymorphic_list(
     let (patterns_before, patterns_after) = match polymorphic_list_ctor {
         ListArity::Slice(before, after) => (
             &list_element_patterns[..before],
-            &list_element_patterns[after..],
+            &list_element_patterns[list_element_patterns.len() - after..],
         ),
         ListArity::Exact(_) => (list_element_patterns, &[] as &[Pattern]),
     };
