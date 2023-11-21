@@ -37,7 +37,7 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
 
-      - name: build basic-webserver with surgical linker and also with legacy linker
+      - name: build basic-webserver with legacy linker
         env:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
         run: ./ci/build_basic_webserver.sh linux_x86_64 "--linker legacy"
