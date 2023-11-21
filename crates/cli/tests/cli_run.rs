@@ -727,6 +727,51 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_countdown_check() {
+        let path = file_path_from_root("examples/cli", "countdown.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_echo_check() {
+        let path = file_path_from_root("examples/cli", "echo.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_file_check() {
+        let path = file_path_from_root("examples/cli", "fileBROKEN.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_form_check() {
+        let path = file_path_from_root("examples/cli", "form.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_http_get_check() {
+        let path = file_path_from_root("examples/cli", "http-get.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn interactive_effects() {
         test_roc_app(
             "examples/cli",
