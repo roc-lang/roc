@@ -1666,7 +1666,7 @@ This is using a mix of a backpassing function `_ <-` and a normal function `\tex
 That said, the typical style in which this `task` would be written in Roc is using backpassing for all the `await` calls, like we had above:
 
 ```roc
-task =
+main =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
