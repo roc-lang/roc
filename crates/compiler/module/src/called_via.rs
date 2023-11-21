@@ -102,6 +102,15 @@ pub enum UnaryOp {
     Not,
 }
 
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnaryOp::Negate => write!(f, "-"),
+            UnaryOp::Not => write!(f, "!"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BinOp {
     // highest precedence

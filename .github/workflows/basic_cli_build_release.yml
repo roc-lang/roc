@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+#  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -7,9 +7,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
   
-# use .tar.gz for quick testing
 env:
-  ARCHIVE_FORMAT: .tar.br
+  # use .tar.gz for quick testing
+  ARCHIVE_FORMAT: .tar.gz
+  BASIC_CLI_BRANCH: main
 
 jobs:
   fetch-releases:
@@ -18,6 +19,7 @@ jobs:
       - uses: actions/checkout@v3
 
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
 
@@ -45,12 +47,37 @@ jobs:
         with:
           name: linux-x86_64-files
           path: |
-            basic-cli/src/metadata_linux-x86_64.rm
-            basic-cli/src/linux-x86_64.rh
-            basic-cli/src/linux-x86_64.o
+            basic-cli/src/metadata_linux-x64.rm
+            basic-cli/src/linux-x64.rh
+            basic-cli/src/linux-x64.o
+
+
+  build-linux-arm64-files:
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v3
+
+      - name: build basic-cli
+        env:
+          CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
+          CC_aarch64_unknown_linux_musl: clang-16
+          AR_aarch64_unknown_linux_musl: llvm-ar-16
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
+        run: ./ci/build_basic_cli.sh linux_arm64
+
+      - name: Save .o file 
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-arm64-files
+          path: |
+            basic-cli/src/linux-arm64.o
 
   build-macos-x86_64-files:
-    runs-on: [macos-11] # I expect the generated files to work on macOS 12
+    runs-on: [macos-11] # I expect the generated files to work on macOS 12 and up
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
@@ -65,7 +92,7 @@ jobs:
         with:
           name: macos-x86_64-files
           path: |
-            basic-cli/src/macos-x86_64.o
+            basic-cli/src/macos-x64.o
 
   build-macos-apple-silicon-files:
     name: build apple silicon .o file
@@ -87,7 +114,7 @@ jobs:
             basic-cli/src/macos-arm64.o
 
   create-release-archive:
-    needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    needs: [build-linux-x86_64-files, build-linux-arm64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
@@ -100,7 +127,7 @@ jobs:
         uses: actions/download-artifact@v3
 
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -116,6 +143,8 @@ jobs:
       - run: cp macos-apple-silicon-files/* ./basic-cli/src
       
       - run: cp linux-x86_64-files/* ./basic-cli/src
+
+      - run: cp linux-arm64-files/* ./basic-cli/src
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
@@ -139,7 +168,7 @@ jobs:
         uses: actions/download-artifact@v3
 
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -159,21 +188,31 @@ jobs:
           cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
           ls | grep "tar$" | xargs tar -xf
 
-      - name: prep testing http-get.roc
+      - name: Install expect for tests if we dont have it yet
+        run: if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+
+      - name: Install ncat for tests if we dont have it yet
+        run: if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+
+      - name: prep testing
         run: |
           mv roc_nightly basic-cli-platform/.
           cd basic-cli-platform
-          mkdir examples
-          cd examples
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
-          sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
-          cd ..
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
-
-      - run: sudo apt install -y expect
-
-      - name: execute test
+          mkdir src
+          find . -maxdepth 1 -type f -exec mv {} src/ \;
+          
+          mkdir temp-basic-cli
+          cd temp-basic-cli
+          git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
+          git checkout ${{ env.BASIC_CLI_BRANCH }}
+          cp -r examples ../..
+          cp -r ci ../..
+          cp -r LICENSE ../..
+          # LICENSE is necessary for command test
+          
+      - name: run tests
         run: |
           cd basic-cli-platform
-          expect http-get.exp
+          ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ROC_BUILD_FLAGS=--prebuilt-platform ./ci/all_tests.sh
 

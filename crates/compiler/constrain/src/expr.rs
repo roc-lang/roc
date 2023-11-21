@@ -502,6 +502,7 @@ pub fn constrain_expr(
                 let reason = Reason::FnArg {
                     name: opt_symbol,
                     arg_index: HumanIndex::zero_based(index),
+                    called_via: *called_via,
                 };
                 let expected_arg =
                     constraints.push_expected_type(ForReason(reason, arg_type_index, region));

@@ -9,6 +9,7 @@
   --violet: #7c38f5;
   --violet-bg: #ece2fd;
   --magenta: #a20031;
+  --link-hover-color: #333;
 
   --link-color: var(--violet);
   --code-link-color: var(--violet);
@@ -53,7 +54,7 @@ table tr td {
 }
 
 .logo svg:hover {
-  fill: var(--green);
+  fill: var(--link-hover-color);
 }
 
 .pkg-full-name {
@@ -130,7 +131,7 @@ a:hover code {
 }
 
 .pkg-and-logo a:hover {
-  color: var(--green);
+  color: var(--link-hover-color);
   text-decoration: none;
 }
 
@@ -173,8 +174,9 @@ main {
   line-height: 1.85em;
   margin-top: 2px;
   padding: 48px;
-
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  max-width: 740px;
+  /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
 }
 
 /* Module links on the package index page (/index.html) */
@@ -254,7 +256,8 @@ padding: 0px 16px;
   font-family: var(--font-sans);
   font-size: 24px;
   height: 100%;
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
+  min-width: 1024px;
 }
 
 .top-header-triangle {
@@ -340,7 +343,7 @@ color: inherit;
 }
 
 .module-name a:hover {
-  color: var(--green);
+  color: var(--link-hover-color);
 }
 
 .sidebar-module-link {
@@ -519,6 +522,7 @@ pre>samp {
       --violet: #CAADFB;
       --violet-bg: #332944;
       --magenta: #f39bac;
+      --link-hover-color: #fff;
 
       --link-color: var(--violet);
       --code-link-color: var(--violet);
@@ -548,6 +552,8 @@ pre>samp {
   .top-header {
       justify-content: space-between;
       width: auto;
+      /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+      min-width: 0;
   }
 
   .pkg-full-name {
@@ -591,6 +597,7 @@ pre>samp {
       grid-row-end: above-footer;
       padding: 18px;
       font-size: 16px;
+      max-width: none;
   }
 
   #sidebar-nav {
@@ -739,6 +746,6 @@ code .dim {
 }
 
 .copy-button:hover {
-  border-color: var(--green);
-  color: var(--green);
+  border-color: var(--link-hover-color);
+  color: var(--link-hover-color);
 }

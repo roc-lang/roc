@@ -474,18 +474,6 @@ mod cli_run {
         )
     }
 
-    #[test]
-    #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
-    fn hello_world_no_url() {
-        test_roc_app_slim(
-            "examples",
-            "helloWorldNoURL.roc",
-            "Hello, World!\n",
-            UseValgrind::Yes,
-        )
-    }
-
     #[cfg(windows)]
     const LINE_ENDING: &str = "\r\n";
     #[cfg(not(windows))]
@@ -687,12 +675,13 @@ mod cli_run {
     }
 
     #[test]
+    #[ignore = "currently broken in basic-cli platform"]
     #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args() {
         test_roc_app(
             "examples/cli",
-            "args.roc",
+            "argsBROKEN.roc",
             &[],
             &[
                 Arg::PlainText("log"),
@@ -713,7 +702,7 @@ mod cli_run {
     #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args_check() {
-        let path = file_path_from_root("examples/cli", "args.roc");
+        let path = file_path_from_root("examples/cli", "argsBROKEN.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -732,6 +721,51 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_countdown_check() {
+        let path = file_path_from_root("examples/cli", "countdown.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_echo_check() {
+        let path = file_path_from_root("examples/cli", "echo.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_file_check() {
+        let path = file_path_from_root("examples/cli", "fileBROKEN.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_form_check() {
+        let path = file_path_from_root("examples/cli", "form.roc");
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    #[serial(cli_platform)]
+    fn cli_http_get_check() {
+        let path = file_path_from_root("examples/cli", "http-get.roc");
         let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -839,7 +873,7 @@ mod cli_run {
                 This roc file can print it's own source code. The source is:
 
                 app "ingested-file"
-                    packages { pf: "cli-platform/main.roc" }
+                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.6.0/QOQW08n38nHHrVVkJNiPIjzjvbR3iMjXeFY5w1aT46w.tar.br" }
                     imports [
                         pf.Stdout,
                         "ingested-file.roc" as ownCode : Str,
@@ -866,7 +900,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "22424\n",
+            "30256\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )

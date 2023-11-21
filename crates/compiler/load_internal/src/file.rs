@@ -3291,7 +3291,7 @@ fn finish(
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
-    documentation: VecMap<ModuleId, ModuleDocumentation>,
+    mut documentation: VecMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
     //
     #[cfg(debug_assertions)] checkmate: Option<roc_checkmate::Collector>,
@@ -3330,6 +3330,18 @@ fn finish(
 
     roc_checkmate::dump_checkmate!(checkmate);
 
+    let mut docs_by_module = Vec::with_capacity(state.exposed_modules.len());
+
+    for module_id in state.exposed_modules.iter() {
+        let docs = documentation.remove(module_id).unwrap_or_else(|| {
+            panic!("A module was exposed but didn't have an entry in `documentation` somehow: {module_id:?}");
+        });
+
+        docs_by_module.push(docs);
+    }
+
+    debug_assert_eq!(documentation.len(), 0);
+
     LoadedModule {
         module_id: state.root_id,
         interns,
@@ -3346,7 +3358,7 @@ fn finish(
         resolved_implementations,
         sources,
         timings: state.timings,
-        docs_by_module: documentation,
+        docs_by_module,
         abilities_store,
     }
 }

@@ -4270,35 +4270,50 @@ pub fn with_hole<'a>(
     let arena = env.arena;
 
     match can_expr {
-        Int(_, _, int_str, int, _bound) => assign_num_literal_expr(
-            env,
-            layout_cache,
-            assigned,
-            variable,
-            &int_str,
-            IntOrFloatValue::Int(int),
-            hole,
-        ),
+        Int(_, _, int_str, int, _bound) => {
+            match assign_num_literal_expr(
+                env,
+                layout_cache,
+                assigned,
+                variable,
+                &int_str,
+                IntOrFloatValue::Int(int),
+                hole,
+            ) {
+                Ok(stmt) => stmt,
+                Err(_) => hole.clone(),
+            }
+        }
 
-        Float(_, _, float_str, float, _bound) => assign_num_literal_expr(
-            env,
-            layout_cache,
-            assigned,
-            variable,
-            &float_str,
-            IntOrFloatValue::Float(float),
-            hole,
-        ),
+        Float(_, _, float_str, float, _bound) => {
+            match assign_num_literal_expr(
+                env,
+                layout_cache,
+                assigned,
+                variable,
+                &float_str,
+                IntOrFloatValue::Float(float),
+                hole,
+            ) {
+                Ok(stmt) => stmt,
+                Err(_) => hole.clone(),
+            }
+        }
 
-        Num(_, num_str, num, _bound) => assign_num_literal_expr(
-            env,
-            layout_cache,
-            assigned,
-            variable,
-            &num_str,
-            IntOrFloatValue::Int(num),
-            hole,
-        ),
+        Num(_, num_str, num, _bound) => {
+            match assign_num_literal_expr(
+                env,
+                layout_cache,
+                assigned,
+                variable,
+                &num_str,
+                IntOrFloatValue::Int(num),
+                hole,
+            ) {
+                Ok(stmt) => stmt,
+                Err(_) => hole.clone(),
+            }
+        }
 
         Str(string) => Stmt::Let(
             assigned,
@@ -9267,14 +9282,12 @@ fn assign_num_literal_expr<'a>(
     num_str: &str,
     num_value: IntOrFloatValue,
     hole: &'a Stmt<'a>,
-) -> Stmt<'a> {
-    let layout = layout_cache
-        .from_var(env.arena, variable, env.subs)
-        .unwrap();
+) -> Result<Stmt<'a>, RuntimeError> {
+    let layout = layout_cache.from_var(env.arena, variable, env.subs)?;
     let literal =
         make_num_literal(&layout_cache.interner, layout, num_str, num_value).to_expr_literal();
 
-    Stmt::Let(assigned, Expr::Literal(literal), layout, hole)
+    Ok(Stmt::Let(assigned, Expr::Literal(literal), layout, hole))
 }
 
 type ToLowLevelCallArguments<'a> = (

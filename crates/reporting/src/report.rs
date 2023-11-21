@@ -490,6 +490,13 @@ impl<'a> RocDocAllocator<'a> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
     }
 
+    pub fn unop(
+        &'a self,
+        content: roc_module::called_via::UnaryOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
+    }
+
     /// Turns off backticks/colors in a block
     pub fn type_block(
         &'a self,
@@ -843,6 +850,7 @@ pub enum Annotation {
     Structure,
     Symbol,
     BinOp,
+    UnaryOp,
     Error,
     GutterBar,
     LineNumber,
@@ -1027,6 +1035,9 @@ where
             BinOp => {
                 self.write_str(self.palette.alias)?;
             }
+            UnaryOp => {
+                self.write_str(self.palette.alias)?;
+            }
             Symbol => {
                 self.write_str(self.palette.variable)?;
             }
@@ -1075,9 +1086,9 @@ where
         match self.style_stack.pop() {
             None => {}
             Some(annotation) => match annotation {
-                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock
-                | PlainText | LineNumber | Tip | Module | Header | Keyword => {
+                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | UnaryOp | Error
+                | GutterBar | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure
+                | CodeBlock | PlainText | LineNumber | Tip | Module | Header | Keyword => {
                     self.write_str(self.palette.reset)?;
                 }
 

@@ -1273,12 +1273,24 @@ fn to_expr_report<'b>(
                     }
                 }
             },
-            Reason::FnArg { name, arg_index } => {
+            Reason::FnArg {
+                name,
+                arg_index,
+                called_via,
+            } => {
                 let ith = arg_index.ordinal();
 
-                let this_function = match name {
-                    None => alloc.text("this function"),
-                    Some(symbol) => alloc.symbol_unqualified(symbol),
+                let this_function = match (called_via, name) {
+                    (CalledVia::Space, Some(symbole)) => alloc.symbol_unqualified(symbole),
+                    (CalledVia::BinOp(op), _) => alloc.binop(op),
+                    (CalledVia::UnaryOp(op), _) => alloc.unop(op),
+                    (CalledVia::StringInterpolation, _) => alloc.text("this string interpolation"),
+                    _ => alloc.text("this function"),
+                };
+
+                let argument = match called_via {
+                    CalledVia::StringInterpolation => "argument".to_string(),
+                    _ => format!("{ith} argument"),
                 };
 
                 report_mismatch(
@@ -1292,7 +1304,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("This {ith} argument to ")),
+                        alloc.string(format!("This {argument} to ")),
                         this_function.clone(),
                         alloc.text(" has an unexpected type:"),
                     ]),
@@ -1300,7 +1312,7 @@ fn to_expr_report<'b>(
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs its {ith} argument to be:")),
+                        alloc.string(format!(" needs its {argument} to be:")),
                     ]),
                     None,
                 )

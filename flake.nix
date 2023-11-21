@@ -18,9 +18,15 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.flake-utils.follows = "flake-utils";
     };
+
+    # for non flake backwards compatibility 
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
     let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
@@ -28,17 +34,11 @@
           ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
 
-        # When updating the zig or llvm version, make sure they stay in sync.
-        # Also update in default.nix (TODO: maybe we can use nix code to sync this)
-        zigPkg = pkgs.zig_0_11;
-        llvmPkgs = pkgs.llvmPackages_16;
-        llvmVersion = builtins.splitVersion llvmPkgs.release_version;
-        llvmMajorMinorStr = builtins.elemAt llvmVersion 0 + builtins.elemAt llvmVersion 1;
+        rocBuild = import ./nix { inherit pkgs; };
 
-        # get current working directory
-        cwd = builtins.toString ./.;
-        rust =
-          pkgs.rust-bin.fromRustupToolchainFile "${cwd}/rust-toolchain.toml";
+        compile-deps = rocBuild.compile-deps;
+        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
+          llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
         # DevInputs are not necessary to build roc as a user 
         linuxDevInputs = with pkgs;
@@ -55,24 +55,14 @@
             xorg.libxcb
           ];
 
-        darwinInputs = with pkgs;
-          lib.optionals stdenv.isDarwin
-          (with pkgs.darwin.apple_sdk.frameworks; [
-            AppKit
-            CoreFoundation
-            CoreServices
-            Foundation
-            Security
-          ]);
-
         # DevInputs are not necessary to build roc as a user 
         darwinDevInputs = with pkgs;
           lib.optionals stdenv.isDarwin
-          (with pkgs.darwin.apple_sdk.frameworks; [
-            CoreVideo # for examples/gui
-            Metal # for examples/gui
-            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
-          ]);
+            (with pkgs.darwin.apple_sdk.frameworks; [
+              CoreVideo # for examples/gui
+              Metal # for examples/gui
+              curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
+            ]);
 
         # For debugging LLVM IR
         debugir = pkgs.stdenv.mkDerivation {
@@ -111,7 +101,7 @@
           zlib
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
-          rust
+          rocBuild.rust-shell
         ]);
 
         sharedDevInputs = (with pkgs; [
@@ -134,14 +124,15 @@
           alias fmtc='cargo fmt --all -- --check'
         '';
 
-      in {
+      in
+      {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs++ linuxDevInputs
+          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
             ++ (if system == "x86_64-linux" then
-              [ pkgs.nixgl.nixVulkanIntel ]
-            else
-              [ ]);
+            [ pkgs.nixgl.nixVulkanIntel ]
+          else
+            [ ]);
 
           # nix does not store libs in /usr/lib or /lib
           # for libgcc_s.so.1
@@ -153,11 +144,11 @@
 
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-            ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-              ++ linuxDevInputs);
+              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
+                ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
-          
+
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
             ${aliases}
@@ -167,6 +158,14 @@
         formatter = pkgs.nixpkgs-fmt;
 
         # You can build this package (the roc CLI) with the `nix build` command.
-        packages.default = import ./. { inherit pkgs; };
+        packages = {
+          default = rocBuild.roc-cli;
+          
+          # all rust crates in workspace.members of Cargo.toml
+          full = rocBuild.roc-full;
+          # only the CLI crate = executable provided in nightly releases
+          cli = rocBuild.roc-cli;
+          lang-server = rocBuild.roc-lang-server;
+        };
       });
 }

@@ -2447,7 +2447,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `add` has an unexpected type:
+    This 2nd argument to + has an unexpected type:
 
     4│      0x4 + "foo"
                   ^^^^^
@@ -2456,7 +2456,7 @@ mod test_reporting {
 
         Str
 
-    But `add` needs its 2nd argument to be:
+    But + needs its 2nd argument to be:
 
         Int *
     "###
@@ -2472,7 +2472,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `add` has an unexpected type:
+    This 2nd argument to + has an unexpected type:
 
     4│      0x4 + 3.14
                   ^^^^
@@ -2481,7 +2481,7 @@ mod test_reporting {
 
         Frac *
 
-    But `add` needs its 2nd argument to be:
+    But + needs its 2nd argument to be:
 
         Int *
 
@@ -2500,7 +2500,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `add` has an unexpected type:
+    This 2nd argument to + has an unexpected type:
 
     4│      42 + True
                  ^^^^
@@ -2509,7 +2509,7 @@ mod test_reporting {
 
         [True]
 
-    But `add` needs its 2nd argument to be:
+    But + needs its 2nd argument to be:
 
         Num *
     "###
@@ -3556,7 +3556,7 @@ mod test_reporting {
 
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `add` has an unexpected type:
+    This 2nd argument to + has an unexpected type:
 
     14│      x + y + h + l + minlit + maxlit
                                       ^^^^^^
@@ -3565,7 +3565,7 @@ mod test_reporting {
 
         U128
 
-    But `add` needs its 2nd argument to be:
+    But + needs its 2nd argument to be:
 
         I128 or Dec
     "###
@@ -3843,7 +3843,7 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `add` has an unexpected type:
+    This 2nd argument to + has an unexpected type:
 
     4│      \{ x, y ? True } -> x + y
                                     ^
@@ -3852,7 +3852,7 @@ mod test_reporting {
 
         [True]
 
-    But `add` needs its 2nd argument to be:
+    But + needs its 2nd argument to be:
 
         Num a
     "###
@@ -6377,7 +6377,7 @@ In roc, functions are always written as a lambda, like{}
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `mul` has an unexpected type:
+    This 2nd argument to * has an unexpected type:
 
     5│      mult = \a, b -> a * b
                                 ^
@@ -6386,7 +6386,7 @@ In roc, functions are always written as a lambda, like{}
 
         F64
 
-    But `mul` needs its 2nd argument to be:
+    But * needs its 2nd argument to be:
 
         Num *
 
@@ -6421,7 +6421,7 @@ In roc, functions are always written as a lambda, like{}
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `mul` has an unexpected type:
+    This 2nd argument to * has an unexpected type:
 
     5│      mult = \a, b -> a * b
                                 ^
@@ -6430,7 +6430,7 @@ In roc, functions are always written as a lambda, like{}
 
         F64
 
-    But `mul` needs its 2nd argument to be:
+    But * needs its 2nd argument to be:
 
         Num a
 
@@ -9234,7 +9234,7 @@ In roc, functions are always written as a lambda, like{}
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `isEq` has an unexpected type:
+    This 2nd argument to == has an unexpected type:
 
     9│          Job lst -> lst == ""
                                   ^^
@@ -9243,7 +9243,7 @@ In roc, functions are always written as a lambda, like{}
 
         Str
 
-    But `isEq` needs its 2nd argument to be:
+    But == needs its 2nd argument to be:
 
         List [Job ∞] as ∞
     "###
@@ -10013,7 +10013,7 @@ In roc, functions are always written as a lambda, like{}
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `isEq` has an unexpected type:
+    This 2nd argument to == has an unexpected type:
 
     4│      0x80000000000000000000000000000000 == -0x80000000000000000000000000000000
                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -10022,7 +10022,7 @@ In roc, functions are always written as a lambda, like{}
 
         I128
 
-    But `isEq` needs its 2nd argument to be:
+    But == needs its 2nd argument to be:
 
         U128
     "###
@@ -10038,7 +10038,7 @@ In roc, functions are always written as a lambda, like{}
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This 2nd argument to `isEq` has an unexpected type:
+    This 2nd argument to == has an unexpected type:
 
     4│      170141183460469231731687303715884105728 == -170141183460469231731687303715884105728
                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -10047,7 +10047,7 @@ In roc, functions are always written as a lambda, like{}
 
         I128 or Dec
 
-    But `isEq` needs its 2nd argument to be:
+    But == needs its 2nd argument to be:
 
         U128
     "###
