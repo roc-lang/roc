@@ -4563,7 +4563,7 @@ mod test_reporting {
         comment_with_control_character,
         "# comment with a \x07\n",
         @r###"
-    ── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
+    ── ASCII CONTROL CHARACTER ─────── tmp/comment_with_control_character/Test.roc ─
 
     I encountered an ASCII control character:
 
