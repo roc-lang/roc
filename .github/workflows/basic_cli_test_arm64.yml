@@ -1,5 +1,6 @@
 on:
   workflow_dispatch:
+  pull_request:
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
@@ -45,10 +46,13 @@ jobs:
       - name: Remove roc_nightly folder to keep things simple (we'll download it again later)
         run: rm -rf roc_nightly
       
-      - name: Get the examples of the latest basic-cli release
-        run: ./ci/get_latest_release_examples.sh
+      - name: Get the repo of the latest basic-cli release
+        run: |
+          mkdir basic-cli
+          cd basic-cli
+          ./ci/get_latest_release_git_files.sh
 
       - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
           sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
-          ROC=./roc_nightly/roc EXAMPLES_DIR=./latest-release-examples/ ./ci/test_latest_release.sh
+          ROC=./roc_nightly/roc EXAMPLES_DIR=./basic-cli/examples/ ./ci/test_latest_release.sh
