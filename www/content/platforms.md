@@ -62,7 +62,7 @@ These security guarantees can be relied on because platforms have *exclusive* co
 
 ### [Performance benefits](#performance) {#performance}
 
-Many I/O operations can benefit from being run concurrently. Since platforms are in charge of how those I/O operations are implemented, they can also determine how they are scheduled. This means that both applications and packages can describe which operations they want to run concurrently, and then the platform can optimize the scehduling of these operations using its domain-specific knowledge.
+Many I/O operations can benefit from being run concurrently. Since platforms are in charge of how those I/O operations are implemented, they can also determine how they are scheduled. This means that both applications and packages can describe which operations they want to run concurrently, and then the platform can optimize the scheduling of these operations using its domain-specific knowledge.
 
 For example, a command-line platform might schedule concurrent operations across all available cores (or some lower number specified by a command-line argument). In contrast, a Web server platform might try to balance available cores across multiple request handlers—to prevent undesirable scenarios like one handler getting all the cores (meaning none of the others can progress).
 
