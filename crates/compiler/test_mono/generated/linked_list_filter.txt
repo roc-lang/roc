@@ -25,11 +25,11 @@ procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
             joinpoint #Derived_gen.12 #Derived_gen.14:
                 let Test.19 : Int1 = CallByName Num.31 Test.7;
                 if Test.19 then
-                    let #Derived_gen.9 : [<rnu><null>, C I64 *self] = NullPointer;
-                    let Test.20 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.7 #Derived_gen.9;
-                    let #Derived_gen.10 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.20;
+                    let #Derived_gen.10 : [<rnu><null>, C I64 *self] = NullPointer;
+                    let Test.20 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.7 #Derived_gen.10;
+                    let #Derived_gen.9 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.20;
                     let #Derived_gen.11 : {} = lowlevel PtrStore #Derived_gen.5 Test.20;
-                    jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.10 #Derived_gen.6;
+                    jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.9 #Derived_gen.6;
                 else
                     decref #Derived_gen.14;
                     jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.5 #Derived_gen.6;

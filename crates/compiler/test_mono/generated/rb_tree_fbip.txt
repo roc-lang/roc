@@ -35,11 +35,11 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                     if Test.179 then
                         joinpoint Test.238 #Derived_gen.166:
                             let Test.232 : Int1 = false;
-                            let #Derived_gen.10 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                            let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.166 UpdateModeId { id: 56 } TagId(1) #Derived_gen.10 Test.18 Test.19 Test.17 Test.232;
-                            let #Derived_gen.11 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 0]) Test.231;
+                            let #Derived_gen.11 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                            let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.166 UpdateModeId { id: 56 } TagId(1) #Derived_gen.11 Test.18 Test.19 Test.17 Test.232;
+                            let #Derived_gen.10 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 0]) Test.231;
                             let #Derived_gen.12 : {} = lowlevel PtrStore #Derived_gen.6 Test.231;
-                            jump #Derived_gen.5 Test.16 Test.10 Test.11 #Derived_gen.11 #Derived_gen.7;
+                            jump #Derived_gen.5 Test.16 Test.10 Test.11 #Derived_gen.10 #Derived_gen.7;
                         in
                         let Test.236 : U8 = 1i64;
                         let Test.237 : U8 = GetTagId Test.16;
@@ -204,11 +204,11 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                         if Test.117 then
                             joinpoint Test.176 #Derived_gen.288:
                                 let Test.170 : Int1 = false;
-                                let #Derived_gen.21 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.288 UpdateModeId { id: 196 } TagId(1) Test.16 Test.18 #Derived_gen.21 Test.17 Test.170;
-                                let #Derived_gen.22 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 2]) Test.169;
+                                let #Derived_gen.22 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.288 UpdateModeId { id: 196 } TagId(1) Test.16 Test.18 #Derived_gen.22 Test.17 Test.170;
+                                let #Derived_gen.21 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 2]) Test.169;
                                 let #Derived_gen.23 : {} = lowlevel PtrStore #Derived_gen.6 Test.169;
-                                jump #Derived_gen.5 Test.19 Test.10 Test.11 #Derived_gen.22 #Derived_gen.7;
+                                jump #Derived_gen.5 Test.19 Test.10 Test.11 #Derived_gen.21 #Derived_gen.7;
                             in
                             let Test.174 : U8 = 1i64;
                             let Test.175 : U8 = GetTagId Test.19;
@@ -410,20 +410,20 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2):
                     let Test.247 : Int1 = CallByName Num.22 Test.10 Test.97;
                     if Test.247 then
                         let Test.249 : Int1 = true;
-                        let #Derived_gen.34 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                        let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) #Derived_gen.34 Test.98 Test.99 Test.97 Test.249;
-                        let #Derived_gen.35 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 0]) Test.248;
+                        let #Derived_gen.35 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                        let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) #Derived_gen.35 Test.98 Test.99 Test.97 Test.249;
+                        let #Derived_gen.34 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 0]) Test.248;
                         let #Derived_gen.36 : {} = lowlevel PtrStore #Derived_gen.6 Test.248;
-                        jump #Derived_gen.5 Test.96 Test.10 Test.11 #Derived_gen.35 #Derived_gen.7;
+                        jump #Derived_gen.5 Test.96 Test.10 Test.11 #Derived_gen.34 #Derived_gen.7;
                     else
                         let Test.243 : Int1 = CallByName Num.24 Test.10 Test.97;
                         if Test.243 then
                             let Test.245 : Int1 = true;
-                            let #Derived_gen.37 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                            let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96 Test.98 #Derived_gen.37 Test.97 Test.245;
-                            let #Derived_gen.38 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 2]) Test.244;
+                            let #Derived_gen.38 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                            let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96 Test.98 #Derived_gen.38 Test.97 Test.245;
+                            let #Derived_gen.37 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 2]) Test.244;
                             let #Derived_gen.39 : {} = lowlevel PtrStore #Derived_gen.6 Test.244;
-                            jump #Derived_gen.5 Test.99 Test.10 Test.11 #Derived_gen.38 #Derived_gen.7;
+                            jump #Derived_gen.5 Test.99 Test.10 Test.11 #Derived_gen.37 #Derived_gen.7;
                         else
                             let Test.242 : Int1 = true;
                             let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse #Derived_gen.364 UpdateModeId { id: 284 } TagId(1) Test.96 Test.11 Test.99 Test.10 Test.242;
