@@ -1196,22 +1196,6 @@ fn gen_div_checked_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn gen_div_by_zero_i64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    when Num.divTruncChecked 1000 0 is
-                        Err DivByZero -> 99
-                        _ -> -24
-                "#
-        ),
-        99,
-        i64
-    );
-}
-
-#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_rem_i64() {
     assert_evals_to!("Num.rem 8 3", 2, i64);
