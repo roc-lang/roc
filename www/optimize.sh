@@ -49,5 +49,5 @@ rm dist/site.css
 
 # Find the new filename
 css_with_hash=$(basename dist/site-*.css)
-# Replace all occurances in the html
+# Replace all occurrences in the html
 sed -i "s:/wip/site.css:/wip/${css_with_hash}:g" dist/*.html
