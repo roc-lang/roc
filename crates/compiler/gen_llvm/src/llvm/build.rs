@@ -2003,12 +2003,15 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             }
         }
 
-        UnionFieldPtrAtIndex {
-            tag_id,
+        GetElementPointer {
             structure,
-            index,
+            indices,
             union_layout,
+            ..
         } => {
+            debug_assert!(indices.len() >= 2);
+            let tag_id = indices[0];
+            let index = indices[1] as usize;
             // cast the argument bytes into the desired shape for this tag
             let argument = scope.load_symbol(structure);
             let ret_repr = layout_interner.get_repr(layout);
@@ -2018,7 +2021,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 UnionLayout::Recursive(tag_layouts) => {
                     debug_assert!(argument.is_pointer_value());
 
-                    let field_layouts = tag_layouts[*tag_id as usize];
+                    let field_layouts = tag_layouts[tag_id as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
@@ -2028,7 +2031,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         None,
-                        *index as usize,
+                        index,
                         ptr,
                         target_loaded_type,
                     )
@@ -2044,7 +2047,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         Some(struct_type.into_struct_type()),
-                        *index as usize,
+                        index,
                         argument.into_pointer_value(),
                         target_loaded_type,
                     )
@@ -2054,10 +2057,11 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     other_tags,
                 } => {
                     debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id, *nullable_id);
+                    debug_assert_ne!(tag_id as u16, *nullable_id);
 
-                    let tag_index = if *tag_id < *nullable_id {
-                        *tag_id
+                    let tag_id = tag_id as u16;
+                    let tag_index = if tag_id < *nullable_id {
+                        tag_id
                     } else {
                         tag_id - 1
                     };
@@ -2072,7 +2076,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         None,
-                        *index as usize,
+                        index,
                         ptr,
                         target_loaded_type,
                     )
@@ -2082,7 +2086,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     other_fields,
                 } => {
                     debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id != 0, *nullable_id);
+                    debug_assert_ne!(tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
                     let struct_layout = LayoutRepr::struct_(field_layouts);
@@ -2096,7 +2100,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         field_layouts,
                         Some(struct_type.into_struct_type()),
                         // the tag id is not stored
-                        *index as usize,
+                        index,
                         argument.into_pointer_value(),
                         target_loaded_type,
                     )

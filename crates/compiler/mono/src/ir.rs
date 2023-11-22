@@ -1892,11 +1892,10 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
         index: u64,
     },
-    UnionFieldPtrAtIndex {
+    GetElementPointer {
         structure: Symbol,
-        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
-        index: u64,
+        indices: &'a [u64],
     },
 
     Array {
@@ -2153,14 +2152,17 @@ impl<'a> Expr<'a> {
             } => text!(alloc, "UnionAtIndex (Id {tag_id}) (Index {index}) ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            UnionFieldPtrAtIndex {
-                tag_id,
-                structure,
-                index,
-                ..
-            } => text!(alloc, "UnionFieldPtrAtIndex (Id {tag_id}) (Index {index}) ",)
-                .append(symbol_to_doc(alloc, *structure, pretty)),
-
+            GetElementPointer {
+                structure, indices, ..
+            } => {
+                let it = indices.iter().map(|num| alloc.as_string(num));
+                let it = alloc.intersperse(it, ", ");
+                text!(alloc, "GetElementPointer (Indices [",)
+                    .append(it)
+                    .append(alloc.text("]) "))
+                    .append(symbol_to_doc(alloc, *structure, pretty))
+            }
+            // .append(alloc.intersperse(index.iter(), ", "))},
             Alloca { initializer, .. } => match initializer {
                 Some(initializer) => {
                     text!(alloc, "Alloca ").append(symbol_to_doc(alloc, *initializer, pretty))
@@ -7955,16 +7957,14 @@ fn substitute_in_expr<'a>(
         },
 
         // currently only used for tail recursion modulo cons (TRMC)
-        UnionFieldPtrAtIndex {
+        GetElementPointer {
             structure,
-            tag_id,
-            index,
+            indices,
             union_layout,
         } => match substitute(subs, *structure) {
-            Some(structure) => Some(UnionFieldPtrAtIndex {
+            Some(structure) => Some(GetElementPointer {
                 structure,
-                tag_id: *tag_id,
-                index: *index,
+                indices,
                 union_layout: *union_layout,
             }),
             None => None,

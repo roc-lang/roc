@@ -1099,18 +1099,21 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 index,
             } => self.expr_union_at_index(*structure, *tag_id, union_layout, *index, sym),
 
-            Expr::UnionFieldPtrAtIndex {
+            Expr::GetElementPointer {
                 structure,
-                tag_id,
                 union_layout,
-                index,
-            } => self.expr_union_field_ptr_at_index(
-                *structure,
-                *tag_id,
-                union_layout,
-                *index,
-                storage,
-            ),
+                indices,
+                ..
+            } => {
+                debug_assert!(indices.len() >= 2);
+                self.expr_union_field_ptr_at_index(
+                    *structure,
+                    indices[0] as u16,
+                    union_layout,
+                    indices[1],
+                    storage,
+                )
+            }
 
             Expr::FunctionPointer { .. } => todo_lambda_erasure!(),
             Expr::ErasedMake { .. } => todo_lambda_erasure!(),
