@@ -42,13 +42,13 @@ logRequest = \req ->
 
 readUrlEnv : Str -> Task Str AppError
 readUrlEnv = \target ->
-    Env.var target 
+    Env.var target
     |> Task.mapErr \_ -> EnvURLNotFound
 
 fetchContent : Str -> Task Str AppError
 fetchContent = \url ->
-    Http.getUtf8 url 
-    |> Task.mapErr \err -> (HttpError err)
+    Http.getUtf8 url
+    |> Task.mapErr \err -> HttpError err
 
 handleErr : AppError -> Task Response []
 handleErr = \err ->
