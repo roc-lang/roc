@@ -520,38 +520,42 @@ fn trmc_candidates_help<'a>(
     // 1) recursive call's return value, or
     // 2) struct that contains a recursive call's return value
     let recursive_call = match is_struct_with_value_of_rec_call(stmt, candidates) {
-        None => TrmcEnv::is_terminal_constructor(stmt)
-            // case 1), the tail tag application must directly use the result of the recursive call
-            .and_then(|cons_info| {
-                candidates
-                    .active()
-                    .find(|call| cons_info.arguments.contains(call))
-            })
-            .map(|call| (call, RecCallLocation::DirectlyInTag)),
+        None => {
+            TrmcEnv::is_terminal_constructor(stmt)
+                // case 1), the tail tag application must directly use the result of the recursive call
+                .and_then(|cons_info| {
+                    candidates
+                        .active()
+                        .find(|call| cons_info.arguments.contains(call))
+                })
+                .map(|call| (call, RecCallLocation::DirectlyInTag))
+        }
         Some(StructWithRecCall {
             struct_symbol,
             next,
             rec_call_value,
             index_of_rec_call_value,
-        }) => TrmcEnv::is_terminal_constructor(next)
-            // case 2), the tail tag application must directly use the struct
-            .and_then(|cons_info| {
-                cons_info
-                    .arguments
-                    .contains(struct_symbol)
-                    .then_some(rec_call_value)
-            })
-            .map(|call| {
-                (
-                    *call,
-                    RecCallLocation::MemberOfStruct(
-                        *struct_symbol,
-                        // seems unnecessary, but will need it when we'll be able to detect usage of
-                        // recursive call return values in nested records
-                        arena.alloc([index_of_rec_call_value]),
-                    ),
-                )
-            }),
+        }) => {
+            TrmcEnv::is_terminal_constructor(next)
+                // case 2), the tail tag application must directly use the struct
+                .and_then(|cons_info| {
+                    cons_info
+                        .arguments
+                        .contains(struct_symbol)
+                        .then_some(rec_call_value)
+                })
+                .map(|call| {
+                    (
+                        *call,
+                        RecCallLocation::MemberOfStruct(
+                            *struct_symbol,
+                            // seems unnecessary, but will need it when we'll be able to detect usage of
+                            // recursive call return values in nested records
+                            arena.alloc([index_of_rec_call_value]),
+                        ),
+                    )
+                })
+        }
     };
 
     // if we find a usage, this is a confirmed TRMC call
@@ -561,15 +565,7 @@ fn trmc_candidates_help<'a>(
     }
 
     // if the stmt uses the active recursive call, that invalidates the recursive call for this branch
-    let dbg_changed = candidates.active().count();
-    candidates.retain(|recursive_call| {
-        let call_not_used = !stmt_contains_symbol_nonrec(stmt, *recursive_call);
-        call_not_used || call_only_used_in_record_cons(stmt, *recursive_call)
-    });
-    let dbg_changed_after = candidates.active().count();
-    if dbg_changed != dbg_changed_after {
-        // println!("{:#?}", stmt)
-    }
+    candidates.retain(|recursive_call| !stmt_contains_symbol_nonrec(stmt, *recursive_call));
 
     match stmt {
         Stmt::Let(symbol, expr, _, next) => {
@@ -1070,6 +1066,7 @@ impl<'a> TrmcEnv<'a> {
                                         )
                                     };
 
+                                    //TODO: arena.alloc
                                     let mut arguments = Vec::from_iter_in(
                                         cons_info.arguments.iter().copied(),
                                         env.arena,
@@ -1327,29 +1324,5 @@ fn stmt_contains_symbol_nonrec(stmt: &Stmt, needle: Symbol) -> bool {
         Stmt::Join { .. } => false,
         Stmt::Jump(_, arguments) => arguments.contains(&needle),
         Stmt::Crash(symbol, _) => needle == *symbol,
-    }
-}
-
-// TODO: yet it's just a coppy - pasta of stmt_contains_symbol_nonrec
-fn call_only_used_in_record_cons(stmt: &Stmt<'_>, rec_call: Symbol) -> bool {
-    use crate::ir::ModifyRc::*;
-
-    match stmt {
-        Stmt::Let(_, expr, _, _) => expr_contains_symbol(expr, rec_call),
-        Stmt::Switch { cond_symbol, .. } => rec_call == *cond_symbol,
-        Stmt::Ret(symbol) => rec_call == *symbol,
-        Stmt::Refcounting(modify, _) => {
-            matches!( modify, Inc(symbol, _) | Dec(symbol) | DecRef(symbol)  if rec_call == *symbol  )
-        }
-        Stmt::Expect {
-            condition, lookups, ..
-        }
-        | Stmt::ExpectFx {
-            condition, lookups, ..
-        } => rec_call == *condition || lookups.contains(&rec_call),
-        Stmt::Dbg { symbol, .. } => rec_call == *symbol,
-        Stmt::Join { .. } => false,
-        Stmt::Jump(_, arguments) => arguments.contains(&rec_call),
-        Stmt::Crash(symbol, _) => rec_call == *symbol,
     }
 }
