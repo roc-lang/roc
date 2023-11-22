@@ -3893,7 +3893,7 @@ fn to_space_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ASII CONTROL CHARACTER".to_string(),
+                title: "ASCII CONTROL CHARACTER".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
