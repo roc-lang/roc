@@ -4269,7 +4269,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    I trying to parse a record field access here:
+    I am trying to parse a record field access here:
 
     4│      foo.bar.
                     ^
@@ -5667,7 +5667,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    I trying to parse a record field access here:
+    I am trying to parse a record field access here:
 
     4│      Num.add . 23
                      ^
