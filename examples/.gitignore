@@ -14,3 +14,5 @@ parser/examples/example
 gui/hello-gui
 gui/breakout/breakout
 gui/breakout/hello-gui
+webserver/echo
+webserver/http
