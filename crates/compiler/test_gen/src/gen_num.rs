@@ -801,14 +801,14 @@ fn gen_div_checked_by_zero_dec() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "Decimal divison by 0!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Decimal division by 0!"#)]
 fn gen_div_dec_by_zero() {
     assert_evals_to!("1dec / 0", RocDec::from_str_to_i128_unsafe("-1"), i128);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "Integer divison by 0!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer division by 0!"#)]
 fn gen_div_ceil_by_zero() {
     assert_evals_to!(
         r#"

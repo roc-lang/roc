@@ -369,7 +369,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            roc_panic("Decimal divison by 0!", 0);
+            roc_panic("Decimal division by 0!", 0);
         }
 
         // If they're both negative, or if neither is negative, the final answer
@@ -397,7 +397,7 @@ pub const RocDec = extern struct {
             if (denominator_i128 == one_point_zero_i128) {
                 return self;
             } else {
-                roc_panic("Decimal divison overflow in numerator!", 0);
+                roc_panic("Decimal division overflow in numerator!", 0);
                 unreachable;
             }
         };
@@ -411,7 +411,7 @@ pub const RocDec = extern struct {
             if (numerator_i128 == one_point_zero_i128) {
                 return other;
             } else {
-                roc_panic("Decimal divison overflow in denominator!", 0);
+                roc_panic("Decimal division overflow in denominator!", 0);
                 unreachable;
             }
         };
@@ -424,7 +424,7 @@ pub const RocDec = extern struct {
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
             unsigned_answer = @as(i128, @intCast(answer.lo));
         } else {
-            roc_panic("Decimal divison overflow!", 0);
+            roc_panic("Decimal division overflow!", 0);
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };

@@ -234,7 +234,7 @@ pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(a: T, b: T) callconv(.C) T {
             return math.divCeil(T, a, b) catch {
-                roc_panic("Integer divison by 0!", 0);
+                roc_panic("Integer division by 0!", 0);
                 unreachable;
             };
         }
