@@ -2,8 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url =
-      "github:nixos/nixpkgs?rev=676fe5e01b9a41fa14aaa48d87685677664104b1";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=676fe5e01b9a41fa14aaa48d87685677664104b1";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -28,9 +27,7 @@
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
-    let
-      supportedSystems =
-        [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
         overlays = [ (import rust-overlay) ]
@@ -40,9 +37,8 @@
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps)
-          zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath
-          darwinInputs;
+        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
+          llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
 
         # DevInputs are not necessary to build roc as a user 
         linuxDevInputs = with pkgs;
@@ -62,11 +58,11 @@
         # DevInputs are not necessary to build roc as a user 
         darwinDevInputs = with pkgs;
           lib.optionals stdenv.isDarwin
-          (with pkgs.darwin.apple_sdk.frameworks; [
-            CoreVideo # for examples/gui
-            Metal # for examples/gui
-            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
-          ]);
+            (with pkgs.darwin.apple_sdk.frameworks; [
+              CoreVideo # for examples/gui
+              Metal # for examples/gui
+              curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
+            ]);
 
         # For debugging LLVM IR
         debugir = pkgs.stdenv.mkDerivation {
@@ -130,15 +126,15 @@
           alias fmtc='cargo fmt --all -- --check'
         '';
 
-      in {
+      in
+      {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs
-            ++ darwinDevInputs ++ linuxDevInputs
+          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
             ++ (if system == "x86_64-linux" then
-              [ pkgs.nixgl.nixVulkanIntel ]
-            else
-              [ ]);
+            [ pkgs.nixgl.nixVulkanIntel ]
+          else
+            [ ]);
 
           # nix does not store libs in /usr/lib or /lib
           # for libgcc_s.so.1
@@ -150,8 +146,8 @@
 
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-            ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-              ++ linuxDevInputs);
+              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
+                ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
