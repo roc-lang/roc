@@ -100,7 +100,7 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 ### [Calling Functions](#calling-functions) {#calling-functions}
 
-Remember back in the [string interpolation](#string-interpolation) section when we mentioned other ways to combine strings? Here's one of them:
+Let's try calling a function:
 
 <pre><samp><span class="repl-prompt">Str.concat "Hi " "there!"</span>
 
