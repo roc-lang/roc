@@ -67,7 +67,6 @@ That will help us improve this document for everyone who reads it in the future!
 To build the compiler, you need these installed:
 
 - [Zig](https://ziglang.org/), see below for version
-- `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
 - On Debian/Ubuntu `sudo apt-get install pkg-config`
 - LLVM, see below for version
 - [rust](https://rustup.rs/)
