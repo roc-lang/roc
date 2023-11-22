@@ -98,3 +98,22 @@ jobs:
 
       - name: Run C platform test
         run: docker-compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc examples/platform-switching/rocLovesC.roc
+
+  nightly-debian-buster:
+    name: nightly-debian-buster
+    runs-on: [ubuntu-20.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Copy example docker file
+        run: cp docker/nightly-debian-buster/docker-compose.example.yml docker/nightly-debian-buster/docker-compose.yml
+
+      - name: Build image
+        run: docker-compose -f docker/nightly-debian-buster/docker-compose.yml build
+
+      - name: Run hello world test
+        run: docker-compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/helloWorld.roc
+
+      - name: Run C platform test
+        run: docker-compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/platform-switching/rocLovesC.roc
