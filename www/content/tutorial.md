@@ -1569,7 +1569,7 @@ Notice that, just like before, we're still building `main` from a single `Task`.
 For example, we can print a prompt before we pause to read from `stdin`, so it no longer looks like the program isn't doing anything when we start it up:
 
 ```roc
-task =
+main =
     Task.await (Stdout.line "Type something press Enter:") \_ ->
         Task.await Stdin.line \text ->
             Stdout.line "You just entered: \(text)"
@@ -1596,7 +1596,7 @@ It's most common in Roc to call functions from other modules in a _qualified_ wa
 Speaking of calling `await` repeatedly, if we keep calling it more and more on this code, we'll end up doing a lot of indenting. If we'd rather not indent so much, we can rewrite `task` into this style which looks different but does the same thing:
 
 ```roc
-task =
+main =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
@@ -1666,7 +1666,7 @@ This is using a mix of a backpassing function `_ <-` and a normal function `\tex
 That said, the typical style in which this `task` would be written in Roc is using backpassing for all the `await` calls, like we had above:
 
 ```roc
-task =
+main =
     _ <- await (Stdout.line "Type something press Enter:")
     text <- await Stdin.line
 
