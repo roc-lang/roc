@@ -181,7 +181,7 @@ running `llc --version` - it should mention "LLVM version 16.0.x" at the top.
 You may also need to manually specify a prefix env var like so:
 
 ```sh
-export LLVM_SYS_160_PREFIX=/usr/local/opt/llvm@16
+export LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)
 ```
 
 #### LLVM MacOS troubleshooting
