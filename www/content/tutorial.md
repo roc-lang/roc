@@ -256,7 +256,7 @@ addAndStringify = \num1, num2 ->
     if sum == 0 then
         ""
     else
-        Num.toStr (num1 + num2)
+        Num.toStr sum
 ```
 
 We did two things here:
@@ -279,7 +279,7 @@ addAndStringify = \num1, num2 ->
     else if sum < 0 then
         "negative"
     else
-        Num.toStr (num1 + num2)
+        Num.toStr sum
 ```
 
 Note that `else if` is not a separate language keyword! It's just an `if`/`else` where the `else` branch contains another `if`/`else`. This is easier to see with different indentation:
@@ -294,7 +294,7 @@ addAndStringify = \num1, num2 ->
         if sum < 0 then
             "negative"
         else
-            Num.toStr (num1 + num2)
+            Num.toStr sum
 ```
 
 This differently-indented version is equivalent to writing `else if sum < 0 then` on the same line, although the convention is to use the original version's style.
