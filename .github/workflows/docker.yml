@@ -22,3 +22,22 @@ jobs:
 
       - name: Run C platform test
         run: docker-compose -f docker/ubuntu-2204-nightly/docker-compose.yml run roc examples/platform-switching/rocLovesC.roc
+
+  ubuntu-2004-nightly:
+    name: ubuntu-2004-nightly
+    runs-on: [ubuntu-20.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Copy example docker file
+        run: cp docker/ubuntu-2004-nightly/docker-compose.example.yml docker/ubuntu-2004-nightly/docker-compose.yml
+
+      - name: Build image
+        run: docker-compose -f docker/ubuntu-2004-nightly/docker-compose.yml build
+
+      - name: Run hello world test
+        run: docker-compose -f docker/ubuntu-2004-nightly/docker-compose.yml run roc examples/helloWorld.roc
+
+      - name: Run C platform test
+        run: docker-compose -f docker/ubuntu-2004-nightly/docker-compose.yml run roc examples/platform-switching/rocLovesC.roc
