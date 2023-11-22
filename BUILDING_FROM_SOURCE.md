@@ -106,8 +106,8 @@ If you prefer a package manager, you can try the following:
 - Systems with snap (such as Ubuntu): `snap install zig --classic --beta`
 - Other systems: refer to the [zig documentation](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
-If you want to install it manually, you can [download a binary](https://ziglang.org/download/#release-0.11.0).
-Apart from the binary, the archive contains a `lib` folder, which needs to be copied next to the binary onto your PATH.
+If you want to install it manually, you can [download the binary](https://ziglang.org/download/#release-0.11.0) and place it on your PATH.
+Apart from the binary, the archive contains a `lib` folder, which needs to be copied next to the binary.
 
 > WINDOWS NOTE: when you unpack the Zig archive on windows, the result is nested in an extra directory. The instructions on the zig website will seem to not work. So, double-check that the path to zig executable does not include the same directory name twice.
 
