@@ -102,12 +102,12 @@ For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage
 
 If you prefer a package manager, you can try the following:
 
-- For MacOS, you can install with `brew install zig@0.11.0`
-- For systems with Snap, you can install with `snap install zig --classic --beta`
-- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+- MacOS: `brew install zig@0.11.0`
+- Systems with snap (such as Ubuntu): `snap install zig --classic --beta`
+- Other systems: refer to the [zig documentation](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
-If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
-Apart from the binary, the archive contains a `lib` folder which needs to be copied next to the binary.
+If you want to install it manually, you can [download a binary](https://ziglang.org/download/#release-0.11.0).
+Apart from the binary, the archive contains a `lib` folder, which needs to be copied next to the binary onto your PATH.
 
 > WINDOWS NOTE: when you unpack the Zig archive on windows, the result is nested in an extra directory. The instructions on the zig website will seem to not work. So, double-check that the path to zig executable does not include the same directory name twice.
 
