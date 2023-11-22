@@ -4,7 +4,7 @@ This is not a roadmap, but it is a set of current plans for the language. Plans 
 
 ## Planned Breaking Changes
 
-These are changes that are both planned and planned to be backwards-compatible, meaning you may need to make changes to your Roc code if they end up getting released.
+These are changes that are both planned and planned to be breaking (so, not backwards-compatible), meaning you may need to make changes to your Roc code if they end up getting released.
 
 The best time to make breaking changes (that will benefit more and more people as the community grows) is when the number of affected code bases is small. That said, the frequency of breaking changes should naturally decrease over time, and of course past a certain level of maturity, the number of justifiable breaking changes approaches zero. (That level of maturity is quite a ways away!)
 
