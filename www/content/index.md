@@ -143,17 +143,17 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
-    <li><a href="https://github.com/aaronwhite">Aaron White</a></li>
-    <li><a href="https://github.com/ayazhafiz">Ayaz Hafiz</a></li>
-    <li><a href="https://github.com/cdolan">Christopher Dolan</a></li>
-    <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>
+    <li><a href="https://github.com/chris-packett">Chris Packett</a></li>
     <li><a href="https://github.com/jamesbirtles">James Birtles</a></li>
-    <li><a href="https://github.com/Ocupe">Jonas Schell</a></li>
+    <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>
     <li><a href="https://github.com/rvcas">Lucas Rosa</a></li>
+    <li><a href="https://github.com/Ocupe">Jonas Schell</a></li>
+    <li><a href="https://github.com/cdolan">Christopher Dolan</a></li>
     <li><a href="https://github.com/nickgravgaard">Nick Gravgaard</a></li>
-    <li><a href="https://github.com/rtfeldman">Richard Feldman</a></li>
-    <li><a href="https://github.com/shritesh">Shritesh Bhattarai</a></li>
     <li><a href="https://github.com/popara">Zeljko Nesic</a></li>
+    <li><a href="https://github.com/shritesh">Shritesh Bhattarai</a></li>
+    <li><a href="https://github.com/rtfeldman">Richard Feldman</a></li>
+    <li><a href="https://github.com/ayazhafiz">Ayaz Hafiz</a></li>
 </ul>
 
 Thank you all for your contributions! Roc would not be what it is without your generosity. 💜
