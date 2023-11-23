@@ -3435,24 +3435,28 @@ impl<
         sym: &Symbol,
         structure: &Symbol,
         tag_id: TagIdIntType,
-        index: u64,
+        index: &[u64],
         union_layout: &UnionLayout<'a>,
     ) {
+        println!("{:#?}", index);
+        let tag_id = index[0] as TagIdIntType;
         let ptr_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, structure);
 
         let sym_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
-
+        let index = &index[1..];
         match union_layout {
             UnionLayout::NonRecursive(_) => {
                 unreachable!("operation not supported")
             }
             UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                let mut offset = 0;
-                for field in &field_layouts[..index as usize] {
-                    offset += self.layout_interner.stack_size(*field);
-                }
+                let offset = load_union_field_ptr_at_index_help(
+                    self.layout_interner,
+                    index,
+                    field_layouts,
+                    0,
+                );
 
                 ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
             }
@@ -3460,12 +3464,20 @@ impl<
                 nullable_id,
                 other_fields,
             } => {
+                // println!("*******************LAYOUT*******************");
+                // println!("{:#?}", union_layout);
+                // println!("*******************INTERN*******************");
+                // println!("{:#?}", self.layout_interner);
+                // println!("*******************FIELD LAYOUT*******************");
+                // println!("{:#?}", self.layout_interner.get(other_fields[0]));
                 debug_assert_ne!(tag_id, *nullable_id as TagIdIntType);
 
-                let mut offset = 0;
-                for field in &other_fields[..index as usize] {
-                    offset += self.layout_interner.stack_size(*field);
-                }
+                let offset = load_union_field_ptr_at_index_help(
+                    self.layout_interner,
+                    index,
+                    other_fields,
+                    0,
+                );
 
                 ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, ptr_reg, offset as i32);
             }
@@ -3484,10 +3496,12 @@ impl<
 
                 let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
 
-                let mut offset = 0;
-                for field in &other_fields[..index as usize] {
-                    offset += self.layout_interner.stack_size(*field);
-                }
+                let offset = load_union_field_ptr_at_index_help(
+                    self.layout_interner,
+                    index,
+                    other_fields,
+                    0,
+                );
 
                 ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, mask_reg, offset as i32);
 
@@ -3509,10 +3523,12 @@ impl<
                         (Some(mask_symbol), mask_reg)
                     };
 
-                let mut offset = 0;
-                for field in &other_fields[..index as usize] {
-                    offset += self.layout_interner.stack_size(*field);
-                }
+                let offset = load_union_field_ptr_at_index_help(
+                    self.layout_interner,
+                    index,
+                    other_fields,
+                    0,
+                );
 
                 ASM::add_reg64_reg64_imm32(&mut self.buf, sym_reg, unmasked_reg, offset as i32);
 
@@ -5365,6 +5381,46 @@ impl<
 
         self.load_literal(&symbol, &u64_layout, &width_literal);
     }
+}
+
+fn load_union_field_ptr_at_index_help<'a>(
+    layout_interner: &'a STLayoutInterner<'a>,
+    indices: &[u64],
+    layouts: &[InLayout<'a>],
+    mut offset: u32,
+) -> u32 {
+    debug_assert_ne!(indices.len(), 0);
+
+    let idx = indices[0];
+    for field in &layouts[..idx as usize] {
+        offset += layout_interner.stack_size(*field);
+    }
+
+    if indices.len() <= 1 {
+        return offset;
+    }
+    use LayoutRepr::*;
+    let enclosing_layout = layouts[idx as usize];
+    return match layout_interner.get_repr(enclosing_layout) {
+        Struct(layouts) => {
+            load_union_field_ptr_at_index_help(layout_interner, &indices[1..], layouts, offset)
+        },
+        Union(UnionLayout::NonRecursive(tags)) => {
+            // apart from the current index, to get information out of a
+            // non-recursive tag union we need 2 more number: a tag id and an index
+            debug_assert!(indices.len() >= 3);
+            let tag_id = indices[1] as usize;
+            let tag_layout = tags[tag_id];
+
+            load_union_field_ptr_at_index_help(layout_interner, &indices[2..], tag_layout, offset)
+        }
+        //TODO: can any of these be a valid target for getting a pointer out of their inner layouts?
+        //(so not them being pointers)
+        Union(_) | Builtin(_) | Ptr(_) | RecursivePointer(_) | LambdaSet(_) | FunctionPointer(_)
+        | Erased(_) => unreachable!(
+            "Following the path of the indices, a layout has been reached where the address of the desired pointer is behind another pointer"
+        ),
+    };
 }
 
 #[macro_export]

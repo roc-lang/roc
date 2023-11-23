@@ -1442,7 +1442,9 @@ fn expr_spec<'a>(
             union_layout,
             ..
         } => {
-            debug_assert!(indices.len() >= 2);
+            //comment written in: 2023.11.22; indices.len() can only be >2 after trmc happens in 
+            //monomorphization, tail_recursion, but that happens after alias analysis
+            debug_assert!(indices.len() == 2);
             let tag_id = indices[0] as u32;
             let index = indices[1];
             let tag_value_id = env.symbols[structure];
