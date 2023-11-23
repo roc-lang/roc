@@ -31,7 +31,7 @@ All types which implement the `Encoding` Ability can therefore use the `Encode.t
 
 ## [Builtins](#builtins) {#builtins}
 
-Roc's Builtin types such as numbers, records, and tags, are automatically derived for the builtin Abilities. This means that you can use these Abilties without needing to provide a custom implementation.
+Roc's Builtin types such as numbers, records, and tags, are automatically derived for the builtin Abilities. This means that you can use these Abilities without needing to provide a custom implementation.
 
 ### [`Eq` Ability](#eq-ability) {#eq-ability}
 
@@ -82,7 +82,7 @@ Hash implements
 
 The `Sort` Ability defines the `compare` function, which can be used to compare two values for ordering. 
 
-`Sort` is not derived for `Str` as working with utf-8 strings which is a variable length encoding scheme is complex and is achived through a dedicated library such as [roc-lang/unicode](https://github.com/roc-lang/unicode). 
+`Sort` is not derived for `Str` as working with utf-8 strings which is a variable length encoding scheme is complex and is achieved through a dedicated library such as [roc-lang/unicode](https://github.com/roc-lang/unicode). 
 
 **Proposed Definition** of the `Sort` Ability.
 
@@ -162,7 +162,7 @@ Decoding implements
 
 **Implementation Status** - Accepted Proposal, implementation in-progress. See [#5775](https://github.com/roc-lang/roc/pull/5775) for progress on auto-deriving `Inspect` for builtin types.
 
-The `Inspect` Ability defines the `toInspector` function which can be used with an Inspector to insepct Roc values using the `Inspect.inspect` function. 
+The `Inspect` Ability defines the `toInspector` function which can be used with an Inspector to inspect Roc values using the `Inspect.inspect` function. 
 
 Example Inspectors:
 - A [LogFormatter](https://github.com/roc-lang/roc/blob/main/examples/LogFormatter.roc) which creates a string representation of Roc values, for use e.g. debug printing to the console. 
