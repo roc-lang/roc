@@ -4614,39 +4614,7 @@ fn linked_list_trmc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn temporary_test_for_norbi() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            ConsList a : [Nil, Cons a (ConsList a) (ConsList a)]
-
-            seq = \n ->
-                if n == 0 then
-                    Nil
-                else
-                    next = seq (n-1)
-                    Cons n next next
-
-            car : ConsList a -> Result a [ListWasEmpty]
-            car = \l ->
-                when l is
-                    Nil -> Err ListWasEmpty
-                    Cons x _ _-> Ok x
-
-            main =
-                seq 10 |> car
-           "#
-        ),
-        9000000,
-        i64
-    );
-}
-
-#[test]
-#[cfg(feature="gen-dev")]
+#[cfg(feature = "gen-dev")]
 fn linked_list_with_record_trmc() {
     assert_evals_to!(
         indoc!(
