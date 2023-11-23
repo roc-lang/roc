@@ -921,6 +921,8 @@ impl<'a> TrmcEnv<'a> {
                     return self.walk_stmt(env, next, trmc_call_locations);
                 }
 
+                // Checks if this is a struct with one of the field being a trmc eligible recursive call
+                // if so, replaces that call with a null pointer
                 if let Expr::Struct(args) = expr {
                     let rec_call_struct_index_opt = args.iter().position(|arg| {
                         self.trmc_calls.keys().enumerate().any(|(i, call)| {
@@ -934,11 +936,10 @@ impl<'a> TrmcEnv<'a> {
                     if let Some(rec_call_struct_arg_index) = rec_call_struct_index_opt {
                         let struct_arg_null_symbol = env.named_unique_symbol("struct_arg_null");
 
-                        let mut args_with_hole = vec::Vec::with_capacity_in(args.len(), arena);
-                        args_with_hole.extend_from_slice(args);
+                        let args_with_hole = arena.alloc_slice_copy(args);
                         args_with_hole[rec_call_struct_arg_index] = struct_arg_null_symbol;
 
-                        let struct_with_hole = Expr::Struct(args_with_hole.into_bump_slice());
+                        let struct_with_hole = Expr::Struct(args_with_hole);
                         let let_struct_with_hole =
                             |next| Stmt::Let(*symbol, struct_with_hole, *layout, next);
 
@@ -1066,17 +1067,13 @@ impl<'a> TrmcEnv<'a> {
                                         )
                                     };
 
-                                    //TODO: arena.alloc
-                                    let mut arguments = Vec::from_iter_in(
-                                        cons_info.arguments.iter().copied(),
-                                        env.arena,
-                                    );
+                                    let arguments = arena.alloc_slice_copy(cons_info.arguments);
                                     arguments[recursive_field_index] = tag_arg_null_symbol;
 
                                     let tag_expr = Expr::Tag {
                                         tag_layout: cons_info.tag_layout,
                                         tag_id: cons_info.tag_id,
-                                        arguments: arguments.into_bump_slice(),
+                                        arguments,
                                         reuse: None,
                                     };
                                     let let_tag =
