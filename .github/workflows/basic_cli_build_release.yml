@@ -9,7 +9,7 @@ concurrency:
   
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.gz
+  ARCHIVE_FORMAT: .tar.br
   BASIC_CLI_BRANCH: main
 
 jobs:
