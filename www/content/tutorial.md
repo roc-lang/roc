@@ -349,12 +349,6 @@ You can give `dbg` any expression you like, for example:
 dbg Str.concat singular plural
 ```
 
-An easy way to print multiple values at a time is to wrap them in a tag, for example a concise tag like `T`:
-
-```roc
-dbg T "the value of count is:" count
-```
-
 > **Note:** `dbg` is a debugging tool, and is only available when running your program via a `roc` subcommand (for example using `roc dev`, `roc run`, or `roc test`). When you build a standalone application with `roc build`, any uses of `dbg` won't be included!
 
 ## [Records](#records) {#records}
@@ -606,6 +600,16 @@ stoplightStr =
 ```
 
 Either style can be a reasonable choice depending on the circumstances.
+
+### [Tags in dbg](#tags-in-dbg) {#tags-in-dbg}
+
+Tags can be a useful way to print multiple values when using `dbg` for print debugging. You can use a concise tag like `T`:
+
+```roc
+dbg T "the value of count is:" count
+```
+
+<samp><span class="kw">[stoplight.roc 6:8]</span> T "the value of count is:" 5</samp>
 
 ### [Tags with payloads](#tags-with-payloads) {#tags-with-payloads}
 
