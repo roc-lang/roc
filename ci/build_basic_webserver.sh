@@ -42,7 +42,7 @@ cd roc_nightly
 # prevent https://github.com/roc-lang/basic-webserver/issues/9
 if [ "$OS" != "Linux" ] || [ "$ARCH" != "x86_64" ]; then
     # build the basic-webserver platform
-    ./roc build ../basic-webserver/examples/echo.roc
+    ./roc build ../basic-webserver/examples/echo.roc --optimize
 fi
 
 # We need this extra variable so we can safely check if $2 is empty later
@@ -50,7 +50,7 @@ EXTRA_ARGS=${2:-}
 
 # In some rare cases it's nice to be able to use the legacy linker, so we produce the .o file to be able to do that
 if [ -n "${EXTRA_ARGS}" ];
- then ./roc build $EXTRA_ARGS ../basic-webserver/examples/echo.roc
+ then ./roc build $EXTRA_ARGS ../basic-webserver/examples/echo.roc --optimize
 fi
 
 cd ..
