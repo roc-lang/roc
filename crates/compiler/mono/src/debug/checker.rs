@@ -618,6 +618,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
         })
     }
 
+    //TODO: make it work for Expr::GetElementPointer
+    //which has list of indices, not a single index
     fn check_union_field_ptr_at_index(
         &mut self,
         structure: Symbol,

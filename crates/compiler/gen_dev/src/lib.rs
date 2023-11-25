@@ -859,7 +859,6 @@ trait Backend<'a> {
                 self.load_union_field_ptr_at_index(
                     sym,
                     structure,
-                    indices[0] as u16,
                     indices,
                     union_layout,
                 );
@@ -2437,8 +2436,7 @@ trait Backend<'a> {
         &mut self,
         sym: &Symbol,
         structure: &Symbol,
-        tag_id: TagIdIntType,
-        index: &[u64],
+        indices: &[u64],
         union_layout: &UnionLayout<'a>,
     );
 
