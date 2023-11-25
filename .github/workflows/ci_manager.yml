@@ -28,12 +28,12 @@ jobs:
 
     start-nix-linux-x86-64-tests:
         needs: check-changes
-        if: needs.check-changes.run_tests == 'full'
+        if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/nix_linux_x86_64.yml
 
     start-nix-macos-apple-silicon-tests:
         needs: check-changes
-        if: needs.check-changes.run_tests == 'full'
+        if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/nix_macos_apple_silicon.yml
 
     finish-full:
@@ -45,7 +45,7 @@ jobs:
     finish-basic:
         runs-on: ubuntu-22.04
         needs: [check-changes]
-        if: needs.check-changes.run_tests == 'basic'
+        if: needs.check-changes.outputs.run_tests == 'basic'
         steps:
             - run: echo "all jobs succeeded!"
   
