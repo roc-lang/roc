@@ -32,6 +32,7 @@ comptime {
     exportDecFn(dec.fromF64C, "from_float.f64");
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.fromU64C, "from_u64");
+    exportDecFn(dec.logC, "log");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
