@@ -150,8 +150,9 @@ hr {
 }
 
 #sponsor-logos svg {
-    height: 54px;
+    height: 64px;
     margin-right: 72px;
+    margin-top: 32px;
 }
 
 #sponsor-logos .logo-rwx {
