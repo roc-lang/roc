@@ -1,6 +1,6 @@
 # Work in progress!
 
-Roc is not ready for a 0.1 release yet, but we do have:
+[Roc](https://www.roc-lang.org) is not ready for a 0.1 release yet, but we do have:
 
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://roc-lang.org/tutorial)
