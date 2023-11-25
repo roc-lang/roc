@@ -11,13 +11,13 @@ jobs:
     check-changes:
         runs-on: ubuntu-22.04
         outputs:
-            full_tests: ${{ steps.filter.outputs.full_tests }}
+            run_tests: ${{ steps.filecheck.outputs.run_tests }}
         steps:
             - name: Checkout
               uses: actions/checkout@v3
 
             - name: Check for only .md changes
-              id: filter
+              id: filecheck
               run: |
                 git fetch origin ${{ github.base_ref }}
                 if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$)'; then
