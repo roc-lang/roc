@@ -1,3 +1,4 @@
+
 # Documentation
 
 - [builtins](/builtins) - docs for modules built into the language—`Str`, `Num`, etc.
@@ -8,7 +9,11 @@ In the future, a language reference will be on this page too.
 
 ## [Guides](#guides) {#guides}
 
-- [FAQ (Frequently Asked Questions)](https://github.com/roc-lang/roc/blob/main/FAQ.md)
-- [Platforms & Applications](/platforms)
+- [Frequently Asked Questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
 - [Roc for Elm Programmers](https://github.com/roc-lang/roc/blob/main/roc-for-elm-programmers.md)
 - [Tutorial](/tutorial)
+
+## [Language Reference](#language-reference) {#language-reference}
+
+- [Platforms & Applications](/platforms)
+- [Abilities](/abilities)
