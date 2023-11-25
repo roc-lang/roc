@@ -114,7 +114,7 @@ The [tutorial](/tutorial) introduces these gradually and in more depth, but this
 
 <!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->
 
-## Sponsors
+## [Sponsors](#sponsors) {#sponsors}
 
 We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
 
