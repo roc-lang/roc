@@ -21,10 +21,12 @@ jobs:
               run: |
                 git fetch origin ${{ github.base_ref }}
                 if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$)'; then
-                    echo "run_tests=full" >> $GITHUB_STATE
+                    echo "run_tests=full" >> $GITHUB_OUTPUT
                 else
-                    echo "run_tests=basic" >> $GITHUB_STATE
+                    echo "run_tests=basic" >> $GITHUB_OUTPUT
                 fi
+
+            - run: echo "debug output ${{ steps.filecheck.outputs.run_tests }}"
 
     start-nix-linux-x86-64-tests:
         needs: check-changes
