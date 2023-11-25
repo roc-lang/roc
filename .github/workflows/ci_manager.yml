@@ -48,4 +48,14 @@ jobs:
         if: needs.check-changes.outputs.run_tests == 'basic'
         steps:
             - run: echo "all jobs succeeded!"
+
+    
+    print-test-output:
+        runs-on: ubuntu-22.04
+        needs: check-changes
+        steps:
+            - name: Print run_tests output
+              run: |
+                echo "run_tests output: ${{ needs.check-changes.outputs.run_tests }}"
+        
   
