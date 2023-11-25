@@ -116,7 +116,7 @@ The [tutorial](/tutorial) introduces these gradually and in more depth, but this
 
 ## [Sponsors](#sponsors) {#sponsors}
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), and [Tweede golf](https://tweedegolf.nl/en):
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), [Tweede golf](https://tweedegolf.nl/en), and [ohne-makler](https://www.ohne-makler.net):
 
 <p id="sponsor-logos" aria-hidden="true"> <!-- aria-hidden because for screen readers this whole section is redundant with the preceding paragraph -->
     <a href="https://www.vendr.com"><svg class="logo-vendr" viewBox="0 0 193 48" fill="none" xmlns="http://www.w3.org/2000/svg">
