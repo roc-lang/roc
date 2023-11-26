@@ -1232,6 +1232,54 @@ mod test_can {
     }
 
     #[test]
+    fn optional_field_with_binary_op() {
+        let src = indoc!(
+            r#"
+                { bar ? 1 + 1 } = {}
+                bar
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn nested_optional_field_with_binary_op() {
+        let src = indoc!(
+            r#"
+                when { x: ([{}], "foo") } is
+                    { x: ([{ bar ? 1 + 1 }], _) } -> bar
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
+    fn multiline_record_pattern() {
+        let src = indoc!(
+            r#"
+                x = { a: 1, b: 2, c: 3 }
+                {
+                    a,
+                    b,
+                    c,
+                } = x
+
+                a + b + c
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+    }
+
+    #[test]
     fn issue_2534() {
         let src = indoc!(
             r#"
