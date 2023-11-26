@@ -745,11 +745,11 @@ Ensuring that all elements in a list share a type eliminates entire categories o
 We can use tags with payloads to make a list that contains a mixture of different types. For example:
 
 ```roc
-List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
+List.map [StrElem "A", StrElem "", NumElem 1, StrElem "c", NumElem -3] \elem ->
     when elem is
         NumElem num -> Num.isNegative num
-        StrElem str -> Str.isCapitalized str
-# returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
+        StrElem str -> Str.isEmpty str
+# returns [Bool.false, Bool.true, Bool.false, Bool.false, Bool.true]
 ```
 
 Compare this with the example from earlier, which caused a compile-time error:
@@ -758,7 +758,7 @@ Compare this with the example from earlier, which caused a compile-time error:
 List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
 ```
 
-The version that uses tags works because we aren't trying to call `Num.isNegative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.isNegative` or `Str.isCapitalized` depending on which type we have.
+The version that uses tags works because we aren't trying to call `Num.isNegative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.isNegative` or `Str.isEmpty` depending on which type we have.
 
 We could take this as far as we like, adding more different tags (e.g. `BoolElem Bool.true`) and then adding more branches to the `when` to handle them appropriately.
 
