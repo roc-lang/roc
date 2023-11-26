@@ -856,12 +856,7 @@ trait Backend<'a> {
                 ..
             } => {
                 debug_assert!(indices.len() >= 2);
-                self.load_union_field_ptr_at_index(
-                    sym,
-                    structure,
-                    indices,
-                    union_layout,
-                );
+                self.load_union_field_ptr_at_index(sym, structure, indices, union_layout);
             }
             Expr::GetTagId {
                 structure,

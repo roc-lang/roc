@@ -4615,6 +4615,38 @@ fn linked_list_trmc() {
 
 #[test]
 #[cfg(feature = "gen-dev")]
+fn linked_list_with_nested_records_trmc() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            LinkedList a : [Nil, Cons { f : {d: a, aaa: {rest: LinkedList a}}, z: {a : a, b: a }}]
+
+            repeat = \value, n ->
+                if n == 0 then
+                    Nil
+                else
+                    Cons {  f: {d: value, aaa: {rest: repeat value (n - 1)}}, z: {a: value, b: value} }
+
+            length : LinkedList a -> I64
+            length = \list ->
+                when list is
+                    Nil -> 0
+                    Cons { f: {aaa: {rest}} } -> 1 + length rest
+
+            #main : I64
+            main =             
+                repeat "foo" 5 |> length
+            "#
+        ),
+        5,
+        i64
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-dev")]
 fn linked_list_with_record_trmc() {
     assert_evals_to!(
         indoc!(

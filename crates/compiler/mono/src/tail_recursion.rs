@@ -59,6 +59,7 @@ pub fn apply_trmc<'a, 'i>(
                     crate::tail_recursion::TrmcEnv::init(env, proc, trmc_candidate_symbols);
                 *proc = new_proc;
             } else {
+                drop(trmc_candidate_symbols);
                 let mut args = Vec::with_capacity_in(proc.args.len(), arena);
                 let mut proc_args = Vec::with_capacity_in(proc.args.len(), arena);
 
@@ -403,11 +404,17 @@ fn insert_jumps<'a>(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+struct TailTagArgInfo<'a> {
+    top_container: Symbol,
+    indices_from_rec_call_to_top: &'a [u64],
+}
+
+#[derive(Debug)]
 enum RecCallLocation<'a> {
     DirectlyInTag,
-    MemberOfStruct(Symbol, &'a [u64]),
-    //member of nonRec tag union?
+    MemberOfStruct(TailTagArgInfo<'a>),
+    //TODO: member of nonRec tag union
 }
 
 #[derive(Debug, Clone)]
@@ -416,37 +423,11 @@ enum RecCallPath<'a> {
     NestedInStructs(Vec<'a, Symbol>, Vec<'a, u64>),
 }
 
-//TODO: imp candidate set to Vec &reccalllocation, so that it can be moved into the function and
-//that fn can return as the owner of data
-impl<'a> From<RecCallPath<'a>> for RecCallLocation<'a> {
-    fn from(path: RecCallPath<'a>) -> Self {
-        match path {
-            RecCallPath::DirectlyInTag => RecCallLocation::DirectlyInTag,
-            RecCallPath::NestedInStructs(symbol_chail, symbol_indices) => {
-                RecCallLocation::MemberOfStruct(symbol_chail[0], &symbol_indices)
-            }
-        }
-    }
-}
-
-fn aaa(
-    candidates: TrmcCandidateSet,
-) -> (VecMap<Symbol, Option<Call>>, std::vec::Vec<RecCallLocation>) {
-    candidates
-        .confirmed()
-        .map(|(s, path)| {
-            let loc = match path {
-                RecCallPath::DirectlyInTag => RecCallLocation::DirectlyInTag,
-                RecCallPath::NestedInStructs(symbol_chail, symbol_indices) => {
-                    RecCallLocation::MemberOfStruct(symbol_chail[0], symbol_indices)
-                }
-            };
-            ((s, None), loc)
-        })
-        .unzip()
-}
 #[derive(Debug, Default)]
 struct TrmcCandidateSet<'a> {
+    //TODO: merge the interner and the call_paths, so there is no manual keeping them in sync.
+    //Care for ovnership
+    //Alternatively provide methods that take care of keeping them in sync
     interner: arrayvec::ArrayVec<Symbol, 64>,
     call_paths: arrayvec::ArrayVec<RecCallPath<'a>, 64>,
     confirmed: u64,
@@ -455,17 +436,11 @@ struct TrmcCandidateSet<'a> {
 }
 
 impl<'a> TrmcCandidateSet<'a> {
-    fn confirmed(&self) -> impl Iterator<Item = (Symbol, RecCallPath)> + '_ {
-        self.interner.iter().enumerate().filter_map(|(i, s)| {
-            (self.confirmed & (1 << i) != 0).then_some((*s, self.call_paths[i].clone()))
-        })
-    }
-
-    fn active(&self) -> impl Iterator<Item = Symbol> + '_ {
+    fn confirmed(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.interner
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| (self.active & (1 << i) != 0).then_some(*s))
+            .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(*s))
     }
 
     fn position(&self, symbol: Symbol) -> Option<usize> {
@@ -481,17 +456,6 @@ impl<'a> TrmcCandidateSet<'a> {
         self.call_paths.push(RecCallPath::DirectlyInTag);
 
         self.active |= 1 << index;
-    }
-
-    fn retain<F>(&mut self, keep: F)
-    where
-        F: Fn(usize, &Symbol) -> bool,
-    {
-        for (i, s) in self.interner.iter().enumerate() {
-            if !keep(i, s) {
-                self.invalidate_at(i)
-            }
-        }
     }
 
     fn invalidate_at(&mut self, i: usize) {
@@ -525,7 +489,7 @@ impl<'a> TrmcCandidateSet<'a> {
 fn trmc_candidates<'a, I>(
     interner: &'_ I,
     arena: &'a Bump,
-    proc: &'_ Proc<'a>,
+    proc: &'a Proc<'a>,
 ) -> TrmcCandidateSet<'a>
 where
     I: LayoutInterner<'a>,
@@ -551,24 +515,30 @@ where
 
 fn trmc_candidates_help<'a>(
     function_name: LambdaName,
-    stmt: &'_ Stmt<'_>,
+    stmt: &'a Stmt<'a>,
     arena: &'a Bump,
     candidates: &mut TrmcCandidateSet<'a>,
 ) {
     //when there is a recursive call within a path of structs,
     //invalidate the call if it or any of the struct containing it is used,
     //apart from the top most struct, which can be inside a tail constructor
-    candidates.retain(|i, call_sym| match candidates.call_paths[i] {
-        RecCallPath::DirectlyInTag => true,
-        RecCallPath::NestedInStructs(structs, _) => {
-            let intermediate_rec_call_holders_not_used = !structs
+    for i in 0..candidates.call_paths.len() {
+        let path = &candidates.call_paths[i];
+        let call = candidates.interner[i];
+        if let RecCallPath::NestedInStructs(structs, _) = path {
+            let nested_rec_value_used = structs
                 .iter()
                 .take(structs.len() - 1)
+                .chain(std::iter::once(&call))
                 .any(|symbol| stmt_contains_symbol_nonrec(stmt, *symbol));
 
-            !stmt_contains_symbol_nonrec(stmt, *call_sym) && intermediate_rec_call_holders_not_used
+            if nested_rec_value_used {
+                candidates.invalidate_at(i);
+            }
         }
-    });
+    }
+
+    push_nested_struct_to_call_path(stmt, candidates, arena);
 
     // a TRMC opportunity is a return stmt of a tag appliaction stmt on a:
     // 1) recursive call's return value, or
@@ -578,8 +548,12 @@ fn trmc_candidates_help<'a>(
         Some(cons_info) => {
             let mut found = None;
             'outer: for (arg_idx, &arg) in cons_info.arguments.iter().enumerate() {
-                for (call_idx, call) in candidates.active().enumerate() {
-                    let call_path = candidates.call_paths[call_idx];
+                for i in 0..candidates.interner.len() {
+                    if candidates.active & (1 << i) == 0 {
+                        continue;
+                    }
+                    let call = candidates.interner[i];
+                    let call_path = &candidates.call_paths[i];
                     match call_path {
                         // case 1), the tail tag application must directly use
                         // the result of the recursive call
@@ -593,14 +567,14 @@ fn trmc_candidates_help<'a>(
                                     .skip(arg_idx + 1)
                                     .any(|arg| *arg == call)
                                 {
-                                    candidates.invalidate_at(call_idx);
+                                    candidates.invalidate_at(i);
                                 } else {
-                                    found = Some((call, RecCallPath::DirectlyInTag));
+                                    found = Some(call);
                                 }
                             }
                         }
                         // case 2), the tail tag application must directly use the struct
-                        RecCallPath::NestedInStructs(structs, indices) => {
+                        RecCallPath::NestedInStructs(structs, _) => {
                             let out_most_rec_struct = structs[structs.len() - 1];
                             if arg == out_most_rec_struct {
                                 // same recursive call value occuring more than once
@@ -611,9 +585,9 @@ fn trmc_candidates_help<'a>(
                                     .skip(arg_idx + 1)
                                     .any(|arg| *arg == out_most_rec_struct)
                                 {
-                                    candidates.invalidate_at(call_idx);
+                                    candidates.invalidate_at(i);
                                 } else {
-                                    found = Some((call, RecCallPath::DirectlyInTag));
+                                    found = Some(call);
                                     break 'outer;
                                 }
                             }
@@ -626,19 +600,32 @@ fn trmc_candidates_help<'a>(
         None => None,
     };
 
-    // add struct to the candidate set if it has a recursive call
-    // member or another struct with the same property
-    is_struct_with_value_containing_rec_call(stmt, candidates, arena);
-
     // if we find a usage, this is a confirmed TRMC call
-    if let Some((recursive_call, loc_of_rec_call)) = recursive_call {
+    if let Some(recursive_call) = recursive_call {
         candidates.confirm(recursive_call);
         return;
     }
 
-    // TODO:
-    // if the stmt uses an active recursive call or the top-most struct that encapsulates one, that invalidates the recursive call for this branch
-    candidates.retain(|_, recursive_call| !stmt_contains_symbol_nonrec(stmt, *recursive_call));
+    //For all recursive calls, or top-level structs
+    //containing a recursive call nested in them,
+    //if they get used, invalidate the call.
+    for i in 0..candidates.call_paths.len() {
+        let path = &candidates.call_paths[i];
+        let call = candidates.interner[i];
+        match path {
+            RecCallPath::NestedInStructs(structs, _) => {
+                let top_lvl_struct = structs[structs.len() - 1];
+                if stmt_contains_symbol_nonrec(stmt, top_lvl_struct) {
+                    candidates.invalidate_at(i);
+                }
+            }
+            RecCallPath::DirectlyInTag => {
+                if stmt_contains_symbol_nonrec(stmt, call) {
+                    candidates.invalidate_at(i);
+                }
+            }
+        }
+    }
 
     match stmt {
         Stmt::Let(symbol, expr, _, next) => {
@@ -680,22 +667,21 @@ fn trmc_candidates_help<'a>(
     }
 }
 
-struct StructWithRecCall<'a> {
-    struct_symbol: &'a Symbol,
-    index_of_rec_call_value: u64,
-    next: &'a Stmt<'a>,
-    rec_value: &'a Symbol,
-}
-
-fn is_struct_with_value_containing_rec_call<'a>(
+/// Add struct to the candidate set if it has a recursive call return value
+/// as member or another struct with the same property
+fn push_nested_struct_to_call_path<'a>(
     stmt: &'a Stmt<'a>,
-    candidates: &mut TrmcCandidateSet,
+    candidates: &mut TrmcCandidateSet<'a>,
     arena: &'a Bump,
 ) {
-    if let Stmt::Let(struct_symbol, Expr::Struct(args), _, next) = stmt {
+    if let Stmt::Let(struct_symbol, Expr::Struct(args), _, _) = stmt {
         for (arg_idx, &arg) in args.iter().enumerate() {
-            for (call_idx, call) in candidates.active().enumerate() {
-                let mut call_path = &candidates.call_paths[call_idx];
+            for call_idx in 0..candidates.interner.len() {
+                if candidates.active & (1 << call_idx) == 0 {
+                    continue;
+                }
+                let call = candidates.interner[call_idx];
+                let call_path = &mut candidates.call_paths[call_idx];
                 match call_path {
                     RecCallPath::DirectlyInTag => {
                         if arg == call {
@@ -927,13 +913,24 @@ impl<'a> TrmcEnv<'a> {
 
         let jump_stmt = Stmt::Jump(joinpoint_id, jump_arguments.into_bump_slice());
 
-        let (trmc_calls, trmc_call_locations): (
-            VecMap<Symbol, Option<Call>>,
-            std::vec::Vec<RecCallLocation>,
-        ) = trmc_calls
-            .confirmed()
-            .map(|(s, loc)| ((s, None), loc.into()))
-            .unzip();
+        let mut trmc_call_locations = Vec::new_in(arena);
+        for i in 0..trmc_calls.interner.len() {
+            if trmc_calls.confirmed & (1 << i) != 0 {
+                let path = &trmc_calls.call_paths[i];
+                let loc = match path {
+                    RecCallPath::DirectlyInTag => RecCallLocation::DirectlyInTag,
+                    RecCallPath::NestedInStructs(symbol_chail, symbol_indices) => {
+                        RecCallLocation::MemberOfStruct(TailTagArgInfo {
+                            top_container: symbol_chail[symbol_chail.len() - 1],
+                            indices_from_rec_call_to_top: arena.alloc(symbol_indices),
+                        })
+                    }
+                };
+                trmc_call_locations.push(loc);
+            }
+        }
+        let trmc_calls: VecMap<Symbol, Option<Call>> =
+            trmc_calls.confirmed().map(|s| (s, None)).collect();
 
         let mut this = Self {
             lambda_name: proc.name,
@@ -1011,7 +1008,6 @@ impl<'a> TrmcEnv<'a> {
                     };
 
                     *opt_call = Some(call.clone());
-
                     return self.walk_stmt(env, next, trmc_call_locations);
                 }
 
@@ -1020,10 +1016,8 @@ impl<'a> TrmcEnv<'a> {
                 if let Expr::Struct(args) = expr {
                     let rec_call_struct_index_opt = args.iter().position(|arg| {
                         self.trmc_calls.keys().enumerate().any(|(i, call)| {
-                            matches!(
-                                trmc_call_locations[i],
-                                RecCallLocation::MemberOfStruct(_, _)
-                            ) && *call == *arg
+                            matches!(trmc_call_locations[i], RecCallLocation::MemberOfStruct(_))
+                                && *call == *arg
                         })
                     });
 
@@ -1071,25 +1065,31 @@ impl<'a> TrmcEnv<'a> {
 
                 if let Some(cons_info) = Self::is_terminal_constructor(stmt) {
                     // figure out which TRMC call to use here. We pick the first one that works
-                    let opt_recursive_call = cons_info.arguments.iter().find_map(|arg| {
-                        self.trmc_calls
-                            .keys()
+                    let opt_recursive_call =
+                        cons_info
+                            .arguments
+                            .iter()
                             .enumerate()
-                            .position(|(i, call)| match trmc_call_locations[i] {
-                                RecCallLocation::DirectlyInTag => *arg == *call,
-                                RecCallLocation::MemberOfStruct(struct_symbol, _) => {
-                                    *arg == struct_symbol
-                                }
-                            })
-                            .and_then(|idx| {
+                            .find_map(|(arg_idx, arg)| {
                                 self.trmc_calls
-                                    .values()
-                                    .nth(idx)
-                                    .unwrap()
-                                    .as_ref()
-                                    .map(|call| (arg, call, &trmc_call_locations[idx]))
-                            })
-                    });
+                                    .keys()
+                                    .enumerate()
+                                    .position(|(i, call)| match trmc_call_locations[i] {
+                                        RecCallLocation::DirectlyInTag => *arg == *call,
+                                        RecCallLocation::MemberOfStruct(TailTagArgInfo {
+                                            top_container,
+                                            ..
+                                        }) => *arg == top_container,
+                                    })
+                                    .and_then(|idx| {
+                                        self.trmc_calls
+                                            .values()
+                                            .nth(idx)
+                                            .unwrap()
+                                            .as_ref()
+                                            .map(|call| (arg_idx, call, &trmc_call_locations[idx]))
+                                    })
+                            });
                     match opt_recursive_call {
                         None => {
                             // this control flow path did not encounter a recursive call. Just
@@ -1104,32 +1104,10 @@ impl<'a> TrmcEnv<'a> {
 
                             return output;
                         }
-                        Some((call_symbol, call, call_location)) => {
+
+                        Some((recursive_field_index, call, call_location)) => {
                             // we did encounter a recursive call, and can perform TRMC in this
                             // branch.
-                            let opt_recursive_field_index =
-                                cons_info
-                                    .arguments
-                                    .iter()
-                                    .position(|s| match call_location {
-                                        RecCallLocation::DirectlyInTag => *s == *call_symbol,
-                                        RecCallLocation::MemberOfStruct(struct_symbol, _) => {
-                                            *s == *struct_symbol
-                                        }
-                                    });
-
-                            let recursive_field_index = match opt_recursive_field_index {
-                                None => {
-                                    let next = self.walk_stmt(env, next, trmc_call_locations);
-                                    return Stmt::Let(
-                                        *symbol,
-                                        expr.clone(),
-                                        *layout,
-                                        arena.alloc(next),
-                                    );
-                                }
-                                Some(v) => v,
-                            };
 
                             let new_hole_symbol = env.named_unique_symbol("newHole");
                             let let_new_hole = |get_reference_expr: Expr<'a>, next| {
@@ -1203,7 +1181,10 @@ impl<'a> TrmcEnv<'a> {
                                     ));
                                     return output;
                                 }
-                                RecCallLocation::MemberOfStruct(_, struct_indices) => {
+                                RecCallLocation::MemberOfStruct(TailTagArgInfo {
+                                    indices_from_rec_call_to_top: struct_indices,
+                                    ..
+                                }) => {
                                     let let_tag =
                                         |next| Stmt::Let(*symbol, expr.clone(), *layout, next);
 
@@ -1211,7 +1192,7 @@ impl<'a> TrmcEnv<'a> {
                                         vec::Vec::with_capacity_in(2 + struct_indices.len(), arena);
                                     indices.push(cons_info.tag_id as u64);
                                     indices.push(recursive_field_index as u64);
-                                    indices.extend_from_slice(struct_indices);
+                                    indices.extend(struct_indices.iter().rev());
                                     let indices = indices.into_bump_slice();
 
                                     let get_reference_expr = Expr::GetElementPointer {
