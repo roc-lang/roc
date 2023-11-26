@@ -418,7 +418,6 @@ impl<R: Read> Read for HashReader<R> {
 struct ProgressReporter<R: Read> {
     read: usize,
     total: usize,
-    last_reported: usize,
     reader: R,
 }
 
@@ -426,7 +425,6 @@ impl<R: Read> ProgressReporter<R> {
     fn new(reader: R, total: usize) -> Self {
         ProgressReporter {
             read: 0,
-            last_reported: 0,
             total,
             reader,
         }
@@ -445,7 +443,6 @@ impl<R: Read> Read for ProgressReporter<R> {
             self.total as f32 / 1_000_000.0,
         );
         std::io::stdout().flush()?;
-        self.last_reported = self.read;
 
         if self.read >= self.total {
             println!("");
