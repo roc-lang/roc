@@ -8,7 +8,8 @@ use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, RecordBuilderField, StrLiteral, StrSegment, ValueDef, WhenBranch,
+    AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral, StrSegment, ValueDef,
+    WhenBranch,
 };
 use roc_region::all::{Loc, Region};
 
@@ -70,7 +71,10 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
     use ValueDef::*;
 
     match def {
-        Body(loc_pattern, loc_expr) => Body(loc_pattern, desugar_expr(arena, loc_expr)),
+        Body(loc_pattern, loc_expr) => Body(
+            desugar_loc_pattern(arena, loc_pattern),
+            desugar_expr(arena, loc_expr),
+        ),
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
             ann_pattern,
@@ -238,7 +242,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         }
         Closure(loc_patterns, loc_ret) => arena.alloc(Loc {
             region: loc_expr.region,
-            value: Closure(loc_patterns, desugar_expr(arena, loc_ret)),
+            value: Closure(
+                desugar_loc_patterns(arena, loc_patterns),
+                desugar_expr(arena, loc_ret),
+            ),
         }),
         Backpassing(loc_patterns, loc_body, loc_ret) => {
             // loc_patterns <- loc_body
@@ -249,7 +256,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             let desugared_body = desugar_expr(arena, loc_body);
 
             let desugared_ret = desugar_expr(arena, loc_ret);
-            let closure = Expr::Closure(loc_patterns, desugared_ret);
+            let desugared_loc_patterns = desugar_loc_patterns(arena, loc_patterns);
+            let closure = Expr::Closure(desugared_loc_patterns, desugared_ret);
             let loc_closure = Loc::at(loc_expr.region, closure);
 
             match &desugared_body.value {
@@ -352,10 +360,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
             for branch in branches.iter() {
-                let desugared = desugar_expr(arena, &branch.value);
-
-                let mut alternatives = Vec::with_capacity_in(branch.patterns.len(), arena);
-                alternatives.extend(branch.patterns.iter().copied());
+                let desugared_expr = desugar_expr(arena, &branch.value);
+                let desugared_patterns = desugar_loc_patterns(arena, branch.patterns);
 
                 let desugared_guard = if let Some(guard) = &branch.guard {
                     Some(*desugar_expr(arena, guard))
@@ -363,11 +369,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     None
                 };
 
-                let alternatives = alternatives.into_bump_slice();
-
                 desugared_branches.push(&*arena.alloc(WhenBranch {
-                    patterns: alternatives,
-                    value: *desugared,
+                    patterns: desugared_patterns,
+                    value: *desugared_expr,
                     guard: desugared_guard,
                 }));
             }
@@ -541,6 +545,85 @@ fn desugar_field<'a>(
         SpaceAfter(field, _spaces) => desugar_field(arena, field),
 
         Malformed(string) => Malformed(string),
+    }
+}
+
+fn desugar_loc_patterns<'a>(
+    arena: &'a Bump,
+    loc_patterns: &'a [Loc<Pattern<'a>>],
+) -> &'a [Loc<Pattern<'a>>] {
+    Vec::from_iter_in(
+        loc_patterns.iter().map(|loc_pattern| Loc {
+            region: loc_pattern.region,
+            value: desugar_pattern(arena, loc_pattern.value),
+        }),
+        arena,
+    )
+    .into_bump_slice()
+}
+
+fn desugar_loc_pattern<'a>(
+    arena: &'a Bump,
+    loc_pattern: &'a Loc<Pattern<'a>>,
+) -> &'a Loc<Pattern<'a>> {
+    arena.alloc(Loc {
+        region: loc_pattern.region,
+        value: desugar_pattern(arena, loc_pattern.value),
+    })
+}
+
+fn desugar_pattern<'a>(arena: &'a Bump, pattern: Pattern<'a>) -> Pattern<'a> {
+    use roc_parse::ast::Pattern::*;
+
+    match pattern {
+        Identifier(_)
+        | Tag(_)
+        | OpaqueRef(_)
+        | NumLiteral(_)
+        | NonBase10Literal { .. }
+        | FloatLiteral(_)
+        | StrLiteral(_)
+        | Underscore(_)
+        | SingleQuote(_)
+        | ListRest(_)
+        | Malformed(_)
+        | MalformedIdent(_, _)
+        | QualifiedIdentifier { .. } => pattern,
+
+        Apply(tag, arg_patterns) => {
+            // Skip desugaring the tag, it should either be a Tag or OpaqueRef
+            let desugared_arg_patterns = Vec::from_iter_in(
+                arg_patterns.iter().map(|arg_pattern| Loc {
+                    region: arg_pattern.region,
+                    value: desugar_pattern(arena, arg_pattern.value),
+                }),
+                arena,
+            )
+            .into_bump_slice();
+
+            Apply(tag, desugared_arg_patterns)
+        }
+        RecordDestructure(field_patterns) => {
+            RecordDestructure(field_patterns.map_items(arena, |field_pattern| Loc {
+                region: field_pattern.region,
+                value: desugar_pattern(arena, field_pattern.value),
+            }))
+        }
+        RequiredField(name, field_pattern) => {
+            RequiredField(name, desugar_loc_pattern(arena, field_pattern))
+        }
+        OptionalField(name, expr) => OptionalField(name, desugar_expr(arena, expr)),
+        Tuple(patterns) => Tuple(patterns.map_items(arena, |elem_pattern| Loc {
+            region: elem_pattern.region,
+            value: desugar_pattern(arena, elem_pattern.value),
+        })),
+        List(patterns) => List(patterns.map_items(arena, |elem_pattern| Loc {
+            region: elem_pattern.region,
+            value: desugar_pattern(arena, elem_pattern.value),
+        })),
+        As(sub_pattern, symbol) => As(desugar_loc_pattern(arena, sub_pattern), symbol),
+        SpaceBefore(sub_pattern, _spaces) => desugar_pattern(arena, *sub_pattern),
+        SpaceAfter(sub_pattern, _spaces) => desugar_pattern(arena, *sub_pattern),
     }
 }
 

@@ -1062,10 +1062,10 @@ pub fn canonicalize_expr<'a>(
             })
         }
         ast::Expr::RecordBuilder(_) => {
-            unreachable!("RecordBuilder should have been desugared by now")
+            internal_error!("RecordBuilder should have been desugared by now")
         }
         ast::Expr::Backpassing(_, _, _) => {
-            unreachable!("Backpassing should have been desugared by now")
+            internal_error!("Backpassing should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
@@ -2338,10 +2338,10 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                             loc_answer.value
                         }
                         Some(_) => {
-                            unreachable!("Tried to inline a non-function");
+                            internal_error!("Tried to inline a non-function");
                         }
                         None => {
-                            unreachable!(
+                            internal_error!(
                                 "Tried to inline a builtin that wasn't registered: {:?}",
                                 symbol
                             );
