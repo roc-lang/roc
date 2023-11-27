@@ -673,7 +673,25 @@ impl<'a> CallerProc<'a> {
 
         let argument_layouts = match capture_layout {
             None => passed_function.argument_layouts,
-            Some(_) => &passed_function.argument_layouts[1..],
+            Some(_capture_layout) => {
+                let capture_layout_index = passed_function.argument_layouts.len() - 1;
+
+                #[cfg(debug_assertions)]
+                {
+                    let passed_capture_layout =
+                        passed_function.argument_layouts[capture_layout_index];
+                    let repr = layout_interner.get_repr(passed_capture_layout);
+
+                    if let LayoutRepr::LambdaSet(lambda_set) = repr {
+                        assert!(layout_interner
+                            .equiv(_capture_layout, lambda_set.runtime_representation()));
+                    } else {
+                        panic!("unexpected layout for capture argument");
+                    }
+                }
+
+                &passed_function.argument_layouts[..capture_layout_index]
+            }
         };
 
         let capture_symbol = ARG_SYMBOLS[0];
