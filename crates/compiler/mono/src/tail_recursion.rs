@@ -404,12 +404,14 @@ fn insert_jumps<'a>(
     }
 }
 
+//TODO: reverse it on creation
 #[derive(Debug)]
 struct TailTagArgInfo<'a> {
     top_container: Symbol,
     indices_from_rec_call_to_top: &'a [u64],
 }
 
+//TODO: do we even need Directly In tag, or is this possible without it?
 #[derive(Debug)]
 enum RecCallLocation<'a> {
     DirectlyInTag,
@@ -417,39 +419,49 @@ enum RecCallLocation<'a> {
     //TODO: member of nonRec tag union
 }
 
-#[derive(Debug, Clone)]
-enum RecCallPath<'a> {
-    DirectlyInTag,
-    NestedInStructs(Vec<'a, Symbol>, Vec<'a, u64>),
+/// TODO: explain the revers and give example
+#[derive(Debug)]
+struct PathToRecCall<'a> {
+    symbols: Vec<'a, Symbol>,
+    indices: Vec<'a, u64>,
 }
 
 #[derive(Debug, Default)]
 struct TrmcCandidateSet<'a> {
-    //TODO: merge the interner and the call_paths, so there is no manual keeping them in sync.
-    //Care for ovnership
-    //Alternatively provide methods that take care of keeping them in sync
     interner: arrayvec::ArrayVec<Symbol, 64>,
-    call_paths: arrayvec::ArrayVec<RecCallPath<'a>, 64>,
+    call_paths: arrayvec::ArrayVec<PathToRecCall<'a>, 64>,
     confirmed: u64,
     active: u64,
     invalid: u64,
 }
 
 impl<'a> TrmcCandidateSet<'a> {
+    fn push_to_path_at(&mut self, i: usize, pair: (Symbol, usize)) {
+        self.call_paths[i].symbols.push(pair.0);
+        self.call_paths[i].indices.push(pair.1 as u64);
+    }
+    fn tail_tag_arg_at(&self, i: usize) -> Symbol {
+        let symbols_at_i = &self.call_paths[i].symbols;
+        symbols_at_i[symbols_at_i.len() - 1]
+    }
+    fn is_call_nested_at(&self, i: usize) -> bool {
+        self.call_paths[i].symbols.len() == 1
+    }
     fn confirmed(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.interner
             .iter()
             .enumerate()
             .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(*s))
     }
-
-    fn insert(&mut self, symbol: Symbol) {
+    fn insert(&mut self, symbol: Symbol, arena: &'a Bump) {
         // there really is no way it could have been inserted already
         debug_assert!(!self.interner.iter().any(|s| *s == symbol));
 
         let index = self.interner.len();
         self.interner.push(symbol);
-        self.call_paths.push(RecCallPath::DirectlyInTag);
+        let path = PathToRecCall{symbols:vec![in arena; symbol], indices: Vec::new_in(arena) };
+        self.call_paths
+            .push(path);
 
         self.active |= 1 << index;
     }
@@ -511,7 +523,7 @@ fn trmc_candidates_help<'a>(
 ) {
     invalidate_on_nested_rec_call_use(candidates, stmt);
 
-    handle_struct_encapsulating_candidate(stmt, candidates, arena);
+    handle_struct_encapsulating_candidate(stmt, candidates);
 
     if let Some(call_idx) = is_trmc_confirmed(candidates, stmt) {
         candidates.confirm_at(call_idx);
@@ -522,20 +534,8 @@ fn trmc_candidates_help<'a>(
     //containing a recursive call nested in them,
     //if they get used, invalidate the call.
     for i in 0..candidates.call_paths.len() {
-        let path = &candidates.call_paths[i];
-        let call = candidates.interner[i];
-        match path {
-            RecCallPath::NestedInStructs(structs, _) => {
-                let top_lvl_struct = structs[structs.len() - 1];
-                if stmt_contains_symbol_nonrec(stmt, top_lvl_struct) {
-                    candidates.invalidate_at(i);
-                }
-            }
-            RecCallPath::DirectlyInTag => {
-                if stmt_contains_symbol_nonrec(stmt, call) {
-                    candidates.invalidate_at(i);
-                }
-            }
+        if stmt_contains_symbol_nonrec(stmt, candidates.tail_tag_arg_at(i)) {
+            candidates.invalidate_at(i);
         }
     }
 
@@ -544,7 +544,7 @@ fn trmc_candidates_help<'a>(
             // find a new recursive call if we currently have none
             // that means we generally pick the first recursive call we find
             if TrmcEnv::is_recursive_expr(expr, function_name).is_some() {
-                candidates.insert(*symbol);
+                candidates.insert(*symbol, arena);
             }
 
             trmc_candidates_help(function_name, next, arena, candidates)
@@ -587,10 +587,11 @@ fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, 
     for i in 0..candidates.call_paths.len() {
         let path = &candidates.call_paths[i];
         let call = candidates.interner[i];
-        if let RecCallPath::NestedInStructs(structs, _) = path {
-            let nested_rec_value_used = structs
+        if candidates.is_call_nested_at(i) {
+            let nested_rec_value_used = path
+                .symbols
                 .iter()
-                .take(structs.len() - 1)
+                .take(path.symbols.len() - 1)
                 .chain(std::iter::once(&call))
                 .any(|symbol| stmt_contains_symbol_nonrec(stmt, *symbol));
 
@@ -603,7 +604,7 @@ fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, 
 
 /// When stmt is a trmc opportunity, returns an index of the candidate
 /// that needs to be confirmed.
-///
+///TODO: explain this
 /// A TRMC opportunity is a tail tag appliaction on a:
 /// 1) recursive call's return value, or
 /// 2) (arbitrary deep nesting of structs containing a)
@@ -615,43 +616,21 @@ fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>)
                 if candidates.active & (1 << i) == 0 {
                     continue;
                 }
-                let call = candidates.interner[i];
-                let call_path = &candidates.call_paths[i];
-                match call_path {
-                    // case 1), the tail tag application must directly use
-                    // the result of the recursive call
-                    RecCallPath::DirectlyInTag => {
-                        if arg == call {
-                            // same recursive call value occuring more than once
-                            // in the same tag application is not allowed
-                            if cons_info
-                                .arguments
-                                .iter()
-                                .skip(arg_idx + 1)
-                                .any(|arg| *arg == call)
-                            {
-                                candidates.invalidate_at(i);
-                            } else {
-                                return Some(i);
-                            }
-                        }
-                    }
-                    RecCallPath::NestedInStructs(structs, _) => {
-                        let out_most_rec_struct = structs[structs.len() - 1];
-                        if arg == out_most_rec_struct {
-                            // same recursive call value occuring more than once
-                            // in the same tag application is not allowed
-                            if cons_info
-                                .arguments
-                                .iter()
-                                .skip(arg_idx + 1)
-                                .any(|arg| *arg == out_most_rec_struct)
-                            {
-                                candidates.invalidate_at(i);
-                            } else {
-                                return Some(i);
-                            }
-                        }
+                let tail_tag_arg_candidate = candidates.tail_tag_arg_at(i);
+                // case 1), the tail tag application must directly use
+                // the result of the recursive call
+                if arg == tail_tag_arg_candidate {
+                    // same recursive call value occuring more than once
+                    // in the same tag application is not allowed
+                    if cons_info
+                        .arguments
+                        .iter()
+                        .skip(arg_idx + 1)
+                        .any(|arg| *arg == tail_tag_arg_candidate)
+                    {
+                        candidates.invalidate_at(i);
+                    } else {
+                        return Some(i);
                     }
                 }
             }
@@ -660,56 +639,34 @@ fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>)
     None
 }
 
-/// When a struct is created with one of it's arguments being a 
+/// When a struct is created with one of it's arguments being a
 /// tail tag argument candidate, Make that struct be the new tail tag argument candidate
 /// by pushing it to the end of the call path
 ///
-/// Invalidates the tail tag argument candidate 
+/// Invalidates the tail tag argument candidate
 /// if it occures in the struct arguments more than one
 fn handle_struct_encapsulating_candidate<'a>(
     stmt: &'a Stmt<'a>,
     candidates: &mut TrmcCandidateSet<'a>,
-    arena: &'a Bump,
 ) {
     if let Stmt::Let(struct_symbol, Expr::Struct(args), _, _) = stmt {
         for (arg_idx, &arg) in args.iter().enumerate() {
-            for call_idx in 0..candidates.interner.len() {
-                if candidates.active & (1 << call_idx) == 0 {
+            for i in 0..candidates.interner.len() {
+                if candidates.active & (1 << i) == 0 {
                     continue;
                 }
-                let call = candidates.interner[call_idx];
-                let call_path = &mut candidates.call_paths[call_idx];
-                match call_path {
-                    RecCallPath::DirectlyInTag => {
-                        if arg == call {
-                            // same recursive call value occuring more than once
-                            // in the same tag application is not allowed
-                            if args.iter().skip(arg_idx + 1).any(|arg| *arg == call) {
-                                candidates.invalidate_at(call_idx);
-                            } else {
-                                *call_path = RecCallPath::NestedInStructs(
-                                    vec![in arena; *struct_symbol],
-                                    vec![in arena; arg_idx as u64],
-                                );
-                            }
-                        }
-                    }
-                    RecCallPath::NestedInStructs(structs, indices) => {
-                        let out_most_rec_struct = structs[structs.len() - 1];
-                        if arg == out_most_rec_struct {
-                            // same recursive call value occuring more than once
-                            // in the same tag application is not allowed
-                            if args
-                                .iter()
-                                .skip(arg_idx + 1)
-                                .any(|arg| *arg == out_most_rec_struct)
-                            {
-                                candidates.invalidate_at(call_idx);
-                            } else {
-                                structs.push(*struct_symbol);
-                                indices.push(arg_idx as u64);
-                            }
-                        }
+                let tail_tag_arg_candidate = candidates.tail_tag_arg_at(i);
+                if arg == tail_tag_arg_candidate {
+                    // same recursive call value occuring more than once
+                    // in the same tag application is not allowed
+                    if args
+                        .iter()
+                        .skip(arg_idx + 1)
+                        .any(|arg| *arg == tail_tag_arg_candidate)
+                    {
+                        candidates.invalidate_at(i);
+                    } else {
+                        candidates.push_to_path_at(i, (*struct_symbol, arg_idx));
                     }
                 }
             }
@@ -913,15 +870,13 @@ impl<'a> TrmcEnv<'a> {
         let mut trmc_call_locations = Vec::new_in(arena);
         for i in 0..trmc_calls.interner.len() {
             if trmc_calls.confirmed & (1 << i) != 0 {
-                let path = &trmc_calls.call_paths[i];
-                let loc = match path {
-                    RecCallPath::DirectlyInTag => RecCallLocation::DirectlyInTag,
-                    RecCallPath::NestedInStructs(symbol_chail, symbol_indices) => {
-                        RecCallLocation::MemberOfStruct(TailTagArgInfo {
-                            top_container: symbol_chail[symbol_chail.len() - 1],
-                            indices_from_rec_call_to_top: arena.alloc(symbol_indices),
-                        })
-                    }
+                let loc = if trmc_calls.is_call_nested_at(i) {
+                    RecCallLocation::DirectlyInTag
+                } else {
+                    RecCallLocation::MemberOfStruct(TailTagArgInfo {
+                        top_container: trmc_calls.tail_tag_arg_at(i),
+                        indices_from_rec_call_to_top: arena.alloc(trmc_calls.call_paths[i].indices.clone()),
+                    })
                 };
                 trmc_call_locations.push(loc);
             }
