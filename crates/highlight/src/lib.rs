@@ -45,7 +45,6 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::ColonEquals
             | Token::Colon
             | Token::And
-            | Token::AtSign
             | Token::QuestionMark => {
                 buf = push_html_span(buf, current_text, "kw");
             }
@@ -79,7 +78,7 @@ pub fn highlight(code: &str) -> Vec<String> {
                 buf = push_html_span(buf, current_text, "delimeter");
             }
             // Types, Tags, and Modules
-            Token::UpperIdent => {
+            Token::UpperIdent | Token::AtSign => {
                 buf = push_html_span(buf, current_text, "upperident");
             }
             // Variables modules and field names
