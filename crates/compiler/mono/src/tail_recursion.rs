@@ -428,17 +428,17 @@ fn insert_jumps<'a>(
 /// ```
 ///
 #[derive(Debug)]
-struct PathToRecCall<'a> {
+struct CandidateChain<'a> {
     /// Holds a chain of symbols of which the first is a recursive call
     /// and the last one is a tail tag argument candidate. Length of 1 is allowed.
-    /// Having >1 value means the recursive call is inside the subsequent symbol's constructor
+    /// Having >1 lenght means the nth symbol is inside the n+1 th symbol's constructor
     symbols: Vec<'a, Symbol>,
     /// In reverse order, holds indices that would lead from the payload of the tail tag argument to the recursive
     /// call if the recursive call is inside structs (todo: later non-recursive tag unions)
     indices: Vec<'a, u64>,
 }
 
-impl<'a> PathToRecCall<'a> {
+impl<'a> CandidateChain<'a> {
     fn rec_call(&self) -> Symbol {
         self.symbols[0]
     }
@@ -447,11 +447,11 @@ impl<'a> PathToRecCall<'a> {
         self.symbols[self.symbols.len() - 1]
     }
 
-    fn is_call_nested(&self) -> bool {
+    fn is_rec_call_nested(&self) -> bool {
         self.symbols.len() > 1
     }
 
-    fn used_in_constructor(&mut self, cons_symbol: Symbol, index: usize) {
+    fn append_new_tail_tag_arg(&mut self, cons_symbol: Symbol, index: usize) {
         self.symbols.push(cons_symbol);
         self.indices.push(index as u64);
     }
@@ -459,15 +459,15 @@ impl<'a> PathToRecCall<'a> {
 
 #[derive(Debug, Default)]
 struct TrmcCandidateSet<'a> {
-    call_paths: arrayvec::ArrayVec<PathToRecCall<'a>, 64>,
+    interner: arrayvec::ArrayVec<CandidateChain<'a>, 64>,
     confirmed: u64,
     active: u64,
     invalid: u64,
 }
 
 impl<'a> TrmcCandidateSet<'a> {
-    fn confirmed(&self) -> impl Iterator<Item = &PathToRecCall> + '_ {
-        self.call_paths
+    fn confirmed(&self) -> impl Iterator<Item = &CandidateChain> + '_ {
+        self.interner
             .iter()
             .enumerate()
             .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(s))
@@ -476,17 +476,17 @@ impl<'a> TrmcCandidateSet<'a> {
     fn insert(&mut self, symbol: Symbol, arena: &'a Bump) {
         // there really is no way it could have been inserted already
         debug_assert!(!self
-            .call_paths
+            .interner
             .iter()
-            .map(|path| path.rec_call())
+            .map(|chain| chain.rec_call())
             .any(|s| s == symbol));
 
-        let index = self.call_paths.len();
-        let path = PathToRecCall {
+        let index = self.interner.len();
+        let chain = CandidateChain {
             symbols: vec![in arena; symbol],
             indices: Vec::new_in(arena),
         };
-        self.call_paths.push(path);
+        self.interner.push(chain);
 
         self.active |= 1 << index;
     }
@@ -562,9 +562,9 @@ fn trmc_candidates_help<'a>(
     //For all recursive calls, or top-level structs
     //containing a recursive call nested in them,
     //if they get used, invalidate the call.
-    for i in 0..candidates.call_paths.len() {
-        let path = &candidates.call_paths[i];
-        if stmt_contains_symbol_nonrec(stmt, path.tail_tag_arg()) {
+    for i in 0..candidates.interner.len() {
+        let chain = &candidates.interner[i];
+        if stmt_contains_symbol_nonrec(stmt, chain.tail_tag_arg()) {
             candidates.invalidate_at(i);
         }
     }
@@ -609,18 +609,18 @@ fn trmc_candidates_help<'a>(
     }
 }
 
-/// When there is a recursive call within a path of structs,
+/// When there is a recursive call within a chain of struct constructors,
 /// invalidate the call if it or any of the struct containing it is used,
-/// apart from the top most struct,
+/// apart from the top most struct (the tail tag argument candidate),
 /// which can be inside a tail constructor which would be a valid use
 fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>) {
-    for i in 0..candidates.call_paths.len() {
-        let path = &candidates.call_paths[i];
-        if path.is_call_nested() {
-            let nested_rec_value_used = path
+    for i in 0..candidates.interner.len() {
+        let chain = &candidates.interner[i];
+        if chain.is_rec_call_nested() {
+            let nested_rec_value_used = chain
                 .symbols
                 .iter()
-                .take(path.symbols.len() - 1)
+                .take(chain.symbols.len() - 1)
                 .any(|symbol| stmt_contains_symbol_nonrec(stmt, *symbol));
 
             if nested_rec_value_used {
@@ -641,12 +641,12 @@ fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, 
 fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>) -> Option<usize> {
     if let Some(cons_info) = TrmcEnv::is_terminal_constructor(stmt) {
         for (arg_idx, &arg) in cons_info.arguments.iter().enumerate() {
-            for i in 0..candidates.call_paths.len() {
+            for i in 0..candidates.interner.len() {
                 if !candidates.is_active_at(i) {
                     continue;
                 }
-                let path = &candidates.call_paths[i];
-                let tail_tag_arg_candidate = path.tail_tag_arg();
+                let chain = &candidates.interner[i];
+                let tail_tag_arg_candidate = chain.tail_tag_arg();
                 if arg == tail_tag_arg_candidate {
                     // same candidate occuring more than once
                     // in the same tag application is not allowed
@@ -669,7 +669,7 @@ fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>)
 
 /// When a struct is created with one of it's arguments being a
 /// tail tag argument candidate, make that struct be the new tail tag argument candidate
-/// by pushing it to the end of the call path
+/// by pushing it to the end of the candidate chain
 ///
 /// Invalidates the tail tag argument candidate
 /// if it occures in the struct arguments more than one
@@ -679,12 +679,12 @@ fn handle_struct_encapsulating_candidate<'a>(
 ) {
     if let Stmt::Let(struct_symbol, Expr::Struct(args), _, _) = stmt {
         for (arg_idx, &arg) in args.iter().enumerate() {
-            for i in 0..candidates.call_paths.len() {
+            for i in 0..candidates.interner.len() {
                 if !candidates.is_active_at(i) {
                     continue;
                 }
-                let path = &mut candidates.call_paths[i];
-                let tail_tag_arg_candidate = path.tail_tag_arg();
+                let chain = &mut candidates.interner[i];
+                let tail_tag_arg_candidate = chain.tail_tag_arg();
 
                 if arg == tail_tag_arg_candidate {
                     // same candidate occuring more than once
@@ -696,7 +696,7 @@ fn handle_struct_encapsulating_candidate<'a>(
                     {
                         candidates.invalidate_at(i);
                     } else {
-                        path.used_in_constructor(*struct_symbol, arg_idx);
+                        chain.append_new_tail_tag_arg(*struct_symbol, arg_idx);
                     }
                 }
             }
@@ -910,17 +910,14 @@ impl<'a> TrmcEnv<'a> {
         let jump_stmt = Stmt::Jump(joinpoint_id, jump_arguments.into_bump_slice());
 
         let mut trmc_call_locations = Vec::new_in(arena);
-        // for i in 0..trmc_calls.call_paths.len() {
-        for path in trmc_calls.confirmed() {
-            // let path = &trmc_calls.call_paths[i];
-
-            let loc = if !path.is_call_nested() {
+        for chain in trmc_calls.confirmed() {
+            let loc = if !chain.is_rec_call_nested() {
                 RecCallLocation::DirectlyInTag
             } else {
-                let indices = arena.alloc(path.indices.clone());
+                let indices = arena.alloc(chain.indices.clone());
                 indices.reverse();
                 RecCallLocation::MemberOfStruct(TailTagArgInfo {
-                    top_container: path.tail_tag_arg(),
+                    top_container: chain.tail_tag_arg(),
                     indices_from_top_to_rec_call: indices,
                 })
             };
@@ -928,7 +925,7 @@ impl<'a> TrmcEnv<'a> {
         }
         let trmc_calls: VecMap<Symbol, Option<Call>> = trmc_calls
             .confirmed()
-            .map(|path| (path.rec_call(), None))
+            .map(|chain| (chain.rec_call(), None))
             .collect();
 
         let mut this = Self {
@@ -1122,8 +1119,6 @@ impl<'a> TrmcEnv<'a> {
                             let jump =
                                 Stmt::Jump(self.joinpoint_id, jump_arguments.into_bump_slice());
 
-                            println!("{:#?}", call_location);
-
                             match call_location {
                                 RecCallLocation::DirectlyInTag => {
                                     let tag_arg_null_symbol =
@@ -1190,7 +1185,6 @@ impl<'a> TrmcEnv<'a> {
                                         vec::Vec::with_capacity_in(2 + struct_indices.len(), arena);
                                     indices.push(cons_info.tag_id as u64);
                                     indices.push(recursive_field_index as u64);
-                                    //TODO: is this correct?
                                     indices.extend(struct_indices.iter());
                                     let indices = indices.into_bump_slice();
 
