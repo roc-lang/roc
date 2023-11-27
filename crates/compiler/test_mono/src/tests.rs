@@ -894,6 +894,37 @@ fn optional_when() {
 }
 
 #[mono_test]
+fn optional_field_with_binary_op() {
+    r#"
+        { bar ? 1 + 1 } = {}
+        bar
+    "#
+}
+
+#[mono_test]
+fn nested_optional_field_with_binary_op() {
+    r#"
+        when { x: ([{}], "foo") } is
+            { x: ([{ bar ? 1 + 1 }], _) } -> bar
+            _ -> 0
+    "#
+}
+
+#[mono_test]
+fn multiline_record_pattern() {
+    r#"
+        x = { a: 1, b: 2, c: 3 }
+        {
+            a,
+            b,
+            c,
+        } = x
+
+        a + b + c
+    "#
+}
+
+#[mono_test]
 fn nested_pattern_match() {
     r#"
     Maybe a : [Nothing, Just a]
