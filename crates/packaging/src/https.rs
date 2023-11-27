@@ -275,17 +275,12 @@ pub fn download_and_hash(
         Encoding::new(content_encoding, url)?
     };
 
-    if let Some(content_len) = resp.content_length() {
-        // Print download progress to stdout if we know the content length
-        //
-        // Use .take to prevent a malicious server from sending back bytes
-        // until system resources are exhausted!
-        let resp = ProgressReporter::new(resp.take(max_download_bytes), content_len as usize);
+    let content_length = resp.content_length().map(|n| n as usize);
 
-        decompress_into(dest_dir, encoding, resp)
-    } else {
-        decompress_into(dest_dir, encoding, resp.take(max_download_bytes))
-    }
+    // Use .take to prevent a malicious server from sending back bytes
+    // until system resources are exhausted!
+    let resp = ProgressReporter::new(resp.take(max_download_bytes), content_length);
+    decompress_into(dest_dir, encoding, resp)
 }
 
 /// The content encodings we support
@@ -417,12 +412,12 @@ impl<R: Read> Read for HashReader<R> {
 /// Prints download progress to stdout
 struct ProgressReporter<R: Read> {
     read: usize,
-    total: usize,
+    total: Option<usize>,
     reader: R,
 }
 
 impl<R: Read> ProgressReporter<R> {
-    fn new(reader: R, total: usize) -> Self {
+    fn new(reader: R, total: Option<usize>) -> Self {
         ProgressReporter {
             read: 0,
             total,
@@ -437,14 +432,21 @@ impl<R: Read> Read for ProgressReporter<R> {
 
         self.read += size;
 
-        print!(
-            "\u{001b}[2K\u{001b}[G[{:.1} / {:.1} MB]",
-            self.read as f32 / 1_000_000.0,
-            self.total as f32 / 1_000_000.0,
-        );
+        if let Some(total) = self.total {
+            print!(
+                "\u{001b}[2K\u{001b}[G[{:.1} / {:.1} MB]",
+                self.read as f32 / 1_000_000.0,
+                total as f32 / 1_000_000.0,
+            );
+        } else {
+            print!(
+                "\u{001b}[2K\u{001b}[G[{:.1} MB]",
+                self.read as f32 / 1_000_000.0,
+            );
+        }
         std::io::stdout().flush()?;
 
-        if self.read >= self.total {
+        if self.total.is_some_and(|total| self.read >= total) {
             println!("");
         }
 
