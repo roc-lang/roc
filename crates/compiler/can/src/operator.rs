@@ -572,8 +572,6 @@ fn desugar_loc_pattern<'a>(
     })
 }
 
-// Find `OptionalField`s and desugar the default value exprs. Also discard `SpaceBefore` and
-// `SpaceAfter` nodes so that patterns can be destructured over multiple lines.
 fn desugar_pattern<'a>(arena: &'a Bump, pattern: Pattern<'a>) -> Pattern<'a> {
     use roc_parse::ast::Pattern::*;
 
