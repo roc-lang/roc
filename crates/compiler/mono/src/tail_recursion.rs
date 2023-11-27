@@ -404,31 +404,61 @@ fn insert_jumps<'a>(
     }
 }
 
-//TODO: reverse it on creation
-#[derive(Debug)]
-struct TailTagArgInfo<'a> {
-    top_container: Symbol,
-    indices_from_rec_call_to_top: &'a [u64],
-}
-
-//TODO: do we even need Directly In tag, or is this possible without it?
-#[derive(Debug)]
-enum RecCallLocation<'a> {
-    DirectlyInTag,
-    MemberOfStruct(TailTagArgInfo<'a>),
-    //TODO: member of nonRec tag union
-}
-
-/// TODO: explain the revers and give example
+/// See the doc of the fields.
+/// In a code like this, the `next` value would be a trmc call.
+///
+/// ```roc
+/// LinkedList a : [Nil, Cons { one : {aaa: a, two: {bbb: a, rest: LinkedList a}}}]
+///
+/// repeat = \value, n ->
+///    if n == 0 then
+///        Nil
+///    else
+///        next =  repeat value (n - 1)
+///        payload = { one: {aaa: value, two: {bbb: value, rest: next}} }
+///        Cons payload
+/// ```
+///
+/// The struct would have these values:
+/// ```
+/// {
+///     symbols: [next, struct_of_two, struct_of_one, payload],
+///     indices: [1, 1, 0]
+/// }
+/// ```
+///
 #[derive(Debug)]
 struct PathToRecCall<'a> {
+    /// Holds a chain of symbols of which the first is a recursive call
+    /// and the last one is a tail tag argument candidate. Length of 1 is allowed.
+    /// Having >1 value means the recursive call is inside the subsequent symbol's constructor
     symbols: Vec<'a, Symbol>,
+    /// In reverse order, holds indices that would lead from the payload of the tail tag argument to the recursive
+    /// call if the recursive call is inside structs (todo: later non-recursive tag unions)
     indices: Vec<'a, u64>,
+}
+
+impl<'a> PathToRecCall<'a> {
+    fn rec_call(&self) -> Symbol {
+        self.symbols[0]
+    }
+
+    fn tail_tag_arg(&self) -> Symbol {
+        self.symbols[self.symbols.len() - 1]
+    }
+
+    fn is_call_nested(&self) -> bool {
+        self.symbols.len() > 1
+    }
+
+    fn used_in_constructor(&mut self, cons_symbol: Symbol, index: usize) {
+        self.symbols.push(cons_symbol);
+        self.indices.push(index as u64);
+    }
 }
 
 #[derive(Debug, Default)]
 struct TrmcCandidateSet<'a> {
-    interner: arrayvec::ArrayVec<Symbol, 64>,
     call_paths: arrayvec::ArrayVec<PathToRecCall<'a>, 64>,
     confirmed: u64,
     active: u64,
@@ -436,32 +466,27 @@ struct TrmcCandidateSet<'a> {
 }
 
 impl<'a> TrmcCandidateSet<'a> {
-    fn push_to_path_at(&mut self, i: usize, pair: (Symbol, usize)) {
-        self.call_paths[i].symbols.push(pair.0);
-        self.call_paths[i].indices.push(pair.1 as u64);
-    }
-    fn tail_tag_arg_at(&self, i: usize) -> Symbol {
-        let symbols_at_i = &self.call_paths[i].symbols;
-        symbols_at_i[symbols_at_i.len() - 1]
-    }
-    fn is_call_nested_at(&self, i: usize) -> bool {
-        self.call_paths[i].symbols.len() == 1
-    }
-    fn confirmed(&self) -> impl Iterator<Item = Symbol> + '_ {
-        self.interner
+    fn confirmed(&self) -> impl Iterator<Item = &PathToRecCall> + '_ {
+        self.call_paths
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(*s))
+            .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(s))
     }
+
     fn insert(&mut self, symbol: Symbol, arena: &'a Bump) {
         // there really is no way it could have been inserted already
-        debug_assert!(!self.interner.iter().any(|s| *s == symbol));
+        debug_assert!(!self
+            .call_paths
+            .iter()
+            .map(|path| path.rec_call())
+            .any(|s| s == symbol));
 
-        let index = self.interner.len();
-        self.interner.push(symbol);
-        let path = PathToRecCall{symbols:vec![in arena; symbol], indices: Vec::new_in(arena) };
-        self.call_paths
-            .push(path);
+        let index = self.call_paths.len();
+        let path = PathToRecCall {
+            symbols: vec![in arena; symbol],
+            indices: Vec::new_in(arena),
+        };
+        self.call_paths.push(path);
 
         self.active |= 1 << index;
     }
@@ -481,6 +506,10 @@ impl<'a> TrmcCandidateSet<'a> {
         debug_assert_ne!(self.active & mask, 0);
         self.active &= !mask;
         self.confirmed |= mask;
+    }
+
+    fn is_active_at(&self, i: usize) -> bool {
+        self.active & (1 << i) != 0
     }
 
     fn is_empty(&self) -> bool {
@@ -534,7 +563,8 @@ fn trmc_candidates_help<'a>(
     //containing a recursive call nested in them,
     //if they get used, invalidate the call.
     for i in 0..candidates.call_paths.len() {
-        if stmt_contains_symbol_nonrec(stmt, candidates.tail_tag_arg_at(i)) {
+        let path = &candidates.call_paths[i];
+        if stmt_contains_symbol_nonrec(stmt, path.tail_tag_arg()) {
             candidates.invalidate_at(i);
         }
     }
@@ -579,20 +609,18 @@ fn trmc_candidates_help<'a>(
     }
 }
 
-///When there is a recursive call within a path of structs,
-///invalidate the call if it or any of the struct containing it is used,
-///apart from the top most struct,
-///which can be inside a tail constructor which would be a valid use
+/// When there is a recursive call within a path of structs,
+/// invalidate the call if it or any of the struct containing it is used,
+/// apart from the top most struct,
+/// which can be inside a tail constructor which would be a valid use
 fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>) {
     for i in 0..candidates.call_paths.len() {
         let path = &candidates.call_paths[i];
-        let call = candidates.interner[i];
-        if candidates.is_call_nested_at(i) {
+        if path.is_call_nested() {
             let nested_rec_value_used = path
                 .symbols
                 .iter()
                 .take(path.symbols.len() - 1)
-                .chain(std::iter::once(&call))
                 .any(|symbol| stmt_contains_symbol_nonrec(stmt, *symbol));
 
             if nested_rec_value_used {
@@ -604,23 +632,23 @@ fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, 
 
 /// When stmt is a trmc opportunity, returns an index of the candidate
 /// that needs to be confirmed.
-///TODO: explain this
-/// A TRMC opportunity is a tail tag appliaction on a:
+///
+/// A TRMC opportunity is a tail tag appliaction on a
+/// tail tag argument candidate, which is a:
 /// 1) recursive call's return value, or
 /// 2) (arbitrary deep nesting of structs containing a)
 ///    struct that contains a recursive call's return value
 fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>) -> Option<usize> {
     if let Some(cons_info) = TrmcEnv::is_terminal_constructor(stmt) {
         for (arg_idx, &arg) in cons_info.arguments.iter().enumerate() {
-            for i in 0..candidates.interner.len() {
-                if candidates.active & (1 << i) == 0 {
+            for i in 0..candidates.call_paths.len() {
+                if !candidates.is_active_at(i) {
                     continue;
                 }
-                let tail_tag_arg_candidate = candidates.tail_tag_arg_at(i);
-                // case 1), the tail tag application must directly use
-                // the result of the recursive call
+                let path = &candidates.call_paths[i];
+                let tail_tag_arg_candidate = path.tail_tag_arg();
                 if arg == tail_tag_arg_candidate {
-                    // same recursive call value occuring more than once
+                    // same candidate occuring more than once
                     // in the same tag application is not allowed
                     if cons_info
                         .arguments
@@ -640,7 +668,7 @@ fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>)
 }
 
 /// When a struct is created with one of it's arguments being a
-/// tail tag argument candidate, Make that struct be the new tail tag argument candidate
+/// tail tag argument candidate, make that struct be the new tail tag argument candidate
 /// by pushing it to the end of the call path
 ///
 /// Invalidates the tail tag argument candidate
@@ -651,13 +679,15 @@ fn handle_struct_encapsulating_candidate<'a>(
 ) {
     if let Stmt::Let(struct_symbol, Expr::Struct(args), _, _) = stmt {
         for (arg_idx, &arg) in args.iter().enumerate() {
-            for i in 0..candidates.interner.len() {
-                if candidates.active & (1 << i) == 0 {
+            for i in 0..candidates.call_paths.len() {
+                if !candidates.is_active_at(i) {
                     continue;
                 }
-                let tail_tag_arg_candidate = candidates.tail_tag_arg_at(i);
+                let path = &mut candidates.call_paths[i];
+                let tail_tag_arg_candidate = path.tail_tag_arg();
+
                 if arg == tail_tag_arg_candidate {
-                    // same recursive call value occuring more than once
+                    // same candidate occuring more than once
                     // in the same tag application is not allowed
                     if args
                         .iter()
@@ -666,7 +696,7 @@ fn handle_struct_encapsulating_candidate<'a>(
                     {
                         candidates.invalidate_at(i);
                     } else {
-                        candidates.push_to_path_at(i, (*struct_symbol, arg_idx));
+                        path.used_in_constructor(*struct_symbol, arg_idx);
                     }
                 }
             }
@@ -732,6 +762,18 @@ struct ConstructorInfo<'a> {
     tag_layout: UnionLayout<'a>,
     tag_id: TagIdIntType,
     arguments: &'a [Symbol],
+}
+
+#[derive(Debug)]
+struct TailTagArgInfo<'a> {
+    top_container: Symbol,
+    indices_from_top_to_rec_call: &'a [u64],
+}
+
+#[derive(Debug)]
+enum RecCallLocation<'a> {
+    DirectlyInTag,
+    MemberOfStruct(TailTagArgInfo<'a>),
 }
 
 impl<'a> TrmcEnv<'a> {
@@ -868,21 +910,26 @@ impl<'a> TrmcEnv<'a> {
         let jump_stmt = Stmt::Jump(joinpoint_id, jump_arguments.into_bump_slice());
 
         let mut trmc_call_locations = Vec::new_in(arena);
-        for i in 0..trmc_calls.interner.len() {
-            if trmc_calls.confirmed & (1 << i) != 0 {
-                let loc = if trmc_calls.is_call_nested_at(i) {
-                    RecCallLocation::DirectlyInTag
-                } else {
-                    RecCallLocation::MemberOfStruct(TailTagArgInfo {
-                        top_container: trmc_calls.tail_tag_arg_at(i),
-                        indices_from_rec_call_to_top: arena.alloc(trmc_calls.call_paths[i].indices.clone()),
-                    })
-                };
-                trmc_call_locations.push(loc);
-            }
+        // for i in 0..trmc_calls.call_paths.len() {
+        for path in trmc_calls.confirmed() {
+            // let path = &trmc_calls.call_paths[i];
+
+            let loc = if !path.is_call_nested() {
+                RecCallLocation::DirectlyInTag
+            } else {
+                let indices = arena.alloc(path.indices.clone());
+                indices.reverse();
+                RecCallLocation::MemberOfStruct(TailTagArgInfo {
+                    top_container: path.tail_tag_arg(),
+                    indices_from_top_to_rec_call: indices,
+                })
+            };
+            trmc_call_locations.push(loc);
         }
-        let trmc_calls: VecMap<Symbol, Option<Call>> =
-            trmc_calls.confirmed().map(|s| (s, None)).collect();
+        let trmc_calls: VecMap<Symbol, Option<Call>> = trmc_calls
+            .confirmed()
+            .map(|path| (path.rec_call(), None))
+            .collect();
 
         let mut this = Self {
             lambda_name: proc.name,
@@ -966,12 +1013,9 @@ impl<'a> TrmcEnv<'a> {
                 // Checks if this is a struct with one of the field being a trmc eligible recursive call
                 // if so, replaces that call with a null pointer
                 if let Expr::Struct(args) = expr {
-                    let rec_call_struct_index_opt = args.iter().position(|arg| {
-                        self.trmc_calls.keys().enumerate().any(|(i, call)| {
-                            matches!(trmc_call_locations[i], RecCallLocation::MemberOfStruct(_))
-                                && *call == *arg
-                        })
-                    });
+                    let rec_call_struct_index_opt = args
+                        .iter()
+                        .position(|arg| self.trmc_calls.keys().any(|call| *call == *arg));
 
                     if let Some(rec_call_struct_arg_index) = rec_call_struct_index_opt {
                         let struct_arg_null_symbol = env.named_unique_symbol("struct_arg_null");
@@ -1078,6 +1122,8 @@ impl<'a> TrmcEnv<'a> {
                             let jump =
                                 Stmt::Jump(self.joinpoint_id, jump_arguments.into_bump_slice());
 
+                            println!("{:#?}", call_location);
+
                             match call_location {
                                 RecCallLocation::DirectlyInTag => {
                                     let tag_arg_null_symbol =
@@ -1134,7 +1180,7 @@ impl<'a> TrmcEnv<'a> {
                                     return output;
                                 }
                                 RecCallLocation::MemberOfStruct(TailTagArgInfo {
-                                    indices_from_rec_call_to_top: struct_indices,
+                                    indices_from_top_to_rec_call: struct_indices,
                                     ..
                                 }) => {
                                     let let_tag =
@@ -1144,7 +1190,8 @@ impl<'a> TrmcEnv<'a> {
                                         vec::Vec::with_capacity_in(2 + struct_indices.len(), arena);
                                     indices.push(cons_info.tag_id as u64);
                                     indices.push(recursive_field_index as u64);
-                                    indices.extend(struct_indices.iter().rev());
+                                    //TODO: is this correct?
+                                    indices.extend(struct_indices.iter());
                                     let indices = indices.into_bump_slice();
 
                                     let get_reference_expr = Expr::GetElementPointer {
