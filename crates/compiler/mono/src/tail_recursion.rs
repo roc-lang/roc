@@ -443,13 +443,9 @@ impl<'a> TrmcCandidateSet<'a> {
             .filter_map(|(i, s)| (self.confirmed & (1 << i) != 0).then_some(*s))
     }
 
-    fn position(&self, symbol: Symbol) -> Option<usize> {
-        self.interner.iter().position(|s| *s == symbol)
-    }
-
     fn insert(&mut self, symbol: Symbol) {
         // there really is no way it could have been inserted already
-        debug_assert!(self.position(symbol).is_none());
+        debug_assert!(!self.interner.iter().any(|s| *s == symbol));
 
         let index = self.interner.len();
         self.interner.push(symbol);
@@ -467,18 +463,12 @@ impl<'a> TrmcCandidateSet<'a> {
         self.invalid |= mask;
     }
 
-    fn confirm(&mut self, symbol: Symbol) {
-        match self.position(symbol) {
-            None => debug_assert_eq!(0, 1, "confirm of invalid symbol"),
-            Some(index) => {
-                let mask = 1 << index;
-                debug_assert_eq!(self.invalid & mask, 0);
-                debug_assert_ne!(self.active & mask, 0);
-
-                self.active &= !mask;
-                self.confirmed |= mask;
-            }
-        }
+    fn confirm_at(&mut self, index: usize) {
+        let mask = 1 << index;
+        debug_assert_eq!(self.invalid & mask, 0);
+        debug_assert_ne!(self.active & mask, 0);
+        self.active &= !mask;
+        self.confirmed |= mask;
     }
 
     fn is_empty(&self) -> bool {
@@ -519,90 +509,12 @@ fn trmc_candidates_help<'a>(
     arena: &'a Bump,
     candidates: &mut TrmcCandidateSet<'a>,
 ) {
-    //when there is a recursive call within a path of structs,
-    //invalidate the call if it or any of the struct containing it is used,
-    //apart from the top most struct, which can be inside a tail constructor
-    for i in 0..candidates.call_paths.len() {
-        let path = &candidates.call_paths[i];
-        let call = candidates.interner[i];
-        if let RecCallPath::NestedInStructs(structs, _) = path {
-            let nested_rec_value_used = structs
-                .iter()
-                .take(structs.len() - 1)
-                .chain(std::iter::once(&call))
-                .any(|symbol| stmt_contains_symbol_nonrec(stmt, *symbol));
+    invalidate_on_nested_rec_call_use(candidates, stmt);
 
-            if nested_rec_value_used {
-                candidates.invalidate_at(i);
-            }
-        }
-    }
+    handle_struct_encapsulating_candidate(stmt, candidates, arena);
 
-    push_nested_struct_to_call_path(stmt, candidates, arena);
-
-    // a TRMC opportunity is a return stmt of a tag appliaction stmt on a:
-    // 1) recursive call's return value, or
-    // 2) (arbitrary deep nesting of structs containing a)
-    //    struct that contains a recursive call's return value
-    let recursive_call = match TrmcEnv::is_terminal_constructor(stmt) {
-        Some(cons_info) => {
-            let mut found = None;
-            'outer: for (arg_idx, &arg) in cons_info.arguments.iter().enumerate() {
-                for i in 0..candidates.interner.len() {
-                    if candidates.active & (1 << i) == 0 {
-                        continue;
-                    }
-                    let call = candidates.interner[i];
-                    let call_path = &candidates.call_paths[i];
-                    match call_path {
-                        // case 1), the tail tag application must directly use
-                        // the result of the recursive call
-                        RecCallPath::DirectlyInTag => {
-                            if arg == call {
-                                // same recursive call value occuring more than once
-                                // in the same tag application is not allowed
-                                if cons_info
-                                    .arguments
-                                    .iter()
-                                    .skip(arg_idx + 1)
-                                    .any(|arg| *arg == call)
-                                {
-                                    candidates.invalidate_at(i);
-                                } else {
-                                    found = Some(call);
-                                }
-                            }
-                        }
-                        // case 2), the tail tag application must directly use the struct
-                        RecCallPath::NestedInStructs(structs, _) => {
-                            let out_most_rec_struct = structs[structs.len() - 1];
-                            if arg == out_most_rec_struct {
-                                // same recursive call value occuring more than once
-                                // in the same tag application is not allowed
-                                if cons_info
-                                    .arguments
-                                    .iter()
-                                    .skip(arg_idx + 1)
-                                    .any(|arg| *arg == out_most_rec_struct)
-                                {
-                                    candidates.invalidate_at(i);
-                                } else {
-                                    found = Some(call);
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            found
-        }
-        None => None,
-    };
-
-    // if we find a usage, this is a confirmed TRMC call
-    if let Some(recursive_call) = recursive_call {
-        candidates.confirm(recursive_call);
+    if let Some(call_idx) = is_trmc_confirmed(candidates, stmt) {
+        candidates.confirm_at(call_idx);
         return;
     }
 
@@ -667,9 +579,94 @@ fn trmc_candidates_help<'a>(
     }
 }
 
-/// Add struct to the candidate set if it has a recursive call return value
-/// as member or another struct with the same property
-fn push_nested_struct_to_call_path<'a>(
+///When there is a recursive call within a path of structs,
+///invalidate the call if it or any of the struct containing it is used,
+///apart from the top most struct,
+///which can be inside a tail constructor which would be a valid use
+fn invalidate_on_nested_rec_call_use<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>) {
+    for i in 0..candidates.call_paths.len() {
+        let path = &candidates.call_paths[i];
+        let call = candidates.interner[i];
+        if let RecCallPath::NestedInStructs(structs, _) = path {
+            let nested_rec_value_used = structs
+                .iter()
+                .take(structs.len() - 1)
+                .chain(std::iter::once(&call))
+                .any(|symbol| stmt_contains_symbol_nonrec(stmt, *symbol));
+
+            if nested_rec_value_used {
+                candidates.invalidate_at(i);
+            }
+        }
+    }
+}
+
+/// When stmt is a trmc opportunity, returns an index of the candidate
+/// that needs to be confirmed.
+///
+/// A TRMC opportunity is a tail tag appliaction on a:
+/// 1) recursive call's return value, or
+/// 2) (arbitrary deep nesting of structs containing a)
+///    struct that contains a recursive call's return value
+fn is_trmc_confirmed<'a>(candidates: &mut TrmcCandidateSet<'a>, stmt: &Stmt<'a>) -> Option<usize> {
+    if let Some(cons_info) = TrmcEnv::is_terminal_constructor(stmt) {
+        for (arg_idx, &arg) in cons_info.arguments.iter().enumerate() {
+            for i in 0..candidates.interner.len() {
+                if candidates.active & (1 << i) == 0 {
+                    continue;
+                }
+                let call = candidates.interner[i];
+                let call_path = &candidates.call_paths[i];
+                match call_path {
+                    // case 1), the tail tag application must directly use
+                    // the result of the recursive call
+                    RecCallPath::DirectlyInTag => {
+                        if arg == call {
+                            // same recursive call value occuring more than once
+                            // in the same tag application is not allowed
+                            if cons_info
+                                .arguments
+                                .iter()
+                                .skip(arg_idx + 1)
+                                .any(|arg| *arg == call)
+                            {
+                                candidates.invalidate_at(i);
+                            } else {
+                                return Some(i);
+                            }
+                        }
+                    }
+                    RecCallPath::NestedInStructs(structs, _) => {
+                        let out_most_rec_struct = structs[structs.len() - 1];
+                        if arg == out_most_rec_struct {
+                            // same recursive call value occuring more than once
+                            // in the same tag application is not allowed
+                            if cons_info
+                                .arguments
+                                .iter()
+                                .skip(arg_idx + 1)
+                                .any(|arg| *arg == out_most_rec_struct)
+                            {
+                                candidates.invalidate_at(i);
+                            } else {
+                                return Some(i);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// When a struct is created with one of it's arguments being a 
+/// tail tag argument candidate, Make that struct be the new tail tag argument candidate
+/// by pushing it to the end of the call path
+///
+/// Invalidates the tail tag argument candidate 
+/// if it occures in the struct arguments more than one
+fn handle_struct_encapsulating_candidate<'a>(
     stmt: &'a Stmt<'a>,
     candidates: &mut TrmcCandidateSet<'a>,
     arena: &'a Bump,
