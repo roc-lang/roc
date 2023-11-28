@@ -808,7 +808,7 @@ fn gen_div_dec_by_zero() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "Integer division by 0!"#)]
+#[should_panic(expected = r#"Roc failed with message: "integer division by 0!"#)]
 fn gen_div_ceil_by_zero() {
     assert_evals_to!(
         r#"
