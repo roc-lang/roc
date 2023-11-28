@@ -249,10 +249,10 @@ dbgBool : Bool -> Inspector DbgFormatter
 dbgBool = \b ->
     if b then
         f0 <- custom
-        dbgWrite f0 "true"
+        dbgWrite f0 "Bool.true"
     else
         f0 <- custom
-        dbgWrite f0 "false"
+        dbgWrite f0 "Bool.false"
 
 dbgStr : Str -> Inspector DbgFormatter
 dbgStr = \s ->

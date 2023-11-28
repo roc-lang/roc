@@ -1504,10 +1504,7 @@ impl AbilityResolver for AbilitiesStore {
 /// because they do not explicitly list ability implementations due to circular dependencies.
 #[inline]
 pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> bool {
-    matches!(
-        module_id,
-        ModuleId::NUM | ModuleId::BOOL | ModuleId::INSPECT
-    )
+    matches!(module_id, ModuleId::NUM | ModuleId::BOOL)
 }
 
 #[derive(Debug)]
