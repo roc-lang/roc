@@ -6010,6 +6010,33 @@ In roc, functions are always written as a lambda, like{}
     }
 
     #[test]
+    fn provides_to_missing_platform_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    provides [main] to
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  app "broken"
+                2│      provides [main] to
+                                          ^
+
+                I am expecting platform name, like
+
+                    to pf
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(

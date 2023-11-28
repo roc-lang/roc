@@ -3540,6 +3540,27 @@ fn to_provides_report<'a>(
             }
         }
 
+        EProvides::IndentListStart(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("I am expecting platform name, like"),
+                alloc
+                    .parser_suggestion("to pf")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PROVIDES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
 }
