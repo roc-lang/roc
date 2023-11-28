@@ -235,7 +235,6 @@ pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
         fn func(a: T, b: T) callconv(.C) T {
             return math.divCeil(T, a, b) catch {
                 roc_panic("integer division by 0!", 0);
-                unreachable;
             };
         }
     }.func;
@@ -383,7 +382,6 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
                 roc_panic("integer addition overflowed!", 0);
-                unreachable;
             } else {
                 return result.value;
             }
@@ -441,7 +439,6 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
                 roc_panic("integer subtraction overflowed!", 0);
-                unreachable;
             } else {
                 return result.value;
             }
@@ -626,7 +623,6 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
             const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
                 roc_panic("integer multiplication overflowed!", 0);
-                unreachable;
             } else {
                 return result.value;
             }
