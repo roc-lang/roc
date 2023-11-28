@@ -859,8 +859,8 @@ impl DerivableVisitor for DeriveInspect {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
-            || is_builtin_bool_alias(symbol)
+        // TODO: Should this just be true? All values are always inspectable.
+        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -927,16 +927,9 @@ impl DerivableVisitor for DeriveInspect {
     }
 
     #[inline(always)]
-    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
-            if is_builtin_nat_alias(symbol) {
-                Err(NotDerivable {
-                    var,
-                    context: NotDerivableContext::Encode(NotDerivableEncode::Nat),
-                })
-            } else {
-                Ok(Descend(false))
-            }
+            Ok(Descend(false))
         } else {
             Ok(Descend(true))
         }
