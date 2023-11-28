@@ -62,11 +62,11 @@ InspectFormatter implements
 
     # In text, this would render as `<opaque>`
     # TODO: Pass the type name to opaque so that it can be displayed.
-    opaque : Inspector f where f implements InspectFormatter
+    opaque : * -> Inspector f where f implements InspectFormatter
 
     # In text, this would render as `<function>`
     # TODO: Maybe pass the the function name or signiture to function so that it can be displayed.
-    function : Inspector f where f implements InspectFormatter
+    function : * -> Inspector f where f implements InspectFormatter
 
     u8 : U8 -> Inspector f where f implements InspectFormatter
     i8 : I8 -> Inspector f where f implements InspectFormatter
@@ -262,13 +262,13 @@ dbgStr = \s ->
     |> dbgWrite s
     |> dbgWrite "\""
 
-dbgOpaque : Inspector DbgFormatter
-dbgOpaque =
+dbgOpaque : * -> Inspector DbgFormatter
+dbgOpaque = \_ ->
     f0 <- custom
     dbgWrite f0 "<opaque>"
 
-dbgFunction : Inspector DbgFormatter
-dbgFunction =
+dbgFunction : * -> Inspector DbgFormatter
+dbgFunction = \_ ->
     f0 <- custom
     dbgWrite f0 "<function>"
 
