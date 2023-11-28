@@ -304,6 +304,13 @@ impl ObligationCache {
 
             Symbol::BOOL_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
 
+            Symbol::INSPECT_INSPECT_ABILITY => Some(DeriveInspect::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
             _ => None,
         };
 
