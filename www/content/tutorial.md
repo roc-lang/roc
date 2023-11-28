@@ -1687,6 +1687,8 @@ Some important things to note about backpassing and `await`:
 - Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 - Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
+See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
+
 ## [Abilities](#abilities) {#abilities}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
