@@ -1493,6 +1493,19 @@ See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-
 
 See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rust-platform/main.roc) for an example.
 
+### [Importing Files](#importing-files) {#importing-files}
+
+You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful for when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
+
+```roc
+imports [
+    "some-file" as someStr : Str,
+    "some-file" as someBytes : List U8,
+]
+```
+
+See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
+
 ## [Tasks](#tasks) {#tasks}
 
 Tasks are technically not part of the Roc language, but they're very common in platforms. Let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
