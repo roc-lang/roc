@@ -2017,10 +2017,6 @@ For this reason, any time you see a function that only runs a `when` on its only
 >
 > Also just like with records, you can use this to compose tag union type aliases. For example, you can write `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`
 
-### [Phantom Types](#phantom-types) {#phantom-types}
-
-\[This part of the tutorial has not been written yet. Coming soon!\]
-
 ### [Record Builder](#record-builder) {#record-builder}
 
 The record builder syntax sugar is a useful feature which leverages the functional programming concept of [applicative functors](https://lucamug.medium.com/functors-applicatives-and-monads-in-pictures-784c2b5786f7), to provide a flexible method for constructing complex types.
