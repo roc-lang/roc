@@ -55,7 +55,7 @@ body {
     width: 100%;
     height: 100%;
     box-sizing: border-box;
-    overflow-x: hidden; /* This shouldn't be necessary, but without it, mobile has a right gutter. */
+    overflow-x: hidden; /* This shouldn't be necessary, but without it mobile has a right gutter. */
 }
 
 p {
