@@ -141,6 +141,10 @@ impl FlatInspectable {
                         AliasKind::Structural => {
                             Self::from_var(subs, real_var)
                         }
+                        AliasKind::Opaque if sym.is_builtin() => {
+                            // TODO: Is this correct for all builtins? It is at least required for the Num wrapper types.
+                            Self::from_var(subs, real_var)
+                        }
                         AliasKind::Opaque => {
                             // There are two cases in which `Inspect` can be derived for an opaque
                             // type.
