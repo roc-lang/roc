@@ -6001,7 +6001,7 @@ In roc, functions are always written as a lambda, like{}
                 2│      provides [main]
                                        ^
 
-                I am expecting the `to` keyword next, like
+                I am expecting the `to` keyword next, like:
 
                     to pf
                 "#
@@ -6028,7 +6028,7 @@ In roc, functions are always written as a lambda, like{}
                 2│      provides [main] to
                                           ^
 
-                I am expecting platform name, like
+                I am expecting the platform name next, like:
 
                     to pf
                 "#
