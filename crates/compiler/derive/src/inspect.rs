@@ -29,8 +29,8 @@ pub(crate) fn derive_to_inspector(
 ) -> DerivedBody {
     let (body, body_type) = match key {
         FlatInspectableKey::List() => to_inspector_list(env, def_symbol),
-        FlatInspectableKey::Set() => todo!(),
-        FlatInspectableKey::Dict() => todo!(),
+        FlatInspectableKey::Set() => unreachable!(),
+        FlatInspectableKey::Dict() => unreachable!(),
         FlatInspectableKey::Record(fields) => {
             // Generalized record var so we can reuse this impl between many records:
             // if fields = { a, b }, this is { a: t1, b: t2 } for fresh t1, t2.

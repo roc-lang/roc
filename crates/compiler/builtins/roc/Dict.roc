@@ -32,6 +32,7 @@ interface Dict
         Str,
         Num.{ Nat, U64, U8, I8 },
         Hash.{ Hasher, Hash },
+        Inspect.{ Inspect, Inspector, InspectFormatter },
     ]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
@@ -108,6 +109,9 @@ Dict k v := {
         Hash {
             hash: hashDict,
         },
+        Inspect {
+            toInspector: toInspectorDict,
+        },
     ]
 
 isEq : Dict k v, Dict k v -> Bool where k implements Hash & Eq, v implements Eq
@@ -125,6 +129,12 @@ isEq = \xs, ys ->
 
 hashDict : hasher, Dict k v -> hasher where k implements Hash & Eq, v implements Hash, hasher implements Hasher
 hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
+
+
+toInspectorDict : Dict k v -> Inspector f where k implements Inspect & Hash & Eq, v implements Inspect, f implements InspectFormatter
+toInspectorDict = \dict ->
+    fmt <- Inspect.custom
+    Inspect.apply (Inspect.dict dict walk Inspect.toInspector Inspect.toInspector) fmt
 
 ## Return an empty dictionary.
 ## ```

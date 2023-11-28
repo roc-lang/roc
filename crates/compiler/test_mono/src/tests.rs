@@ -3420,3 +3420,19 @@ fn inspect_derived_list() {
         "#
     )
 }
+
+#[mono_test(large_stack = "true")]
+fn inspect_derived_dict() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main =
+            Dict.fromList [("a", 1), ("b", 2)]
+            |> Inspect.inspect
+            |> Inspect.toDbgStr
+        "#
+    )
+}
