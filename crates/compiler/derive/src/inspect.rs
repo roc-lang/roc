@@ -49,7 +49,7 @@ pub(crate) fn derive_to_inspector(
                 Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)),
             );
 
-            to_encoder_record(env, record_var, fields, def_symbol)
+            to_inspector_record(env, record_var, fields, def_symbol)
         }
         FlatInspectableKey::Tuple(arity) => {
             // Generalized tuple var so we can reuse this impl between many tuples:
@@ -63,7 +63,7 @@ pub(crate) fn derive_to_inspector(
                 Content::Structure(FlatType::Tuple(elems, Variable::EMPTY_TUPLE)),
             );
 
-            to_encoder_tuple(env, tuple_var, elems, def_symbol)
+            to_inspector_tuple(env, tuple_var, elems, def_symbol)
         }
         FlatInspectableKey::TagUnion(tags) => {
             // Generalized tag union var so we can reuse this impl between many unions:
@@ -88,7 +88,7 @@ pub(crate) fn derive_to_inspector(
                 )),
             );
 
-            to_encoder_tag_union(env, tag_union_var, union_tags, def_symbol)
+            to_inspector_tag_union(env, tag_union_var, union_tags, def_symbol)
         }
         FlatInspectableKey::Function(_arity) => {
             // Desired output: \x, y, z -> ... ===> "<function>"
@@ -100,7 +100,7 @@ pub(crate) fn derive_to_inspector(
     };
 
     let specialization_lambda_sets =
-        env.get_specialization_lambda_sets(body_type, Symbol::ENCODE_TO_ENCODER);
+        env.get_specialization_lambda_sets(body_type, Symbol::INSPECT_TO_INSPECTOR);
 
     DerivedBody {
         body,
@@ -110,7 +110,7 @@ pub(crate) fn derive_to_inspector(
 }
 
 fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
-    // Build \lst -> Encode.list lst (\elem -> Encode.toEncoder elem)
+    // Build \lst -> Inspect.list lst (\elem -> Inspect.toInspector elem)
     //
     // TODO eta reduce this baby     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -127,76 +127,77 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, elem_var_slice)),
     );
 
-    // build `toEncoder elem` type
-    // val -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-    let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
+    // build `toInspector elem` type
+    // val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
     // elem -[clos]-> t1
-    let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-    let elem_encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-    let elem_to_encoder_fn_var = synth_var(
+    let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let elem_inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let elem_to_inspector_fn_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Func(
             elem_var_slice,
-            to_encoder_clos_var,
-            elem_encoder_var,
+            to_inspector_clos_var,
+            elem_inspector_var,
         )),
     );
 
-    //   val  -[uls]->  Encoder fmt where fmt implements EncoderFormatting
+    //   val  -[uls]->  Inspector fmt where fmt implements InspectorFormatting
     // ~ elem -[clos]-> t1
-    env.unify(to_encoder_fn_var, elem_to_encoder_fn_var);
+    env.unify(to_inspector_fn_var, elem_to_inspector_fn_var);
 
-    // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-    let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, elem_to_encoder_fn_var);
-    let to_encoder_fn = Box::new((
-        to_encoder_fn_var,
-        Loc::at_zero(to_encoder_var),
-        to_encoder_clos_var,
-        elem_encoder_var,
+    // toInspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    let to_inspector_var =
+        AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, elem_to_inspector_fn_var);
+    let to_inspector_fn = Box::new((
+        to_inspector_fn_var,
+        Loc::at_zero(to_inspector_var),
+        to_inspector_clos_var,
+        elem_inspector_var,
     ));
 
-    // toEncoder elem
-    let to_encoder_call = Call(
-        to_encoder_fn,
+    // toInspector elem
+    let to_inspector_call = Call(
+        to_inspector_fn,
         vec![(elem_var, Loc::at_zero(Var(elem_sym, elem_var)))],
         CalledVia::Space,
     );
 
-    // elem -[to_elem_encoder]-> toEncoder elem
-    let to_elem_encoder_sym = env.new_symbol("to_elem_encoder");
+    // elem -[to_elem_inspector]-> toInspector elem
+    let to_elem_inspector_sym = env.new_symbol("to_elem_inspector");
 
     // Create fn_var for ambient capture; we fix it up below.
-    let to_elem_encoder_fn_var = synth_var(env.subs, Content::Error);
+    let to_elem_inspector_fn_var = synth_var(env.subs, Content::Error);
 
-    // -[to_elem_encoder]->
-    let to_elem_encoder_labels =
-        UnionLambdas::insert_into_subs(env.subs, once((to_elem_encoder_sym, vec![])));
-    let to_elem_encoder_lset = synth_var(
+    // -[to_elem_inspector]->
+    let to_elem_inspector_labels =
+        UnionLambdas::insert_into_subs(env.subs, once((to_elem_inspector_sym, vec![])));
+    let to_elem_inspector_lset = synth_var(
         env.subs,
         Content::LambdaSet(LambdaSet {
-            solved: to_elem_encoder_labels,
+            solved: to_elem_inspector_labels,
             recursion_var: OptVariable::NONE,
             unspecialized: SubsSlice::default(),
-            ambient_function: to_elem_encoder_fn_var,
+            ambient_function: to_elem_inspector_fn_var,
         }),
     );
-    // elem -[to_elem_encoder]-> toEncoder elem
+    // elem -[to_elem_inspector]-> toInspector elem
     env.subs.set_content(
-        to_elem_encoder_fn_var,
+        to_elem_inspector_fn_var,
         Content::Structure(FlatType::Func(
             elem_var_slice,
-            to_elem_encoder_lset,
-            elem_encoder_var,
+            to_elem_inspector_lset,
+            elem_inspector_var,
         )),
     );
 
-    // \elem -> toEncoder elem
-    let to_elem_encoder = Closure(ClosureData {
-        function_type: to_elem_encoder_fn_var,
-        closure_type: to_elem_encoder_lset,
-        return_type: elem_encoder_var,
-        name: to_elem_encoder_sym,
+    // \elem -> toInspector elem
+    let to_elem_inspector = Closure(ClosureData {
+        function_type: to_elem_inspector_fn_var,
+        closure_type: to_elem_inspector_lset,
+        return_type: elem_inspector_var,
+        name: to_elem_inspector_sym,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
         arguments: vec![(
@@ -204,60 +205,60 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             AnnotatedMark::known_exhaustive(),
             Loc::at_zero(Pattern::Identifier(elem_sym)),
         )],
-        loc_body: Box::new(Loc::at_zero(to_encoder_call)),
+        loc_body: Box::new(Loc::at_zero(to_inspector_call)),
     });
 
-    // build `Encode.list lst (\elem -> Encode.toEncoder elem)` type
-    // List e, (e -> Encoder fmt) -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-    let encode_list_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_LIST);
+    // build `Inspect.list lst (\elem -> Inspect.toInspector elem)` type
+    // List e, (e -> Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    let inspect_list_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_LIST);
 
-    // List elem, to_elem_encoder_fn_var -[clos]-> t1
-    let this_encode_list_args_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, [list_var, to_elem_encoder_fn_var]);
-    let this_encode_list_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-    let this_list_encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-    let this_encode_list_fn_var = synth_var(
+    // List elem, to_elem_inspector_fn_var -[clos]-> t1
+    let this_inspect_list_args_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, [list_var, to_elem_inspector_fn_var]);
+    let this_inspect_list_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let this_list_inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let this_inspect_list_fn_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Func(
-            this_encode_list_args_slice,
-            this_encode_list_clos_var,
-            this_list_encoder_var,
+            this_inspect_list_args_slice,
+            this_inspect_list_clos_var,
+            this_list_inspector_var,
         )),
     );
 
-    //   List e,    (e -> Encoder fmt)     -[uls]->  Encoder fmt where fmt implements EncoderFormatting
-    // ~ List elem, to_elem_encoder_fn_var -[clos]-> t1
-    env.unify(encode_list_fn_var, this_encode_list_fn_var);
+    //   List e,    (e -> Inspector fmt)     -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+    // ~ List elem, to_elem_inspector_fn_var -[clos]-> t1
+    env.unify(inspect_list_fn_var, this_inspect_list_fn_var);
 
-    // Encode.list : List elem, to_elem_encoder_fn_var -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-    let encode_list = AbilityMember(Symbol::ENCODE_LIST, None, this_encode_list_fn_var);
-    let encode_list_fn = Box::new((
-        this_encode_list_fn_var,
-        Loc::at_zero(encode_list),
-        this_encode_list_clos_var,
-        this_list_encoder_var,
+    // Inspect.list : List elem, to_elem_inspector_fn_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    let inspect_list = AbilityMember(Symbol::INSPECT_LIST, None, this_inspect_list_fn_var);
+    let inspect_list_fn = Box::new((
+        this_inspect_list_fn_var,
+        Loc::at_zero(inspect_list),
+        this_inspect_list_clos_var,
+        this_list_inspector_var,
     ));
 
-    // Encode.list lst to_elem_encoder
-    let encode_list_call = Call(
-        encode_list_fn,
+    // Inspect.list lst to_elem_inspector
+    let inspect_list_call = Call(
+        inspect_list_fn,
         vec![
             (list_var, Loc::at_zero(Var(lst_sym, list_var))),
-            (to_elem_encoder_fn_var, Loc::at_zero(to_elem_encoder)),
+            (to_elem_inspector_fn_var, Loc::at_zero(to_elem_inspector)),
         ],
         CalledVia::Space,
     );
 
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.list ..) fmt
-    let (body, this_encoder_var) = wrap_in_encode_custom(
+    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (Inspect.list ..) fmt
+    let (body, this_inspector_var) = wrap_in_inspect_custom(
         env,
-        encode_list_call,
-        this_list_encoder_var,
+        inspect_list_call,
+        this_list_inspector_var,
         lst_sym,
         list_var,
     );
 
-    // \lst -> Encode.list lst (\elem -> Encode.toEncoder elem)
+    // \lst -> Inspect.list lst (\elem -> Inspect.toInspector elem)
     // Create fn_var for ambient capture; we fix it up below.
     let fn_var = synth_var(env.subs, Content::Error);
 
@@ -272,22 +273,22 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
             ambient_function: fn_var,
         }),
     );
-    // List elem -[fn_name]-> Encoder fmt
+    // List elem -[fn_name]-> Inspector fmt
     let list_var_slice = SubsSlice::insert_into_subs(env.subs, once(list_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             list_var_slice,
             fn_clos_var,
-            this_encoder_var,
+            this_inspector_var,
         )),
     );
 
-    // \lst -[fn_name]-> Encode.list lst (\elem -> Encode.toEncoder elem)
+    // \lst -[fn_name]-> Inspect.list lst (\elem -> Inspect.toInspector elem)
     let clos = Closure(ClosureData {
         function_type: fn_var,
         closure_type: fn_clos_var,
-        return_type: this_encoder_var,
+        return_type: this_inspector_var,
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -302,7 +303,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     (clos, fn_var)
 }
 
-fn to_encoder_record(
+fn to_inspector_record(
     env: &mut Env<'_>,
     record_var: Variable,
     fields: RecordFields,
@@ -310,9 +311,9 @@ fn to_encoder_record(
 ) -> (Expr, Variable) {
     // Suppose rcd = { a: t1, b: t2 }. Build
     //
-    // \rcd -> Encode.record [
-    //      { key: "a", value: Encode.toEncoder rcd.a },
-    //      { key: "b", value: Encode.toEncoder rcd.b },
+    // \rcd -> Inspect.record [
+    //      { key: "a", value: Inspect.toInspector rcd.a },
+    //      { key: "b", value: Inspect.toInspector rcd.b },
     //   ]
 
     let rcd_sym = env.new_symbol("rcd");
@@ -346,50 +347,51 @@ fn to_encoder_record(
                 field: field_name,
             };
 
-            // build `toEncoder rcd.a` type
-            // val -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-            let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
+            // build `toInspector rcd.a` type
+            // val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+            let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
             // (typeof rcd.a) -[clos]-> t1
-            let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-            let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-            let this_to_encoder_fn_var = synth_var(
+            let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+            let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+            let this_to_inspector_fn_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Func(
                     field_var_slice,
-                    to_encoder_clos_var,
-                    encoder_var,
+                    to_inspector_clos_var,
+                    inspector_var,
                 )),
             );
 
-            //   val            -[uls]->  Encoder fmt where fmt implements EncoderFormatting
+            //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatting
             // ~ (typeof rcd.a) -[clos]-> t1
-            env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
+            env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
-            // toEncoder : (typeof rcd.a) -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-            let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, to_encoder_fn_var);
-            let to_encoder_fn = Box::new((
-                to_encoder_fn_var,
-                Loc::at_zero(to_encoder_var),
-                to_encoder_clos_var,
-                encoder_var,
+            // toInspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+            let to_inspector_var =
+                AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, to_inspector_fn_var);
+            let to_inspector_fn = Box::new((
+                to_inspector_fn_var,
+                Loc::at_zero(to_inspector_var),
+                to_inspector_clos_var,
+                inspector_var,
             ));
 
-            // toEncoder rcd.a
-            let to_encoder_call = Call(
-                to_encoder_fn,
+            // toInspector rcd.a
+            let to_inspector_call = Call(
+                to_inspector_fn,
                 vec![(field_var, Loc::at_zero(field_access))],
                 CalledVia::Space,
             );
 
-            // value: toEncoder rcd.a
+            // value: toInspector rcd.a
             let value_field = Field {
-                var: encoder_var,
+                var: inspector_var,
                 region: Region::zero(),
-                loc_expr: Box::new(Loc::at_zero(to_encoder_call)),
+                loc_expr: Box::new(Loc::at_zero(to_inspector_call)),
             };
 
-            // { key: "a", value: toEncoder rcd.a }
+            // { key: "a", value: toInspector rcd.a }
             let mut kv = SendMap::default();
             kv.insert("key".into(), key_field);
             kv.insert("value".into(), value_field);
@@ -397,13 +399,13 @@ fn to_encoder_record(
             let this_record_fields = RecordFields::insert_into_subs(
                 env.subs,
                 (once(("key".into(), RecordField::Required(Variable::STR))))
-                    .chain(once(("value".into(), RecordField::Required(encoder_var)))),
+                    .chain(once(("value".into(), RecordField::Required(inspector_var)))),
             );
             let this_record_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Record(this_record_fields, Variable::EMPTY_RECORD)),
             );
-            // NOTE: must be done to unify the lambda sets under `encoder_var`
+            // NOTE: must be done to unify the lambda sets under `inspector_var`
             env.unify(this_record_var, whole_rcd_var);
 
             Loc::at_zero(Record {
@@ -426,47 +428,47 @@ fn to_encoder_record(
         loc_elems: fields_list,
     };
 
-    // build `Encode.record [ { key: .., value: ..}, .. ]` type
-    // List { key : Str, value : Encoder fmt } -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-    let encode_record_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_RECORD);
+    // build `Inspect.record [ { key: .., value: ..}, .. ]` type
+    // List { key : Str, value : Inspector fmt } -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    let inspect_record_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_RECORD);
 
     // fields_list_var -[clos]-> t1
     let fields_list_var_slice =
         VariableSubsSlice::insert_into_subs(env.subs, once(fields_list_var));
-    let encode_record_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-    let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-    let this_encode_record_fn_var = synth_var(
+    let inspect_record_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let this_inspect_record_fn_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Func(
             fields_list_var_slice,
-            encode_record_clos_var,
-            encoder_var,
+            inspect_record_clos_var,
+            inspector_var,
         )),
     );
 
-    //   List { key : Str, value : Encoder fmt } -[uls]->  Encoder fmt where fmt implements EncoderFormatting
+    //   List { key : Str, value : Inspector fmt } -[uls]->  Inspector fmt where fmt implements InspectorFormatting
     // ~ fields_list_var                         -[clos]-> t1
-    env.unify(encode_record_fn_var, this_encode_record_fn_var);
+    env.unify(inspect_record_fn_var, this_inspect_record_fn_var);
 
-    // Encode.record : fields_list_var -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-    let encode_record_var = AbilityMember(Symbol::ENCODE_RECORD, None, encode_record_fn_var);
-    let encode_record_fn = Box::new((
-        encode_record_fn_var,
-        Loc::at_zero(encode_record_var),
-        encode_record_clos_var,
-        encoder_var,
+    // Inspect.record : fields_list_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    let inspect_record_var = AbilityMember(Symbol::INSPECT_RECORD, None, inspect_record_fn_var);
+    let inspect_record_fn = Box::new((
+        inspect_record_fn_var,
+        Loc::at_zero(inspect_record_var),
+        inspect_record_clos_var,
+        inspector_var,
     ));
 
-    // Encode.record [ { key: .., value: .. }, .. ]
-    let encode_record_call = Call(
-        encode_record_fn,
+    // Inspect.record [ { key: .., value: .. }, .. ]
+    let inspect_record_call = Call(
+        inspect_record_fn,
         vec![(fields_list_var, Loc::at_zero(fields_list))],
         CalledVia::Space,
     );
 
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.record ..) fmt
-    let (body, this_encoder_var) =
-        wrap_in_encode_custom(env, encode_record_call, encoder_var, rcd_sym, record_var);
+    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (Inspect.record ..) fmt
+    let (body, this_inspector_var) =
+        wrap_in_inspect_custom(env, inspect_record_call, inspector_var, rcd_sym, record_var);
 
     // Create fn_var for ambient capture; we fix it up below.
     let fn_var = synth_var(env.subs, Content::Error);
@@ -482,22 +484,22 @@ fn to_encoder_record(
             ambient_function: fn_var,
         }),
     );
-    // typeof rcd -[fn_name]-> (typeof Encode.record [ .. ] = Encoder fmt)
+    // typeof rcd -[fn_name]-> (typeof Inspect.record [ .. ] = Inspector fmt)
     let record_var_slice = SubsSlice::insert_into_subs(env.subs, once(record_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             record_var_slice,
             fn_clos_var,
-            this_encoder_var,
+            this_inspector_var,
         )),
     );
 
-    // \rcd -[fn_name]-> Encode.record [ { key: .., value: .. }, .. ]
+    // \rcd -[fn_name]-> Inspect.record [ { key: .., value: .. }, .. ]
     let clos = Closure(ClosureData {
         function_type: fn_var,
         closure_type: fn_clos_var,
-        return_type: this_encoder_var,
+        return_type: this_inspector_var,
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -512,7 +514,7 @@ fn to_encoder_record(
     (clos, fn_var)
 }
 
-fn to_encoder_tuple(
+fn to_inspector_tuple(
     env: &mut Env<'_>,
     tuple_var: Variable,
     elems: TupleElems,
@@ -520,17 +522,17 @@ fn to_encoder_tuple(
 ) -> (Expr, Variable) {
     // Suppose tup = (t1, t2). Build
     //
-    // \tup -> Encode.tuple [
-    //      Encode.toEncoder tup.0,
-    //      Encode.toEncoder tup.1,
+    // \tup -> Inspect.tuple [
+    //      Inspect.toInspector tup.0,
+    //      Inspect.toInspector tup.1,
     //   ]
 
     let tup_sym = env.new_symbol("tup");
-    let whole_encoder_in_list_var = env.subs.fresh_unnamed_flex_var(); // type of the encoder in the list
+    let whole_inspector_in_list_var = env.subs.fresh_unnamed_flex_var(); // type of the inspector in the list
 
     use Expr::*;
 
-    let elem_encoders_list = elems
+    let elem_inspectors_list = elems
         .iter_all()
         .map(|(elem_index, elem_var_index)| {
             let index = env.subs[elem_index];
@@ -549,107 +551,108 @@ fn to_encoder_tuple(
                 index,
             };
 
-            // build `toEncoder tup.0` type
-            // val -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-            let to_encoder_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
+            // build `toInspector tup.0` type
+            // val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+            let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
             // (typeof tup.0) -[clos]-> t1
-            let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-            let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-            let this_to_encoder_fn_var = synth_var(
+            let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+            let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+            let this_to_inspector_fn_var = synth_var(
                 env.subs,
                 Content::Structure(FlatType::Func(
                     elem_var_slice,
-                    to_encoder_clos_var,
-                    encoder_var,
+                    to_inspector_clos_var,
+                    inspector_var,
                 )),
             );
 
-            //   val            -[uls]->  Encoder fmt where fmt implements EncoderFormatting
+            //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatting
             // ~ (typeof tup.0) -[clos]-> t1
-            env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
+            env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
-            // toEncoder : (typeof tup.0) -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-            let to_encoder_var = AbilityMember(Symbol::ENCODE_TO_ENCODER, None, to_encoder_fn_var);
-            let to_encoder_fn = Box::new((
-                to_encoder_fn_var,
-                Loc::at_zero(to_encoder_var),
-                to_encoder_clos_var,
-                encoder_var,
+            // toInspector : (typeof tup.0) -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+            let to_inspector_var =
+                AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, to_inspector_fn_var);
+            let to_inspector_fn = Box::new((
+                to_inspector_fn_var,
+                Loc::at_zero(to_inspector_var),
+                to_inspector_clos_var,
+                inspector_var,
             ));
 
-            // toEncoder tup.0
-            let to_encoder_call = Call(
-                to_encoder_fn,
+            // toInspector tup.0
+            let to_inspector_call = Call(
+                to_inspector_fn,
                 vec![(elem_var, Loc::at_zero(tuple_access))],
                 CalledVia::Space,
             );
 
-            // NOTE: must be done to unify the lambda sets under `encoder_var`
-            env.unify(encoder_var, whole_encoder_in_list_var);
+            // NOTE: must be done to unify the lambda sets under `inspector_var`
+            env.unify(inspector_var, whole_inspector_in_list_var);
 
-            Loc::at_zero(to_encoder_call)
+            Loc::at_zero(to_inspector_call)
         })
         .collect::<Vec<_>>();
 
-    // typeof [ toEncoder tup.0, toEncoder tup.1 ]
-    let whole_encoder_in_list_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, once(whole_encoder_in_list_var));
-    let elem_encoders_list_var = synth_var(
+    // typeof [ toInspector tup.0, toInspector tup.1 ]
+    let whole_inspector_in_list_var_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, once(whole_inspector_in_list_var));
+    let elem_inspectors_list_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Apply(
             Symbol::LIST_LIST,
-            whole_encoder_in_list_var_slice,
+            whole_inspector_in_list_var_slice,
         )),
     );
 
-    // [ toEncoder tup.0, toEncoder tup.1 ]
-    let elem_encoders_list = List {
-        elem_var: whole_encoder_in_list_var,
-        loc_elems: elem_encoders_list,
+    // [ toInspector tup.0, toInspector tup.1 ]
+    let elem_inspectors_list = List {
+        elem_var: whole_inspector_in_list_var,
+        loc_elems: elem_inspectors_list,
     };
 
-    // build `Encode.tuple [ toEncoder tup.0, toEncoder tup.1 ]` type
-    // List (Encoder fmt) -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-    let encode_tuple_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TUPLE);
+    // build `Inspect.tuple [ toInspector tup.0, toInspector tup.1 ]` type
+    // List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    let inspect_tuple_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TUPLE);
 
-    // elem_encoders_list_var -[clos]-> t1
-    let elem_encoders_list_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, once(elem_encoders_list_var));
-    let encode_tuple_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-    let encoder_var = env.subs.fresh_unnamed_flex_var(); // t1
-    let this_encode_tuple_fn_var = synth_var(
+    // elem_inspectors_list_var -[clos]-> t1
+    let elem_inspectors_list_var_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, once(elem_inspectors_list_var));
+    let inspect_tuple_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let this_inspect_tuple_fn_var = synth_var(
         env.subs,
         Content::Structure(FlatType::Func(
-            elem_encoders_list_var_slice,
-            encode_tuple_clos_var,
-            encoder_var,
+            elem_inspectors_list_var_slice,
+            inspect_tuple_clos_var,
+            inspector_var,
         )),
     );
 
-    //   List (Encoder fmt)     -[uls]->  Encoder fmt where fmt implements EncoderFormatting
-    // ~ elem_encoders_list_var -[clos]-> t1
-    env.unify(encode_tuple_fn_var, this_encode_tuple_fn_var);
+    //   List (Inspector fmt)     -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+    // ~ elem_inspectors_list_var -[clos]-> t1
+    env.unify(inspect_tuple_fn_var, this_inspect_tuple_fn_var);
 
-    // Encode.tuple : elem_encoders_list_var -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-    let encode_tuple_var = AbilityMember(Symbol::ENCODE_TUPLE, None, encode_tuple_fn_var);
-    let encode_tuple_fn = Box::new((
-        encode_tuple_fn_var,
-        Loc::at_zero(encode_tuple_var),
-        encode_tuple_clos_var,
-        encoder_var,
+    // Inspect.tuple : elem_inspectors_list_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    let inspect_tuple_var = AbilityMember(Symbol::INSPECT_TUPLE, None, inspect_tuple_fn_var);
+    let inspect_tuple_fn = Box::new((
+        inspect_tuple_fn_var,
+        Loc::at_zero(inspect_tuple_var),
+        inspect_tuple_clos_var,
+        inspector_var,
     ));
 
-    // Encode.tuple [ { key: .., value: .. }, .. ]
-    let encode_tuple_call = Call(
-        encode_tuple_fn,
-        vec![(elem_encoders_list_var, Loc::at_zero(elem_encoders_list))],
+    // Inspect.tuple [ { key: .., value: .. }, .. ]
+    let inspect_tuple_call = Call(
+        inspect_tuple_fn,
+        vec![(elem_inspectors_list_var, Loc::at_zero(elem_inspectors_list))],
         CalledVia::Space,
     );
 
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (Encode.tuple_var ..) fmt
-    let (body, this_encoder_var) =
-        wrap_in_encode_custom(env, encode_tuple_call, encoder_var, tup_sym, tuple_var);
+    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (Inspect.tuple_var ..) fmt
+    let (body, this_inspector_var) =
+        wrap_in_inspect_custom(env, inspect_tuple_call, inspector_var, tup_sym, tuple_var);
 
     // Create fn_var for ambient capture; we fix it up below.
     let fn_var = synth_var(env.subs, Content::Error);
@@ -665,22 +668,22 @@ fn to_encoder_tuple(
             ambient_function: fn_var,
         }),
     );
-    // typeof tup -[fn_name]-> (typeof Encode.tuple [ .. ] = Encoder fmt)
+    // typeof tup -[fn_name]-> (typeof Inspect.tuple [ .. ] = Inspector fmt)
     let tuple_var_slice = SubsSlice::insert_into_subs(env.subs, once(tuple_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             tuple_var_slice,
             fn_clos_var,
-            this_encoder_var,
+            this_inspector_var,
         )),
     );
 
-    // \tup -[fn_name]-> Encode.tuple [ { key: .., value: .. }, .. ]
+    // \tup -[fn_name]-> Inspect.tuple [ { key: .., value: .. }, .. ]
     let clos = Closure(ClosureData {
         function_type: fn_var,
         closure_type: fn_clos_var,
-        return_type: this_encoder_var,
+        return_type: this_inspector_var,
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -695,7 +698,7 @@ fn to_encoder_tuple(
     (clos, fn_var)
 }
 
-fn to_encoder_tag_union(
+fn to_inspector_tag_union(
     env: &mut Env<'_>,
     tag_union_var: Variable,
     tags: UnionTags,
@@ -704,11 +707,11 @@ fn to_encoder_tag_union(
     // Suppose tag = [ A t1 t2, B t3 ]. Build
     //
     // \tag -> when tag is
-    //     A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-    //     B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ]
+    //     A v1 v2 -> Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+    //     B v3 -> Inspect.tag "B" [ Inspect.toInspector v3 ]
 
     let tag_sym = env.new_symbol("tag");
-    let whole_tag_encoders_var = env.subs.fresh_unnamed_flex_var(); // type of the Encode.tag ... calls in the branch bodies
+    let whole_tag_inspectors_var = env.subs.fresh_unnamed_flex_var(); // type of the Inspect.tag ... calls in the branch bodies
 
     use Expr::*;
 
@@ -741,128 +744,131 @@ fn to_encoder_tag_union(
                 degenerate: false,
             };
 
-            // whole type of the elements in [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-            let whole_payload_encoders_var = env.subs.fresh_unnamed_flex_var();
-            // [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-            let payload_to_encoders = (payload_syms.iter())
+            // whole type of the elements in [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+            let whole_payload_inspectors_var = env.subs.fresh_unnamed_flex_var();
+            // [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+            let payload_to_inspectors = (payload_syms.iter())
                 .zip(payload_vars.iter())
                 .map(|(&sym, &sym_var)| {
-                    // build `toEncoder v1` type
-                    // expected: val -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-                    let to_encoder_fn_var =
-                        env.import_builtin_symbol_var(Symbol::ENCODE_TO_ENCODER);
+                    // build `toInspector v1` type
+                    // expected: val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+                    let to_inspector_fn_var =
+                        env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
                     // wanted: t1 -[clos]-> t'
                     let var_slice_of_sym_var =
                         VariableSubsSlice::insert_into_subs(env.subs, [sym_var]); // [ t1 ]
-                    let to_encoder_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
-                    let encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
-                    let this_to_encoder_fn_var = synth_var(
+                    let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+                    let inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
+                    let this_to_inspector_fn_var = synth_var(
                         env.subs,
                         Content::Structure(FlatType::Func(
                             var_slice_of_sym_var,
-                            to_encoder_clos_var,
-                            encoder_var,
+                            to_inspector_clos_var,
+                            inspector_var,
                         )),
                     );
 
-                    //   val -[uls]->  Encoder fmt where fmt implements EncoderFormatting
+                    //   val -[uls]->  Inspector fmt where fmt implements InspectorFormatting
                     // ~ t1  -[clos]-> t'
-                    env.unify(to_encoder_fn_var, this_to_encoder_fn_var);
+                    env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
-                    // toEncoder : t1 -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-                    let to_encoder_var =
-                        AbilityMember(Symbol::ENCODE_TO_ENCODER, None, this_to_encoder_fn_var);
-                    let to_encoder_fn = Box::new((
-                        this_to_encoder_fn_var,
-                        Loc::at_zero(to_encoder_var),
-                        to_encoder_clos_var,
-                        encoder_var,
+                    // toInspector : t1 -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+                    let to_inspector_var =
+                        AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, this_to_inspector_fn_var);
+                    let to_inspector_fn = Box::new((
+                        this_to_inspector_fn_var,
+                        Loc::at_zero(to_inspector_var),
+                        to_inspector_clos_var,
+                        inspector_var,
                     ));
 
-                    // toEncoder rcd.a
-                    let to_encoder_call = Call(
-                        to_encoder_fn,
+                    // toInspector rcd.a
+                    let to_inspector_call = Call(
+                        to_inspector_fn,
                         vec![(sym_var, Loc::at_zero(Var(sym, sym_var)))],
                         CalledVia::Space,
                     );
 
-                    // NOTE: must be done to unify the lambda sets under `encoder_var`
-                    env.unify(encoder_var, whole_payload_encoders_var);
+                    // NOTE: must be done to unify the lambda sets under `inspector_var`
+                    env.unify(inspector_var, whole_payload_inspectors_var);
 
-                    Loc::at_zero(to_encoder_call)
+                    Loc::at_zero(to_inspector_call)
                 })
                 .collect();
 
-            // typeof [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-            let whole_encoders_var_slice =
-                VariableSubsSlice::insert_into_subs(env.subs, [whole_payload_encoders_var]);
-            let payload_encoders_list_var = synth_var(
+            // typeof [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+            let whole_inspectors_var_slice =
+                VariableSubsSlice::insert_into_subs(env.subs, [whole_payload_inspectors_var]);
+            let payload_inspectors_list_var = synth_var(
                 env.subs,
-                Content::Structure(FlatType::Apply(Symbol::LIST_LIST, whole_encoders_var_slice)),
-            );
-
-            // [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-            let payload_encoders_list = List {
-                elem_var: whole_payload_encoders_var,
-                loc_elems: payload_to_encoders,
-            };
-
-            // build `Encode.tag "A" [ ... ]` type
-            // expected: Str, List (Encoder fmt) -[uls]-> Encoder fmt where fmt implements EncoderFormatting
-            let encode_tag_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_TAG);
-
-            // wanted: Str, List whole_encoders_var -[clos]-> t'
-            let this_encode_tag_args_var_slice = VariableSubsSlice::insert_into_subs(
-                env.subs,
-                [Variable::STR, payload_encoders_list_var],
-            );
-            let this_encode_tag_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
-            let this_encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
-            let this_encode_tag_fn_var = synth_var(
-                env.subs,
-                Content::Structure(FlatType::Func(
-                    this_encode_tag_args_var_slice,
-                    this_encode_tag_clos_var,
-                    this_encoder_var,
+                Content::Structure(FlatType::Apply(
+                    Symbol::LIST_LIST,
+                    whole_inspectors_var_slice,
                 )),
             );
 
-            //   Str, List (Encoder fmt)      -[uls]->  Encoder fmt where fmt implements EncoderFormatting
-            // ~ Str, List whole_encoders_var -[clos]-> t'
-            env.unify(encode_tag_fn_var, this_encode_tag_fn_var);
+            // [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+            let payload_inspectors_list = List {
+                elem_var: whole_payload_inspectors_var,
+                loc_elems: payload_to_inspectors,
+            };
 
-            // Encode.tag : Str, List whole_encoders_var -[clos]-> Encoder fmt where fmt implements EncoderFormatting
-            let encode_tag_var = AbilityMember(Symbol::ENCODE_TAG, None, this_encode_tag_fn_var);
-            let encode_tag_fn = Box::new((
-                this_encode_tag_fn_var,
-                Loc::at_zero(encode_tag_var),
-                this_encode_tag_clos_var,
-                this_encoder_var,
+            // build `Inspect.tag "A" [ ... ]` type
+            // expected: Str, List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+            let inspect_tag_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TAG);
+
+            // wanted: Str, List whole_inspectors_var -[clos]-> t'
+            let this_inspect_tag_args_var_slice = VariableSubsSlice::insert_into_subs(
+                env.subs,
+                [Variable::STR, payload_inspectors_list_var],
+            );
+            let this_inspect_tag_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
+            let this_inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
+            let this_inspect_tag_fn_var = synth_var(
+                env.subs,
+                Content::Structure(FlatType::Func(
+                    this_inspect_tag_args_var_slice,
+                    this_inspect_tag_clos_var,
+                    this_inspector_var,
+                )),
+            );
+
+            //   Str, List (Inspector fmt)      -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+            // ~ Str, List whole_inspectors_var -[clos]-> t'
+            env.unify(inspect_tag_fn_var, this_inspect_tag_fn_var);
+
+            // Inspect.tag : Str, List whole_inspectors_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+            let inspect_tag_var = AbilityMember(Symbol::INSPECT_TAG, None, this_inspect_tag_fn_var);
+            let inspect_tag_fn = Box::new((
+                this_inspect_tag_fn_var,
+                Loc::at_zero(inspect_tag_var),
+                this_inspect_tag_clos_var,
+                this_inspector_var,
             ));
 
-            // Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-            let encode_tag_call = Call(
-                encode_tag_fn,
+            // Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+            let inspect_tag_call = Call(
+                inspect_tag_fn,
                 vec![
                     // (Str, "A")
                     (Variable::STR, Loc::at_zero(Str(tag_name.0.as_str().into()))),
-                    // (List (Encoder fmt), [ Encode.toEncoder v1, Encode.toEncoder v2 ])
+                    // (List (Inspector fmt), [ Inspect.toInspector v1, Inspect.toInspector v2 ])
                     (
-                        payload_encoders_list_var,
-                        Loc::at_zero(payload_encoders_list),
+                        payload_inspectors_list_var,
+                        Loc::at_zero(payload_inspectors_list),
                     ),
                 ],
                 CalledVia::Space,
             );
 
-            // NOTE: must be done to unify the lambda sets under `encoder_var`
-            // Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ] ~ whole_encoders
-            env.unify(this_encoder_var, whole_tag_encoders_var);
+            // NOTE: must be done to unify the lambda sets under `inspector_var`
+            // Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ] ~ whole_inspectors
+            env.unify(this_inspector_var, whole_tag_inspectors_var);
 
             WhenBranch {
                 patterns: vec![branch_pattern],
-                value: Loc::at_zero(encode_tag_call),
+                value: Loc::at_zero(inspect_tag_call),
                 guard: None,
                 redundant: RedundantMark::known_non_redundant(),
             }
@@ -870,23 +876,23 @@ fn to_encoder_tag_union(
         .collect::<Vec<_>>();
 
     // when tag is
-    //     A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-    //     B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ]
+    //     A v1 v2 -> Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+    //     B v3 -> Inspect.tag "B" [ Inspect.toInspector v3 ]
     let when_branches = When {
         loc_cond: Box::new(Loc::at_zero(Var(tag_sym, tag_union_var))),
         cond_var: tag_union_var,
-        expr_var: whole_tag_encoders_var,
+        expr_var: whole_tag_inspectors_var,
         region: Region::zero(),
         branches,
         branches_cond_var: tag_union_var,
         exhaustive: ExhaustiveMark::known_exhaustive(),
     };
 
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes (when ..) fmt
-    let (body, this_encoder_var) = wrap_in_encode_custom(
+    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (when ..) fmt
+    let (body, this_inspector_var) = wrap_in_inspect_custom(
         env,
         when_branches,
-        whole_tag_encoders_var,
+        whole_tag_inspectors_var,
         tag_sym,
         tag_union_var,
     );
@@ -905,27 +911,27 @@ fn to_encoder_tag_union(
             ambient_function: fn_var,
         }),
     );
-    // tag_union_var -[fn_name]-> whole_tag_encoders_var
+    // tag_union_var -[fn_name]-> whole_tag_inspectors_var
     let tag_union_var_slice = SubsSlice::insert_into_subs(env.subs, once(tag_union_var));
     env.subs.set_content(
         fn_var,
         Content::Structure(FlatType::Func(
             tag_union_var_slice,
             fn_clos_var,
-            this_encoder_var,
+            this_inspector_var,
         )),
     );
 
     // \tag ->
-    //   Encode.custom \bytes, fmt -> Encode.appendWith bytes (
+    //   Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (
     //     when tag is
-    //        A v1 v2 -> Encode.tag "A" [ Encode.toEncoder v1, Encode.toEncoder v2 ]
-    //        B v3 -> Encode.tag "B" [ Encode.toEncoder v3 ])
+    //        A v1 v2 -> Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
+    //        B v3 -> Inspect.tag "B" [ Inspect.toInspector v3 ])
     //     fmt
     let clos = Closure(ClosureData {
         function_type: fn_var,
         closure_type: fn_clos_var,
-        return_type: this_encoder_var,
+        return_type: this_inspector_var,
         name: fn_name,
         captured_symbols: vec![],
         recursive: Recursive::NotRecursive,
@@ -940,157 +946,158 @@ fn to_encoder_tag_union(
     (clos, fn_var)
 }
 
-/// Lift `encoder` to `Encode.custom \bytes, fmt -> Encode.appendWith bytes encoder fmt`
+/// Lift `inspector` to `Inspect.custom \bytes, fmt -> Inspect.appendWith bytes inspector fmt`
 ///
-/// TODO: currently it appears that just `encoder` is not isomorphic to the lift, on the
+/// TODO: currently it appears that just `inspector` is not isomorphic to the lift, on the
 /// monomorphization level, even though we would think it is. In particular, unspecialized lambda
 /// sets fail to resolve when we use the non-lifted version.
 /// More investigation is needed to figure out why.
-fn wrap_in_encode_custom(
-    env: &mut Env,
-    encoder: Expr,
-    encoder_var: Variable,
-    captured_symbol: Symbol,
-    captured_var: Variable,
+fn wrap_in_inspect_custom(
+    _env: &mut Env,
+    _inspector: Expr,
+    _inspector_var: Variable,
+    _captured_symbol: Symbol,
+    _captured_var: Variable,
 ) -> (Expr, Variable) {
-    use Expr::*;
+    unimplemented!();
+    // use Expr::*;
 
-    let fn_name = env.new_symbol("custom");
+    // let fn_name = env.new_symbol("custom");
 
-    // bytes: List U8
-    let bytes_sym = env.new_symbol("bytes");
-    let bytes_var = Variable::LIST_U8;
+    // // bytes: List U8
+    // let bytes_sym = env.new_symbol("bytes");
+    // let bytes_var = Variable::LIST_U8;
 
-    // fmt: fmt where fmt implements EncoderFormatting
-    let fmt_sym = env.new_symbol("fmt");
-    let fmt_var = env.subs.fresh_unnamed_flex_var();
+    // // fmt: fmt where fmt implements InspectorFormatting
+    // let fmt_sym = env.new_symbol("fmt");
+    // let fmt_var = env.subs.fresh_unnamed_flex_var();
 
-    // build `Encode.appendWith bytes encoder fmt` type
-    // expected: Encode.appendWith : List U8, Encoder fmt, fmt -[appendWith]-> List U8 where fmt implements EncoderFormatting
-    let append_with_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_APPEND_WITH);
+    // // build `Inspect.appendWith bytes inspector fmt` type
+    // // expected: Inspect.appendWith : List U8, Inspector fmt, fmt -[appendWith]-> List U8 where fmt implements InspectorFormatting
+    // let append_with_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_APPEND_WITH);
 
-    // wanted: Encode.appendWith : List U8, encoder_var, fmt -[clos]-> List U8 where fmt implements EncoderFormatting
-    let this_append_with_args_var_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, encoder_var, fmt_var]);
-    let this_append_with_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
-    let this_append_with_fn_var = synth_var(
-        env.subs,
-        Content::Structure(FlatType::Func(
-            this_append_with_args_var_slice,
-            this_append_with_clos_var,
-            Variable::LIST_U8,
-        )),
-    );
+    // // wanted: Inspect.appendWith : List U8, inspector_var, fmt -[clos]-> List U8 where fmt implements InspectorFormatting
+    // let this_append_with_args_var_slice =
+    //     VariableSubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, inspector_var, fmt_var]);
+    // let this_append_with_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
+    // let this_append_with_fn_var = synth_var(
+    //     env.subs,
+    //     Content::Structure(FlatType::Func(
+    //         this_append_with_args_var_slice,
+    //         this_append_with_clos_var,
+    //         Variable::LIST_U8,
+    //     )),
+    // );
 
-    //   List U8, Encoder fmt, fmt -[appendWith]-> List U8 where fmt implements EncoderFormatting
-    // ~ List U8, encoder_var, fmt -[clos]->       List U8 where fmt implements EncoderFormatting
-    env.unify(append_with_fn_var, this_append_with_fn_var);
+    // //   List U8, Inspector fmt, fmt -[appendWith]-> List U8 where fmt implements InspectorFormatting
+    // // ~ List U8, inspector_var, fmt -[clos]->       List U8 where fmt implements InspectorFormatting
+    // env.unify(append_with_fn_var, this_append_with_fn_var);
 
-    // Encode.appendWith : List U8, encoder_var, fmt -[appendWith]-> List U8 where fmt implements EncoderFormatting
-    let append_with_fn = Box::new((
-        this_append_with_fn_var,
-        Loc::at_zero(Var(Symbol::ENCODE_APPEND_WITH, this_append_with_fn_var)),
-        this_append_with_clos_var,
-        Variable::LIST_U8,
-    ));
+    // // Inspect.appendWith : List U8, inspector_var, fmt -[appendWith]-> List U8 where fmt implements InspectorFormatting
+    // let append_with_fn = Box::new((
+    //     this_append_with_fn_var,
+    //     Loc::at_zero(Var(Symbol::INSPECT_APPEND_WITH, this_append_with_fn_var)),
+    //     this_append_with_clos_var,
+    //     Variable::LIST_U8,
+    // ));
 
-    // Encode.appendWith bytes encoder fmt
-    let append_with_call = Call(
-        append_with_fn,
-        vec![
-            // (bytes_var, bytes)
-            (bytes_var, Loc::at_zero(Var(bytes_sym, bytes_var))),
-            // (encoder_var, encoder)
-            (encoder_var, Loc::at_zero(encoder)),
-            // (fmt, fmt_var)
-            (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
-        ],
-        CalledVia::Space,
-    );
+    // // Inspect.appendWith bytes inspector fmt
+    // let append_with_call = Call(
+    //     append_with_fn,
+    //     vec![
+    //         // (bytes_var, bytes)
+    //         (bytes_var, Loc::at_zero(Var(bytes_sym, bytes_var))),
+    //         // (inspector_var, inspector)
+    //         (inspector_var, Loc::at_zero(inspector)),
+    //         // (fmt, fmt_var)
+    //         (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
+    //     ],
+    //     CalledVia::Space,
+    // );
 
-    // Create fn_var for ambient capture; we fix it up below.
-    let fn_var = synth_var(env.subs, Content::Error);
+    // // Create fn_var for ambient capture; we fix it up below.
+    // let fn_var = synth_var(env.subs, Content::Error);
 
-    // -[[FN_name captured_var]]->
-    let fn_name_labels =
-        UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![captured_var])));
-    let fn_clos_var = synth_var(
-        env.subs,
-        Content::LambdaSet(LambdaSet {
-            solved: fn_name_labels,
-            recursion_var: OptVariable::NONE,
-            unspecialized: SubsSlice::default(),
-            ambient_function: fn_var,
-        }),
-    );
+    // // -[[FN_name captured_var]]->
+    // let fn_name_labels =
+    //     UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![captured_var])));
+    // let fn_clos_var = synth_var(
+    //     env.subs,
+    //     Content::LambdaSet(LambdaSet {
+    //         solved: fn_name_labels,
+    //         recursion_var: OptVariable::NONE,
+    //         unspecialized: SubsSlice::default(),
+    //         ambient_function: fn_var,
+    //     }),
+    // );
 
-    // bytes, fmt -[[FN_name captured_var]]-> Encode.appendWith bytes encoder fmt
-    let args_slice = SubsSlice::insert_into_subs(env.subs, vec![bytes_var, fmt_var]);
-    env.subs.set_content(
-        fn_var,
-        Content::Structure(FlatType::Func(args_slice, fn_clos_var, Variable::LIST_U8)),
-    );
+    // // bytes, fmt -[[FN_name captured_var]]-> Inspect.appendWith bytes inspector fmt
+    // let args_slice = SubsSlice::insert_into_subs(env.subs, vec![bytes_var, fmt_var]);
+    // env.subs.set_content(
+    //     fn_var,
+    //     Content::Structure(FlatType::Func(args_slice, fn_clos_var, Variable::LIST_U8)),
+    // );
 
-    // \bytes, fmt -[[fn_name captured_var]]-> Encode.appendWith bytes encoder fmt
-    let clos = Closure(ClosureData {
-        function_type: fn_var,
-        closure_type: fn_clos_var,
-        return_type: Variable::LIST_U8,
-        name: fn_name,
-        captured_symbols: vec![(captured_symbol, captured_var)],
-        recursive: Recursive::NotRecursive,
-        arguments: vec![
-            (
-                bytes_var,
-                AnnotatedMark::known_exhaustive(),
-                Loc::at_zero(Pattern::Identifier(bytes_sym)),
-            ),
-            (
-                fmt_var,
-                AnnotatedMark::known_exhaustive(),
-                Loc::at_zero(Pattern::Identifier(fmt_sym)),
-            ),
-        ],
-        loc_body: Box::new(Loc::at_zero(append_with_call)),
-    });
+    // // \bytes, fmt -[[fn_name captured_var]]-> Inspect.appendWith bytes inspector fmt
+    // let clos = Closure(ClosureData {
+    //     function_type: fn_var,
+    //     closure_type: fn_clos_var,
+    //     return_type: Variable::LIST_U8,
+    //     name: fn_name,
+    //     captured_symbols: vec![(captured_symbol, captured_var)],
+    //     recursive: Recursive::NotRecursive,
+    //     arguments: vec![
+    //         (
+    //             bytes_var,
+    //             AnnotatedMark::known_exhaustive(),
+    //             Loc::at_zero(Pattern::Identifier(bytes_sym)),
+    //         ),
+    //         (
+    //             fmt_var,
+    //             AnnotatedMark::known_exhaustive(),
+    //             Loc::at_zero(Pattern::Identifier(fmt_sym)),
+    //         ),
+    //     ],
+    //     loc_body: Box::new(Loc::at_zero(append_with_call)),
+    // });
 
-    // Build
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes encoder fmt
-    //
-    // expected: Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt where fmt implements EncoderFormatting
-    let custom_fn_var = env.import_builtin_symbol_var(Symbol::ENCODE_CUSTOM);
+    // // Build
+    // // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes inspector fmt
+    // //
+    // // expected: Inspect.custom : (List U8, fmt -> List U8) -> Inspector fmt where fmt implements InspectorFormatting
+    // let custom_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_CUSTOM);
 
-    // wanted: Encode.custom : fn_var -[clos]-> t'
-    let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);
-    let this_custom_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
-    let this_custom_encoder_var = env.subs.fresh_unnamed_flex_var(); // t'
-    let this_custom_fn_var = synth_var(
-        env.subs,
-        Content::Structure(FlatType::Func(
-            this_custom_args_var_slice,
-            this_custom_clos_var,
-            this_custom_encoder_var,
-        )),
-    );
+    // // wanted: Inspect.custom : fn_var -[clos]-> t'
+    // let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);
+    // let this_custom_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
+    // let this_custom_inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
+    // let this_custom_fn_var = synth_var(
+    //     env.subs,
+    //     Content::Structure(FlatType::Func(
+    //         this_custom_args_var_slice,
+    //         this_custom_clos_var,
+    //         this_custom_inspector_var,
+    //     )),
+    // );
 
-    //   (List U8, fmt -> List U8) -[..]->   Encoder fmt where fmt implements EncoderFormatting
-    // ~ fn_var                    -[clos]-> t'
-    env.unify(custom_fn_var, this_custom_fn_var);
+    // //   (List U8, fmt -> List U8) -[..]->   Inspector fmt where fmt implements InspectorFormatting
+    // // ~ fn_var                    -[clos]-> t'
+    // env.unify(custom_fn_var, this_custom_fn_var);
 
-    // Encode.custom : (List U8, fmt -> List U8) -> Encoder fmt where fmt implements EncoderFormatting
-    let custom_fn = Box::new((
-        this_custom_fn_var,
-        Loc::at_zero(Var(Symbol::ENCODE_CUSTOM, this_custom_fn_var)),
-        this_custom_clos_var,    // -[clos]->
-        this_custom_encoder_var, // t' ~ Encoder fmt
-    ));
+    // // Inspect.custom : (List U8, fmt -> List U8) -> Inspector fmt where fmt implements InspectorFormatting
+    // let custom_fn = Box::new((
+    //     this_custom_fn_var,
+    //     Loc::at_zero(Var(Symbol::INSPECT_CUSTOM, this_custom_fn_var)),
+    //     this_custom_clos_var,      // -[clos]->
+    //     this_custom_inspector_var, // t' ~ Inspector fmt
+    // ));
 
-    // Encode.custom \bytes, fmt -> Encode.appendWith bytes encoder fmt
-    let custom_call = Call(
-        custom_fn,
-        vec![(fn_var, Loc::at_zero(clos))],
-        CalledVia::Space,
-    );
+    // // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes inspector fmt
+    // let custom_call = Call(
+    //     custom_fn,
+    //     vec![(fn_var, Loc::at_zero(clos))],
+    //     CalledVia::Space,
+    // );
 
-    (custom_call, this_custom_encoder_var)
+    // (custom_call, this_custom_inspector_var)
 }
