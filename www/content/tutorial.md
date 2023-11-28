@@ -2021,6 +2021,36 @@ For this reason, any time you see a function that only runs a `when` on its only
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
+### [Record Builder](#record-builder) {#record-builder}
+
+The record builder syntax sugar is a useful feature which leverages the functional programming concept of [applicative functors](https://lucamug.medium.com/functors-applicatives-and-monads-in-pictures-784c2b5786f7), to provide a flexible method for constructing complex types.
+
+The record builder syntax sugar helps to build up a record by applying a series of functions to it. 
+
+For example, let's say we write a record-builder as follows:
+
+```roc
+{ aliceID, bobID, trudyID } = 
+    initIDCount {
+        aliceID: <- incID,
+        bobID: <- incID,
+        trudyID: <- incID,
+    } |> extractState
+```
+
+The above desguars to the following.
+
+```roc
+{ aliceID, bobID, trudyID } =
+    initIDCount (\aID -> \bID -> \cID -> { aliceID: aID, bobID: bID, trudyID: cID })
+    |> incID
+    |> incID
+    |> incID
+    |> extractState
+```
+
+See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for an explanation of how to use this feature.
+
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 
 These are all the reserved keywords in Roc. You can't choose any of these as names, except as record field names.
