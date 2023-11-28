@@ -510,7 +510,7 @@ outside a record field. Optionality is a concept that exists only in record
 fields, and it's intended for the use case of config records like this. The
 ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead.
 
-## [Tags](#tags) {#tags}
+## [Tags &amp; Pattern Matching](#tags) {#tags}
 
 Sometimes we want to represent that something can have one of several values. For example:
 
@@ -660,6 +660,8 @@ when myList is
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
 
 > **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
+
+See the [Pattern Matching example](https://www.roc-lang.org/examples/PatternMatching/README.html) which shows different ways to do pattern matching in Roc using tags, strings, and numbers.
 
 ## [Booleans](#booleans) {#booleans}
 
