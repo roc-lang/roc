@@ -110,9 +110,9 @@ pub(crate) fn derive_to_inspector(
 }
 
 fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
-    // Build \lst -> Inspect.list lst (\elem -> Inspect.toInspector elem)
+    // Build \lst -> list, List.walk, (\elem -> Inspect.toInspector elem)
     //
-    // TODO eta reduce this baby     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    // TODO eta reduce this baby       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     use Expr::*;
 
@@ -212,9 +212,12 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     // List e, (e -> Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_list_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_LIST);
 
-    // List elem, to_elem_inspector_fn_var -[clos]-> t1
-    let this_inspect_list_args_slice =
-        VariableSubsSlice::insert_into_subs(env.subs, [list_var, to_elem_inspector_fn_var]);
+    // List elem, List.walk, to_elem_inspector_fn_var -[clos]-> t1
+    let list_walk_fn_var = env.import_builtin_symbol_var(Symbol::LIST_WALK);
+    let this_inspect_list_args_slice = VariableSubsSlice::insert_into_subs(
+        env.subs,
+        [list_var, list_walk_fn_var, to_elem_inspector_fn_var],
+    );
     let this_inspect_list_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
     let this_list_inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
     let this_inspect_list_fn_var = synth_var(
@@ -244,6 +247,10 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         inspect_list_fn,
         vec![
             (list_var, Loc::at_zero(Var(lst_sym, list_var))),
+            (
+                list_walk_fn_var,
+                Loc::at_zero(Var(Symbol::LIST_WALK, list_walk_fn_var)),
+            ),
             (to_elem_inspector_fn_var, Loc::at_zero(to_elem_inspector)),
         ],
         CalledVia::Space,
