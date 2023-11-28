@@ -128,7 +128,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     );
 
     // build `toInspector elem` type
-    // val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    // val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
     // elem -[clos]-> t1
@@ -143,11 +143,11 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         )),
     );
 
-    //   val  -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+    //   val  -[uls]->  Inspector fmt where fmt implements InspectorFormatter
     // ~ elem -[clos]-> t1
     env.unify(to_inspector_fn_var, elem_to_inspector_fn_var);
 
-    // toInspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    // toInspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
     let to_inspector_var =
         AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, elem_to_inspector_fn_var);
     let to_inspector_fn = Box::new((
@@ -209,7 +209,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     });
 
     // build `Inspect.list lst (\elem -> Inspect.toInspector elem)` type
-    // List e, (e -> Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    // List e, (e -> Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_list_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_LIST);
 
     // List elem, to_elem_inspector_fn_var -[clos]-> t1
@@ -226,11 +226,11 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         )),
     );
 
-    //   List e,    (e -> Inspector fmt)     -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+    //   List e,    (e -> Inspector fmt)     -[uls]->  Inspector fmt where fmt implements InspectorFormatter
     // ~ List elem, to_elem_inspector_fn_var -[clos]-> t1
     env.unify(inspect_list_fn_var, this_inspect_list_fn_var);
 
-    // Inspect.list : List elem, to_elem_inspector_fn_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    // Inspect.list : List elem, to_elem_inspector_fn_var -[clos]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_list = AbilityMember(Symbol::INSPECT_LIST, None, this_inspect_list_fn_var);
     let inspect_list_fn = Box::new((
         this_inspect_list_fn_var,
@@ -249,7 +249,7 @@ fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
         CalledVia::Space,
     );
 
-    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (Inspect.list ..) fmt
+    // Inspect.custom \fmt -> Inspect.apply (Inspect.list ..) fmt
     let (body, this_inspector_var) = wrap_in_inspect_custom(
         env,
         inspect_list_call,
@@ -348,7 +348,7 @@ fn to_inspector_record(
             };
 
             // build `toInspector rcd.a` type
-            // val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+            // val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
             let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
             // (typeof rcd.a) -[clos]-> t1
@@ -363,11 +363,11 @@ fn to_inspector_record(
                 )),
             );
 
-            //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+            //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatter
             // ~ (typeof rcd.a) -[clos]-> t1
             env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
-            // toInspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+            // toInspector : (typeof rcd.a) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
             let to_inspector_var =
                 AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, to_inspector_fn_var);
             let to_inspector_fn = Box::new((
@@ -429,7 +429,7 @@ fn to_inspector_record(
     };
 
     // build `Inspect.record [ { key: .., value: ..}, .. ]` type
-    // List { key : Str, value : Inspector fmt } -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    // List { key : Str, value : Inspector fmt } -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_record_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_RECORD);
 
     // fields_list_var -[clos]-> t1
@@ -446,11 +446,11 @@ fn to_inspector_record(
         )),
     );
 
-    //   List { key : Str, value : Inspector fmt } -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+    //   List { key : Str, value : Inspector fmt } -[uls]->  Inspector fmt where fmt implements InspectorFormatter
     // ~ fields_list_var                         -[clos]-> t1
     env.unify(inspect_record_fn_var, this_inspect_record_fn_var);
 
-    // Inspect.record : fields_list_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    // Inspect.record : fields_list_var -[clos]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_record_var = AbilityMember(Symbol::INSPECT_RECORD, None, inspect_record_fn_var);
     let inspect_record_fn = Box::new((
         inspect_record_fn_var,
@@ -466,7 +466,7 @@ fn to_inspector_record(
         CalledVia::Space,
     );
 
-    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (Inspect.record ..) fmt
+    // Inspect.custom \fmt -> Inspect.apply (Inspect.record ..) fmt
     let (body, this_inspector_var) =
         wrap_in_inspect_custom(env, inspect_record_call, inspector_var, rcd_sym, record_var);
 
@@ -552,7 +552,7 @@ fn to_inspector_tuple(
             };
 
             // build `toInspector tup.0` type
-            // val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+            // val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
             let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
             // (typeof tup.0) -[clos]-> t1
@@ -567,11 +567,11 @@ fn to_inspector_tuple(
                 )),
             );
 
-            //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+            //   val            -[uls]->  Inspector fmt where fmt implements InspectorFormatter
             // ~ (typeof tup.0) -[clos]-> t1
             env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
-            // toInspector : (typeof tup.0) -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+            // toInspector : (typeof tup.0) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
             let to_inspector_var =
                 AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, to_inspector_fn_var);
             let to_inspector_fn = Box::new((
@@ -613,7 +613,7 @@ fn to_inspector_tuple(
     };
 
     // build `Inspect.tuple [ toInspector tup.0, toInspector tup.1 ]` type
-    // List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+    // List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_tuple_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TUPLE);
 
     // elem_inspectors_list_var -[clos]-> t1
@@ -630,11 +630,11 @@ fn to_inspector_tuple(
         )),
     );
 
-    //   List (Inspector fmt)     -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+    //   List (Inspector fmt)     -[uls]->  Inspector fmt where fmt implements InspectorFormatter
     // ~ elem_inspectors_list_var -[clos]-> t1
     env.unify(inspect_tuple_fn_var, this_inspect_tuple_fn_var);
 
-    // Inspect.tuple : elem_inspectors_list_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+    // Inspect.tuple : elem_inspectors_list_var -[clos]-> Inspector fmt where fmt implements InspectorFormatter
     let inspect_tuple_var = AbilityMember(Symbol::INSPECT_TUPLE, None, inspect_tuple_fn_var);
     let inspect_tuple_fn = Box::new((
         inspect_tuple_fn_var,
@@ -650,7 +650,7 @@ fn to_inspector_tuple(
         CalledVia::Space,
     );
 
-    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (Inspect.tuple_var ..) fmt
+    // Inspect.custom \fmt -> Inspect.apply (Inspect.tuple_var ..) fmt
     let (body, this_inspector_var) =
         wrap_in_inspect_custom(env, inspect_tuple_call, inspector_var, tup_sym, tuple_var);
 
@@ -751,7 +751,7 @@ fn to_inspector_tag_union(
                 .zip(payload_vars.iter())
                 .map(|(&sym, &sym_var)| {
                     // build `toInspector v1` type
-                    // expected: val -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+                    // expected: val -[uls]-> Inspector fmt where fmt implements InspectorFormatter
                     let to_inspector_fn_var =
                         env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
 
@@ -769,11 +769,11 @@ fn to_inspector_tag_union(
                         )),
                     );
 
-                    //   val -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+                    //   val -[uls]->  Inspector fmt where fmt implements InspectorFormatter
                     // ~ t1  -[clos]-> t'
                     env.unify(to_inspector_fn_var, this_to_inspector_fn_var);
 
-                    // toInspector : t1 -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+                    // toInspector : t1 -[clos]-> Inspector fmt where fmt implements InspectorFormatter
                     let to_inspector_var =
                         AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, this_to_inspector_fn_var);
                     let to_inspector_fn = Box::new((
@@ -815,7 +815,7 @@ fn to_inspector_tag_union(
             };
 
             // build `Inspect.tag "A" [ ... ]` type
-            // expected: Str, List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatting
+            // expected: Str, List (Inspector fmt) -[uls]-> Inspector fmt where fmt implements InspectorFormatter
             let inspect_tag_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TAG);
 
             // wanted: Str, List whole_inspectors_var -[clos]-> t'
@@ -834,11 +834,11 @@ fn to_inspector_tag_union(
                 )),
             );
 
-            //   Str, List (Inspector fmt)      -[uls]->  Inspector fmt where fmt implements InspectorFormatting
+            //   Str, List (Inspector fmt)      -[uls]->  Inspector fmt where fmt implements InspectorFormatter
             // ~ Str, List whole_inspectors_var -[clos]-> t'
             env.unify(inspect_tag_fn_var, this_inspect_tag_fn_var);
 
-            // Inspect.tag : Str, List whole_inspectors_var -[clos]-> Inspector fmt where fmt implements InspectorFormatting
+            // Inspect.tag : Str, List whole_inspectors_var -[clos]-> Inspector fmt where fmt implements InspectorFormatter
             let inspect_tag_var = AbilityMember(Symbol::INSPECT_TAG, None, this_inspect_tag_fn_var);
             let inspect_tag_fn = Box::new((
                 this_inspect_tag_fn_var,
@@ -888,7 +888,7 @@ fn to_inspector_tag_union(
         exhaustive: ExhaustiveMark::known_exhaustive(),
     };
 
-    // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (when ..) fmt
+    // Inspect.custom \fmt -> Inspect.apply (when ..) fmt
     let (body, this_inspector_var) = wrap_in_inspect_custom(
         env,
         when_branches,
@@ -923,7 +923,7 @@ fn to_inspector_tag_union(
     );
 
     // \tag ->
-    //   Inspect.custom \bytes, fmt -> Inspect.appendWith bytes (
+    //   Inspect.custom \fmt -> Inspect.apply (
     //     when tag is
     //        A v1 v2 -> Inspect.tag "A" [ Inspect.toInspector v1, Inspect.toInspector v2 ]
     //        B v3 -> Inspect.tag "B" [ Inspect.toInspector v3 ])
@@ -946,158 +946,144 @@ fn to_inspector_tag_union(
     (clos, fn_var)
 }
 
-/// Lift `inspector` to `Inspect.custom \bytes, fmt -> Inspect.appendWith bytes inspector fmt`
+/// Lift `inspector` to `Inspect.custom \fmt -> Inspect.apply inspector fmt`
 ///
 /// TODO: currently it appears that just `inspector` is not isomorphic to the lift, on the
 /// monomorphization level, even though we would think it is. In particular, unspecialized lambda
 /// sets fail to resolve when we use the non-lifted version.
 /// More investigation is needed to figure out why.
 fn wrap_in_inspect_custom(
-    _env: &mut Env,
-    _inspector: Expr,
-    _inspector_var: Variable,
-    _captured_symbol: Symbol,
-    _captured_var: Variable,
+    env: &mut Env,
+    inspector: Expr,
+    inspector_var: Variable,
+    captured_symbol: Symbol,
+    captured_var: Variable,
 ) -> (Expr, Variable) {
-    unimplemented!();
-    // use Expr::*;
+    use Expr::*;
 
-    // let fn_name = env.new_symbol("custom");
+    let fn_name = env.new_symbol("custom");
 
-    // // bytes: List U8
-    // let bytes_sym = env.new_symbol("bytes");
-    // let bytes_var = Variable::LIST_U8;
+    // fmt: fmt where fmt implements InspectorFormatter
+    let fmt_sym = env.new_symbol("fmt");
+    let fmt_var = env.subs.fresh_unnamed_flex_var();
 
-    // // fmt: fmt where fmt implements InspectorFormatting
-    // let fmt_sym = env.new_symbol("fmt");
-    // let fmt_var = env.subs.fresh_unnamed_flex_var();
+    // build `Inspect.apply inspector fmt` type
+    // expected: Inspect.apply : Inspector fmt, fmt -[apply]-> fmt where fmt implements InspectorFormatter
+    let apply_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_APPLY);
 
-    // // build `Inspect.appendWith bytes inspector fmt` type
-    // // expected: Inspect.appendWith : List U8, Inspector fmt, fmt -[appendWith]-> List U8 where fmt implements InspectorFormatting
-    // let append_with_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_APPEND_WITH);
+    // wanted: Inspect.apply : inspector_var, fmt -[clos]-> fmt where fmt implements InspectorFormatter
+    let this_apply_args_var_slice =
+        VariableSubsSlice::insert_into_subs(env.subs, [inspector_var, fmt_var]);
+    let this_apply_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
+    let this_apply_fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            this_apply_args_var_slice,
+            this_apply_clos_var,
+            fmt_var,
+        )),
+    );
 
-    // // wanted: Inspect.appendWith : List U8, inspector_var, fmt -[clos]-> List U8 where fmt implements InspectorFormatting
-    // let this_append_with_args_var_slice =
-    //     VariableSubsSlice::insert_into_subs(env.subs, [Variable::LIST_U8, inspector_var, fmt_var]);
-    // let this_append_with_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
-    // let this_append_with_fn_var = synth_var(
-    //     env.subs,
-    //     Content::Structure(FlatType::Func(
-    //         this_append_with_args_var_slice,
-    //         this_append_with_clos_var,
-    //         Variable::LIST_U8,
-    //     )),
-    // );
+    //   Inspector fmt, fmt -[apply]-> ft where fmt implements InspectorFormatter
+    // ~ inspector_var, fmt -[clos]->       fmt where fmt implements InspectorFormatter
+    env.unify(apply_fn_var, this_apply_fn_var);
 
-    // //   List U8, Inspector fmt, fmt -[appendWith]-> List U8 where fmt implements InspectorFormatting
-    // // ~ List U8, inspector_var, fmt -[clos]->       List U8 where fmt implements InspectorFormatting
-    // env.unify(append_with_fn_var, this_append_with_fn_var);
+    // Inspect.apply : inspector_var, fmt -[apply]-> fmt where fmt implements InspectorFormatter
+    let apply_fn = Box::new((
+        this_apply_fn_var,
+        Loc::at_zero(Var(Symbol::INSPECT_APPLY, this_apply_fn_var)),
+        this_apply_clos_var,
+        fmt_var,
+    ));
 
-    // // Inspect.appendWith : List U8, inspector_var, fmt -[appendWith]-> List U8 where fmt implements InspectorFormatting
-    // let append_with_fn = Box::new((
-    //     this_append_with_fn_var,
-    //     Loc::at_zero(Var(Symbol::INSPECT_APPEND_WITH, this_append_with_fn_var)),
-    //     this_append_with_clos_var,
-    //     Variable::LIST_U8,
-    // ));
+    // Inspect.apply inspector fmt
+    let apply_call = Call(
+        apply_fn,
+        vec![
+            // (inspector_var, inspector)
+            (inspector_var, Loc::at_zero(inspector)),
+            // (fmt, fmt_var)
+            (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
+        ],
+        CalledVia::Space,
+    );
 
-    // // Inspect.appendWith bytes inspector fmt
-    // let append_with_call = Call(
-    //     append_with_fn,
-    //     vec![
-    //         // (bytes_var, bytes)
-    //         (bytes_var, Loc::at_zero(Var(bytes_sym, bytes_var))),
-    //         // (inspector_var, inspector)
-    //         (inspector_var, Loc::at_zero(inspector)),
-    //         // (fmt, fmt_var)
-    //         (fmt_var, Loc::at_zero(Var(fmt_sym, fmt_var))),
-    //     ],
-    //     CalledVia::Space,
-    // );
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
 
-    // // Create fn_var for ambient capture; we fix it up below.
-    // let fn_var = synth_var(env.subs, Content::Error);
+    // -[[FN_name captured_var]]->
+    let fn_name_labels =
+        UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![captured_var])));
+    let fn_clos_var = synth_var(
+        env.subs,
+        Content::LambdaSet(LambdaSet {
+            solved: fn_name_labels,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
 
-    // // -[[FN_name captured_var]]->
-    // let fn_name_labels =
-    //     UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![captured_var])));
-    // let fn_clos_var = synth_var(
-    //     env.subs,
-    //     Content::LambdaSet(LambdaSet {
-    //         solved: fn_name_labels,
-    //         recursion_var: OptVariable::NONE,
-    //         unspecialized: SubsSlice::default(),
-    //         ambient_function: fn_var,
-    //     }),
-    // );
+    // fmt -[[FN_name captured_var]]-> Inspect.apply inspector fmt
+    let args_slice = SubsSlice::insert_into_subs(env.subs, vec![fmt_var]);
+    env.subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(args_slice, fn_clos_var, fmt_var)),
+    );
 
-    // // bytes, fmt -[[FN_name captured_var]]-> Inspect.appendWith bytes inspector fmt
-    // let args_slice = SubsSlice::insert_into_subs(env.subs, vec![bytes_var, fmt_var]);
-    // env.subs.set_content(
-    //     fn_var,
-    //     Content::Structure(FlatType::Func(args_slice, fn_clos_var, Variable::LIST_U8)),
-    // );
+    // \fmt -[[fn_name captured_var]]-> Inspect.apply inspector fmt
+    let clos = Closure(ClosureData {
+        function_type: fn_var,
+        closure_type: fn_clos_var,
+        return_type: fmt_var,
+        name: fn_name,
+        captured_symbols: vec![(captured_symbol, captured_var)],
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            fmt_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(fmt_sym)),
+        )],
+        loc_body: Box::new(Loc::at_zero(apply_call)),
+    });
 
-    // // \bytes, fmt -[[fn_name captured_var]]-> Inspect.appendWith bytes inspector fmt
-    // let clos = Closure(ClosureData {
-    //     function_type: fn_var,
-    //     closure_type: fn_clos_var,
-    //     return_type: Variable::LIST_U8,
-    //     name: fn_name,
-    //     captured_symbols: vec![(captured_symbol, captured_var)],
-    //     recursive: Recursive::NotRecursive,
-    //     arguments: vec![
-    //         (
-    //             bytes_var,
-    //             AnnotatedMark::known_exhaustive(),
-    //             Loc::at_zero(Pattern::Identifier(bytes_sym)),
-    //         ),
-    //         (
-    //             fmt_var,
-    //             AnnotatedMark::known_exhaustive(),
-    //             Loc::at_zero(Pattern::Identifier(fmt_sym)),
-    //         ),
-    //     ],
-    //     loc_body: Box::new(Loc::at_zero(append_with_call)),
-    // });
+    // Build
+    // Inspect.custom \fmt -> Inspect.apply inspector fmt
+    //
+    // expected: Inspect.custom : (fmt -> fmt) -> Inspector fmt where fmt implements InspectorFormatter
+    let custom_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_CUSTOM);
 
-    // // Build
-    // // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes inspector fmt
-    // //
-    // // expected: Inspect.custom : (List U8, fmt -> List U8) -> Inspector fmt where fmt implements InspectorFormatting
-    // let custom_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_CUSTOM);
+    // wanted: Inspect.custom : fn_var -[clos]-> t'
+    let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);
+    let this_custom_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
+    let this_custom_inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
+    let this_custom_fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            this_custom_args_var_slice,
+            this_custom_clos_var,
+            this_custom_inspector_var,
+        )),
+    );
 
-    // // wanted: Inspect.custom : fn_var -[clos]-> t'
-    // let this_custom_args_var_slice = VariableSubsSlice::insert_into_subs(env.subs, [fn_var]);
-    // let this_custom_clos_var = env.subs.fresh_unnamed_flex_var(); // -[clos]->
-    // let this_custom_inspector_var = env.subs.fresh_unnamed_flex_var(); // t'
-    // let this_custom_fn_var = synth_var(
-    //     env.subs,
-    //     Content::Structure(FlatType::Func(
-    //         this_custom_args_var_slice,
-    //         this_custom_clos_var,
-    //         this_custom_inspector_var,
-    //     )),
-    // );
+    //   (fmt -> fmt) -[..]->   Inspector fmt where fmt implements InspectorFormatter
+    // ~ fn_var                    -[clos]-> t'
+    env.unify(custom_fn_var, this_custom_fn_var);
 
-    // //   (List U8, fmt -> List U8) -[..]->   Inspector fmt where fmt implements InspectorFormatting
-    // // ~ fn_var                    -[clos]-> t'
-    // env.unify(custom_fn_var, this_custom_fn_var);
+    // Inspect.custom : (fmt -> fmt) -> Inspector fmt where fmt implements InspectorFormatter
+    let custom_fn = Box::new((
+        this_custom_fn_var,
+        Loc::at_zero(Var(Symbol::INSPECT_CUSTOM, this_custom_fn_var)),
+        this_custom_clos_var,      // -[clos]->
+        this_custom_inspector_var, // t' ~ Inspector fmt
+    ));
 
-    // // Inspect.custom : (List U8, fmt -> List U8) -> Inspector fmt where fmt implements InspectorFormatting
-    // let custom_fn = Box::new((
-    //     this_custom_fn_var,
-    //     Loc::at_zero(Var(Symbol::INSPECT_CUSTOM, this_custom_fn_var)),
-    //     this_custom_clos_var,      // -[clos]->
-    //     this_custom_inspector_var, // t' ~ Inspector fmt
-    // ));
+    // Inspect.custom \fmt -> Inspect.apply inspector fmt
+    let custom_call = Call(
+        custom_fn,
+        vec![(fn_var, Loc::at_zero(clos))],
+        CalledVia::Space,
+    );
 
-    // // Inspect.custom \bytes, fmt -> Inspect.appendWith bytes inspector fmt
-    // let custom_call = Call(
-    //     custom_fn,
-    //     vec![(fn_var, Loc::at_zero(clos))],
-    //     CalledVia::Space,
-    // );
-
-    // (custom_call, this_custom_inspector_var)
+    (custom_call, this_custom_inspector_var)
 }
