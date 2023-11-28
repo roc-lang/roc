@@ -3,10 +3,6 @@ on:
     
 name: test cargo build on linux arm64 inside nix
 
-concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
-
 env:
     RUST_BACKTRACE: 1
 

@@ -3,10 +3,6 @@ on:
 
 name: Nix apple silicon cargo test
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   RUST_BACKTRACE: 1
 

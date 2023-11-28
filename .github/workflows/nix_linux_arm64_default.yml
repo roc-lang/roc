@@ -3,10 +3,6 @@ on:
   
 name: test default.nix on linux arm64 
 
-concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
-
 env:
     RUST_BACKTRACE: 1
 
