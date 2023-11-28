@@ -141,8 +141,11 @@ impl FlatInspectable {
                         AliasKind::Structural => {
                             Self::from_var(subs, real_var)
                         }
+                        // Special case, an unbound `Frac *` will become a `Dec`.
+                        AliasKind::Opaque if matches!(*subs.get_content_without_compacting(real_var), Content::FlexVar(_) | Content::FlexAbleVar(_, _)) => {
+                            Immediate(Symbol::INSPECT_DEC)
+                        }
                         AliasKind::Opaque if sym.is_builtin() => {
-                            // TODO: Is this correct for all builtins? It is at least required for the Num wrapper types.
                             Self::from_var(subs, real_var)
                         }
                         AliasKind::Opaque => {
