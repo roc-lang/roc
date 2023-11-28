@@ -3,10 +3,6 @@ on:
   
 name: CI manager
 
-concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
-
 jobs:
     check-changes:
         runs-on: ubuntu-22.04
@@ -23,7 +19,7 @@ jobs:
                 if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$)'; then
                     echo "run_tests=full" >> $GITHUB_OUTPUT
                 else
-                    echo "run_tests=basic" >> $GITHUB_OUTPUT
+                    echo "run_tests=none" >> $GITHUB_OUTPUT
                 fi
 
             - run: echo "debug output ${{ steps.filecheck.outputs.run_tests }}"
@@ -42,22 +38,12 @@ jobs:
         runs-on: ubuntu-22.04
         needs: [start-nix-linux-x86-64-tests, start-nix-macos-apple-silicon-tests]
         steps:
-            - run: echo "all jobs succeeded!"
+            - run: echo "all workflows succeeded!"
 
-    finish-basic:
+    finish-none:
         runs-on: ubuntu-22.04
         needs: [check-changes]
-        if: needs.check-changes.outputs.run_tests == 'basic'
+        if: needs.check-changes.outputs.run_tests == 'none'
         steps:
-            - run: echo "all jobs succeeded!"
-
-    
-    print-test-output:
-        runs-on: ubuntu-22.04
-        needs: check-changes
-        steps:
-            - name: Print run_tests output
-              run: |
-                echo "run_tests output: ${{ needs.check-changes.outputs.run_tests }}"
-        
+            - run: echo "Only non-code files changed. CI manager did not run any workflows."
   
