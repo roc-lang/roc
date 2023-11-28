@@ -9798,7 +9798,7 @@ In roc, functions are always written as a lambda, like{}
 
     Only builtin abilities can be derived.
 
-    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`
+    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`, `Inspect`
     "###
     );
 

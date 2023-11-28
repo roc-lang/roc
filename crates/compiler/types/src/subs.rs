@@ -1756,7 +1756,7 @@ impl Subs {
         symbol_names.push(Symbol::HASH_HASHER);
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
         symbol_names.push(Symbol::BOOL_EQ);
-        symbol_names.push(Symbol::INSPECT_INSPECT);
+        symbol_names.push(Symbol::INSPECT_INSPECT_ABILITY);
         // END INIT-SymbolNames
 
         // IFTTT INIT-VariableSubsSlice

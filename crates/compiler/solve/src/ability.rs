@@ -854,7 +854,7 @@ trait DerivableVisitor {
 
 struct DeriveInspect;
 impl DerivableVisitor for DeriveInspect {
-    const ABILITY: Symbol = Symbol::INSPECT_INSPECT;
+    const ABILITY: Symbol = Symbol::INSPECT_INSPECT_ABILITY;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_INSPECT;
 
     #[inline(always)]
