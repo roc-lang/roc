@@ -2254,17 +2254,15 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect [],               # List *
                 Inspect.inspect [0, 1, 2],        # List (Num *)
                 Inspect.inspect [1, 0x2, 3],      # List (Int *)
-                # TODO: Re-enable when Frac is fixed for inspect.
-                # Inspect.inspect [0.1 + 0.2, 0.4], # List (Frac *)
+                Inspect.inspect [0.1 + 0.2, 0.4], # List (Frac *)
                 Inspect.inspect [1u8, 2u8],       # List U8
                 Inspect.inspect ["foo"],          # List Str
             ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
             ),
-            RocStr::from("[], [0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
+            RocStr::from("[0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
             RocStr
         );
     }
