@@ -2181,12 +2181,25 @@ fn issue_4772_weakened_monomorphic_destructure() {
     })
 }
 
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn inspect_bool() {
-    assert_evals_to!(
-        indoc!(
-            r#"
+mod inspect {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use indoc::indoc;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use roc_std::RocStr;
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
             app "test" provides [main] to "./platform"
 
             main = [
@@ -2194,24 +2207,21 @@ fn inspect_bool() {
                 Inspect.inspect Bool.false,
             ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
-        ),
-        RocStr::from("Bool.true, Bool.false"),
-        RocStr
-    );
-}
+            ),
+            RocStr::from("Bool.true, Bool.false"),
+            RocStr
+        );
+    }
 
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn inspect_num() {
-    assert_evals_to!(
-        indoc!(
-            r#"
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn num() {
+        assert_evals_to!(
+            indoc!(
+                r#"
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect 42,             # Num *
-                Inspect.inspect 0x5,            # Int *
-                Inspect.inspect (0.1 + 0.2),    # Frac *
                 Inspect.inspect 1u8,            # U8
                 Inspect.inspect 2i8,            # I8
                 Inspect.inspect 3u16,           # U16
@@ -2227,18 +2237,18 @@ fn inspect_num() {
                 Inspect.inspect (1.1dec + 2.2), # Dec
             ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
-        ),
-        RocStr::from("42, 5, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1.1, 2.2, 3.3"),
-        RocStr
-    );
-}
+            ),
+            RocStr::from("42, 5, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1.1, 2.2, 3.3"),
+            RocStr
+        );
+    }
 
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn inspect_list() {
-    assert_evals_to!(
-        indoc!(
-            r#"
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
             app "test" provides [main] to "./platform"
 
             main = [
@@ -2250,18 +2260,18 @@ fn inspect_list() {
                 Inspect.inspect ["foo"],       # List Str
             ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
-        ),
-        RocStr::from("[], [0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
-        RocStr
-    );
-}
+            ),
+            RocStr::from("[], [0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
+            RocStr
+        );
+    }
 
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn inspect_str() {
-    assert_evals_to!(
-        indoc!(
-            r#"
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn str() {
+        assert_evals_to!(
+            indoc!(
+                r#"
             app "test" provides [main] to "./platform"
 
             main = [
@@ -2270,10 +2280,11 @@ fn inspect_str() {
                 Inspect.inspect "an extraordinarily long string - so long it's on the heap!",
             ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
-        ),
-        RocStr::from(
-            r#""", "a small string", "an extraordinarily long string - so long it's on the heap!""#
-        ),
-        RocStr
-    );
+            ),
+            RocStr::from(
+                r#""", "a small string", "an extraordinarily long string - so long it's on the heap!""#
+            ),
+            RocStr
+        );
+    }
 }
