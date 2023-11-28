@@ -258,8 +258,7 @@ dbgStr = \s ->
     f0 <- custom
     f0
     |> dbgWrite "\""
-    # TODO: Should we be escaping strings for dbg/logging?
-    |> dbgWrite s
+    |> dbgWrite s # TODO: Should we be escaping strings for dbg/logging?
     |> dbgWrite "\""
 
 dbgOpaque : * -> Inspector DbgFormatter
