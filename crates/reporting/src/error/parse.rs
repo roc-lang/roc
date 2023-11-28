@@ -3525,7 +3525,7 @@ fn to_provides_report<'a>(
                 alloc.concat([
                     alloc.reflow("I am expecting the "),
                     alloc.keyword("to"),
-                    alloc.reflow(" keyword next, like"),
+                    alloc.reflow(" keyword next, like:"),
                 ]),
                 alloc
                     .parser_suggestion("to pf")
@@ -3547,7 +3547,7 @@ fn to_provides_report<'a>(
             let doc = alloc.stack([
                 alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.reflow("I am expecting platform name, like"),
+                alloc.reflow("I am expecting the platform name next, like:"),
                 alloc
                     .parser_suggestion("to pf")
                     .indent(4),
