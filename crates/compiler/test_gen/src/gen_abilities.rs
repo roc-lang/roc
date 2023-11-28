@@ -2192,7 +2192,7 @@ fn inspect_bool() {
             main = [
                 Inspect.inspect Bool.true,
                 Inspect.inspect Bool.false,
-            ] |> Str.joinWith ", "
+            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
         ),
         RocStr::from("Bool.true, Bool.false"),
@@ -2225,7 +2225,7 @@ fn inspect_num() {
                 Inspect.inspect 1.1f32,         # F32
                 Inspect.inspect 2.2f64,         # F64
                 Inspect.inspect (1.1dec + 2.2), # Dec
-            ] |> Str.joinWith ", "
+            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
         ),
         RocStr::from("42, 5, 0.3, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1.1, 2.2, 3.3"),
@@ -2248,7 +2248,7 @@ fn inspect_list() {
                 Inspect.inspect [0.1 + 0.2, 0.4], # List (Frac *)
                 Inspect.inspect [1u8, 2u8],       # List U8
                 Inspect.inspect ["foo"],       # List Str
-            ] |> Str.joinWith ", "
+            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
         ),
         RocStr::from("[], [0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
@@ -2268,7 +2268,7 @@ fn inspect_str() {
                 Inspect.inspect "",
                 Inspect.inspect "a small string",
                 Inspect.inspect "an extraordinarily long string - so long it's on the heap!",
-            ] |> Str.joinWith ", "
+            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
         ),
         RocStr::from(

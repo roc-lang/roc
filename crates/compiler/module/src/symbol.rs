@@ -1628,6 +1628,8 @@ define_builtins! {
         31 INSPECT_APPLY: "apply"
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_NAT: "nat"
+        34 INSPECT_DBG_FORMATTER: "DbgFormatter" exposed_type=true
+        35 INSPECT_TO_DBG_STR: "toDbgStr"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"
