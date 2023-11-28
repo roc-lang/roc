@@ -25,6 +25,7 @@ GuiFormatter := { nodes : List Elem }
             record: record,
             bool: bool,
             str: str,
+            function: function,
             opaque: opaque,
             u8: u8,
             i8: i8,
@@ -36,6 +37,7 @@ GuiFormatter := { nodes : List Elem }
             i64: i64,
             u128: u128,
             i128: i128,
+            nat: nat,
             f32: f32,
             f64: f64,
             dec: dec,
@@ -149,10 +151,15 @@ str = \s ->
     f0 <- Inspect.custom
     addNode f0 (Text "\"\(s)\"")
 
-opaque : Str -> Inspector GuiFormatter
-opaque = \s ->
+opaque : * -> Inspector GuiFormatter
+opaque = \_ ->
     f0 <- Inspect.custom
-    addNode f0 (Text "<\(s)>")
+    addNode f0 (Text "<opaque>")
+
+function : * -> Inspector GuiFormatter
+function = \_ ->
+    f0 <- Inspect.custom
+    addNode f0 (Text "<function>")
 
 u8 : U8 -> Inspector GuiFormatter
 u8 = \num ->
@@ -201,6 +208,11 @@ u128 = \num ->
 
 i128 : I128 -> Inspector GuiFormatter
 i128 = \num ->
+    f0 <- Inspect.custom
+    addNode f0 (num |> Num.toStr |> Text)
+
+nat : Nat -> Inspector GuiFormatter
+nat = \num ->
     f0 <- Inspect.custom
     addNode f0 (num |> Num.toStr |> Text)
 
