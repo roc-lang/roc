@@ -86,7 +86,7 @@ InspectFormatter implements
 Inspector f := f -> f where f implements InspectFormatter
 
 custom : (f -> f) -> Inspector f where f implements InspectFormatter
-custom = @Inspector
+custom = \fn -> @Inspector fn
 
 apply : Inspector f, f -> f where f implements InspectFormatter
 apply = \@Inspector fn, fmt -> fn fmt
