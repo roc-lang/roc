@@ -365,6 +365,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ///  213568:       f90033fd        str     x29, [sp, #96]
     const SHADOW_SPACE_SIZE: u8 = 16;
 
+    // These are registers that a called function must save and restore if it wants to use them.
     #[inline(always)]
     fn general_callee_saved(reg: &AArch64GeneralReg) -> bool {
         matches!(
