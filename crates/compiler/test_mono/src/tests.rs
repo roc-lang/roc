@@ -3289,3 +3289,133 @@ fn non_nullable_unwrapped_instead_of_nullable_wrapped() {
         "#
     )
 }
+
+#[mono_test]
+fn inspect_custom_type() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        HelloWorld := {} implements [Inspect { toInspector: myToInspector }]
+
+        myToInspector : HelloWorld -> Inspector f where f implements InspectFormatter
+        myToInspector = \@HellowWorld {} ->
+            fmt <- Inspect.custom
+            Inspect.apply (Inspect.str "Hello, World!\n") fmt
+
+        main =
+            Inspect.inspect (@HelloWorld {})
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main = Inspect.inspect "abc" |> Inspect.toDbgStr
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_record() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main = Inspect.inspect {a: 7, b: 3dec} |> Inspect.toDbgStr
+        "#
+    )
+}
+#[mono_test]
+fn inspect_derived_record_one_field_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main = Inspect.inspect {a: "foo"} |> Inspect.toDbgStr
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_record_two_field_strings() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main = Inspect.inspect {a: "foo", b: "bar"} |> Inspect.toDbgStr
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_nested_record_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main = Inspect.inspect {a: {b: "bar"}} |> Inspect.toDbgStr
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_tag_one_field_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str]
+            x = A "foo"
+            Inspect.inspect x |> Inspect.toDbgStr
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_tag_two_payloads_string() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main =
+            x : [A Str Str]
+            x = A "foo" "foo"
+            Inspect.inspect x |> Inspect.toDbgStr
+        "#
+    )
+}
+
+#[mono_test]
+fn inspect_derived_list() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main = Inspect.inspect [1, 2, 3] |> Inspect.toDbgStr
+        "#
+    )
+}
