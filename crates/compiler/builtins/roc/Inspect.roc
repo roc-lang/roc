@@ -99,7 +99,6 @@ inspect = \val ->
     (@Inspector valFn) = toInspector val
     valFn (init {})
 
-
 # The current default formatter for inspect.
 # This just returns a simple string for debugging.
 # More powerful formatters will likely be wanted in the future.

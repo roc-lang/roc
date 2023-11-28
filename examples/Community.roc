@@ -14,7 +14,8 @@ interface Community
 Community := {
     people : List Person,
     friends : List (Set Nat),
-} implements [Inspect]
+}
+    implements [Inspect]
 
 Person := {
     firstName : Str,
@@ -22,7 +23,8 @@ Person := {
     age : U8,
     hasBeard : Bool,
     favoriteColor : Color,
-} implements [Inspect]
+}
+    implements [Inspect]
 
 Color : [
     Red,
