@@ -11,7 +11,7 @@ use crate::util::{
     check_derivable_ext_var, debug_name_fn, debug_name_record, debug_name_tag, debug_name_tuple,
 };
 
-#[derive(Hash)]
+#[derive(Hash, Debug)]
 pub enum FlatInspectable {
     Immediate(Symbol),
     Key(FlatInspectableKey),
