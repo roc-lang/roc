@@ -1,0 +1,4 @@
+app "test" provides [main] to "./platform"
+
+main = Inspect.toInspector 7dec |> Inspect.apply (Inspect.init {}) |> Inspect.toDbgStr
+#      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): Dec -[[Inspect.dbgDec(60)]]-> Inspector DbgFormatter
