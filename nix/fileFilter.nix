@@ -1,6 +1,6 @@
 { lib, nix-gitignore }:
 let
-  # See https://nix.dev/tutorials/file-sets for an guide on how the file set api works
+  # See https://nix.dev/tutorials/file-sets for a guide on how the file set api works
 
   fs = lib.fileset;
 
@@ -8,12 +8,12 @@ let
 
   repoRoot = ../.;
 
-  # The file set api does not currently have a way to easily remove folders dynamically
-  # since the nix build does not run tests try to remove any folders with just tests
+  # The file set api does not currently have a way to easily remove folders dynamically.
+  # The nix build does not run tests, so we try to remove any folders with only tests.
   removedTests =
     let
-      dir_filter = path_str: (
-        let dirName = baseNameOf path_str; in !(
+      dirFilter = pathStr: (
+        let dirName = baseNameOf pathStr; in !(
           # remove any folder whos name is `tests` or starts with `test_`
           dirName == "tests"
 
@@ -22,13 +22,13 @@ let
           # || lib.strings.hasPrefix "test_" dirName
         )
       );
-      removeTestFiler =
+      removeTestFilter =
         path: type:
         # only do a "real" check on directory, allow everything else through
-        (type == "directory" && dir_filter path)
+        (type == "directory" && dirFilter path)
         || type != "directory";
     in
-    lib.sources.cleanSourceWith { src = repoRoot; filter = removeTestFiler; };
+    lib.sources.cleanSourceWith { src = repoRoot; filter = removeTestFilter; };
   fsBase = fs.fromSource removedTests;
 
   # fsBase = fs.fromSource repoRoot;
@@ -67,7 +67,7 @@ let
   # if only the package passed with `-i` is shown, nothing depends on it
   # ===============================
 
-  # remove www folder from checkmate crate since its not built with nix
+  # remove www folder from checkmate crate since it's not built with nix
   removedWWW = fs.difference docsAddedBack ../crates/compiler/checkmate/www;
 
   # potential packages/folders that could be removed 
