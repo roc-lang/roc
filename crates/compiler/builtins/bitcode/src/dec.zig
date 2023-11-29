@@ -629,7 +629,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     const d = answer[0];
 
     if (overflowed == 1) {
-        roc_panic("Decimal multiplication overflow22!", 0);
+        roc_panic("Decimal multiplication overflow!", 0);
     }
 
     // Final 512bit value is d, c, b, a
@@ -1205,7 +1205,7 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
-        roc_panic("Decimal conversion from f64!", 0);
+        roc_panic("Decimal conversion from f64 failed!", 0);
     }
 }
 
@@ -1229,7 +1229,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
             if (answer[1] == 1) {
-                roc_panic("Decimal conversion from integer!", 0);
+                roc_panic("Decimal conversion from integer failed!", 0);
             } else {
                 return answer[0];
             }
