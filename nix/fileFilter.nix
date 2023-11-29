@@ -38,13 +38,12 @@ let
   # only look at files in the crates folder
   onlyCratesFolder = fs.intersection ../crates fsBase; # TODO: probably need to union back in the root cargo files
 
-  # the above filter only has the subfolder, put the cargo.toml and lock back
+  # the above filter only has the subfolder, put some needed files from the root back in
   includeCargoRootFiles = fs.unions [
     ../Cargo.toml
     ../Cargo.lock
     ../version.txt
     onlyCratesFolder
-
   ];
 
   # Remove any "simple" files like markdown/pictures since they probably wont be used in the actual code
