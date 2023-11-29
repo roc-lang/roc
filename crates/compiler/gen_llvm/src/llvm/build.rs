@@ -919,6 +919,51 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         call.set_call_convention(C_CALL_CONV);
     }
 
+    pub fn call_dbg(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        file_path: BasicValueEnum<'ctx>,
+        message: BasicValueEnum<'ctx>,
+    ) {
+        let function = self.module.get_function("roc_dbg").unwrap();
+
+        let file = match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the file_path by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .new_build_alloca(file_path.get_type(), "alloca_dbg_file_path");
+                env.builder.new_build_store(alloca, file_path);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                file_path
+            }
+        };
+
+        let msg = match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the message by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .new_build_alloca(message.get_type(), "alloca_dbg_msg");
+                env.builder.new_build_store(alloca, message);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                message
+            }
+        };
+
+        let call = self
+            .builder
+            .new_build_call(function, &[file.into(), msg.into()], "roc_dbg");
+
+        call.set_call_convention(C_CALL_CONV);
+    }
+
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
         module.create_debug_info_builder(
             true,
@@ -3502,26 +3547,15 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
         Dbg {
             symbol,
-            variable: specialized_var,
+            variable: _,
             remainder,
         } => {
             if env.mode.runs_expects() {
-                let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
-                let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
-
-                crate::llvm::expect::clone_to_shared_memory(
-                    env,
-                    layout_interner,
-                    scope,
-                    layout_ids,
-                    &shared_memory,
-                    *symbol,
-                    region,
-                    &[*symbol],
-                    &[*specialized_var],
-                );
-
-                crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
+                // TODO: deal with filename and region
+                // let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
+                let file_path = build_string_literal(env, parent, "TODO: add filepath here");
+                let message = scope.load_symbol(symbol);
+                env.call_dbg(env, file_path, message);
             }
 
             build_exp_stmt(

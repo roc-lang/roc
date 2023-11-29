@@ -29,6 +29,10 @@ void roc_panic(void* ptr, unsigned int alignment) {
   exit(0);
 }
 
+void roc_dbg(char* file_path, char* msg) {
+  fprintf(stderr, "[%s] %s\n", file_path, msg);
+}
+
 void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 
 int roc_shm_open(char* name, int oflag, int mode) {
