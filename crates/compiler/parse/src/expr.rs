@@ -12,8 +12,8 @@ use crate::keyword;
 use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
     sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, word1, word1_indent,
-    word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
-    EType, EWhen, Either, ParseResult, Parser,
+    word2, EClosure, EExpect, EExpr, EIf, EImport, EInParens, EList, ENumber, EPattern, ERecord,
+    EString, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -574,30 +574,43 @@ pub fn parse_single_def<'a>(
         min_indent,
     ) {
         Err((NoProgress, _)) => {
-            match parse_expect.parse(arena, state.clone(), min_indent) {
+            match loc!(import()).parse(arena, state.clone(), min_indent) {
                 Err((_, _)) => {
-                    // a hacky way to get expression-based error messages. TODO fix this
-                    Ok((NoProgress, None, initial))
+                    match parse_expect.parse(arena, state.clone(), min_indent) {
+                        Err((_, _)) => {
+                            // a hacky way to get expression-based error messages. TODO fix this
+                            Ok((NoProgress, None, initial))
+                        }
+                        Ok((_, expect_flavor, state)) => parse_statement_inside_def(
+                            arena,
+                            state,
+                            min_indent,
+                            options,
+                            start,
+                            spaces_before_current_start,
+                            spaces_before_current,
+                            |preceding_comment, loc_def_expr| match expect_flavor {
+                                Either::Second(_) => ValueDef::Expect {
+                                    condition: arena.alloc(loc_def_expr),
+                                    preceding_comment,
+                                },
+                                Either::First(_) => ValueDef::ExpectFx {
+                                    condition: arena.alloc(loc_def_expr),
+                                    preceding_comment,
+                                },
+                            },
+                        ),
+                    }
                 }
-                Ok((_, expect_flavor, state)) => parse_statement_inside_def(
-                    arena,
+                Ok((_, loc_import, state)) => Ok((
+                    MadeProgress,
+                    Some(SingleDef {
+                        type_or_value: Either::Second(loc_import.value),
+                        region: loc_import.region,
+                        spaces_before: spaces_before_current,
+                    }),
                     state,
-                    min_indent,
-                    options,
-                    start,
-                    spaces_before_current_start,
-                    spaces_before_current,
-                    |preceding_comment, loc_def_expr| match expect_flavor {
-                        Either::Second(_) => ValueDef::Expect {
-                            condition: arena.alloc(loc_def_expr),
-                            preceding_comment,
-                        },
-                        Either::First(_) => ValueDef::ExpectFx {
-                            condition: arena.alloc(loc_def_expr),
-                            preceding_comment,
-                        },
-                    },
-                ),
+                )),
             }
         }
         Err((MadeProgress, _)) => {
@@ -821,6 +834,24 @@ pub fn parse_single_def<'a>(
             }
         }
     }
+}
+
+#[inline(always)]
+fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
+    map!(
+        skip_first!(
+            and!(
+                crate::parser::keyword_e(crate::keyword::IMPORT, EImport::Import),
+                spaces()
+            ),
+            loc!(crate::module::module_name_help(EImport::ModuleName))
+        ),
+        |loc_module_name| {
+            ValueDef::ModuleImport {
+                name: loc_module_name,
+            }
+        }
+    )
 }
 
 /// e.g. Things that can be on their own line in a def, e.g. `expect`, `expect-fx`, or `dbg`

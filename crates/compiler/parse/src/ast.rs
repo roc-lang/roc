@@ -455,6 +455,11 @@ pub enum ValueDef<'a> {
         condition: &'a Loc<Expr<'a>>,
         preceding_comment: Region,
     },
+
+    /// e.g. `import [Req] as Http from InternalHttp`.
+    ModuleImport {
+        name: Loc<crate::header::ModuleName<'a>>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1792,6 +1797,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
+            ValueDef::ModuleImport { name } => name.value.contains_dot(),
         }
     }
 }

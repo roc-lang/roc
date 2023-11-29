@@ -87,6 +87,7 @@ impl_space_problem! {
     EGeneratesWith,
     EHeader<'a>,
     EIf<'a>,
+    EImport,
     EImports,
     EInParens<'a>,
     EClosure<'a>,
@@ -346,6 +347,7 @@ pub enum EExpr<'a> {
 
     Expect(EExpect<'a>, Position),
     Dbg(EExpect<'a>, Position),
+    Import(EImport, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
@@ -515,6 +517,13 @@ pub enum EExpect<'a> {
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
     IndentCondition(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EImport {
+    Import(Position),
+    ModuleName(Position),
+    Space(BadInputError, Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

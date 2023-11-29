@@ -323,6 +323,7 @@ mod test_snapshots {
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/if_def.expr,
+        pass/import.moduledefs,
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,
         pass/lambda_in_chain.expr,
@@ -567,6 +568,8 @@ mod test_snapshots {
             }
             Err(err) => Err(format!("{err:?}")),
         };
+
+        println!("{:?}", result);
 
         if expect == TestExpectation::Pass {
             let tokens = roc_parse::highlight::highlight(&source);
