@@ -196,7 +196,7 @@ impl<'a> Formattable for ValueDef<'a> {
             Expect { condition, .. } => condition.is_multiline(),
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
-            ModuleImport { name: _ } => false,
+            ModuleImport { name: _, alias: _ } => false,
         }
     }
 
@@ -239,12 +239,19 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
-            ModuleImport { name } => {
+            ModuleImport { name, alias } => {
                 buf.indent(indent);
 
                 buf.push_str("import");
                 buf.spaces(1);
                 buf.push_str(name.value.as_str());
+
+                if let Some(alias_name) = alias {
+                    buf.spaces(1);
+                    buf.push_str("as");
+                    buf.spaces(1);
+                    buf.push_str(alias_name.value.as_str());
+                }
             }
         }
     }

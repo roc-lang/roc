@@ -1,0 +1,44 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+    ],
+    regions: [
+        @0-23,
+        @24-49,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport {
+            name: @7-17 ModuleName(
+                "JsonEncode",
+            ),
+            alias: Some(
+                @21-23 ModuleName(
+                    "JE",
+                ),
+            ),
+        },
+        ModuleImport {
+            name: @31-42 ModuleName(
+                "BytesDecode",
+            ),
+            alias: Some(
+                @47-49 ModuleName(
+                    "BD",
+                ),
+            ),
+        },
+    ],
+}

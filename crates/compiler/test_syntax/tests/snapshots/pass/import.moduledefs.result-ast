@@ -18,6 +18,7 @@ Defs {
             name: @8-12 ModuleName(
                 "Json",
             ),
+            alias: None,
         },
     ],
 }

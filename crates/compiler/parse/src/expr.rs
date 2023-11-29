@@ -844,11 +844,24 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
                 crate::parser::keyword_e(crate::keyword::IMPORT, EImport::Import),
                 spaces()
             ),
-            loc!(crate::module::module_name_help(EImport::ModuleName))
+            and!(
+                loc!(crate::module::module_name_help(EImport::ModuleName)),
+                optional(backtrackable(skip_first!(
+                    and!(
+                        spaces(),
+                        and!(
+                            crate::parser::keyword_e(crate::keyword::AS, EImport::As),
+                            spaces()
+                        )
+                    ),
+                    loc!(crate::module::module_name_help(EImport::Alias))
+                )))
+            )
         ),
-        |loc_module_name| {
+        |(loc_module_name, optional_loc_alias)| {
             ValueDef::ModuleImport {
                 name: loc_module_name,
+                alias: optional_loc_alias,
             }
         }
     )

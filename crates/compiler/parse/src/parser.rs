@@ -523,6 +523,8 @@ pub enum EExpect<'a> {
 pub enum EImport {
     Import(Position),
     ModuleName(Position),
+    As(Position),
+    Alias(Position),
     Space(BadInputError, Position),
 }
 
