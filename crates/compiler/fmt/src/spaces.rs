@@ -726,6 +726,10 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
             ),
+            Expr::LowLevelDbg(a, b) => Expr::LowLevelDbg(
+                arena.alloc(a.remove_spaces(arena)),
+                arena.alloc(b.remove_spaces(arena)),
+            ),
             Expr::Apply(a, b, c) => Expr::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 b.remove_spaces(arena),

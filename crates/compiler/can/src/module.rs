@@ -996,7 +996,7 @@ fn fix_values_captured_in_closure_expr(
             ..
         }
         | Dbg {
-            loc_condition,
+            loc_message: loc_condition,
             loc_continuation,
             ..
         } => {
