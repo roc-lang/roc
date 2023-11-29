@@ -1229,7 +1229,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
             if (answer[1] == 1) {
-                roc_panic("Decimal conversion from integer failed!", 0);
+                roc_panic("Decimal conversion from Integer failed!", 0);
             } else {
                 return answer[0];
             }
