@@ -8,12 +8,31 @@ let
 
   repoRoot = ../.;
 
+  # The file set api does not currently have a way to easily remove folders dynamically
+  # since the nix build does not run tests try to remove any folders with just tests
+  removedTests =
+    let
+      dir_filter = path_str: (
+        let dirName = baseNameOf path_str; in !(
+          # remove any folder whos name is `tests` or starts with `test_`
+          dirName == "tests"
 
-  # "old" way of filtering files that fileset does not support yet
-  # remove anything ignored by git
-  # baseSrc = nix-gitignore.gitignoreSource [ ] repoRoot;
+          # TODO: while the below logic seems to work to filter out folders, 
+          # cargo still cares if the path exists (even for dev) :(
+          # || lib.strings.hasPrefix "test_" dirName
+        )
+      );
+      removeTestFiler =
+        path: type:
+        # only do a "real" check on directory, allow everything else through
+        (type == "directory" && dir_filter path)
+        || type != "directory";
+    in
+    lib.sources.cleanSourceWith { src = repoRoot; filter = removeTestFiler; };
+  fsBase = fs.fromSource removedTests;
 
-  fsBase = fs.fromSource repoRoot;
+  # fsBase = fs.fromSource repoRoot;
+
 
 
   # only look at files in the crates folder
@@ -37,24 +56,27 @@ let
       includeCargoRootFiles
       (fs.fileFilter (fileDoesNotHaveExt extensionsToRemove) repoRoot);
 
-  # the above filter can make the doc crate sad since it deals with pictures
+  # the above filter can make the doc crate sad since it has pictures
   docsAddedBack = fs.unions [
     ../crates/docs
     removedSimpleFiles
   ];
 
-
-  #
+  # ===============================
   # If you are trying to see what is ok to exclude from the "main" builds (cli/lang_server)
   # use `cargo tree` https://doc.rust-lang.org/cargo/commands/cargo-tree.html
   # 
   # Ex: `cargo tree -i roc_build` will show all deps of the `roc_build` crate
   # if only the package passed with `-i` is shown, nothing depends on it
+  # ===============================
+
+
+  filteredSrc = fs.toSource {
+    root = repoRoot;
+    # to debug you can switch to
+    # fileset = fs.traceVal <file set>
+    fileset = docsAddedBack;
+  };
 
 in
-fs.toSource {
-  root = repoRoot;
-  # to debug you can switch to
-  # fileset = fs.traceVal <file set>
-  fileset = docsAddedBack;
-}
+filteredSrc
