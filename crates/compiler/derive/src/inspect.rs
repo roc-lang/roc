@@ -111,8 +111,6 @@ pub(crate) fn derive_to_inspector(
 
 fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
     // Build \lst -> list, List.walk, (\elem -> Inspect.toInspector elem)
-    //
-    // TODO eta reduce this baby       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     use Expr::*;
 
@@ -954,11 +952,6 @@ fn to_inspector_tag_union(
 }
 
 /// Lift `inspector` to `Inspect.custom \fmt -> Inspect.apply inspector fmt`
-///
-/// TODO: currently it appears that just `inspector` is not isomorphic to the lift, on the
-/// monomorphization level, even though we would think it is. In particular, unspecialized lambda
-/// sets fail to resolve when we use the non-lifted version.
-/// More investigation is needed to figure out why.
 fn wrap_in_inspect_custom(
     env: &mut Env,
     inspector: Expr,

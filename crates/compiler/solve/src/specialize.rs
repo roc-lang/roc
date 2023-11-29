@@ -628,38 +628,7 @@ fn make_specialization_decision<P: Phase>(
             } else {
                 // Solving within a module.
                 phase.with_module_abilities_store(opaque.module_id(), |abilities_store| {
-                    let impl_key = ImplKey {
-                        opaque: *opaque,
-                        ability_member,
-                    };
-                    match abilities_store.get_implementation(impl_key) {
-                        None => {
-                            match ability_member {
-                                // Inspect is special - if there is no implementation for the
-                                // opaque type, we always emit a default implementation.
-                                Symbol::INSPECT_TO_INSPECTOR => SpecializeDecision::Specialize(
-                                    Immediate(Symbol::INSPECT_OPAQUE),
-                                ),
-                                _ => {
-                                    // Doesn't specialize; an error will already be reported for this.
-                                    SpecializeDecision::Drop
-                                }
-                            }
-                        }
-                        Some(MemberImpl::Error) => {
-                            // TODO: probably not right, we may want to choose a derive decision!
-                            SpecializeDecision::Specialize(Opaque(*opaque))
-                        }
-                        Some(MemberImpl::Impl(specialization_symbol)) => {
-                            match abilities_store.specialization_info(*specialization_symbol) {
-                                Some(_) => SpecializeDecision::Specialize(Opaque(*opaque)),
-
-                                // If we expect a specialization impl but don't yet know it, we must hold off
-                                // compacting the lambda set until the specialization is well-known.
-                                None => SpecializeDecision::PendingSpecialization(impl_key),
-                            }
-                        }
-                    }
+                    make_ability_specialization_decision(*opaque, ability_member, abilities_store)
                 })
             }
         }
@@ -703,6 +672,46 @@ fn make_specialization_decision<P: Phase>(
         | ErasedLambda
         | RangedNumber(..) => {
             internal_error!("unexpected")
+        }
+    }
+}
+
+fn make_ability_specialization_decision(
+    opaque: Symbol,
+    ability_member: Symbol,
+    abilities_store: &AbilitiesStore,
+) -> SpecializeDecision {
+    use SpecializationTypeKey::*;
+    let impl_key = ImplKey {
+        opaque,
+        ability_member,
+    };
+    match abilities_store.get_implementation(impl_key) {
+        None => {
+            match ability_member {
+                // Inspect is special - if there is no implementation for the
+                // opaque type, we always emit a default implementation.
+                Symbol::INSPECT_TO_INSPECTOR => {
+                    SpecializeDecision::Specialize(Immediate(Symbol::INSPECT_OPAQUE))
+                }
+                _ => {
+                    // Doesn't specialize; an error will already be reported for this.
+                    SpecializeDecision::Drop
+                }
+            }
+        }
+        Some(MemberImpl::Error) => {
+            // TODO: probably not right, we may want to choose a derive decision!
+            SpecializeDecision::Specialize(Opaque(opaque))
+        }
+        Some(MemberImpl::Impl(specialization_symbol)) => {
+            match abilities_store.specialization_info(*specialization_symbol) {
+                Some(_) => SpecializeDecision::Specialize(Opaque(opaque)),
+
+                // If we expect a specialization impl but don't yet know it, we must hold off
+                // compacting the lambda set until the specialization is well-known.
+                None => SpecializeDecision::PendingSpecialization(impl_key),
+            }
         }
     }
 }

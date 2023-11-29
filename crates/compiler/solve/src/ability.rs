@@ -381,7 +381,6 @@ impl ObligationCache {
         let ImplKey { opaque, ability } = impl_key;
 
         // Every type has the Inspect ability automatically, even opaques with no `implements` declaration.
-        // (Those opaques get a default implementation that returns something along the lines of "<opaque>")
         let is_inspect = ability == Symbol::INSPECT_INSPECT_ABILITY;
         let has_known_impl =
             is_inspect || abilities_store.has_declared_implementation(opaque, ability);
@@ -865,9 +864,8 @@ impl DerivableVisitor for DeriveInspect {
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_INSPECT;
 
     #[inline(always)]
-    fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        // TODO: Should this just be true? All values are always inspectable.
-        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
+    fn is_derivable_builtin_opaque(_: Symbol) -> bool {
+        true
     }
 
     #[inline(always)]
@@ -876,18 +874,8 @@ impl DerivableVisitor for DeriveInspect {
     }
 
     #[inline(always)]
-    fn visit_apply(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
-        if matches!(
-            symbol,
-            Symbol::LIST_LIST | Symbol::SET_SET | Symbol::DICT_DICT | Symbol::STR_STR,
-        ) {
-            Ok(Descend(true))
-        } else {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        }
+    fn visit_apply(_: Variable, _: Symbol) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
     }
 
     #[inline(always)]
