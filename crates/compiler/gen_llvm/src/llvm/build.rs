@@ -922,23 +922,23 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     pub fn call_dbg(
         &self,
         env: &Env<'a, 'ctx, 'env>,
-        file_path: BasicValueEnum<'ctx>,
+        location: BasicValueEnum<'ctx>,
         message: BasicValueEnum<'ctx>,
     ) {
         let function = self.module.get_function("roc_dbg").unwrap();
 
-        let file = match env.target_info.ptr_width() {
+        let loc = match env.target_info.ptr_width() {
             PtrWidth::Bytes4 => {
-                // we need to pass the file_path by reference, but we currently hold the value.
+                // we need to pass the location by reference, but we currently hold the value.
                 let alloca = env
                     .builder
-                    .new_build_alloca(file_path.get_type(), "alloca_dbg_file_path");
-                env.builder.new_build_store(alloca, file_path);
+                    .new_build_alloca(location.get_type(), "alloca_dbg_location");
+                env.builder.new_build_store(alloca, location);
                 alloca.into()
             }
             PtrWidth::Bytes8 => {
                 // string is already held by reference
-                file_path
+                location
             }
         };
 
@@ -959,7 +959,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
 
         let call = self
             .builder
-            .new_build_call(function, &[file.into(), msg.into()], "roc_dbg");
+            .new_build_call(function, &[loc.into(), msg.into()], "roc_dbg");
 
         call.set_call_convention(C_CALL_CONV);
     }
@@ -3551,11 +3551,12 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             remainder,
         } => {
             if env.mode.runs_expects() {
-                // TODO: deal with filename and region
+                // TODO: Change location to `filename:line_number`
                 // let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
-                let file_path = build_string_literal(env, parent, "TODO: add filepath here");
+                let location =
+                    build_string_literal(env, parent, symbol.module_string(&env.interns));
                 let message = scope.load_symbol(symbol);
-                env.call_dbg(env, file_path, message);
+                env.call_dbg(env, location, message);
             }
 
             build_exp_stmt(

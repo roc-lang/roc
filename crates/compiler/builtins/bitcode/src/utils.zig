@@ -22,7 +22,7 @@ extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
 extern fn roc_dbg(file_path: *anyopaque, message: *anyopaque) callconv(.C) void;
 
-// Since roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
+// Sincet roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
 pub fn test_dbg(file_path: *anyopaque, message: *anyopaque) callconv(.C) void {
     roc_dbg(file_path, message);
 }
