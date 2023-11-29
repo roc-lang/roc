@@ -4128,7 +4128,6 @@ fn load_packages<'a>(
                     }
                     Err(problem) => {
                         let buf = to_https_problem_report_string(src, problem);
-
                         load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
                         return;
                     }
