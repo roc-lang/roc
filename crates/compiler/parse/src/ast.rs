@@ -460,6 +460,7 @@ pub enum ValueDef<'a> {
     ModuleImport {
         name: Loc<crate::header::ModuleName<'a>>,
         alias: Option<Loc<crate::header::ModuleName<'a>>>,
+        exposed: Collection<'a, Loc<Spaced<'a, crate::header::ExposedName<'a>>>>,
     },
 }
 
@@ -1798,9 +1799,11 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
-            ValueDef::ModuleImport { name, alias } => {
-                name.value.contains_dot() || alias.map_or(false, |x| x.value.contains_dot())
-            }
+            ValueDef::ModuleImport {
+                name,
+                alias,
+                exposed: _,
+            } => name.value.contains_dot() || alias.map_or(false, |x| x.value.contains_dot()),
         }
     }
 }

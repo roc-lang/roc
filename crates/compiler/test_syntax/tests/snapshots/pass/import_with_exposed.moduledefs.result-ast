@@ -1,0 +1,57 @@
+Defs {
+    tags: [
+        Index(2147483648),
+        Index(2147483649),
+    ],
+    regions: [
+        @0-31,
+        @32-67,
+    ],
+    space_before: [
+        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
+    ],
+    space_after: [
+        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport {
+            name: @27-31 ModuleName(
+                "Json",
+            ),
+            alias: None,
+            exposed: [
+                @8-11 ExposedName(
+                    "map",
+                ),
+                @13-20 ExposedName(
+                    "Decoder",
+                ),
+            ],
+        },
+        ModuleImport {
+            name: @63-67 ModuleName(
+                "Json",
+            ),
+            alias: None,
+            exposed: [
+                @40-43 ExposedName(
+                    "map",
+                ),
+                @49-56 SpaceBefore(
+                    ExposedName(
+                        "Decoder",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+        },
+    ],
+}

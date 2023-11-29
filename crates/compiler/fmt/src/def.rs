@@ -1,4 +1,5 @@
-use crate::annotation::{Formattable, Newlines, Parens};
+use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
+use crate::collection::{fmt_collection, Braces};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_spaces, INDENT};
 use crate::Buf;
@@ -196,7 +197,11 @@ impl<'a> Formattable for ValueDef<'a> {
             Expect { condition, .. } => condition.is_multiline(),
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
-            ModuleImport { name: _, alias: _ } => false,
+            ModuleImport {
+                name: _,
+                alias: _,
+                exposed,
+            } => is_collection_multiline(exposed),
         }
     }
 
@@ -239,11 +244,23 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
-            ModuleImport { name, alias } => {
+            ModuleImport {
+                name,
+                alias,
+                exposed,
+            } => {
                 buf.indent(indent);
 
                 buf.push_str("import");
                 buf.spaces(1);
+
+                if !exposed.is_empty() {
+                    fmt_collection(buf, indent, Braces::Square, *exposed, Newlines::No);
+                    buf.spaces(1);
+                    buf.push_str("from");
+                    buf.spaces(1);
+                }
+
                 buf.push_str(name.value.as_str());
 
                 if let Some(alias_name) = alias {

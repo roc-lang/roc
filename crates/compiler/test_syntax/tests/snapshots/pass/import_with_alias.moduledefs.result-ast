@@ -29,6 +29,7 @@ Defs {
                     "JE",
                 ),
             ),
+            exposed: [],
         },
         ModuleImport {
             name: @31-42 ModuleName(
@@ -39,6 +40,7 @@ Defs {
                     "BD",
                 ),
             ),
+            exposed: [],
         },
     ],
 }

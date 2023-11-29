@@ -11,6 +11,9 @@ pub const EXPECT: &str = "expect";
 pub const EXPECT_FX: &str = "expect-fx";
 pub const CRASH: &str = "crash";
 
+// These keywords are valid in imports
+pub const FROM: &str = "from";
+
 // These keywords are valid in types
 pub const IMPLEMENTS: &str = "implements";
 pub const WHERE: &str = "where";

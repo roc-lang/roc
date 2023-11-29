@@ -565,9 +565,14 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.remove_spaces(arena)),
                 preceding_comment: Region::zero(),
             },
-            ModuleImport { name, alias } => ModuleImport {
+            ModuleImport {
+                name,
+                alias,
+                exposed,
+            } => ModuleImport {
                 name: name.remove_spaces(arena),
                 alias: alias.map(|alias_name| alias_name.remove_spaces(arena)),
+                exposed: exposed.remove_spaces(arena),
             },
         }
     }
