@@ -33,8 +33,6 @@ let
 
   # fsBase = fs.fromSource repoRoot;
 
-
-
   # only look at files in the crates folder
   onlyCratesFolder = fs.intersection ../crates fsBase; # TODO: probably need to union back in the root cargo files
 
@@ -69,12 +67,17 @@ let
   # if only the package passed with `-i` is shown, nothing depends on it
   # ===============================
 
+  # remove www folder from checkmate crate since its not built with nix
+  removedWWW = fs.difference docsAddedBack ../crates/compiler/checkmate/www;
+
+  # potential packages/folders that could be removed 
+  # repl_* -> I don't think nix will build those
 
   filteredSrc = fs.toSource {
     root = repoRoot;
     # to debug you can switch to
     # fileset = fs.traceVal <file set>
-    fileset = docsAddedBack;
+    fileset = removedWWW;
   };
 
 in
