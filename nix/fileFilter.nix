@@ -16,10 +16,6 @@ let
         let dirName = baseNameOf pathStr; in !(
           # remove any folder whos name is `tests` or starts with `test_`
           dirName == "tests"
-
-          # TODO: while the below logic seems to work to filter out folders, 
-          # cargo still cares if the path exists (even for dev) :(
-          # || lib.strings.hasPrefix "test_" dirName
         )
       );
       removeTestFilter =
@@ -34,7 +30,7 @@ let
   # fsBase = fs.fromSource repoRoot;
 
   # only look at files in the crates folder
-  onlyCratesFolder = fs.intersection ../crates fsBase; # TODO: probably need to union back in the root cargo files
+  onlyCratesFolder = fs.intersection ../crates fsBase;
 
   # the above filter only has the subfolder, put some needed files from the root back in
   includeCargoRootFiles = fs.unions [
