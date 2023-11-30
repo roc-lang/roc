@@ -447,7 +447,7 @@ impl<R: Read> Read for ProgressReporter<R> {
         std::io::stdout().flush()?;
 
         if self.total.is_some_and(|total| self.read >= total) {
-            println!("");
+            println!();
         }
 
         Ok(size)
