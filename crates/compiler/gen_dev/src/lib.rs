@@ -57,6 +57,14 @@ impl AssemblyBackendMode {
             AssemblyBackendMode::Repl => true,
         }
     }
+
+    fn generate_roc_dbg(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+            AssemblyBackendMode::Repl => true,
+        }
+    }
 }
 
 pub struct Env<'a> {

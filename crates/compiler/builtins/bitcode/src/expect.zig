@@ -96,7 +96,3 @@ pub fn notifyParent(shared_buffer: [*]u8, tag: u32) callconv(.C) void {
 pub fn notifyParentExpect(shared_buffer: [*]u8) callconv(.C) void {
     notifyParent(shared_buffer, 1);
 }
-
-pub fn notifyParentDbg(shared_buffer: [*]u8) callconv(.C) void {
-    notifyParent(shared_buffer, 2);
-}

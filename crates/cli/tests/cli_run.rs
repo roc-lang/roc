@@ -562,11 +562,11 @@ mod cli_run {
                 x : Num *
                 x = 42
 
-                [<ignored for tests> 19:9] 42
-                [<ignored for tests> 20:9] "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests> 13:9] "abc"
-                [<ignored for tests> 13:9] 10
-                [<ignored for tests> 13:9] A (B C)
+                [#UserApp] 42
+                [#UserApp] "Fjoer en ferdjer frieten oan dyn geve lea"
+                [#UserApp] "abc"
+                [#UserApp] 10
+                [#UserApp] (A (B C))
                 Program finished!
                 "#
             ),

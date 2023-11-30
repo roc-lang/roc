@@ -4602,7 +4602,7 @@ pub fn with_hole<'a>(
         Expect { .. } => unreachable!("I think this is unreachable"),
         ExpectFx { .. } => unreachable!("I think this is unreachable"),
         Dbg {
-            loc_condition,
+            loc_message,
             loc_continuation,
             variable: cond_variable,
             symbol: dbg_symbol,
@@ -4622,7 +4622,7 @@ pub fn with_hole<'a>(
                 procs,
                 layout_cache,
                 dbg_symbol,
-                *loc_condition,
+                *loc_message,
                 cond_variable,
                 rest,
             )
@@ -7137,7 +7137,7 @@ pub fn from_can<'a>(
         }
 
         Dbg {
-            loc_condition,
+            loc_message,
             loc_continuation,
             variable: cond_variable,
             symbol: dbg_symbol,
@@ -7149,7 +7149,7 @@ pub fn from_can<'a>(
                 procs,
                 layout_cache,
                 dbg_symbol,
-                *loc_condition,
+                *loc_message,
                 cond_variable,
                 rest,
             )

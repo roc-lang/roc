@@ -461,13 +461,48 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             })
         }
         Dbg(condition, continuation) => {
-            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            // Desugars a `dbg x` statement into
+            // `roc_dbg (Inspect.toDbgStr (Inspect.inspect x))`
             let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
+
+            let region = condition.region;
+            // TODO desugar this in canonicalization instead, so we can work
+            // in terms of integers exclusively and not need to create strings
+            // which canonicalization then needs to look up, check if they're exposed, etc
+            let inspect = Var {
+                module_name: ModuleName::INSPECT,
+                ident: "inspect",
+            };
+            let loc_inspect_fn_var = arena.alloc(Loc {
+                value: inspect,
+                region,
+            });
+            let desugared_inspect_args = arena.alloc([desugar_expr(arena, condition)]);
+
+            let inspector = arena.alloc(Loc {
+                value: Apply(loc_inspect_fn_var, desugared_inspect_args, CalledVia::Space),
+                region,
+            });
+
+            let to_dbg_str = Var {
+                module_name: ModuleName::INSPECT,
+                ident: "toDbgStr",
+            };
+            let loc_to_dbg_str_fn_var = arena.alloc(Loc {
+                value: to_dbg_str,
+                region,
+            });
+            let to_dbg_str_args = arena.alloc([&*inspector]);
+            let dbg_str = arena.alloc(Loc {
+                value: Apply(loc_to_dbg_str_fn_var, to_dbg_str_args, CalledVia::Space),
+                region,
+            });
             arena.alloc(Loc {
-                value: Dbg(desugared_condition, desugared_continuation),
+                value: LowLevelDbg(dbg_str, desugared_continuation),
                 region: loc_expr.region,
             })
         }
+        LowLevelDbg(_, _) => unreachable!("Only exists after desugaring"),
     }
 }
 

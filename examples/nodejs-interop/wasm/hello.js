@@ -34,6 +34,10 @@ function hello() {
             roc_panic: (_pointer, _tag_id) => {
                 throw "Roc panicked!";
             },
+            roc_dbg: (_loc, _msg) => {
+                // TODO write a proper impl.
+                throw "Roc dbg not supported!";
+            },
         },
     };
 

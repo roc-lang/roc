@@ -132,6 +132,9 @@ void roc_panic(void* msg, unsigned int panic_tag)
     exit(101);
 }
 
+// TODO: add a way to send dbg to rust.
+void roc_debug(void* loc, void* msg) {}
+
 //--------------------------
 
 void *roc_memset(void *str, int c, size_t n)

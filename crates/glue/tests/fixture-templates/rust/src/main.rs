@@ -1,3 +1,3 @@
 fn main() {
-    std::process::exit(host::rust_main() as _);
+    host::rust_main();
 }
