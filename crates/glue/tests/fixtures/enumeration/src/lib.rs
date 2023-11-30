@@ -2,7 +2,7 @@ use roc_app;
 use roc_std::RocStr;
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
@@ -32,9 +32,6 @@ pub extern "C" fn rust_main() -> i32 {
         roc_app::MyEnum::Bar,
         roc_app::MyEnum::Baz,
     ); // Debug
-
-    // Exit code
-    0
 }
 
 // Externs required by roc_std and by the Roc app

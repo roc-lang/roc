@@ -2,7 +2,7 @@ use roc_app;
 use roc_std::RocStr;
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() {
     use std::cmp::Ordering;
 
     let outer = roc_app::mainForHost();
@@ -31,7 +31,6 @@ pub extern "C" fn rust_main() -> i32 {
 
     println!("Record was: {:?}", outer);
 
-    // Exit code
     std::process::exit(0);
 }
 

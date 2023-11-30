@@ -7,7 +7,7 @@ extern "C" {
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
@@ -36,9 +36,6 @@ pub extern "C" fn rust_main() -> i32 {
     set.insert(tag_union);
 
     assert_eq!(set.len(), 1);
-
-    // Exit code
-    0
 }
 
 // Externs required by roc_std and by the Roc app

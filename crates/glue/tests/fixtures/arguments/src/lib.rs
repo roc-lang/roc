@@ -2,13 +2,10 @@ use roc_app;
 use roc_std::RocStr;
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> i32 {
+pub extern "C" fn rust_main() {
     let answer = roc_app::mainForHost(42i64);
 
     println!("Answer was: {:?}", answer); // Debug
-
-    // Exit code
-    0
 }
 
 // Externs required by roc_std and by the Roc app
