@@ -53,10 +53,16 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
 }
 
 export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
-
     const stderr = std.io.getStdErr().writer();
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+    switch (tag_id) {
+        0 => {
+            stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        1 => {
+            stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        else => unreachable,
+    }
     std.process.exit(1);
 }
 

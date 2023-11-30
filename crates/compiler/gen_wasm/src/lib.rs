@@ -290,6 +290,11 @@ mod dummy_platform_functions {
     }
 
     #[no_mangle]
+    pub unsafe extern "C" fn roc_dbg(_loc: *mut c_void, _msg: *mut c_void) {
+        unimplemented!("It is not valid to call roc dbg from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
     pub fn roc_memset(_dst: *mut c_void, _c: i32, _n: usize) -> *mut c_void {
         unimplemented!("It is not valid to call roc memset from within the compiler. Please use the \"platform\" feature if this is a platform.")
     }

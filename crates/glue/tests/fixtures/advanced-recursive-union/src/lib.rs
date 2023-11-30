@@ -1,6 +1,7 @@
 use roc_app;
 
 use indoc::indoc;
+use roc_std::RocStr;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
@@ -65,16 +66,22 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(msg: *mut RocStr, tag_id: u32) {
     match tag_id {
         0 => {
-            let slice = CStr::from_ptr(c_ptr as *const c_char);
-            let string = slice.to_str().unwrap();
-            eprintln!("Roc hit a panic: {}", string);
-            std::process::exit(1);
+            eprintln!("Roc standard library hit a panic: {}", &*msg);
         }
-        _ => todo!(),
+        1 => {
+            eprintln!("Application hit a panic: {}", &*msg);
+        }
+        _ => unreachable!(),
     }
+    std::process::exit(1);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn roc_dbg(loc: *mut RocStr, msg: *mut RocStr) {
+    eprintln!("[{}] {}", &*loc, &*msg);
 }
 
 #[no_mangle]
