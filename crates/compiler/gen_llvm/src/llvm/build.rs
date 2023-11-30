@@ -897,20 +897,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let function = self.module.get_function("roc_panic").unwrap();
         let tag_id = self.context.i32_type().const_int(tag as u32 as u64, false);
 
-        let msg = match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => {
-                // we need to pass the message by reference, but we currently hold the value.
-                let alloca = env
-                    .builder
-                    .new_build_alloca(message.get_type(), "alloca_panic_msg");
-                env.builder.new_build_store(alloca, message);
-                alloca.into()
-            }
-            PtrWidth::Bytes8 => {
-                // string is already held by reference
-                message
-            }
-        };
+        let msg = self.string_to_arg(env, message);
 
         let call = self
             .builder
@@ -927,41 +914,35 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     ) {
         let function = self.module.get_function("roc_dbg").unwrap();
 
-        let loc = match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => {
-                // we need to pass the location by reference, but we currently hold the value.
-                let alloca = env
-                    .builder
-                    .new_build_alloca(location.get_type(), "alloca_dbg_location");
-                env.builder.new_build_store(alloca, location);
-                alloca.into()
-            }
-            PtrWidth::Bytes8 => {
-                // string is already held by reference
-                location
-            }
-        };
-
-        let msg = match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => {
-                // we need to pass the message by reference, but we currently hold the value.
-                let alloca = env
-                    .builder
-                    .new_build_alloca(message.get_type(), "alloca_dbg_msg");
-                env.builder.new_build_store(alloca, message);
-                alloca.into()
-            }
-            PtrWidth::Bytes8 => {
-                // string is already held by reference
-                message
-            }
-        };
+        let loc = self.string_to_arg(env, location);
+        let msg = self.string_to_arg(env, message);
 
         let call = self
             .builder
             .new_build_call(function, &[loc.into(), msg.into()], "roc_dbg");
 
         call.set_call_convention(C_CALL_CONV);
+    }
+
+    fn string_to_arg(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        string: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the string by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .new_build_alloca(string.get_type(), "alloca_string");
+                env.builder.new_build_store(alloca, string);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                string
+            }
+        }
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {

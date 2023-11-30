@@ -461,6 +461,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             })
         }
         Dbg(condition, continuation) => {
+            // Desugars a `dbg x` statement into
+            // `roc_dbg (Inspect.toDbgStr (Inspect.inspect x))`
             let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
 
             let region = condition.region;
