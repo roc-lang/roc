@@ -1712,7 +1712,7 @@ Well done on making it this far!
 
 We've covered all of the basic syntax and features of Roc in this Tutorial. You should now have a good foundation and be ready to start writing your own applications.
 
-You can continue reading through more advanced topics below, or perhaps checkout some of the [Examples](/example) for more a detailed exploration of ways to do various things.
+You can continue reading through more advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
 
 ## [Appendix: Advanced Concepts](#appendix-advanced-concepts) {#appendix-advanced-concepts}
 
