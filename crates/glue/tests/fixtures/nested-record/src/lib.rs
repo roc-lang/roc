@@ -32,7 +32,7 @@ pub extern "C" fn rust_main() -> i32 {
     println!("Record was: {:?}", outer);
 
     // Exit code
-    0
+    std::process::exit(0);
 }
 
 // Externs required by roc_std and by the Roc app
