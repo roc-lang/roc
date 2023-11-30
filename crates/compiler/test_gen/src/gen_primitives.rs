@@ -4630,3 +4630,36 @@ fn many_arguments() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn multiple_uses_of_bool_true_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            (Bool.true, Bool.true).0
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn multiple_uses_of_bool_true_tag_union() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : [ One Bool Bool, Empty ]
+            x = One Bool.true Bool.true
+
+            when x is
+                One a _ -> a
+                Empty -> Bool.false
+            "#
+        ),
+        true,
+        bool
+    );
+}

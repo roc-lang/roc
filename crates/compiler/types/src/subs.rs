@@ -1726,6 +1726,8 @@ impl Subs {
     pub const AB_HASH: SubsSlice<Symbol>            = SubsSlice::new(3, 1);
     #[rustfmt::skip]
     pub const AB_EQ: SubsSlice<Symbol>              = SubsSlice::new(4, 1);
+    #[rustfmt::skip]
+    pub const AB_INSPECT: SubsSlice<Symbol>         = SubsSlice::new(5, 1);
     // END INIT-SymbolSubsSlice
 
     pub fn new() -> Self {
@@ -1746,7 +1748,7 @@ impl Subs {
         tag_names.push(TagName("OutOfBounds".into()));
         // END INIT-TagNames
 
-        // IFTTT INIT-SymbolNames
+        // IFTTT INIT-SymbolSubsSlice
         let mut symbol_names = Vec::with_capacity(32);
 
         symbol_names.push(Symbol::ENCODE_ENCODING);
@@ -1754,7 +1756,8 @@ impl Subs {
         symbol_names.push(Symbol::HASH_HASHER);
         symbol_names.push(Symbol::HASH_HASH_ABILITY);
         symbol_names.push(Symbol::BOOL_EQ);
-        // END INIT-SymbolNames
+        symbol_names.push(Symbol::INSPECT_INSPECT_ABILITY);
+        // END INIT-SymbolSubsSlice
 
         // IFTTT INIT-VariableSubsSlice
         let variables = vec![Variable::STR];

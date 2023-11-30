@@ -1,0 +1,4 @@
+app "test" provides [main] to "./platform"
+
+main = Inspect.toInspector 7u8 |> Inspect.apply (Inspect.init {}) |> Inspect.toDbgStr
+#      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): U8 -[[Inspect.dbgU8(47)]]-> Inspector DbgFormatter

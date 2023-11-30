@@ -304,6 +304,13 @@ impl ObligationCache {
 
             Symbol::BOOL_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
 
+            Symbol::INSPECT_INSPECT_ABILITY => Some(DeriveInspect::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
             _ => None,
         };
 
@@ -373,7 +380,10 @@ impl ObligationCache {
 
         let ImplKey { opaque, ability } = impl_key;
 
-        let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
+        // Every type has the Inspect ability automatically, even opaques with no `implements` declaration.
+        let is_inspect = ability == Symbol::INSPECT_INSPECT_ABILITY;
+        let has_known_impl =
+            is_inspect || abilities_store.has_declared_implementation(opaque, ability);
 
         // Some builtins, like Float32 and Bool, would have a cyclic dependency on Encode/Decode/etc.
         // if their Roc implementations explicitly defined some abilities they support.
@@ -382,18 +392,17 @@ impl ObligationCache {
             DeriveDecoding::ABILITY => DeriveDecoding::is_derivable_builtin_opaque(opaque),
             DeriveEq::ABILITY => DeriveEq::is_derivable_builtin_opaque(opaque),
             DeriveHash::ABILITY => DeriveHash::is_derivable_builtin_opaque(opaque),
+            DeriveInspect::ABILITY => DeriveInspect::is_derivable_builtin_opaque(opaque),
             _ => false,
         };
 
-        let has_declared_impl = has_declared_impl || builtin_opaque_impl_ok();
-
-        let obligation_result = if !has_declared_impl {
+        let obligation_result = if has_known_impl || builtin_opaque_impl_ok() {
+            Ok(())
+        } else {
             Err(Unfulfilled::OpaqueDoesNotImplement {
                 typ: opaque,
                 ability,
             })
-        } else {
-            Ok(())
         };
 
         self.impl_cache.insert(impl_key, obligation_result);
@@ -846,6 +855,93 @@ trait DerivableVisitor {
         }
 
         Ok(())
+    }
+}
+
+struct DeriveInspect;
+impl DerivableVisitor for DeriveInspect {
+    const ABILITY: Symbol = Symbol::INSPECT_INSPECT_ABILITY;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_INSPECT;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(_: Symbol) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(_: Variable, _: Symbol) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        _subs: &Subs,
+        _var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
     }
 }
 
@@ -1392,7 +1488,7 @@ impl AbilityResolver for AbilitiesStore {
     }
 }
 
-/// Whether this a module whose types' ability implementations should be checked via derive_key,
+/// Whether this is a module whose types' ability implementations should be checked via derive_key,
 /// because they do not explicitly list ability implementations due to circular dependencies.
 #[inline]
 pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> bool {

@@ -19,7 +19,7 @@ use util::Env;
 mod decoding;
 mod encoding;
 mod hash;
-
+mod inspect;
 mod util;
 
 pub(crate) const DERIVED_SYNTH: ModuleId = ModuleId::DERIVED_SYNTH;
@@ -79,6 +79,9 @@ fn build_derived_body(
             decoding::derive_decoder(&mut env, decoder_key, derived_symbol)
         }
         DeriveKey::Hash(hash_key) => hash::derive_hash(&mut env, hash_key, derived_symbol),
+        DeriveKey::ToInspector(to_inspector_key) => {
+            inspect::derive_to_inspector(&mut env, to_inspector_key, derived_symbol)
+        }
     };
 
     let def = Def {

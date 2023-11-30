@@ -6020,7 +6020,12 @@ fn compile_struct_like<'a, L, UnusedLayout>(
         match take_elem_expr(index) {
             Some((var, loc_expr)) => {
                 match can_reuse_symbol(env, layout_cache, procs, &loc_expr.value, var) {
-                    Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
+                    Imported(symbol) => {
+                        // we cannot re-use the symbol in this case; it is used as a value, but defined as a thunk
+                        elem_symbols.push(env.unique_symbol());
+                        can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
+                    }
+                    LocalFunction(symbol) | UnspecializedExpr(symbol) => {
                         elem_symbols.push(symbol);
                         can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
                     }
@@ -6068,15 +6073,15 @@ fn compile_struct_like<'a, L, UnusedLayout>(
             Field::ValueSymbol => {
                 // this symbol is already defined; nothing to do
             }
-            Field::FunctionOrUnspecialized(symbol, variable) => {
+            Field::FunctionOrUnspecialized(can_symbol, variable) => {
                 stmt = specialize_symbol(
                     env,
                     procs,
                     layout_cache,
                     Some(variable),
-                    symbol,
+                    *symbol,
                     env.arena.alloc(stmt),
-                    symbol,
+                    can_symbol,
                 );
             }
             Field::Field(var, loc_expr) => {
