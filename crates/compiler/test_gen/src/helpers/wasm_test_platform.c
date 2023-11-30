@@ -132,6 +132,8 @@ void roc_panic(void* msg, unsigned int panic_tag)
     exit(101);
 }
 
+void roc_debug(void* loc, void* msg) {}
+
 //--------------------------
 
 void *roc_memset(void *str, int c, size_t n)

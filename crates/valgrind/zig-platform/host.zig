@@ -44,13 +44,17 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
-export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
+export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
     _ = tag_id;
 
     const stderr = std.io.getStdErr().writer();
-    const msg = @as([*:0]const u8, @ptrCast(c_ptr));
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-    std.process.exit(0);
+    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+    std.process.exit(1);
+}
+
+export fn roc_dbg(loc: *RocStr, msg: *RocStr) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[{s}] {s}\n", .{ loc.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
