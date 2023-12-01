@@ -3,8 +3,6 @@ let
   inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
 
   subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
-
-  filteredSource = pkgs.callPackage ./fileFilter.nix { };
 in
 rustPlatform.buildRustPackage {
   pname = "roc" + lib.optionalString (subPackage != null) "_${subPackage}";
@@ -12,7 +10,7 @@ rustPlatform.buildRustPackage {
 
   buildAndTestSubdir = subPackagePath;
 
-  src = filteredSource;
+  src = pkgs.nix-gitignore.gitignoreSource [ ] ../.;
 
   cargoLock = {
     lockFile = ../Cargo.lock;
