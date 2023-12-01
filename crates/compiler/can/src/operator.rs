@@ -461,29 +461,65 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             })
         }
         Dbg(condition, continuation) => {
-            // Desugars a `dbg x` statement into
-            // `roc_dbg (Inspect.toDbgStr (Inspect.inspect x))`
+            // Desugars a `dbg x` statement into essentially
+            // Inspect.toInspector x |> Inspect.apply (Inspect.init {}) |> Inspect.toDbgStr |> LowLevelDbg
             let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
 
             let region = condition.region;
-            // TODO desugar this in canonicalization instead, so we can work
-            // in terms of integers exclusively and not need to create strings
-            // which canonicalization then needs to look up, check if they're exposed, etc
-            let inspect = Var {
+            // Inspect.toInspector x
+            let to_inspector_fn = Var {
                 module_name: ModuleName::INSPECT,
-                ident: "inspect",
+                ident: "toInspector",
             };
-            let loc_inspect_fn_var = arena.alloc(Loc {
-                value: inspect,
+            let loc_to_inspector_fn_var = arena.alloc(Loc {
+                value: to_inspector_fn,
                 region,
             });
-            let desugared_inspect_args = arena.alloc([desugar_expr(arena, condition)]);
+            let desugared_to_inspector_args = arena.alloc([desugar_expr(arena, condition)]);
 
             let inspector = arena.alloc(Loc {
-                value: Apply(loc_inspect_fn_var, desugared_inspect_args, CalledVia::Space),
+                value: Apply(
+                    loc_to_inspector_fn_var,
+                    desugared_to_inspector_args,
+                    CalledVia::Space,
+                ),
                 region,
             });
 
+            // Inspect.init {}
+            let init_fn = Var {
+                module_name: ModuleName::INSPECT,
+                ident: "init",
+            };
+            let loc_init_fn_var = arena.alloc(Loc {
+                value: init_fn,
+                region,
+            });
+            let empty_record_args = arena.alloc([&*arena.alloc(Loc {
+                value: Record(Collection::empty()),
+                region,
+            })]);
+            let formatter = arena.alloc(Loc {
+                value: Apply(loc_init_fn_var, empty_record_args, CalledVia::Space),
+                region,
+            });
+
+            // |> Inspect.apply (Inspect.init {})
+            let apply_fn = Var {
+                module_name: ModuleName::INSPECT,
+                ident: "apply",
+            };
+            let loc_apply_fn_var = arena.alloc(Loc {
+                value: apply_fn,
+                region,
+            });
+            let apply_args = arena.alloc([&*inspector, &*formatter]);
+            let applied_formatter = arena.alloc(Loc {
+                value: Apply(loc_apply_fn_var, apply_args, CalledVia::Space),
+                region,
+            });
+
+            // |> Inspect.toDbgStr
             let to_dbg_str = Var {
                 module_name: ModuleName::INSPECT,
                 ident: "toDbgStr",
@@ -492,11 +528,12 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 value: to_dbg_str,
                 region,
             });
-            let to_dbg_str_args = arena.alloc([&*inspector]);
+            let to_dbg_str_args = arena.alloc([&*applied_formatter]);
             let dbg_str = arena.alloc(Loc {
                 value: Apply(loc_to_dbg_str_fn_var, to_dbg_str_args, CalledVia::Space),
                 region,
             });
+            // |> LowLevelDbg
             arena.alloc(Loc {
                 value: LowLevelDbg(dbg_str, desugared_continuation),
                 region: loc_expr.region,
