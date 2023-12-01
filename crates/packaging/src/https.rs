@@ -433,21 +433,21 @@ impl<R: Read> Read for ProgressReporter<R> {
         self.read += size;
 
         if let Some(total) = self.total {
-            print!(
+            eprint!(
                 "\u{001b}[2K\u{001b}[G[{:.1} / {:.1} MB]",
                 self.read as f32 / 1_000_000.0,
                 total as f32 / 1_000_000.0,
             );
         } else {
-            print!(
+            eprint!(
                 "\u{001b}[2K\u{001b}[G[{:.1} MB]",
                 self.read as f32 / 1_000_000.0,
             );
         }
-        std::io::stdout().flush()?;
+        std::io::stderr().flush()?;
 
         if self.total.is_some_and(|total| self.read >= total) {
-            println!();
+            eprintln!();
         }
 
         Ok(size)
