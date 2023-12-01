@@ -1454,16 +1454,27 @@ code .dim {
     color: var(--cyan);
 }
 
-.color-white {
-    /* Really this isn't white so much as "default text color." For the repl, this should be black
-    in a light color scheme, and only white in dark mode. The name could be better! */
-    color: black;
+/* Really this isn't white so much as "default text color." For the repl, this should be black
+    in a light color scheme, and only white in dark mode. The name could be better!
+*/
+#homepage-repl-container .color-white {
+    color: #FFF;
+}
+
+#repl-container .color-white {
+    color: #000;
 }
 
 @media (prefers-color-scheme: dark) {
-    .color-white {
-        color: white;
+
+    #homepage-repl-container .color-white {
+        color: #FFF;
     }
+
+    #repl-container .color-white {
+        color: #FFF;
+    }
+
 }
 
 .bold {
