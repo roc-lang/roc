@@ -2288,4 +2288,42 @@ mod inspect {
             RocStr
         );
     }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn opaque_automatic() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            Op := {}
+
+            main = Inspect.toDbgStr (Inspect.inspect (@Op {}))
+            "#
+            ),
+            RocStr::from(r#"<opaque>"#),
+            RocStr
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn opaque_automatic_with_polymorphic_call() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            Op := {}
+
+            late = \a -> Inspect.toDbgStr (Inspect.inspect a)
+
+            main = late (@Op {})
+            "#
+            ),
+            RocStr::from(r#"<opaque>"#),
+            RocStr
+        );
+    }
 }
