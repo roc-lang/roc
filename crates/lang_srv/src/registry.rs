@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::Write};
 
 use tower_lsp::lsp_types::{
     CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
@@ -12,12 +12,47 @@ pub(crate) enum DocumentChange {
     Closed(Url),
 }
 
+#[derive(Debug)]
+pub(crate) struct Document {
+    latest_document: AnalyzedDocument,
+    last_good_document: AnalyzedDocument,
+}
 #[derive(Debug, Default)]
 pub(crate) struct Registry {
-    documents: HashMap<Url, AnalyzedDocument>,
+    documents: HashMap<Url, Document>,
 }
 
 impl Registry {
+    fn update_document(&mut self, document: AnalyzedDocument) {
+        let url = document.url().clone();
+
+        match self.documents.get_mut(&url) {
+            Some(doc) => {
+                if document.type_checked() {
+                    self.documents.insert(
+                        url.clone(),
+                        Document {
+                            //TODO not sure if i should actually be cloning here?
+                            latest_document: document.clone(),
+                            last_good_document: document,
+                        },
+                    );
+                } else {
+                    //TODO this seems ugly but for now i'll let it slide. shoudl be immutable
+                    doc.latest_document = document;
+                }
+            }
+            None => {
+                self.documents.insert(
+                    url.clone(),
+                    Document {
+                        latest_document: document.clone(),
+                        last_good_document: document,
+                    },
+                );
+            }
+        }
+    }
     pub fn apply_change(&mut self, change: DocumentChange) {
         match change {
             DocumentChange::Modified(url, source) => {
@@ -27,8 +62,7 @@ impl Registry {
                 // Note that this is actually the opposite of what we want - in truth we want to
                 // re-evaluate all dependents!
                 for document in documents {
-                    let url = document.url().clone();
-                    self.documents.insert(url.clone(), document);
+                    self.update_document(document);
                 }
             }
             DocumentChange::Closed(_url) => {
@@ -38,6 +72,9 @@ impl Registry {
     }
 
     fn document_by_url(&mut self, url: &Url) -> Option<&mut AnalyzedDocument> {
+        self.documents.get_mut(url).map(|a| &mut a.latest_document)
+    }
+    fn document_pair_by_url(&mut self, url: &Url) -> Option<&mut Document> {
         self.documents.get_mut(url)
     }
 
@@ -78,10 +115,15 @@ impl Registry {
         url: &Url,
         position: Position,
     ) -> Option<CompletionResponse> {
-        let document = self.document_by_url(url)?;
+        let Document {
+            latest_document,
+            last_good_document,
+        } = self.document_pair_by_url(url)?;
+        let mut stderr = std::io::stderr();
+        writeln!(&mut stderr, "got document");
+        let symbol_prefix = latest_document.get_prefix_at_position(position);
         //this strategy probably won't work for record fields
-        let prefix = document.symbol_at(position)?;
-        let completions = document.completion_items(position, prefix)?;
+        let completions = last_good_document.completion_items(position, symbol_prefix)?;
 
         Some(CompletionResponse::Array(completions))
     }

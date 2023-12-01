@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -13,10 +14,10 @@ use roc_collections::MutMap;
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::LineInfo;
+use roc_region::all::{LineColumn, LineInfo};
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
-use roc_types::subs::Subs;
+use roc_types::subs::{Subs, Variable};
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, Diagnostic, GotoDefinitionResponse, Hover, HoverContents,
     Location, MarkedString, Position, Range, SemanticTokenType, SemanticTokens,
@@ -39,6 +40,23 @@ pub(crate) struct GlobalAnalysis {
     pub documents: Vec<AnalyzedDocument>,
 }
 
+fn format_var_type(
+    var: Variable,
+    subs: &mut Subs,
+    module_id: &ModuleId,
+    interns: &Interns,
+) -> String {
+    let snapshot = subs.snapshot();
+    let type_str = roc_types::pretty_print::name_and_print_var(
+        var,
+        subs,
+        *module_id,
+        interns,
+        roc_types::pretty_print::DebugPrint::NOTHING,
+    );
+    subs.rollback_to(snapshot);
+    type_str
+}
 impl GlobalAnalysis {
     pub fn new(source_url: Url, source: String) -> GlobalAnalysis {
         let arena = Bump::new();
@@ -251,7 +269,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
 
 type ModuleIdToUrl = HashMap<ModuleId, Url>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AnalyzedModule {
     module_id: ModuleId,
     interns: Interns,
@@ -263,7 +281,7 @@ struct AnalyzedModule {
     module_id_to_url: ModuleIdToUrl,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct AnalyzedDocument {
     url: Url,
     line_info: LineInfo,
@@ -302,6 +320,9 @@ impl AnalyzedDocument {
         let end = Position::new(line_info.num_lines(), 0);
         Range::new(start, end)
     }
+    pub fn type_checked(&self) -> bool {
+        self.module.is_some()
+    }
 
     pub fn diagnostics(&mut self) -> Vec<Diagnostic> {
         self.diagnostics.clone()
@@ -338,16 +359,7 @@ impl AnalyzedDocument {
         } = self.module_mut()?;
 
         let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
-
-        let snapshot = subs.snapshot();
-        let type_str = roc_types::pretty_print::name_and_print_var(
-            var,
-            subs,
-            *module_id,
-            interns,
-            roc_types::pretty_print::DebugPrint::NOTHING,
-        );
-        subs.rollback_to(snapshot);
+        let type_str = format_var_type(var, subs, module_id, interns);
 
         let range = region.to_range(self.line_info());
 
@@ -356,53 +368,22 @@ impl AnalyzedDocument {
             range: Some(range),
         })
     }
-    pub fn completion_items(
-        &mut self,
-        position: Position,
-        symbol_prefix: Symbol,
-    ) -> Option<Vec<CompletionItem>> {
+
+    pub fn get_prefix_at_position(&self, position: Position) -> String {
         let line_info = self.line_info();
         let position = position.to_roc_position(&line_info);
-        let AnalyzedModule {
-            declarations,
-            interns,
-            ..
-        } = self.module_mut()?;
-        let symbol_prefix = symbol_prefix.as_str(interns).to_string();
-
-        let completions = get_completions(&symbol_prefix, position, declarations, interns);
-        let completion_items: Vec<CompletionItem> = completions
+        let offset = position.offset;
+        let source = self.source.as_bytes().split_at(offset as usize).0;
+        let mut symbol = source
             .iter()
-            .flat_map(|comp| match comp {
-                FoundDeclaration::Decl(dec) => match dec {
-                    DeclarationInfo::Value { loc_symbol, .. } => vec![CompletionItem {
-                        label: loc_symbol.value.as_str(interns).to_string(),
-                        kind: Some(CompletionItemKind::VARIABLE),
-                        ..Default::default()
-                    }],
-                    DeclarationInfo::Function { loc_symbol, .. } => vec![CompletionItem {
-                        label: loc_symbol.value.as_str(interns).to_string(),
-                        kind: Some(CompletionItemKind::FUNCTION),
-                        ..Default::default()
-                    }],
-                    DeclarationInfo::Destructure { .. } => {
-                        //TODO
-                        vec![]
-                    }
-                    DeclarationInfo::Expectation { .. } => vec![],
-                },
-                FoundDeclaration::Def(def) => def
-                    .pattern_vars
-                    .iter()
-                    .map(|(symbol, _)| CompletionItem {
-                        label: symbol.as_str(interns).to_string(),
-                        kind: Some(CompletionItemKind::FUNCTION),
-                        ..Default::default()
-                    })
-                    .collect(),
-            })
-            .collect();
-        Some(completion_items)
+            .rev()
+            //TODO proper regex here
+            .take_while(|&&a| matches!(a as char,'a'..='z'|'A'..='Z'|'0'..='9'|'_'))
+            .map(|&a| a)
+            .collect::<Vec<u8>>();
+        symbol.reverse();
+
+        String::from_utf8(symbol).unwrap()
     }
 
     pub fn definition(&self, symbol: Symbol) -> Option<GotoDefinitionResponse> {
@@ -448,5 +429,79 @@ impl AnalyzedDocument {
 
     pub(crate) fn module_url(&self, module_id: ModuleId) -> Option<Url> {
         self.module()?.module_id_to_url.get(&module_id).cloned()
+    }
+
+    pub fn completion_items(
+        &mut self,
+        position: Position,
+        symbol_prefix: String,
+    ) -> Option<Vec<CompletionItem>> {
+        let mut stderr = std::io::stderr();
+        writeln!(&mut stderr, "starting to get completion items");
+        let line_info = self.line_info();
+        let position = position.to_roc_position(&line_info);
+        let AnalyzedModule {
+            declarations,
+            interns,
+            subs,
+            module_id,
+            ..
+        } = self.module_mut()?;
+        writeln!(&mut stderr, "prefix is: {:?}", symbol_prefix);
+
+        let completions = get_completions(&symbol_prefix, position, declarations, interns);
+        let completion_items: Vec<CompletionItem> = completions
+            .iter()
+            .flat_map(|comp| match comp {
+                FoundDeclaration::Decl(dec) => match dec {
+                    DeclarationInfo::Value {
+                        loc_symbol,
+                        expr_var,
+                        ..
+                    } => {
+                        let type_str = format_var_type(expr_var.clone(), subs, module_id, interns);
+                        vec![CompletionItem {
+                            label: loc_symbol.value.as_str(interns).to_string(),
+                            detail: Some(type_str),
+                            kind: Some(CompletionItemKind::VARIABLE),
+                            ..Default::default()
+                        }]
+                    }
+                    DeclarationInfo::Function {
+                        loc_symbol,
+                        expr_var,
+                        ..
+                    } => {
+                        let type_str = format_var_type(expr_var.clone(), subs, module_id, interns);
+                        vec![CompletionItem {
+                            label: loc_symbol.value.as_str(interns).to_string(),
+                            detail: Some(type_str),
+                            kind: Some(CompletionItemKind::FUNCTION),
+                            ..Default::default()
+                        }]
+                    }
+                    DeclarationInfo::Destructure { .. } => {
+                        //TODO
+                        vec![]
+                    }
+                    DeclarationInfo::Expectation { .. } => vec![],
+                },
+                FoundDeclaration::Def(def) => def
+                    .pattern_vars
+                    .iter()
+                    .map(|(symbol, var)| {
+                        let type_str = format_var_type(var.clone(), subs, module_id, interns);
+                        CompletionItem {
+                            label: symbol.as_str(interns).to_string(),
+                            detail: Some(type_str),
+                            kind: Some(CompletionItemKind::FUNCTION),
+
+                            ..Default::default()
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+        Some(completion_items)
     }
 }
