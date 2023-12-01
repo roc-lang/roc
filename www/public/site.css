@@ -1507,3 +1507,25 @@ code .dim {
         display: none;
     }
 }
+
+#gh-logo {
+    fill: var(--text-color);
+}
+
+#gh-link {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 0;
+}
+
+#gh-centered-link {
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+}
+
+#gh-link-text {
+    margin-left: 8px;
+    vertical-align: middle;
+}
