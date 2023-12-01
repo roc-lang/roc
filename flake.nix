@@ -2,8 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=676fe5e01b9a41fa14aaa48d87685677664104b1";
-
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -160,7 +159,7 @@
         # You can build this package (the roc CLI) with the `nix build` command.
         packages = {
           default = rocBuild.roc-cli;
-          
+
           # all rust crates in workspace.members of Cargo.toml
           full = rocBuild.roc-full;
           # only the CLI crate = executable provided in nightly releases
