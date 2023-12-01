@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{
-    Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult, TextEdit, Url,
+    CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
+    TextEdit, Url,
 };
 
 use crate::analysis::{AnalyzedDocument, GlobalAnalysis};
@@ -71,5 +72,17 @@ impl Registry {
     pub fn semantic_tokens(&mut self, url: &Url) -> Option<SemanticTokensResult> {
         let document = self.document_by_url(url)?;
         document.semantic_tokens()
+    }
+    pub fn completion_items(
+        &mut self,
+        url: &Url,
+        position: Position,
+    ) -> Option<CompletionResponse> {
+        let document = self.document_by_url(url)?;
+        //this strategy probably won't work for record fields
+        let prefix = document.symbol_at(position)?;
+        let completions = document.completion_items(position, prefix)?;
+
+        Some(CompletionResponse::Array(completions))
     }
 }

@@ -4,7 +4,11 @@ use std::{
 };
 
 use bumpalo::Bump;
-use roc_can::{abilities::AbilitiesStore, expr::Declarations};
+use roc_can::{
+    abilities::AbilitiesStore,
+    expr::Declarations,
+    traverse::{get_completions, DeclarationInfo, FoundDeclaration},
+};
 use roc_collections::MutMap;
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -14,8 +18,9 @@ use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::subs::Subs;
 use tower_lsp::lsp_types::{
-    Diagnostic, GotoDefinitionResponse, Hover, HoverContents, Location, MarkedString, Position,
-    Range, SemanticTokenType, SemanticTokens, SemanticTokensResult, TextEdit, Url,
+    CompletionItem, CompletionItemKind, Diagnostic, GotoDefinitionResponse, Hover, HoverContents,
+    Location, MarkedString, Position, Range, SemanticTokenType, SemanticTokens,
+    SemanticTokensResult, TextEdit, Url,
 };
 
 use crate::convert::{
@@ -350,6 +355,54 @@ impl AnalyzedDocument {
             contents: HoverContents::Scalar(MarkedString::String(type_str)),
             range: Some(range),
         })
+    }
+    pub fn completion_items(
+        &mut self,
+        position: Position,
+        symbol_prefix: Symbol,
+    ) -> Option<Vec<CompletionItem>> {
+        let line_info = self.line_info();
+        let position = position.to_roc_position(&line_info);
+        let AnalyzedModule {
+            declarations,
+            interns,
+            ..
+        } = self.module_mut()?;
+        let symbol_prefix = symbol_prefix.as_str(interns).to_string();
+
+        let completions = get_completions(&symbol_prefix, position, declarations, interns);
+        let completion_items: Vec<CompletionItem> = completions
+            .iter()
+            .flat_map(|comp| match comp {
+                FoundDeclaration::Decl(dec) => match dec {
+                    DeclarationInfo::Value { loc_symbol, .. } => vec![CompletionItem {
+                        label: loc_symbol.value.as_str(interns).to_string(),
+                        kind: Some(CompletionItemKind::VARIABLE),
+                        ..Default::default()
+                    }],
+                    DeclarationInfo::Function { loc_symbol, .. } => vec![CompletionItem {
+                        label: loc_symbol.value.as_str(interns).to_string(),
+                        kind: Some(CompletionItemKind::FUNCTION),
+                        ..Default::default()
+                    }],
+                    DeclarationInfo::Destructure { .. } => {
+                        //TODO
+                        vec![]
+                    }
+                    DeclarationInfo::Expectation { .. } => vec![],
+                },
+                FoundDeclaration::Def(def) => def
+                    .pattern_vars
+                    .iter()
+                    .map(|(symbol, _)| CompletionItem {
+                        label: symbol.as_str(interns).to_string(),
+                        kind: Some(CompletionItemKind::FUNCTION),
+                        ..Default::default()
+                    })
+                    .collect(),
+            })
+            .collect();
+        Some(completion_items)
     }
 
     pub fn definition(&self, symbol: Symbol) -> Option<GotoDefinitionResponse> {

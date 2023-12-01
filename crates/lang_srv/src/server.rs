@@ -61,13 +61,22 @@ impl RocLs {
                 range: None,
                 full: Some(SemanticTokensFullOptions::Bool(true)),
             });
-
+        let completion_provider = CompletionOptions {
+            resolve_provider: Some(true),
+            trigger_characters: Some(vec![".".to_string()]),
+            //TODO: what is this?
+            all_commit_characters: None,
+            work_done_progress_options: WorkDoneProgressOptions {
+                work_done_progress: None,
+            },
+        };
         ServerCapabilities {
             text_document_sync: Some(text_document_sync),
             hover_provider: Some(hover_provider),
             definition_provider: Some(OneOf::Right(definition_provider)),
             document_formatting_provider: Some(OneOf::Right(document_formatting_provider)),
             semantic_tokens_provider: Some(semantic_tokens_provider),
+            completion_provider: Some(completion_provider),
             ..ServerCapabilities::default()
         }
     }
@@ -189,6 +198,33 @@ impl LanguageServer for RocLs {
 
         panic_wrapper(|| self.registry().semantic_tokens(&text_document.uri))
     }
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let doc = params.text_document_position;
+
+        panic_wrapper(|| {
+            self.registry()
+                .completion_items(&doc.text_document.uri, doc.position)
+        })
+    }
+    // async fn completion(
+    //     &self,
+    //     params: GotoDefinitionParams,
+    // ) -> Result<Option<GotoDefinitionResponse>> {
+    //     let GotoDefinitionParams {
+    //         text_document_position_params:
+    //             TextDocumentPositionParams {
+    //                 text_document,
+    //                 position,
+    //             },
+    //         work_done_progress_params: _,
+    //         partial_result_params: _,
+    //     } = params;
+
+    //     panic_wrapper(|| {
+    //         self.registry()
+    //             .goto_definition(&text_document.uri, position)
+    //     })
+    // }
 }
 
 fn panic_wrapper<T>(f: impl FnOnce() -> Option<T> + std::panic::UnwindSafe) -> Result<Option<T>> {
