@@ -70,6 +70,7 @@ pub struct Instance<'a, I: ImportDispatcher> {
 
 impl<'a, I: ImportDispatcher> Instance<'a, I> {
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn new<G>(
         arena: &'a Bump,
         memory_pages: u32,
