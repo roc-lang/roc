@@ -24,11 +24,15 @@ use tower_lsp::lsp_types::{
     SemanticTokensResult, TextEdit, Url,
 };
 
-use crate::convert::{
-    diag::{IntoLspDiagnostic, ProblemFmt},
-    ToRange, ToRocPosition,
+use crate::{
+    analysis::completion::Completion,
+    convert::{
+        diag::{IntoLspDiagnostic, ProblemFmt},
+        ToRange, ToRocPosition,
+    },
 };
 
+mod completion;
 mod parse_ast;
 mod semantic_tokens;
 mod tokens;
@@ -441,67 +445,28 @@ impl AnalyzedDocument {
         let line_info = self.line_info();
         let position = position.to_roc_position(&line_info);
         let AnalyzedModule {
-            declarations,
+            module_id,
             interns,
             subs,
-            module_id,
+            declarations,
             ..
         } = self.module_mut()?;
         writeln!(&mut stderr, "prefix is: {:?}", symbol_prefix);
 
-        let completions = get_completions(&symbol_prefix, position, declarations, interns);
-        let completion_items: Vec<CompletionItem> = completions
-            .iter()
-            .flat_map(|comp| match comp {
-                FoundDeclaration::Decl(dec) => match dec {
-                    DeclarationInfo::Value {
-                        loc_symbol,
-                        expr_var,
-                        ..
-                    } => {
-                        let type_str = format_var_type(expr_var.clone(), subs, module_id, interns);
-                        vec![CompletionItem {
-                            label: loc_symbol.value.as_str(interns).to_string(),
-                            detail: Some(type_str),
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            ..Default::default()
-                        }]
-                    }
-                    DeclarationInfo::Function {
-                        loc_symbol,
-                        expr_var,
-                        ..
-                    } => {
-                        let type_str = format_var_type(expr_var.clone(), subs, module_id, interns);
-                        vec![CompletionItem {
-                            label: loc_symbol.value.as_str(interns).to_string(),
-                            detail: Some(type_str),
-                            kind: Some(CompletionItemKind::FUNCTION),
-                            ..Default::default()
-                        }]
-                    }
-                    DeclarationInfo::Destructure { .. } => {
-                        //TODO
-                        vec![]
-                    }
-                    DeclarationInfo::Expectation { .. } => vec![],
-                },
-                FoundDeclaration::Def(def) => def
-                    .pattern_vars
-                    .iter()
-                    .map(|(symbol, var)| {
-                        let type_str = format_var_type(var.clone(), subs, module_id, interns);
-                        CompletionItem {
-                            label: symbol.as_str(interns).to_string(),
-                            detail: Some(type_str),
-                            kind: Some(CompletionItemKind::FUNCTION),
-
-                            ..Default::default()
-                        }
-                    })
-                    .collect(),
-            })
-            .collect();
-        Some(completion_items)
+        //TODO: to impliment record destructuring and other complex patterns i should pass in the completion item maker into this call and call it directly from the visitor
+        let mut completion = Completion {
+            subs,
+            interns,
+            module_id,
+            prefix: symbol_prefix,
+        };
+        let completions = get_completions(
+            position,
+            &declarations,
+            &mut completion,
+            Completion::maybe_complete,
+        );
+        writeln!(&mut stderr, "got completions: ");
+        Some(completions.into_iter().flatten().collect())
     }
 }
