@@ -1,5 +1,6 @@
 mod frame;
 mod instance;
+mod tests;
 mod value_store;
 pub mod wasi;
 
