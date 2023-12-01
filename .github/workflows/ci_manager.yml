@@ -74,7 +74,7 @@ jobs:
         if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/benchmarks.yml
 
-    finish-full:
+    ran-full:
         runs-on: ubuntu-22.04
         needs: [
                 start-nix-linux-x86-64-tests,
@@ -90,10 +90,23 @@ jobs:
         steps:
             - run: echo "all workflows succeeded!"
 
-    finish-none:
+    ran-none:
         runs-on: ubuntu-22.04
         needs: [check-changes]
         if: needs.check-changes.outputs.run_tests == 'none'
         steps:
             - run: echo "Only non-code files changed. CI manager did not run any workflows."
+
+    # we need a single end job for the required checks under branch protection rules
+    finish:
+      runs-on: ubuntu-22.04
+      if: >
+        always() &&
+        (
+          needs.finish-full.result == 'success' || needs.finish-none.result == 'success'
+        )
+      steps:
+          - run: echo "Workflow succeeded :)"
+
+        
   
