@@ -269,7 +269,7 @@ pub enum Expr {
     },
 
     Dbg {
-        loc_condition: Box<Loc<Expr>>,
+        loc_message: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
         variable: Variable,
         symbol: Symbol,
@@ -1062,10 +1062,10 @@ pub fn canonicalize_expr<'a>(
             })
         }
         ast::Expr::RecordBuilder(_) => {
-            unreachable!("RecordBuilder should have been desugared by now")
+            internal_error!("RecordBuilder should have been desugared by now")
         }
         ast::Expr::Backpassing(_, _, _) => {
-            unreachable!("Backpassing should have been desugared by now")
+            internal_error!("Backpassing should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
@@ -1246,11 +1246,14 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::Dbg(condition, continuation) => {
+        ast::Expr::Dbg(_, _) => {
+            internal_error!("Dbg should have been desugared by now")
+        }
+        ast::Expr::LowLevelDbg(message, continuation) => {
             let mut output = Output::default();
 
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let (loc_message, output1) =
+                canonicalize_expr(env, var_store, scope, message.region, &message.value);
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1263,17 +1266,17 @@ pub fn canonicalize_expr<'a>(
             output.union(output1);
             output.union(output2);
 
-            // the symbol is used to bind the condition `x = condition`, and identify this `dbg`.
+            // the symbol is used to bind the message `x = message`, and identify this `dbg`.
             // That would cause issues if we dbg a variable, like `dbg y`, because in the IR we
             // cannot alias variables. Hence, we make the dbg use that same variable `y`
-            let symbol = match &loc_condition.value {
+            let symbol = match &loc_message.value {
                 Expr::Var(symbol, _) => *symbol,
                 _ => scope.gen_unique_symbol(),
             };
 
             (
                 Dbg {
-                    loc_condition: Box::new(loc_condition),
+                    loc_message: Box::new(loc_message),
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
                     symbol,
@@ -2094,14 +2097,14 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Dbg {
-            loc_condition,
+            loc_message,
             loc_continuation,
             variable,
             symbol,
         } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
+            let loc_message = Loc {
+                region: loc_message.region,
+                value: inline_calls(var_store, loc_message.value),
             };
 
             let loc_continuation = Loc {
@@ -2110,7 +2113,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             };
 
             Dbg {
-                loc_condition: Box::new(loc_condition),
+                loc_message: Box::new(loc_message),
                 loc_continuation: Box::new(loc_continuation),
                 variable,
                 symbol,
@@ -2338,10 +2341,10 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                             loc_answer.value
                         }
                         Some(_) => {
-                            unreachable!("Tried to inline a non-function");
+                            internal_error!("Tried to inline a non-function");
                         }
                         None => {
-                            unreachable!(
+                            internal_error!(
                                 "Tried to inline a builtin that wasn't registered: {:?}",
                                 symbol
                             );
@@ -2395,6 +2398,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedClosure => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::Dbg(_, _)
+        | ast::Expr::LowLevelDbg(_, _)
         | ast::Expr::Defs(_, _)
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)
@@ -3328,7 +3332,7 @@ impl crate::traverse::Visitor for ExpectCollector {
                     .insert(loc_condition.region, lookups_in_cond.to_vec());
             }
             Expr::Dbg {
-                loc_condition,
+                loc_message,
                 variable,
                 symbol,
                 ..
@@ -3336,7 +3340,7 @@ impl crate::traverse::Visitor for ExpectCollector {
                 let lookup = DbgLookup {
                     symbol: *symbol,
                     var: *variable,
-                    region: loc_condition.region,
+                    region: loc_message.region,
                     ability_info: None,
                 };
 

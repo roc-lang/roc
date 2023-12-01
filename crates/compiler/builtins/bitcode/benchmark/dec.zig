@@ -11,10 +11,14 @@ fn roc_alloc(_: usize, _: u32) callconv(.C) ?*anyopaque {
 fn roc_panic(_: *anyopaque, _: u32) callconv(.C) void {
     @panic("Not needed for dec benchmark");
 }
+fn roc_dbg(_: *anyopaque, _: *anyopaque) callconv(.C) void {
+    @panic("Not needed for dec benchmark");
+}
 
 comptime {
     @export(roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
     @export(roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
+    @export(roc_dbg, .{ .name = "roc_dbg", .linkage = .Strong });
 }
 
 var timer: Timer = undefined;
@@ -100,16 +104,16 @@ pub fn main() !void {
     const f64Atan = try avg_runs(f64, n, atanF64, f1);
 
     try stdout.print("\n\nDec/F64:\n", .{});
-    try stdout.print("addition:       {d:0.2}\n", .{@intToFloat(f64, decAdd) / @intToFloat(f64, f64Add)});
-    try stdout.print("subtraction:    {d:0.2}\n", .{@intToFloat(f64, decSub) / @intToFloat(f64, f64Sub)});
-    try stdout.print("multiplication: {d:0.2}\n", .{@intToFloat(f64, decMul) / @intToFloat(f64, f64Mul)});
-    try stdout.print("division:       {d:0.2}\n", .{@intToFloat(f64, decDiv) / @intToFloat(f64, f64Div)});
-    try stdout.print("sin:            {d:0.2}\n", .{@intToFloat(f64, decSin) / @intToFloat(f64, f64Sin)});
-    try stdout.print("cos:            {d:0.2}\n", .{@intToFloat(f64, decCos) / @intToFloat(f64, f64Cos)});
-    try stdout.print("tan:            {d:0.2}\n", .{@intToFloat(f64, decTan) / @intToFloat(f64, f64Tan)});
-    try stdout.print("asin:           {d:0.2}\n", .{@intToFloat(f64, decAsin) / @intToFloat(f64, f64Asin)});
-    try stdout.print("acos:           {d:0.2}\n", .{@intToFloat(f64, decAcos) / @intToFloat(f64, f64Acos)});
-    try stdout.print("atan:           {d:0.2}\n", .{@intToFloat(f64, decAtan) / @intToFloat(f64, f64Atan)});
+    try stdout.print("addition:       {d:0.2}\n", .{@as(f64, @floatFromInt(decAdd)) / @as(f64, @floatFromInt(f64Add))});
+    try stdout.print("subtraction:    {d:0.2}\n", .{@as(f64, @floatFromInt(decSub)) / @as(f64, @floatFromInt(f64Sub))});
+    try stdout.print("multiplication: {d:0.2}\n", .{@as(f64, @floatFromInt(decMul)) / @as(f64, @floatFromInt(f64Mul))});
+    try stdout.print("division:       {d:0.2}\n", .{@as(f64, @floatFromInt(decDiv)) / @as(f64, @floatFromInt(f64Div))});
+    try stdout.print("sin:            {d:0.2}\n", .{@as(f64, @floatFromInt(decSin)) / @as(f64, @floatFromInt(f64Sin))});
+    try stdout.print("cos:            {d:0.2}\n", .{@as(f64, @floatFromInt(decCos)) / @as(f64, @floatFromInt(f64Cos))});
+    try stdout.print("tan:            {d:0.2}\n", .{@as(f64, @floatFromInt(decTan)) / @as(f64, @floatFromInt(f64Tan))});
+    try stdout.print("asin:           {d:0.2}\n", .{@as(f64, @floatFromInt(decAsin)) / @as(f64, @floatFromInt(f64Asin))});
+    try stdout.print("acos:           {d:0.2}\n", .{@as(f64, @floatFromInt(decAcos)) / @as(f64, @floatFromInt(f64Acos))});
+    try stdout.print("atan:           {d:0.2}\n", .{@as(f64, @floatFromInt(decAtan)) / @as(f64, @floatFromInt(f64Atan))});
 }
 
 fn avg_runs(comptime T: type, comptime n: usize, comptime op: fn (T, T) T, v: T) !u64 {

@@ -160,6 +160,9 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             }
         }
 
+        // TODO: generate a valid impl of dbg here.
+        unreachable_function(env, "roc_dbg");
+
         match env.target_info.operating_system {
             roc_target::OperatingSystem::Windows => {
                 // We don't need these functions on Windows

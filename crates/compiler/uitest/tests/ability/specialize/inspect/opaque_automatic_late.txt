@@ -1,0 +1,61 @@
+# +emit:mono
+app "test" provides [main] to "./platform"
+
+Op := {}
+
+late = \a ->
+    dbg a
+    1
+
+main =
+    late (@Op {})
+
+# -emit:mono
+procedure Inspect.251 (Inspect.252):
+    let Inspect.317 : Str = "<opaque>";
+    let Inspect.316 : Str = CallByName Inspect.61 Inspect.252 Inspect.317;
+    ret Inspect.316;
+
+procedure Inspect.30 (Inspect.147):
+    ret Inspect.147;
+
+procedure Inspect.35 (Inspect.300):
+    ret Inspect.300;
+
+procedure Inspect.36 (Inspect.304):
+    let Inspect.311 : Str = "";
+    ret Inspect.311;
+
+procedure Inspect.45 (Inspect.302):
+    let Inspect.314 : {} = Struct {};
+    let Inspect.313 : {} = CallByName Inspect.30 Inspect.314;
+    ret Inspect.313;
+
+procedure Inspect.5 (Inspect.150):
+    let Inspect.312 : {} = CallByName Inspect.45 Inspect.150;
+    let Inspect.309 : {} = Struct {};
+    let Inspect.308 : Str = CallByName Inspect.36 Inspect.309;
+    let Inspect.307 : Str = CallByName Inspect.251 Inspect.308;
+    ret Inspect.307;
+
+procedure Inspect.61 (Inspect.303, Inspect.298):
+    let Inspect.319 : Str = CallByName Str.3 Inspect.303 Inspect.298;
+    dec Inspect.298;
+    ret Inspect.319;
+
+procedure Str.3 (#Attr.2, #Attr.3):
+    let Str.292 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.292;
+
+procedure Test.2 (Test.3):
+    let Test.8 : Str = CallByName Inspect.5 Test.3;
+    let Test.4 : Str = CallByName Inspect.35 Test.8;
+    dbg Test.4;
+    dec Test.4;
+    let Test.7 : I64 = 1i64;
+    ret Test.7;
+
+procedure Test.0 ():
+    let Test.6 : {} = Struct {};
+    let Test.5 : I64 = CallByName Test.2 Test.6;
+    ret Test.5;
