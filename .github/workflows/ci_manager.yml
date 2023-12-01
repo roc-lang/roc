@@ -100,6 +100,7 @@ jobs:
     # we need a single end job for the required checks under branch protection rules
     finish:
       runs-on: ubuntu-22.04
+      needs: [ran-full, ran-none]
       if: >
         always() &&
         (
