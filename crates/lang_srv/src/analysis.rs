@@ -5,11 +5,7 @@ use std::{
 };
 
 use bumpalo::Bump;
-use roc_can::{
-    abilities::AbilitiesStore,
-    expr::Declarations,
-    traverse::{get_completions, DeclarationInfo, FoundDeclaration},
-};
+use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::MutMap;
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
@@ -25,7 +21,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::{
-    analysis::completion::Completion,
+    analysis::completion::get_completions,
     convert::{
         diag::{IntoLspDiagnostic, ProblemFmt},
         ToRange, ToRocPosition,
@@ -454,19 +450,15 @@ impl AnalyzedDocument {
         writeln!(&mut stderr, "prefix is: {:?}", symbol_prefix);
 
         //TODO: to impliment record destructuring and other complex patterns i should pass in the completion item maker into this call and call it directly from the visitor
-        let mut completion = Completion {
-            subs,
-            interns,
-            module_id,
-            prefix: symbol_prefix,
-        };
         let completions = get_completions(
             position,
-            &declarations,
-            &mut completion,
-            Completion::maybe_complete,
+            declarations,
+            subs,
+            symbol_prefix,
+            interns,
+            module_id,
         );
         writeln!(&mut stderr, "got completions: ");
-        Some(completions.into_iter().flatten().collect())
+        Some(completions)
     }
 }

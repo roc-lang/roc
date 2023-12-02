@@ -169,7 +169,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
     }
 }
 
-fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
+pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
     use DeclarationInfo::*;
 
     match decl {
@@ -967,75 +967,4 @@ pub fn find_declaration(symbol: Symbol, decls: &'_ Declarations) -> Option<Found
             walk_def(self, def)
         }
     }
-}
-struct CompletionVisitor<'a, U, T> {
-    position: Position,
-    found_decls: Vec<T>,
-    state: &'a mut U,
-    processor: fn(&mut U, FoundDeclaration) -> T,
-}
-
-impl<T, U> Visitor for CompletionVisitor<'_, U, T> {
-    fn should_visit(&mut self, region: Region) -> bool {
-        region.contains_pos(self.position)
-    }
-
-    // fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
-    //     if region.contains_pos(self.position) {
-    //         // self.region_typ = Some((region, var));
-
-    //         walk_expr(self, expr, var);
-    //     }
-    // }
-
-    // fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
-    //     if region.contains_pos(self.position) {
-    //         // if let Some(var) = opt_var {
-    //         //     self.region_typ = Some((region, var));
-    //         // }
-
-    //         walk_pattern(self, pat);
-    //     }
-    // }
-    fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
-        match decl {
-            DeclarationInfo::Value { .. }
-            | DeclarationInfo::Function { .. }
-            | DeclarationInfo::Destructure { .. } => {
-                let res = (self.processor)(
-                    self.state,
-                    FoundDeclaration::Decl(unsafe { std::mem::transmute(decl.clone()) }),
-                );
-                self.found_decls.push(res);
-                walk_decl(self, decl);
-            }
-            _ => {
-                walk_decl(self, decl);
-            }
-        }
-    }
-
-    fn visit_def(&mut self, def: &Def) {
-        let res = ((self.processor)(
-            self.state,
-            FoundDeclaration::Def(unsafe { std::mem::transmute(def) }),
-        ));
-        self.found_decls.push(res);
-        walk_def(self, def);
-    }
-}
-pub fn get_completions<'a, U, T>(
-    position: Position,
-    decls: &'a Declarations,
-    state: &mut U,
-    processor: fn(&mut U, FoundDeclaration) -> T,
-) -> Vec<T> {
-    let mut visitor = CompletionVisitor {
-        position,
-        found_decls: Vec::new(),
-        state,
-        processor,
-    };
-    visitor.visit_decls(decls);
-    visitor.found_decls
 }
