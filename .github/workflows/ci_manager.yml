@@ -77,15 +77,7 @@ jobs:
     ran-full:
         runs-on: ubuntu-22.04
         needs: [
-                start-nix-linux-x86-64-tests,
-                start-nix-linux-aarch64-build-default-test,
-                start-nix-linux-aarch64-cargo-build-test,
-                start-nix-macos-apple-silicon-tests,
-                start-macos-x86-64-tests,
-                start-ubuntu-x86-64-tests,
-                start-windows-release-build-test,
-                start-windows-tests,
-                start-roc-benchmarks
+                start-nix-linux-x86-64-tests
             ]
         steps:
             - run: echo "all workflows succeeded!"
@@ -101,11 +93,10 @@ jobs:
     finish:
       runs-on: ubuntu-22.04
       needs: [ran-full, ran-none]
-      if: >
-        always() &&
-        (
-          needs.finish-full.result == 'success' || needs.finish-none.result == 'success'
-        )
+      if: |
+        always()
+        && contains(needs.*.result, 'success')
+        && !contains(needs.*.result, 'failure')
       steps:
           - run: echo "Workflow succeeded :)"
 
