@@ -562,11 +562,11 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [#UserApp] 42
-                [#UserApp] "Fjoer en ferdjer frieten oan dyn geve lea"
-                [#UserApp] "abc"
-                [#UserApp] 10
-                [#UserApp] (A (B C))
+                [<ignored for tests>:18] x = 42
+                [<ignored for tests>:19] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:12] x = "abc"
+                [<ignored for tests>:12] x = 10
+                [<ignored for tests>:12] x = (A (B C))
                 Program finished!
                 "#
             ),
