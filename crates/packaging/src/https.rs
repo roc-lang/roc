@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read},
+    io::{self, Read, Write},
     path::Path,
 };
 
@@ -275,9 +275,12 @@ pub fn download_and_hash(
         Encoding::new(content_encoding, url)?
     };
 
+    let content_length = resp.content_length().map(|n| n as usize);
+
     // Use .take to prevent a malicious server from sending back bytes
     // until system resources are exhausted!
-    decompress_into(dest_dir, encoding, resp.take(max_download_bytes))
+    let resp = ProgressReporter::new(resp.take(max_download_bytes), content_length);
+    decompress_into(dest_dir, encoding, resp)
 }
 
 /// The content encodings we support
@@ -403,5 +406,50 @@ impl<R: Read> Read for HashReader<R> {
         self.hasher.update(&buf[0..bytes_read]);
 
         Ok(bytes_read)
+    }
+}
+
+/// Prints download progress to stdout
+struct ProgressReporter<R: Read> {
+    read: usize,
+    total: Option<usize>,
+    reader: R,
+}
+
+impl<R: Read> ProgressReporter<R> {
+    fn new(reader: R, total: Option<usize>) -> Self {
+        ProgressReporter {
+            read: 0,
+            total,
+            reader,
+        }
+    }
+}
+
+impl<R: Read> Read for ProgressReporter<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let size = self.reader.read(buf)?;
+
+        self.read += size;
+
+        if let Some(total) = self.total {
+            eprint!(
+                "\u{001b}[2K\u{001b}[G[{:.1} / {:.1} MB]",
+                self.read as f32 / 1_000_000.0,
+                total as f32 / 1_000_000.0,
+            );
+        } else {
+            eprint!(
+                "\u{001b}[2K\u{001b}[G[{:.1} MB]",
+                self.read as f32 / 1_000_000.0,
+            );
+        }
+        std::io::stderr().flush()?;
+
+        if self.total.is_some_and(|total| self.read >= total) {
+            eprintln!();
+        }
+
+        Ok(size)
     }
 }
