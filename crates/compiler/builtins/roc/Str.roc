@@ -880,8 +880,11 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
 ## state for each byte.
 ##
 ## ```
-## result = walkUtf8 "hello, world!" "" (\state, byte -> state ++ String.fromCodePoint byte)
-## expect result == Ok "hello, world!"
+## sumOfUtf8Bytes =
+##     Str.walkUtf8 "Hello, World!" 0 \total, byte ->
+##         total + byte
+##
+## expect sumOfUtf8Bytes == 105
 ## ```
 walkUtf8 : Str, state, (state, U8 -> state) -> state
 walkUtf8 = \str, initial, step ->
