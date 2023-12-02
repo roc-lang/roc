@@ -78,9 +78,8 @@ mod glue_cli_run {
 
     fixtures! {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
-        // TODO: re-enable this test. Currently it is flaking on macos x86-64 with a bad exit code.
-        // nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
-        // enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
+        nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
+        enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
         single_tag_union:"single-tag-union" => indoc!(r#"
             tag_union was: SingleTagUnion::OneTag
         "#),
