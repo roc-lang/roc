@@ -77,7 +77,15 @@ jobs:
     ran-full:
         runs-on: ubuntu-22.04
         needs: [
-                start-nix-linux-x86-64-tests
+                start-nix-linux-x86-64-tests,
+                start-nix-linux-aarch64-build-default-test,
+                start-nix-linux-aarch64-cargo-build-test,
+                start-nix-macos-apple-silicon-tests,
+                start-macos-x86-64-tests,
+                start-ubuntu-x86-64-tests,
+                start-windows-release-build-test,
+                start-windows-tests,
+                start-roc-benchmarks
             ]
         steps:
             - run: echo "all workflows succeeded!"
