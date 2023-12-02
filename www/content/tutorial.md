@@ -165,7 +165,7 @@ Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1412,7 +1412,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1424,7 +1424,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1523,7 +1523,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1543,28 +1543,36 @@ When we set `main` to be a `Task`, the task will get run when we run our program
 
 `Task` has two type parameters: the type of value it produces when it finishes running, and any errors that might happen when running it. `Stdout.line` has the type `Task {} *` because it doesn't produce any values when it finishes (hence the `{}`) and there aren't any errors that can happen when it runs (hence the `*`).
 
-In contrast, `Stdin.line` produces a `Str` when it finishes reading from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>). That `Str` is reflected in its type:
-
-```roc
-Stdin.line : Task Str *
+We'll add a new `Task` that is the opposite of `Stdout.line`, `readLine`:
 ```
+readLine : Task.Task Str *
+readLine =
+    Task.map
+        Stdin.line
+        \readInput ->
+            when readInput is
+                Input str -> str
+                End -> ""
+```
+
+`readLine` produces a `Str` based on the data it got from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>). 
 
 Let's change `main` to read a line from `stdin`, and then print it back out again:
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
 main =
-    Task.await Stdin.line \text ->
+    Task.await readLine \text ->
         Stdout.line "You just entered: \(text)"
 ```
 
 If you run this program, at first it won't do anything. It's waiting for you to type something in and press Enter! Once you do, it should print back out what you entered.
 
-The `Task.await` function combines two tasks into one bigger `Task` which first runs one of the given tasks and then the other. In this case, it's combining a `Stdin.line` task with a `Stdout.line` task into one bigger `Task`, and then setting `main` to be that bigger task.
+The `Task.await` function combines two tasks into one bigger `Task` which first runs one of the given tasks and then the other. In this case, it's combining a `readLine` task with a `Stdout.line` task into one bigger `Task`, and then setting `main` to be that bigger task.
 
 The type of `Task.await` is:
 
@@ -1586,7 +1594,7 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 ```roc
 main =
     Task.await (Stdout.line "Type something press Enter:") \_ ->
-        Task.await Stdin.line \text ->
+        Task.await readLine \text ->
             Stdout.line "You just entered: \(text)"
 ```
 
@@ -1594,13 +1602,13 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
 main =
     await (Stdout.line "Type something press Enter:") \_ ->
-        await Stdin.line \text ->
+        await readLine \text ->
             Stdout.line "You just entered: \(text)"
 ```
 
@@ -1613,7 +1621,7 @@ Speaking of calling `await` repeatedly, if we keep calling it more and more on t
 ```roc
 main =
     _ <- await (Stdout.line "Type something press Enter:")
-    text <- await Stdin.line
+    text <- await readLine
 
     Stdout.line "You just entered: \(text)"
 ```
@@ -1639,21 +1647,21 @@ It may not look like it, but this code is defining an anonymous function! You mi
 
 These two anonymous functions are the same, just defined using different syntax.
 
-The reason the `<-` syntax is called _backpassing_ is because it both defines a function and passes that function _back_ as an argument to whatever comes after the `<-` (which in this case is `await Stdin.line`).
+The reason the `<-` syntax is called _backpassing_ is because it both defines a function and passes that function _back_ as an argument to whatever comes after the `<-` (which in this case is `await readLine`).
 
 Let's look at these two complete expressions side by side. They are both saying exactly the same thing, with different syntax!
 
 Here's the original:
 
 ```roc
-await Stdin.line \text ->
+await readLine \text ->
     Stdout.line "You just entered: \(text)"
 ```
 
 And here's the equivalent expression with backpassing syntax:
 
 ```roc
-text <- await Stdin.line
+text <- await readLine
 
 Stdout.line "You just entered: \(text)"
 ```
@@ -1662,7 +1670,7 @@ Here's the other function we're defining with backpassing:
 
 ```roc
 _ <-
-text <- await Stdin.line
+text <- await readLine
 
 Stdout.line "You just entered: \(text)"
 ```
@@ -1672,7 +1680,7 @@ We could also have written that function this way if we preferred:
 ```roc
 _ <-
 
-await Stdin.line \text ->
+await readLine \text ->
     Stdout.line "You just entered: \(text)"
 ```
 
@@ -1683,7 +1691,7 @@ That said, the typical style in which this `task` would be written in Roc is usi
 ```roc
 main =
     _ <- await (Stdout.line "Type something press Enter:")
-    text <- await Stdin.line
+    text <- await readLine
 
     Stdout.line "You just entered: \(text)"
 ```
@@ -1691,8 +1699,8 @@ main =
 This way, it reads like a series of instructions:
 
 1.  First, run the `Stdout.line` task and await its completion. Ignore its output (hence the underscore in `_ <-`)
-2.  Next, run the `Stdin.line` task and await its completion. Name its output `text`.
-3.  Finally, run the `Stdout.line` task again, using the `text` value we got from the `Stdin.line` effect.
+2.  Next, run the `readLine` task and await its completion. Name its output `text`.
+3.  Finally, run the `Stdout.line` task again, using the `text` value we got from the `readLine` effect.
 
 Some important things to note about backpassing and `await`:
 
