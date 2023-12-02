@@ -302,7 +302,7 @@ pub enum Expr<'a> {
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     // This form of debug is a desugared call to roc_dbg
-    LowLevelDbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+    LowLevelDbg(&'a str, &'a str, &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -1537,7 +1537,7 @@ impl<'a> Malformed for Expr<'a> {
             Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
             Expect(condition, continuation) |
             Dbg(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
-            LowLevelDbg(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            LowLevelDbg(_, _, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),

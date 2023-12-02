@@ -5264,6 +5264,8 @@ fn canonicalize_and_constrain<'a>(
 
     let ParsedModule {
         module_id,
+        module_path,
+        src,
         header_type,
         exposed_ident_ids,
         parsed_defs,
@@ -5286,6 +5288,8 @@ fn canonicalize_and_constrain<'a>(
         parsed_defs,
         &header_type,
         module_id,
+        &*arena.alloc(module_path.to_string_lossy()),
+        src,
         module_ids,
         exposed_ident_ids,
         &dep_idents,

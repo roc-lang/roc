@@ -62,7 +62,7 @@ impl<'a> Formattable for Expr<'a> {
                 condition.is_multiline() || continuation.is_multiline()
             }
             Dbg(condition, continuation) => condition.is_multiline() || continuation.is_multiline(),
-            LowLevelDbg(_, _) => unreachable!(
+            LowLevelDbg(_, _, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
 
@@ -438,7 +438,7 @@ impl<'a> Formattable for Expr<'a> {
             Dbg(condition, continuation) => {
                 fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
             }
-            LowLevelDbg(_, _) => unreachable!(
+            LowLevelDbg(_, _, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
             If(branches, final_else) => {

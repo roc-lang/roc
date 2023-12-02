@@ -689,6 +689,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             })
         }
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -703,6 +705,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             );
 
             arena.alloc(Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: newer_remainder,
