@@ -24,8 +24,8 @@ void roc_panic(void* ptr, unsigned int alignment) {
   exit(1);
 }
 
-void roc_dbg(char* loc, char* msg) {
-  fprintf(stderr, "[%s] %s\n", loc, msg);
+void roc_dbg(char* loc, char* src, char* msg) {
+  fprintf(stderr, "[%s] %s = %s\n", loc, src, msg);
 }
 
 void* roc_memmove(void* dest, const void* src, size_t n){

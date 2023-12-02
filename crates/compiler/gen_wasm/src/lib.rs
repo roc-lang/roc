@@ -290,7 +290,7 @@ mod dummy_platform_functions {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn roc_dbg(_loc: *mut c_void, _msg: *mut c_void) {
+    pub unsafe extern "C" fn roc_dbg(_loc: *mut c_void, _src: *mut c_void, _msg: *mut c_void) {
         unimplemented!("It is not valid to call roc dbg from within the compiler. Please use the \"platform\" feature if this is a platform.")
     }
 
