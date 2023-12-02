@@ -371,6 +371,18 @@ fn start_phase<'a>(
                         checkmate: _,
                 } = typechecked;
 
+                let our_exposed_types = state
+                    .exposed_types
+                    .get(&module_id)
+                    .unwrap_or_else(|| internal_error!("Exposed types for {:?} missing", module_id))
+                    .clone();
+
+                state.world_abilities.insert(
+                    module_id,
+                    abilities_store.clone(),
+                    our_exposed_types.exposed_types_storage_subs,
+                );
+
                 let mut imported_module_thunks = bumpalo::collections::Vec::new_in(arena);
 
                 if let Some(imports) = state.module_cache.imports.get(&module_id) {
@@ -397,7 +409,7 @@ fn start_phase<'a>(
                     decls,
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
-                    abilities_store,
+                    world_abilities: state.world_abilities.clone_ref(),
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
@@ -457,23 +469,8 @@ fn start_phase<'a>(
                         procs_base,
                         layout_cache,
                         module_timing,
-                        abilities_store,
                         expectations,
                     } = found_specializations;
-                    let our_exposed_types = state
-                        .exposed_types
-                        .get(&module_id)
-                        .unwrap_or_else(|| {
-                            internal_error!("Exposed types for {:?} missing", module_id)
-                        })
-                        .clone();
-
-                    // Add our abilities to the world.
-                    state.world_abilities.insert(
-                        module_id,
-                        abilities_store,
-                        our_exposed_types.exposed_types_storage_subs,
-                    );
 
                     (
                         ident_ids,
@@ -598,7 +595,6 @@ enum Msg<'a> {
         procs_base: ProcsBase<'a>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
-        abilities_store: AbilitiesStore,
         toplevel_expects: ToplevelExpects,
         expectations: Option<Expectations>,
     },
@@ -906,7 +902,7 @@ enum BuildTask<'a> {
         decls: Declarations,
         exposed_to_host: ExposedToHost,
         exposed_by_module: ExposedByModule,
-        abilities_store: AbilitiesStore,
+        world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
         build_expects: bool,
@@ -2730,7 +2726,6 @@ fn update<'a>(
             ident_ids,
             layout_cache,
             module_timing,
-            abilities_store,
             toplevel_expects,
             expectations,
         } => {
@@ -2754,7 +2749,6 @@ fn update<'a>(
                 procs_base,
                 subs,
                 module_timing,
-                abilities_store,
                 expectations,
             };
 
@@ -5705,7 +5699,7 @@ fn build_pending_specializations<'a>(
     target_info: TargetInfo,
     exposed_to_host: ExposedToHost,
     exposed_by_module: &ExposedByModule,
-    abilities_store: AbilitiesStore,
+    world_abilities: WorldAbilities,
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
     build_expects: bool,
@@ -5738,7 +5732,7 @@ fn build_pending_specializations<'a>(
         // NB: for getting pending specializations the module view is enough because we only need
         // to know the types and abilities in our modules. Only for building *all* specializations
         // do we need a global view.
-        abilities: AbilitiesView::Module(&abilities_store),
+        abilities: AbilitiesView::World(&world_abilities),
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
@@ -6138,7 +6132,6 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs_base,
         module_timing,
-        abilities_store,
         toplevel_expects,
         expectations,
     }
@@ -6378,7 +6371,7 @@ fn run_task<'a>(
             solved_subs,
             imported_module_thunks,
             exposed_to_host,
-            abilities_store,
+            world_abilities,
             exposed_by_module,
             derived_module,
             expectations,
@@ -6395,7 +6388,7 @@ fn run_task<'a>(
             target_info,
             exposed_to_host,
             &exposed_by_module,
-            abilities_store,
+            world_abilities,
             derived_module,
             expectations,
             build_expects,
