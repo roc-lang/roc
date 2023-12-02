@@ -1251,7 +1251,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Dbg(_, _) => {
             internal_error!("Dbg should have been desugared by now")
         }
-        ast::Expr::LowLevelDbg(source_location, source, message, continuation) => {
+        ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
             let mut output = Output::default();
 
             let (loc_message, output1) =
@@ -2406,7 +2406,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedClosure => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::Dbg(_, _)
-        | ast::Expr::LowLevelDbg(_, _, _, _)
+        | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Defs(_, _)
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)

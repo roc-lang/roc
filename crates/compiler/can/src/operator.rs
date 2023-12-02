@@ -660,15 +660,17 @@ pub fn desugar_expr<'a>(
             // |> LowLevelDbg
             arena.alloc(Loc {
                 value: LowLevelDbg(
-                    arena.alloc(format!("{}:{}", module_path, line_col.line)),
-                    arena.alloc(dbg_src),
+                    arena.alloc((
+                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line)),
+                        &*arena.alloc_str(dbg_src),
+                    )),
                     dbg_str,
                     desugared_continuation,
                 ),
                 region: loc_expr.region,
             })
         }
-        LowLevelDbg(_, _, _, _) => unreachable!("Only exists after desugaring"),
+        LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
     }
 }
 
