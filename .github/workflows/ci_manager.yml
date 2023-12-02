@@ -97,6 +97,8 @@ jobs:
         always()
         && contains(needs.*.result, 'success')
         && !contains(needs.*.result, 'failure')
+        && !contains(needs.*.result, 'cancelled')
+        && !(needs.ran-full.result == 'skipped' && needs.ran-none.result == 'skipped')
       steps:
           - run: echo "Workflow succeeded :)"
 
