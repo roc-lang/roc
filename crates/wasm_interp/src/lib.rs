@@ -1,5 +1,8 @@
 mod frame;
 mod instance;
+#[cfg(test)]
+mod tests;
+
 mod value_store;
 pub mod wasi;
 
