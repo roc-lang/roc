@@ -67,6 +67,9 @@ void roc_panic(void *ptr, unsigned int panic_tag)
     abort();
 }
 
+// TODO: add a way to send dbg to js.
+void roc_debug(void* loc, void* msg) {}
+
 //--------------------------
 
 void *roc_memset(void *str, int c, size_t n)

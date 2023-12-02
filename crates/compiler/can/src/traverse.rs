@@ -387,11 +387,11 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::Dbg {
             variable,
-            loc_condition,
+            loc_message,
             loc_continuation,
             symbol: _,
         } => {
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, *variable);
+            visitor.visit_expr(&loc_message.value, loc_message.region, *variable);
             visitor.visit_expr(
                 &loc_continuation.value,
                 loc_continuation.region,

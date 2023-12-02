@@ -231,6 +231,7 @@ comptime {
 
 // Utils
 comptime {
+    exportUtilsFn(utils.test_dbg, "test_dbg");
     exportUtilsFn(utils.test_panic, "test_panic");
     exportUtilsFn(utils.increfRcPtrC, "incref_rc_ptr");
     exportUtilsFn(utils.decrefRcPtrC, "decref_rc_ptr");
@@ -249,7 +250,6 @@ comptime {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
         exportUtilsFn(expect.expectFailedStartSharedFile, "expect_failed_start_shared_file");
         exportUtilsFn(expect.notifyParentExpect, "notify_parent_expect");
-        exportUtilsFn(expect.notifyParentDbg, "notify_parent_dbg");
 
         // sets the buffer used for expect failures
         @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });

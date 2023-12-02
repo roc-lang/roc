@@ -54,7 +54,7 @@
           <div id="history-text" aria-live="polite"></div>
         </code>
         <div id="repl-prompt" role="presentation">»</div>
-        <textarea aria-label="Input Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Enter some Roc code here."></textarea>
+        <textarea aria-label="Input Roc code here, then press Enter to submit it to the REPL" rows="5" id="source-input" placeholder="Enter some Roc code here." spellcheck="false"></textarea>
     </div>
 </div>
 <script type="module" src="/site.js"></script>
@@ -144,6 +144,9 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
+    <li><a href="https://github.com/asteroidb612">Drew Lazzeri</a>
+    <li><a href="https://github.com/mrmizz">Alex Binaei</a>
+    <li><a href="https://github.com/jonomallanyk">Jono Mallanyk</a>
     <li><a href="https://github.com/chris-packett">Chris Packett</a></li>
     <li><a href="https://github.com/jamesbirtles">James Birtles</a></li>
     <li><a href="https://github.com/Ivo-Balbaert">Ivo Balbaert</a></li>

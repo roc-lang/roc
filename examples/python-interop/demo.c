@@ -27,6 +27,10 @@ __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
     PyErr_SetString(PyExc_RuntimeError, (char *)ptr);
 }
 
+void roc_dbg(char* loc, char* msg) {
+  fprintf(stderr, "[%s] %s\n", loc, msg);
+}
+
 void *roc_memset(void *str, int c, size_t n) { return memset(str, c, n); }
 
 // Reference counting

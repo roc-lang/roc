@@ -25,6 +25,7 @@ interface Set
         Dict.{ Dict },
         Num.{ Nat },
         Hash.{ Hash, Hasher },
+        Inspect.{ Inspect, Inspector, InspectFormatter },
     ]
 
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
@@ -36,6 +37,9 @@ Set k := Dict.Dict k {} where k implements Hash & Eq
         },
         Hash {
             hash: hashSet,
+        },
+        Inspect {
+            toInspector: toInspectorSet,
         },
     ]
 
@@ -52,6 +56,11 @@ isEq = \xs, ys ->
 
 hashSet : hasher, Set k -> hasher where k implements Hash & Eq, hasher implements Hasher
 hashSet = \hasher, @Set inner -> Hash.hash hasher inner
+
+toInspectorSet : Set k -> Inspector f where k implements Inspect & Hash & Eq, f implements InspectFormatter
+toInspectorSet = \set ->
+    fmt <- Inspect.custom
+    Inspect.apply (Inspect.set set walk Inspect.toInspector) fmt
 
 ## Creates a new empty `Set`.
 ## ```

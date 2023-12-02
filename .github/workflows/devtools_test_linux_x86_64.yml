@@ -1,11 +1,11 @@
 on:
-    pull_request:
+  pull_request:
   
 name: devtools nix files test - linux
 
 concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
     devtools-test-linux:

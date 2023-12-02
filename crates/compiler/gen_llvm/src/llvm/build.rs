@@ -897,26 +897,52 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let function = self.module.get_function("roc_panic").unwrap();
         let tag_id = self.context.i32_type().const_int(tag as u32 as u64, false);
 
-        let msg = match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => {
-                // we need to pass the message by reference, but we currently hold the value.
-                let alloca = env
-                    .builder
-                    .new_build_alloca(message.get_type(), "alloca_panic_msg");
-                env.builder.new_build_store(alloca, message);
-                alloca.into()
-            }
-            PtrWidth::Bytes8 => {
-                // string is already held by reference
-                message
-            }
-        };
+        let msg = self.string_to_arg(env, message);
 
         let call = self
             .builder
             .new_build_call(function, &[msg.into(), tag_id.into()], "roc_panic");
 
         call.set_call_convention(C_CALL_CONV);
+    }
+
+    pub fn call_dbg(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        location: BasicValueEnum<'ctx>,
+        message: BasicValueEnum<'ctx>,
+    ) {
+        let function = self.module.get_function("roc_dbg").unwrap();
+
+        let loc = self.string_to_arg(env, location);
+        let msg = self.string_to_arg(env, message);
+
+        let call = self
+            .builder
+            .new_build_call(function, &[loc.into(), msg.into()], "roc_dbg");
+
+        call.set_call_convention(C_CALL_CONV);
+    }
+
+    fn string_to_arg(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        string: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the string by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .new_build_alloca(string.get_type(), "alloca_string");
+                env.builder.new_build_store(alloca, string);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                string
+            }
+        }
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
@@ -3502,26 +3528,16 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
         Dbg {
             symbol,
-            variable: specialized_var,
+            variable: _,
             remainder,
         } => {
             if env.mode.runs_expects() {
-                let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
-                let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
-
-                crate::llvm::expect::clone_to_shared_memory(
-                    env,
-                    layout_interner,
-                    scope,
-                    layout_ids,
-                    &shared_memory,
-                    *symbol,
-                    region,
-                    &[*symbol],
-                    &[*specialized_var],
-                );
-
-                crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
+                // TODO: Change location to `filename:line_number`
+                // let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
+                let location =
+                    build_string_literal(env, parent, symbol.module_string(&env.interns));
+                let message = scope.load_symbol(symbol);
+                env.call_dbg(env, location, message);
             }
 
             build_exp_stmt(

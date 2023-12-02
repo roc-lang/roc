@@ -82,8 +82,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
-        general_saved_regs: &[GeneralReg],
-        float_saved_regs: &[FloatReg],
+        saved_general_regs: &[GeneralReg],
+        saved_float_regs: &[FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32;
@@ -900,8 +900,11 @@ impl<
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
-        let used_general_regs = self.storage_manager.general_used_callee_saved_regs();
-        let used_float_regs = self.storage_manager.float_used_callee_saved_regs();
+        let (used_general_regs, used_float_regs) = self
+            .storage_manager
+            .used_callee_saved_regs
+            .as_vecs(self.env.arena);
+
         let aligned_stack_size = CC::setup_stack(
             &mut out,
             &used_general_regs,
@@ -1199,6 +1202,12 @@ impl<
             max_branch_stack_size =
                 std::cmp::max(max_branch_stack_size, self.storage_manager.stack_size());
             base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
+
+            // make sure that used callee-saved registers get saved/restored even if used in only
+            // one of the branches of the switch
+            base_storage
+                .used_callee_saved_regs
+                .extend(&self.storage_manager.used_callee_saved_regs);
         }
         self.storage_manager = base_storage;
         self.literal_map = base_literal_map;

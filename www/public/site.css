@@ -55,7 +55,7 @@ body {
     width: 100%;
     height: 100%;
     box-sizing: border-box;
-    overflow-x: hidden; /* This shouldn't be necessary, but without it, mobile has a right gutter. */
+    overflow-x: hidden; /* This shouldn't be necessary, but without it mobile has a right gutter. */
 }
 
 p {
@@ -1454,16 +1454,27 @@ code .dim {
     color: var(--cyan);
 }
 
-.color-white {
-    /* Really this isn't white so much as "default text color." For the repl, this should be black
-    in a light color scheme, and only white in dark mode. The name could be better! */
-    color: black;
+/* Really this isn't white so much as "default text color." For the repl, this should be black
+    in a light color scheme, and only white in dark mode. The name could be better!
+*/
+#homepage-repl-container .color-white {
+    color: #FFF;
+}
+
+#repl-container .color-white {
+    color: #000;
 }
 
 @media (prefers-color-scheme: dark) {
-    .color-white {
-        color: white;
+
+    #homepage-repl-container .color-white {
+        color: #FFF;
     }
+
+    #repl-container .color-white {
+        color: #FFF;
+    }
+
 }
 
 .bold {
@@ -1506,4 +1517,26 @@ code .dim {
     #repl-arrow {
         display: none;
     }
+}
+
+#gh-logo {
+    fill: var(--text-color);
+}
+
+#gh-link {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin: 0;
+}
+
+#gh-centered-link {
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+}
+
+#gh-link-text {
+    margin-left: 8px;
+    vertical-align: middle;
 }

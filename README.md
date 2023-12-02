@@ -1,6 +1,6 @@
 # Work in progress!
 
-Roc is not ready for a 0.1 release yet, but we do have:
+[Roc](https://www.roc-lang.org) is not ready for a 0.1 release yet, but we do have:
 
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
 - [**tutorial**](https://roc-lang.org/tutorial)
@@ -30,6 +30,9 @@ If you would like your company to become a corporate sponsor of Roc's developmen
 
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
+* [Drew Lazzeri](https://github.com/asteroidb612)
+* [Alex Binaei](https://github.com/mrmizz)
+* [Jono Mallanyk](https://github.com/jonomallanyk)
 * [Chris Packett](https://github.com/chris-packett)
 * [James Birtles](https://github.com/jamesbirtles)
 * [Ivo Balbaert](https://github.com/Ivo-Balbaert)
