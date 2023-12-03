@@ -4,8 +4,8 @@ libapp.so
 dynhost
 preprocessedhost
 metadata
-expects
 
+expects/expects
 benchmarks/rbtree-ck
 benchmarks/rbtree-insert
 benchmarks/test-astar

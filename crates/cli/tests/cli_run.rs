@@ -554,13 +554,13 @@ mod cli_run {
                 r#"
                 This expectation failed:
 
-                18│      expect x != x
-                                ^^^^^^
+                19│      expect words == []
+                                ^^^^^^^^^^^
 
                 When it failed, these variables had these values:
 
-                x : Num *
-                x = 42
+                words : List Str
+                words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
                 [#UserApp] 42
                 [#UserApp] "Fjoer en ferdjer frieten oan dyn geve lea"
