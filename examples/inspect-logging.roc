@@ -34,6 +34,5 @@ main =
     }
     |> Community.addFriend 0 2
     |> Community.addFriend 1 2
-    |> Inspect.inspect
-    |> Inspect.toDbgStr
+    |> Inspect.toStr
     |> Stdout.line
