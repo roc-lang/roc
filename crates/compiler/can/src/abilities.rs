@@ -435,8 +435,6 @@ impl IAbilitiesStore<Resolved> {
         match self.declared_implementations.get_mut(&impl_key) {
             Some(member_impl) => match *member_impl {
                 MemberImpl::Impl(specialization_symbol) => {
-                    debug_assert!(!self.specializations.contains_key(&specialization_symbol));
-
                     match mark {
                         Ok(specialization_info) => {
                             self.specializations

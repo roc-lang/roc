@@ -1,0 +1,60 @@
+procedure : `#Derived.custom` Str
+procedure = `#Derived.custom` (`#Derived.fmt`: Str, `#Derived.val`: Decimal):
+    let `#Derived_gen.4` : Decimal = CallByName `#Derived.toInspector_wrapper_Num.14` `#Derived.val`;
+    let `#Derived_gen.3` : Str = CallByName `Inspect.apply` `#Derived_gen.4` `#Derived.fmt`;
+    ret `#Derived_gen.3`;
+
+procedure : `#Derived.toInspector_wrapper_Num.14` Decimal
+procedure = `#Derived.toInspector_wrapper_Num.14` (`#Derived.val`: Decimal):
+    let `#Derived_gen.0` : Decimal = CallByName `Inspect.custom` `#Derived.val`;
+    ret `#Derived_gen.0`;
+
+procedure : `Inspect.apply` Str
+procedure = `Inspect.apply` (`Inspect.305`: Decimal, `Inspect.fmt`: Str):
+    let `Inspect.314` : Str = CallByName `#Derived.custom` `Inspect.fmt` `Inspect.305`;
+    ret `Inspect.314`;
+
+procedure : `Inspect.custom` Decimal
+procedure = `Inspect.custom` (`Inspect.fn`: Decimal):
+    ret `Inspect.fn`;
+
+procedure : `Inspect.dbgInit` Str
+procedure = `Inspect.dbgInit` (`Inspect.304`: {}):
+    let `Inspect.311` : Str = "";
+    ret `Inspect.311`;
+
+procedure : `Inspect.inspect` Str
+procedure = `Inspect.inspect` (`Inspect.val`: Decimal):
+    let `Inspect.312` : Decimal = CallByName `#Derived.toInspector_wrapper_Num.14` `Inspect.val`;
+    let `Inspect.309` : {} = Struct {};
+    let `Inspect.308` : Str = CallByName `Inspect.dbgInit` `Inspect.309`;
+    let `Inspect.307` : Str = CallByName `#Derived.custom` `Inspect.308` `Inspect.312`;
+    ret `Inspect.307`;
+
+procedure : `Inspect.toDbgStr` Str
+procedure = `Inspect.toDbgStr` (`Inspect.300`: Str):
+    ret `Inspect.300`;
+
+procedure : `List.map` List Str
+procedure = `List.map` (`#Attr.#arg1`: List Str, `#Attr.#arg2`: {}):
+    let `List.553` : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } `#Attr.#arg1` `Inspect.toDbgStr` `#Attr.#arg2`;
+    decref `#Attr.#arg1`;
+    ret `List.553`;
+
+procedure : `Str.joinWith` Str
+procedure = `Str.joinWith` (`#Attr.#arg1`: List Str, `#Attr.#arg2`: Str):
+    let `Str.292` : Str = lowlevel StrJoinWith `#Attr.#arg1` `#Attr.#arg2`;
+    ret `Str.292`;
+
+procedure : `#UserApp.main` Str
+procedure = `#UserApp.main` ():
+    let `#UserApp.7` : Decimal = 0.5dec;
+    let `#UserApp.6` : Str = CallByName `Inspect.inspect` `#UserApp.7`;
+    let `#UserApp.4` : List Str = Array [`#UserApp.6`];
+    let `#UserApp.5` : {} = Struct {};
+    let `#UserApp.2` : List Str = CallByName `List.map` `#UserApp.4` `#UserApp.5`;
+    let `#UserApp.3` : Str = ", ";
+    let `#UserApp.1` : Str = CallByName `Str.joinWith` `#UserApp.2` `#UserApp.3`;
+    dec `#UserApp.2`;
+    dec `#UserApp.3`;
+    ret `#UserApp.1`;

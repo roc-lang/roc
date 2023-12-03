@@ -19,6 +19,7 @@ pub enum FlatInspectable {
 
 #[derive(Hash, PartialEq, Eq, Debug, Clone)]
 pub enum FlatInspectableKey {
+    Wrapper(Symbol),
     List(/* takes one variable */),
     Set(/* takes one variable */),
     Dict(/* takes two variables */),
@@ -35,6 +36,7 @@ pub enum FlatInspectableKey {
 impl FlatInspectableKey {
     pub(crate) fn debug_name(&self) -> String {
         match self {
+            FlatInspectableKey::Wrapper(x) => format!("wrapper_{}", x),
             FlatInspectableKey::List() => "list".to_string(),
             FlatInspectableKey::Set() => "set".to_string(),
             FlatInspectableKey::Dict() => "dict".to_string(),
@@ -143,7 +145,7 @@ impl FlatInspectable {
                         }
                         // Special case, an unbound `Frac *` will become a `Dec`.
                         AliasKind::Opaque if matches!(*subs.get_content_without_compacting(real_var), Content::FlexVar(_) | Content::FlexAbleVar(_, _)) => {
-                            Immediate(Symbol::INSPECT_DEC)
+                            Key(FlatInspectableKey::Wrapper(sym))
                         }
                         AliasKind::Opaque if sym.is_builtin() => {
                             Self::from_var(subs, real_var)

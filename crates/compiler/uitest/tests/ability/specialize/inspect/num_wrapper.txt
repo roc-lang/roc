@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+young : (Num a -> b) -> b
+young = \f -> f 1
+
+main =
+    young \x ->
+#          ^ Num a where a implements Inspect
+        s = Inspect.toInspector x |> Inspect.apply (Inspect.init {}) |> Inspect.toDbgStr
+#           ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): Num a -[[#Derived.toInspector_wrapper(0)]]-> Inspector DbgFormatter where a implements Inspect
+        s

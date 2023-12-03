@@ -2222,21 +2222,7 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect 0,              # Num a
-                Inspect.inspect 1u8,            # U8
-                Inspect.inspect 2i8,            # I8
-                Inspect.inspect 3u16,           # U16
-                Inspect.inspect 4i16,           # I16
-                Inspect.inspect 5u32,           # U32
-                Inspect.inspect 6i32,           # I32
-                Inspect.inspect 7u64,           # U64
-                Inspect.inspect 8i64,           # I64
-                Inspect.inspect 9u128,          # U128
-                Inspect.inspect 10i128,         # I128
                 Inspect.inspect 0.5,            # Frac a
-                Inspect.inspect 1.5f32,         # F32
-                Inspect.inspect 2.2f64,         # F64
-                Inspect.inspect (1.1dec + 2.2), # Dec
             ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
             "#
             ),

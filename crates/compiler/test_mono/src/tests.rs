@@ -3436,3 +3436,19 @@ fn inspect_derived_dict() {
         "#
     )
 }
+
+#[mono_test(large_stack = "true")]
+fn inspect_auto_frac() {
+    indoc!(
+        r#"
+        app "test"
+            imports []
+            provides [main] to "./platform"
+
+        main =
+            [
+                Inspect.inspect 0.5,            # Frac a
+            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
+        "#
+    )
+}

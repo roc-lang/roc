@@ -28,6 +28,7 @@ pub(crate) fn derive_to_inspector(
     def_symbol: Symbol,
 ) -> DerivedBody {
     let (body, body_type) = match key {
+        FlatInspectableKey::Wrapper(_) => to_inspector_wrapper(env, def_symbol),
         FlatInspectableKey::List() => to_inspector_list(env, def_symbol),
         FlatInspectableKey::Set() => unreachable!(),
         FlatInspectableKey::Dict() => unreachable!(),
@@ -107,6 +108,100 @@ pub(crate) fn derive_to_inspector(
         body_type,
         specialization_lambda_sets,
     }
+}
+
+fn to_inspector_wrapper(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
+    // Build \val -> custom \f -> apply (Inspect.toInspector val) f
+
+    use Expr::*;
+
+    let val_sym = env.new_symbol("val");
+    let val_var = env.subs.fresh_unnamed_flex_var();
+    let val_var_slice = SubsSlice::insert_into_subs(env.subs, once(val_var));
+
+    // build `toInspector val` type
+    // v -[uls]-> Inspector fmt where fmt implements InspectorFormatter
+    let to_inspector_fn_var = env.import_builtin_symbol_var(Symbol::INSPECT_TO_INSPECTOR);
+
+    // val -[clos]-> t1
+    let to_inspector_clos_var = env.subs.fresh_unnamed_flex_var(); // clos
+    let val_inspector_var = env.subs.fresh_unnamed_flex_var(); // t1
+    let val_to_inspector_fn_var = synth_var(
+        env.subs,
+        Content::Structure(FlatType::Func(
+            val_var_slice,
+            to_inspector_clos_var,
+            val_inspector_var,
+        )),
+    );
+
+    //   v   -[uls]->  Inspector fmt where fmt implements InspectorFormatter
+    // ~ val -[clos]-> t1
+    env.unify(to_inspector_fn_var, val_to_inspector_fn_var);
+
+    // toInspector : (typeof val) -[clos]-> Inspector fmt where fmt implements InspectorFormatter
+    let to_inspector_var =
+        AbilityMember(Symbol::INSPECT_TO_INSPECTOR, None, val_to_inspector_fn_var);
+    let to_inspector_fn = Box::new((
+        to_inspector_fn_var,
+        Loc::at_zero(to_inspector_var),
+        to_inspector_clos_var,
+        val_inspector_var,
+    ));
+
+    // toInspector val
+    let to_inspector_call = Call(
+        to_inspector_fn,
+        vec![(val_var, Loc::at_zero(Var(val_sym, val_var)))],
+        CalledVia::Space,
+    );
+
+    // Inspect.custom \fmt -> Inspect.apply (Inspect.toInspector val) fmt
+    let (body, this_inspector_var) =
+        wrap_in_inspect_custom(env, to_inspector_call, val_inspector_var, val_sym, val_var);
+
+    // \val -> Inspect.custom \fmt -> Inspect.apply (Inspect.toInspector val) fmt
+    // Create fn_var for ambient capture; we fix it up below.
+    let fn_var = synth_var(env.subs, Content::Error);
+
+    // -[fn_name]->
+    let fn_name_labels = UnionLambdas::insert_into_subs(env.subs, once((fn_name, vec![])));
+    let fn_clos_var = synth_var(
+        env.subs,
+        Content::LambdaSet(LambdaSet {
+            solved: fn_name_labels,
+            recursion_var: OptVariable::NONE,
+            unspecialized: SubsSlice::default(),
+            ambient_function: fn_var,
+        }),
+    );
+    // val -[fn_name]-> Inspector fmt
+    env.subs.set_content(
+        fn_var,
+        Content::Structure(FlatType::Func(
+            val_var_slice,
+            fn_clos_var,
+            this_inspector_var,
+        )),
+    );
+
+    // \val -[fn_name]-> Inspect.custom \fmt -> Inspect.apply (Inspect.toInspector val) fmt
+    let clos = Closure(ClosureData {
+        function_type: fn_var,
+        closure_type: fn_clos_var,
+        return_type: this_inspector_var,
+        name: fn_name,
+        captured_symbols: vec![],
+        recursive: Recursive::NotRecursive,
+        arguments: vec![(
+            val_var,
+            AnnotatedMark::known_exhaustive(),
+            Loc::at_zero(Pattern::Identifier(val_sym)),
+        )],
+        loc_body: Box::new(Loc::at_zero(body)),
+    });
+
+    (clos, fn_var)
 }
 
 fn to_inspector_list(env: &mut Env<'_>, fn_name: Symbol) -> (Expr, Variable) {
