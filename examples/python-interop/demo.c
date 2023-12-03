@@ -27,7 +27,7 @@ __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
     PyErr_SetString(PyExc_RuntimeError, (char *)ptr);
 }
 
-void roc_dbg(char* loc, char* src, char* msg) {
+void roc_dbg(char* loc, char* msg, char* src) {
   fprintf(stderr, "[%s] %s = %s\n", loc, src, msg);
 }
 

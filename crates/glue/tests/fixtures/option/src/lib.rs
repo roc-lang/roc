@@ -51,7 +51,7 @@ pub unsafe extern "C" fn roc_panic(msg: *mut RocStr, tag_id: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_dbg(loc: *mut RocStr, src: *mut RocStr, msg: *mut RocStr) {
+pub unsafe extern "C" fn roc_dbg(loc: *mut RocStr, msg: *mut RocStr, src: *mut RocStr) {
     eprintln!("[{}] {} = {}", &*loc, &*src, &*msg);
 }
 

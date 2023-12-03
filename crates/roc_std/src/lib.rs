@@ -36,7 +36,7 @@ extern "C" {
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
-    pub fn roc_dbg(loc: *mut c_void, src: *mut c_void, msg: *mut c_void);
+    pub fn roc_dbg(loc: *mut c_void, msg: *mut c_void, src: *mut c_void);
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 

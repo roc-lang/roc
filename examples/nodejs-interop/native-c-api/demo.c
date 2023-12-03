@@ -27,7 +27,7 @@ void roc_panic(void *ptr, unsigned int alignment)
     napi_throw_error(napi_global_env, NULL, (char *)ptr);
 }
 
-void roc_dbg(char* loc, char* src, char* msg) {
+void roc_dbg(char* loc, char* msg, char* src) {
   fprintf(stderr, "[%s] %s = %s\n", loc, src, msg);
 }
 

@@ -919,9 +919,10 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let src = self.string_to_arg(env, source);
         let msg = self.string_to_arg(env, message);
 
+        // TODO: at some point it will be a breaking change, but flip order to (loc, src, msg)
         let call =
             self.builder
-                .new_build_call(function, &[loc.into(), src.into(), msg.into()], "roc_dbg");
+                .new_build_call(function, &[loc.into(), msg.into(), src.into()], "roc_dbg");
 
         call.set_call_convention(C_CALL_CONV);
     }

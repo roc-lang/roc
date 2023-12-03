@@ -20,11 +20,11 @@ extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
-extern fn roc_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.C) void;
+extern fn roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void;
 
 // Since roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
 pub fn test_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.C) void {
-    roc_dbg(loc, src, message);
+    roc_dbg(loc, message, src);
 }
 
 extern fn kill(pid: c_int, sig: c_int) c_int;
@@ -47,7 +47,7 @@ fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int
     return mmap(addr, length, prot, flags, fd, offset);
 }
 
-fn testing_roc_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.C) void {
+fn testing_roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void {
     _ = message;
     _ = src;
     _ = loc;

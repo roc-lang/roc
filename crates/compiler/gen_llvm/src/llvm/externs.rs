@@ -167,8 +167,8 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             let fn_val = module.get_function("roc_dbg").unwrap();
             let mut params = fn_val.get_param_iter();
             let loc_arg = params.next().unwrap();
-            let src_arg = params.next().unwrap();
             let msg_arg = params.next().unwrap();
+            let src_arg = params.next().unwrap();
 
             debug_assert!(params.next().is_none());
 
@@ -181,7 +181,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             let dbg_impl = module.get_function(bitcode::UTILS_DBG_IMPL).unwrap();
             let call = builder.new_build_call(
                 dbg_impl,
-                &[loc_arg.into(), src_arg.into(), msg_arg.into()],
+                &[loc_arg.into(), msg_arg.into(), src_arg.into()],
                 "call_utils_dbg_impl",
             );
 
