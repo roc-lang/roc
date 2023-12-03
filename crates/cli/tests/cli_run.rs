@@ -562,11 +562,11 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [#UserApp] 42
-                [#UserApp] "Fjoer en ferdjer frieten oan dyn geve lea"
-                [#UserApp] "abc"
-                [#UserApp] 10
-                [#UserApp] (A (B C))
+                [<ignored for tests>:21] x = 42
+                [<ignored for tests>:22] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:12] x = "abc"
+                [<ignored for tests>:12] x = 10
+                [<ignored for tests>:12] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -942,7 +942,7 @@ mod cli_run {
         test_roc_app_slim(
             "examples",
             "inspect-logging.roc",
-            r#"{friends: [{2}, {2}, {0, 1}], people: [{age: 27, favoriteColor: Blue, firstName: "John", hasBeard: Bool.true, lastName: "Smith"}, {age: 47, favoriteColor: Green, firstName: "Debby", hasBeard: Bool.false, lastName: "Johnson"}, {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: "Jane", hasBeard: Bool.false, lastName: "Doe"}]}
+            r#"(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: "John", hasBeard: Bool.true, lastName: "Smith"}), (@Person {age: 47, favoriteColor: Green, firstName: "Debby", hasBeard: Bool.false, lastName: "Johnson"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: "Jane", hasBeard: Bool.false, lastName: "Doe"})]})
 "#,
             UseValgrind::Yes,
         )

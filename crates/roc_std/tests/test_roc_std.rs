@@ -38,8 +38,12 @@ pub unsafe extern "C" fn roc_panic(msg: *mut roc_std::RocStr, _tag_id: u32) {
 
 #[cfg(test)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_dbg(loc: *mut roc_std::RocStr, msg: *mut roc_std::RocStr) {
-    eprintln!("[{}] {}", &*loc, &*msg);
+pub unsafe extern "C" fn roc_dbg(
+    loc: *mut roc_std::RocStr,
+    msg: *mut roc_std::RocStr,
+    src: *mut roc_std::RocStr,
+) {
+    eprintln!("[{}] {} = {}", &*loc, &*src, &*msg);
 }
 
 #[cfg(test)]

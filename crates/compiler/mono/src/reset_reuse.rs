@@ -651,6 +651,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             })
         }
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -666,6 +668,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             );
 
             arena.alloc(Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: new_remainder,

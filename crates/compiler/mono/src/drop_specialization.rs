@@ -631,10 +631,14 @@ fn specialize_drops_stmt<'a, 'i>(
             ),
         }),
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
         } => arena.alloc(Stmt::Dbg {
+            source_location,
+            source,
             symbol: *symbol,
             variable: *variable,
             remainder: specialize_drops_stmt(

@@ -741,6 +741,8 @@ pub fn constrain_expr(
         }
 
         Dbg {
+            source_location: _,
+            source: _,
             loc_message,
             loc_continuation,
             variable,

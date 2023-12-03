@@ -422,6 +422,7 @@ pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 
+pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
 pub const UTILS_INCREF_RC_PTR: &str = "roc_builtins.utils.incref_rc_ptr";

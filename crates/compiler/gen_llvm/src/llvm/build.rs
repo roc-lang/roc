@@ -910,16 +910,19 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         &self,
         env: &Env<'a, 'ctx, 'env>,
         location: BasicValueEnum<'ctx>,
+        source: BasicValueEnum<'ctx>,
         message: BasicValueEnum<'ctx>,
     ) {
         let function = self.module.get_function("roc_dbg").unwrap();
 
         let loc = self.string_to_arg(env, location);
+        let src = self.string_to_arg(env, source);
         let msg = self.string_to_arg(env, message);
 
-        let call = self
-            .builder
-            .new_build_call(function, &[loc.into(), msg.into()], "roc_dbg");
+        // TODO: at some point it will be a breaking change, but flip order to (loc, src, msg)
+        let call =
+            self.builder
+                .new_build_call(function, &[loc.into(), msg.into(), src.into()], "roc_dbg");
 
         call.set_call_convention(C_CALL_CONV);
     }
@@ -3527,17 +3530,17 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         }
 
         Dbg {
+            source_location,
+            source,
             symbol,
             variable: _,
             remainder,
         } => {
             if env.mode.runs_expects() {
-                // TODO: Change location to `filename:line_number`
-                // let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
-                let location =
-                    build_string_literal(env, parent, symbol.module_string(&env.interns));
+                let location = build_string_literal(env, parent, source_location);
+                let source = build_string_literal(env, parent, source);
                 let message = scope.load_symbol(symbol);
-                env.call_dbg(env, location, message);
+                env.call_dbg(env, location, source, message);
             }
 
             build_exp_stmt(
