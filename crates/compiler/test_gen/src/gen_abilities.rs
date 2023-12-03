@@ -2203,9 +2203,9 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect Bool.true,
-                Inspect.inspect Bool.false,
-            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
+                Inspect.toStr Bool.true,
+                Inspect.toStr Bool.false,
+            ] |> Str.joinWith ", "
             "#
             ),
             RocStr::from("Bool.true, Bool.false"),
@@ -2222,22 +2222,22 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect 0,              # Num a
-                Inspect.inspect 1u8,            # U8
-                Inspect.inspect 2i8,            # I8
-                Inspect.inspect 3u16,           # U16
-                Inspect.inspect 4i16,           # I16
-                Inspect.inspect 5u32,           # U32
-                Inspect.inspect 6i32,           # I32
-                Inspect.inspect 7u64,           # U64
-                Inspect.inspect 8i64,           # I64
-                Inspect.inspect 9u128,          # U128
-                Inspect.inspect 10i128,         # I128
-                Inspect.inspect 0.5,            # Frac a
-                Inspect.inspect 1.5f32,         # F32
-                Inspect.inspect 2.2f64,         # F64
-                Inspect.inspect (1.1dec + 2.2), # Dec
-            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
+                Inspect.toStr 0,              # Num a
+                Inspect.toStr 1u8,            # U8
+                Inspect.toStr 2i8,            # I8
+                Inspect.toStr 3u16,           # U16
+                Inspect.toStr 4i16,           # I16
+                Inspect.toStr 5u32,           # U32
+                Inspect.toStr 6i32,           # I32
+                Inspect.toStr 7u64,           # U64
+                Inspect.toStr 8i64,           # I64
+                Inspect.toStr 9u128,          # U128
+                Inspect.toStr 10i128,         # I128
+                Inspect.toStr 0.5,            # Frac a
+                Inspect.toStr 1.5f32,         # F32
+                Inspect.toStr 2.2f64,         # F64
+                Inspect.toStr (1.1dec + 2.2), # Dec
+            ] |> Str.joinWith ", "
             "#
             ),
             RocStr::from("0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0.5, 1.5, 2.2, 3.3"),
@@ -2254,12 +2254,12 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect [0, 1, 2],        # List (Num *)
-                Inspect.inspect [1, 0x2, 3],      # List (Int *)
-                Inspect.inspect [0.1 + 0.2, 0.4], # List (Frac *)
-                Inspect.inspect [1u8, 2u8],       # List U8
-                Inspect.inspect ["foo"],          # List Str
-            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
+                Inspect.toStr [0, 1, 2],        # List (Num *)
+                Inspect.toStr [1, 0x2, 3],      # List (Int *)
+                Inspect.toStr [0.1 + 0.2, 0.4], # List (Frac *)
+                Inspect.toStr [1u8, 2u8],       # List U8
+                Inspect.toStr ["foo"],          # List Str
+            ] |> Str.joinWith ", "
             "#
             ),
             RocStr::from("[0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
@@ -2276,10 +2276,10 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.inspect "",
-                Inspect.inspect "a small string",
-                Inspect.inspect "an extraordinarily long string - so long it's on the heap!",
-            ] |> List.map Inspect.toDbgStr |> Str.joinWith ", "
+                Inspect.toStr "",
+                Inspect.toStr "a small string",
+                Inspect.toStr "an extraordinarily long string - so long it's on the heap!",
+            ] |> Str.joinWith ", "
             "#
             ),
             RocStr::from(
@@ -2299,7 +2299,7 @@ mod inspect {
 
             Op := {}
 
-            main = Inspect.toDbgStr (Inspect.inspect (@Op {}))
+            main = Inspect.toStr (@Op {})
             "#
             ),
             RocStr::from(r#"<opaque>"#),
@@ -2317,7 +2317,7 @@ mod inspect {
 
             Op := {}
 
-            late = \a -> Inspect.toDbgStr (Inspect.inspect a)
+            late = \a -> Inspect.toStr a
 
             main = late (@Op {})
             "#
