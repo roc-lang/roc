@@ -4,6 +4,7 @@ const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
 const panic_utils = @import("panic.zig");
+const dbg_utils = @import("dbg.zig");
 
 comptime {
     _ = @import("compiler_rt.zig");
@@ -245,6 +246,7 @@ comptime {
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
     @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+    @export(dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .Weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
