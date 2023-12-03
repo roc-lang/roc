@@ -57,7 +57,7 @@ DecodeError : [TooShort]
 
 ## Return type of a [Decoder].
 ##
-## This is can be useful when creating a [custom](#custom) decoder or when
+## This can be useful when creating a [custom](#custom) decoder or when
 ## using [fromBytesPartial](#fromBytesPartial). For example writing unit tests,
 ## such as;
 ## ```
