@@ -126,7 +126,7 @@ Encoding implements
 
 ### [`Decoding` Ability](#decoding-ability) {#decoding-ability}
 
-The `Decoding` Ability defines `decoder` which can be used with an Decoder to de-serialise from bytes to Roc values using the `Decoding.fromBytesPartial` and `Decoding.fromBytes` functions.
+The `Decoding` Ability defines `decoder` which can be used with a Decoder to de-serialise from bytes to Roc values using the `Decoding.fromBytesPartial` and `Decoding.fromBytes` functions.
 
 Decoding for `Dict` values **has not been implemented**, see [#5294](https://github.com/roc-lang/roc/issues/5294) for more details. If you would like to help implement this, please let us know.
 
