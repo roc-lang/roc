@@ -25,7 +25,7 @@ All types which implement the `Encoding` Ability can therefore use the `Encode.t
   - [`Decoding` Ability](#decoding-ability)
   - [`Inspect` Ability](#inspect-ability)
 - [Opaque Types](#opaque-types)
-  - [Derived Implementions](#derived-implementions)
+  - [Derived Implementations](#derived-implementations)
   - [Custom Implementations ](#custom-implementations)
 - [Advanced Topic: Defining a new Ability](#defining-a-new-ability)
 
@@ -98,7 +98,7 @@ The `Encoding` Ability defines `toEncoder` which can be used with an Encoder to 
 
 Functions are not serialisable, therefore Roc does not derive `Encoding` for types that contain functions.
 
-Encoding for `Dict` values **has not been implemened**, see [#5294](https://github.com/roc-lang/roc/issues/5294) for more details. If you would like to help implement this, please let us know.
+Encoding for `Dict` values **has not been implemented**, see [#5294](https://github.com/roc-lang/roc/issues/5294) for more details. If you would like to help implement this, please let us know.
 
 **Example** showing the use of `Encoding.toBytes` to serialise a Roc `List (Str, U32)` to a [JSON](https://www.json.org/json-en.html) encoded string.
 
@@ -128,7 +128,7 @@ Encoding implements
 
 The `Decoding` Ability defines `decoder` which can be used with an Decoder to de-serialise from bytes to Roc values using the `Decoding.fromBytesPartial` and `Decoding.fromBytes` functions.
 
-Decoding for `Dict` values **has not been implemened**, see [#5294](https://github.com/roc-lang/roc/issues/5294) for more details. If you would like to help implement this, please let us know.
+Decoding for `Dict` values **has not been implemented**, see [#5294](https://github.com/roc-lang/roc/issues/5294) for more details. If you would like to help implement this, please let us know.
 
 **Example** showing the use of `Decoding.fromBytes` to decode a Roc `List (U32, Str)` from a [JSON](https://www.json.org/json-en.html) encoded string.
 
@@ -180,9 +180,9 @@ Inspect implements
 
 Opaque Types are used to hide implementation details of a type. Modules export functions to define a *public* API for working with a type. 
 
-By default abilities are not derieved for Opaque Types. However, [Derived](#derived-implementions) and [Custom](#custom-implementations) implementations are two ways to work with abilities for your Opaque Types.
+By default abilities are not derived for Opaque Types. However, [Derived](#derived-implementations) and [Custom](#custom-implementations) implementations are two ways to work with abilities for your Opaque Types.
 
-### [Derived Implementions](#derived-implementions) {#derived-implementions}
+### [Derived Implementations](#derived-implementations) {#derived-implementations}
 
 Abilities can be automatically derived for Opaque Types where the type is an alias for a builtin, or it is composed of other types which also implement that ability. 
 
