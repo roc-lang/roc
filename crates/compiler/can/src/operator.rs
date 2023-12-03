@@ -661,7 +661,7 @@ pub fn desugar_expr<'a>(
             arena.alloc(Loc {
                 value: LowLevelDbg(
                     arena.alloc((
-                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line)),
+                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line + 1)),
                         &*arena.alloc_str(dbg_src),
                     )),
                     dbg_str,

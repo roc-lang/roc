@@ -21,6 +21,7 @@ main =
     x = 42
     dbg x
     dbg "Fjoer en ferdjer frieten oan dyn geve lea"
+    dbg "this is line 24"
 
     r = {x : polyDbg "abc", y: polyDbg 10u8, z : polyDbg (A (B C))}
 
