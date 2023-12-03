@@ -1,0 +1,52 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @0-13,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Identifier(
+                    "x",
+                ),
+                @4-13 BinOps(
+                    [
+                        (
+                            @4-5 SpaceAfter(
+                                Num(
+                                    "1",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @10-11 LessThan,
+                        ),
+                    ],
+                    @12-13 Num(
+                        "2",
+                    ),
+                ),
+            ),
+        ],
+    },
+    @15-17 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

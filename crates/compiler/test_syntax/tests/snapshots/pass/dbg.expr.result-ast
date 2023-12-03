@@ -1,0 +1,24 @@
+Dbg(
+    @4-10 BinOps(
+        [
+            (
+                @4-5 Num(
+                    "1",
+                ),
+                @6-8 Equals,
+            ),
+        ],
+        @9-10 Num(
+            "1",
+        ),
+    ),
+    @12-13 SpaceBefore(
+        Num(
+            "4",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

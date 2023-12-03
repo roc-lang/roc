@@ -1,0 +1,18 @@
+[package]
+name = "roc_collections"
+description = "Domain-specific collections created for the needs of the compiler."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+bitvec.workspace = true
+bumpalo.workspace = true
+fnv.workspace = true
+hashbrown.workspace = true
+im-rc.workspace = true
+im.workspace = true
+wyhash.workspace = true
+smallvec.workspace = true

@@ -1,0 +1,195 @@
+procedure Bool.1 ():
+    let Bool.25 : Int1 = false;
+    ret Bool.25;
+
+procedure Bool.2 ():
+    let Bool.24 : Int1 = true;
+    ret Bool.24;
+
+procedure List.216 (List.555, List.217, List.215):
+    let List.585 : Int1 = CallByName Test.1 List.217;
+    if List.585 then
+        let List.587 : {} = Struct {};
+        let List.586 : [C {}, C {}] = TagId(1) List.587;
+        ret List.586;
+    else
+        let List.584 : {} = Struct {};
+        let List.583 : [C {}, C {}] = TagId(0) List.584;
+        ret List.583;
+
+procedure List.23 (#Attr.2, #Attr.3, #Attr.4):
+    let List.588 : List {[<r>C I64, C List *self], [<r>C I64, C List *self]} = lowlevel ListMap2 { xs: `#Attr.#arg1`, ys: `#Attr.#arg2` } #Attr.2 #Attr.3 Test.15 #Attr.4;
+    decref #Attr.3;
+    decref #Attr.2;
+    ret List.588;
+
+procedure List.56 (List.214, List.215):
+    let List.564 : {} = Struct {};
+    let List.556 : [C {}, C {}] = CallByName List.99 List.214 List.564 List.215;
+    let List.561 : U8 = 1i64;
+    let List.562 : U8 = GetTagId List.556;
+    let List.563 : Int1 = lowlevel Eq List.561 List.562;
+    if List.563 then
+        let List.557 : Int1 = CallByName Bool.2;
+        ret List.557;
+    else
+        let List.558 : Int1 = CallByName Bool.1;
+        ret List.558;
+
+procedure List.6 (#Attr.2):
+    let List.554 : U64 = lowlevel ListLen #Attr.2;
+    ret List.554;
+
+procedure List.6 (#Attr.2):
+    let List.582 : U64 = lowlevel ListLen #Attr.2;
+    ret List.582;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.581 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.581;
+
+procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4, #Derived_gen.5):
+    joinpoint List.569 List.471 List.472 List.473 List.474 List.475:
+        let List.571 : Int1 = CallByName Num.22 List.474 List.475;
+        if List.571 then
+            let List.580 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = CallByName List.66 List.471 List.474;
+            inc List.580;
+            let List.572 : [C {}, C {}] = CallByName List.216 List.472 List.580 List.473;
+            let List.577 : U8 = 1i64;
+            let List.578 : U8 = GetTagId List.572;
+            let List.579 : Int1 = lowlevel Eq List.577 List.578;
+            if List.579 then
+                let List.476 : {} = UnionAtIndex (Id 1) (Index 0) List.572;
+                let List.575 : U64 = 1i64;
+                let List.574 : U64 = CallByName Num.51 List.474 List.575;
+                jump List.569 List.471 List.476 List.473 List.574 List.475;
+            else
+                dec List.471;
+                let List.477 : {} = UnionAtIndex (Id 0) (Index 0) List.572;
+                let List.576 : [C {}, C {}] = TagId(0) List.477;
+                ret List.576;
+        else
+            dec List.471;
+            let List.570 : [C {}, C {}] = TagId(1) List.472;
+            ret List.570;
+    in
+    jump List.569 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
+
+procedure List.99 (List.468, List.469, List.470):
+    let List.567 : U64 = 0i64;
+    let List.568 : U64 = CallByName List.6 List.468;
+    let List.566 : [C {}, C {}] = CallByName List.80 List.468 List.469 List.470 List.567 List.568;
+    ret List.566;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.291;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.294;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.293 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.293;
+
+procedure Test.1 (#Derived_gen.0):
+    joinpoint Test.26 Test.6:
+        let Test.65 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
+        let Test.66 : U8 = 0i64;
+        let Test.67 : U8 = GetTagId Test.65;
+        let Test.68 : Int1 = lowlevel Eq Test.66 Test.67;
+        if Test.68 then
+            let Test.57 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
+            let Test.58 : U8 = 0i64;
+            let Test.59 : U8 = GetTagId Test.57;
+            let Test.60 : Int1 = lowlevel Eq Test.58 Test.59;
+            if Test.60 then
+                let Test.50 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
+                let Test.8 : I64 = UnionAtIndex (Id 0) (Index 0) Test.50;
+                let Test.49 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
+                dec Test.50;
+                let Test.10 : I64 = UnionAtIndex (Id 0) (Index 0) Test.49;
+                joinpoint #Derived_gen.6:
+                    let Test.27 : Int1 = CallByName Num.22 Test.8 Test.10;
+                    ret Test.27;
+                in
+                let #Derived_gen.7 : Int1 = lowlevel RefCountIsUnique Test.49;
+                if #Derived_gen.7 then
+                    free Test.49;
+                    jump #Derived_gen.6;
+                else
+                    decref Test.49;
+                    jump #Derived_gen.6;
+            else
+                let Test.39 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
+                let Test.42 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
+                let Test.41 : List [<r>C I64, C List *self] = Array [Test.42];
+                let Test.40 : [<r>C I64, C List *self] = TagId(1) Test.41;
+                let Test.38 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = Struct {Test.39, Test.40};
+                jump Test.26 Test.38;
+        else
+            let Test.61 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
+            let Test.62 : U8 = 1i64;
+            let Test.63 : U8 = GetTagId Test.61;
+            let Test.64 : Int1 = lowlevel Eq Test.62 Test.63;
+            if Test.64 then
+                let Test.52 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
+                let Test.12 : List [<r>C I64, C List *self] = UnionAtIndex (Id 1) (Index 0) Test.52;
+                inc 2 Test.12;
+                let Test.51 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
+                dec Test.52;
+                let Test.14 : List [<r>C I64, C List *self] = UnionAtIndex (Id 1) (Index 0) Test.51;
+                inc Test.14;
+                joinpoint #Derived_gen.8:
+                    let Test.35 : {} = Struct {};
+                    let Test.33 : List {[<r>C I64, C List *self], [<r>C I64, C List *self]} = CallByName List.23 Test.12 Test.14 Test.35;
+                    let Test.34 : {} = Struct {};
+                    let Test.29 : Int1 = CallByName List.56 Test.33 Test.34;
+                    if Test.29 then
+                        let Test.31 : U64 = CallByName List.6 Test.12;
+                        dec Test.12;
+                        let Test.32 : U64 = CallByName List.6 Test.14;
+                        dec Test.14;
+                        let Test.30 : Int1 = CallByName Num.22 Test.31 Test.32;
+                        ret Test.30;
+                    else
+                        dec Test.12;
+                        dec Test.14;
+                        let Test.28 : Int1 = CallByName Bool.1;
+                        ret Test.28;
+                in
+                let #Derived_gen.9 : Int1 = lowlevel RefCountIsUnique Test.51;
+                if #Derived_gen.9 then
+                    free Test.51;
+                    jump #Derived_gen.8;
+                else
+                    inc Test.14;
+                    decref Test.51;
+                    jump #Derived_gen.8;
+            else
+                let Test.48 : [<r>C I64, C List *self] = StructAtIndex 0 Test.6;
+                let Test.47 : List [<r>C I64, C List *self] = Array [Test.48];
+                let Test.45 : [<r>C I64, C List *self] = TagId(1) Test.47;
+                let Test.46 : [<r>C I64, C List *self] = StructAtIndex 1 Test.6;
+                let Test.44 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = Struct {Test.45, Test.46};
+                jump Test.26 Test.44;
+    in
+    jump Test.26 #Derived_gen.0;
+
+procedure Test.15 (Test.16, Test.17):
+    let Test.36 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = Struct {Test.16, Test.17};
+    ret Test.36;
+
+procedure Test.0 ():
+    let Test.76 : I64 = 10i64;
+    let Test.75 : [<r>C I64, C List *self] = TagId(0) Test.76;
+    let Test.74 : List [<r>C I64, C List *self] = Array [Test.75];
+    let Test.69 : [<r>C I64, C List *self] = TagId(1) Test.74;
+    let Test.73 : I64 = 20i64;
+    let Test.72 : [<r>C I64, C List *self] = TagId(0) Test.73;
+    let Test.71 : List [<r>C I64, C List *self] = Array [Test.72];
+    let Test.70 : [<r>C I64, C List *self] = TagId(1) Test.71;
+    let Test.25 : {[<r>C I64, C List *self], [<r>C I64, C List *self]} = Struct {Test.69, Test.70};
+    let Test.24 : Int1 = CallByName Test.1 Test.25;
+    ret Test.24;

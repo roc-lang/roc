@@ -1,0 +1,10 @@
+app "test" provides [effectAlways] to "./platform"
+
+Effect a := {} -> a
+
+effectAlways : a -> Effect a
+effectAlways = \x ->
+#^^^^^^^^^^^^{-1} a -[[effectAlways(0)]]-> Effect a
+    inner = \{} -> x
+
+    @Effect inner

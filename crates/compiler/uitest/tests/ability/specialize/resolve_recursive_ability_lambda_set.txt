@@ -1,0 +1,17 @@
+app "test" provides [main] to "./platform"
+
+Diverge implements diverge : a -> a where a implements Diverge
+
+A := {} implements [Diverge {diverge}]
+
+diverge : A -> A
+diverge = \@A {} -> diverge (@A {})
+#                   ^^^^^^^ A#diverge(4): A -[[diverge(4)]]-> A
+#^^^^^^^{-1} A#diverge(4): A -[[diverge(4)]]-> A
+
+main =
+    a : A
+    a = diverge (@A {})
+    #   ^^^^^^^ A#diverge(4): A -[[diverge(4)]]-> A
+
+    a

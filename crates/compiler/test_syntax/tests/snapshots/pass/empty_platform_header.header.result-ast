@@ -1,0 +1,61 @@
+Module {
+    comments: [],
+    header: Platform(
+        PlatformHeader {
+            before_name: [],
+            name: @9-25 PackageName(
+                "rtfeldman/blah",
+            ),
+            requires: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: RequiresKeyword,
+                    after: [],
+                },
+                item: PlatformRequires {
+                    rigids: [],
+                    signature: @40-49 TypedIdent {
+                        ident: @40-44 "main",
+                        spaces_before_colon: [],
+                        ann: @47-49 Record {
+                            fields: [],
+                            ext: None,
+                        },
+                    },
+                },
+            },
+            exposes: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ExposesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            packages: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: PackagesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            imports: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ImportsKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            provides: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ProvidesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+        },
+    ),
+}

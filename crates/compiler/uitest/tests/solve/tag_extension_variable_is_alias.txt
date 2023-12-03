@@ -1,0 +1,10 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Other : [B, C]
+
+    f : [A]Other
+    f
+
+main = entry
+#      ^^^^^ [A, B, C]*

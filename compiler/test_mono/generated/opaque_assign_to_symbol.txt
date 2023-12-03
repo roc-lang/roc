@@ -1,8 +1,0 @@
-procedure Test.3 (Test.4):
-    let Test.8 : [C {}, C U8] = Ok Test.4;
-    ret Test.8;
-
-procedure Test.0 ():
-    let Test.7 : U8 = 98i64;
-    let Test.6 : [C {}, C U8] = CallByName Test.3 Test.7;
-    ret Test.6;

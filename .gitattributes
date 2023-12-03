@@ -1,0 +1,2 @@
+# Require roc files to be checlked out with Unix line endings, even on windows
+*.roc  text eol=lf

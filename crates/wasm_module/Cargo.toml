@@ -1,0 +1,14 @@
+[package]
+name = "roc_wasm_module"
+description = "Parse, manipulate, and serialize WebAssembly modules."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_error_macros = { path = "../error_macros" }
+
+bitvec.workspace = true
+bumpalo.workspace = true

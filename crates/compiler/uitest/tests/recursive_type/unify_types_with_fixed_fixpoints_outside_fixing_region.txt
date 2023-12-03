@@ -1,0 +1,25 @@
+# +opt infer:print_only_under_alias
+app "test" provides [main] to "./platform"
+
+Input := [
+    FromJob Job
+]
+
+Job := [
+    Job (List Input)
+]
+
+job : List Input -> Job
+job = \inputs ->
+    @Job (Job inputs)
+
+helloWorld : Job
+helloWorld =
+    @Job ( Job [ @Input (FromJob greeting) ] )
+    #            ^^^^^^^^^^^^^^^^^^^^^^^^^ [FromJob ([Job (List [FromJob a])] as a)]
+
+greeting : Job
+greeting =
+    job []
+
+main = (\_ -> "Which platform am I running on now?\n") helloWorld

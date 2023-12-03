@@ -1,0 +1,12 @@
+[package]
+description = "Rust wrapper for a WebAssembly test platform built on libc"
+name = "wasi_libc_sys"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[build-dependencies]
+roc_command_utils = { path = "../utils/command" }

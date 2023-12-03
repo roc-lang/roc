@@ -1,0 +1,753 @@
+:root {
+  /* WCAG AAA Compliant colors */
+  --code-bg: #f4f8f9;
+  --gray: #717171;
+  --orange: #bf5000;
+  --green: #0b8400;
+  --cyan: #067c94;
+  --blue: #05006d;
+  --violet: #7c38f5;
+  --violet-bg: #ece2fd;
+  --magenta: #a20031;
+  --link-hover-color: #333;
+
+  --link-color: var(--violet);
+  --code-link-color: var(--violet);
+  --text-color: #000;
+  --text-hover-color: var(--violet);
+  --body-bg-color: #ffffff;
+  --border-color: #717171;
+  --faded-color: #4c4c4c;
+  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
+      sans-serif;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
+      monospace;
+  --top-header-height: 67px;
+  --sidebar-width: 280px;
+}
+
+a {
+  color: var(--violet);
+}
+
+table tr th {
+  border: 1px solid var(--gray);
+}
+
+table tr th,
+table tr td {
+  padding: 6px 13px;
+}
+
+.logo {
+  padding: 2px 8px;
+}
+
+.logo svg {
+  height: 48px;
+  width: 48px;
+  fill: var(--violet);
+}
+
+.logo:hover {
+  text-decoration: none;
+}
+
+.logo svg:hover {
+  fill: var(--link-hover-color);
+}
+
+.pkg-full-name {
+  display: flex;
+  align-items: center;
+  font-size: 32px;
+  margin: 0 8px;
+  font-weight: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  height: 100%;
+}
+
+.entry-name {
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: normal;
+  color: var(--violet);
+  width: auto;
+  margin-top: 0;
+  margin-bottom: 24px;
+  padding: 8px 16px;
+  border-left: 2px solid var(--violet);
+}
+
+.entry-name a {
+  visibility: hidden;
+  display: inline-block;
+  width: 18px;
+  height: 14px;
+  margin-left: -8px;
+  margin-right: 4px;
+  user-select: none;
+  color: var(--violet);
+}
+
+.entry-name:hover a {
+  visibility: visible;
+  text-decoration: none;
+}
+
+.entry-name:not(:hover) a {
+  visibility: hidden;
+  transition: visibility 2s;
+}
+
+.pkg-full-name a {
+  padding-top: 12px;
+  padding-bottom: 16px;
+}
+
+a {
+  text-decoration: none;
+}
+
+a:hover,
+a:hover code {
+  text-decoration: underline;
+}
+
+.pkg-and-logo {
+  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+  display: flex;
+  align-items: center;
+  height: 100%;
+  background-color: var(--violet-bg);
+}
+
+.pkg-and-logo a,
+.pkg-and-logo a:visited {
+  color: var(--violet);
+}
+
+.pkg-and-logo a:hover {
+  color: var(--link-hover-color);
+  text-decoration: none;
+}
+
+.search-button {
+  flex-shrink: 0; /* always shrink the package name before these; they have a relatively constrained length */
+  padding: 12px 18px;
+  margin-right: 42px;
+  display: none; /* only show this in the mobile view */
+}
+
+.version {
+  padding: 18px 10px;
+  min-width: 48px;
+  margin-right: 8px;
+}
+
+body {
+  display: grid;
+  grid-template-columns:
+      [before-sidebar] 1fr [sidebar] var(--sidebar-width)
+      [main-content] fit-content(calc(1280px - var(--sidebar-width)))
+      [end] 1fr;
+  grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-sans);
+  color: var(--text-color);
+  background-color: var(--body-bg-color);
+}
+
+main {
+  grid-column-start: main-content;
+  grid-column-end: main-content;
+  grid-row-start: above-footer;
+  grid-row-end: above-footer;
+  box-sizing: border-box;
+  position: relative;
+  font-size: 18px;
+  line-height: 1.85em;
+  margin-top: 2px;
+  padding: 48px;
+  max-width: 740px;
+  /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
+}
+
+/* Module links on the package index page (/index.html) */
+.index-module-links {
+    margin: 0;
+    padding: 0;
+    list-style-type: none;
+}
+
+section {
+  padding: 0px 0px 16px 0px;
+  margin: 72px 0px;
+}
+
+section blockquote {
+  font-style: italic;
+  position: relative;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+section blockquote:before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2px;
+  height: 100%;
+  background-color: var(--gray);
+}
+
+
+section > *:last-child {
+  margin-bottom: 0;
+}
+
+section h1,
+section h2,
+section h3,
+section h4,
+section p {
+padding: 0px 16px;
+}
+
+#sidebar-nav {
+  grid-column-start: sidebar;
+  grid-column-end: sidebar;
+  grid-row-start: above-footer;
+  grid-row-end: above-footer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding-left: 56px;
+  padding-top: 6px;
+  width: 100%;
+}
+
+.top-header-extension {
+  grid-column-start: before-sidebar;
+  grid-column-end: sidebar;
+  grid-row-start: top-header;
+  grid-row-end: top-header;
+  background-color: var(--violet-bg);
+}
+
+.top-header {
+  grid-column-start: sidebar;
+  grid-column-end: end;
+  grid-row-start: top-header;
+  grid-row-end: top-header;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
+  box-sizing: border-box;
+  font-family: var(--font-sans);
+  font-size: 24px;
+  height: 100%;
+  /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
+  min-width: 1024px;
+}
+
+.top-header-triangle {
+  /* This used to be a clip-path, but Firefox on Android (at least as of early 2020)
+ * rendered the page extremely slowly in that version. With this approach it's super fast.
+ */
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: var(--top-header-height) 0 0 48px;
+  border-color: transparent transparent transparent var(--violet-bg);
+}
+
+p {
+  overflow-wrap: break-word;
+  margin: 24px 0;
+}
+
+footer {
+  grid-column-start: main-content;
+  grid-column-end: main-content;
+  grid-row-start: footer;
+  grid-row-end: footer;
+  max-width: var(--main-content-max-width);
+  font-size: 14px;
+  box-sizing: border-box;
+  padding: 16px;
+}
+
+footer p {
+  display: inline-block;
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.content {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+}
+
+.sidebar-entry ul {
+  list-style-type: none;
+  margin: 0;
+}
+
+.sidebar-entry a {
+  box-sizing: border-box;
+  min-height: 48px;
+  min-width: 48px;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+}
+
+.sidebar-entry a,
+.sidebar-entry a:visited {
+  color: var(--text-color);
+}
+
+.sidebar-sub-entries a {
+  display: block;
+  line-height: 24px;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-left: 14px;
+  padding-left: 26px;
+  border-left: 2px solid var(--violet);
+}
+
+.module-name {
+  font-size: 56px;
+  line-height: 1em;
+  font-family: var(--font-mono);
+  font-weight: bold;
+  margin-top: 18px;
+  margin-bottom: 48px;
+  color: var(--violet);
+}
+
+.module-name a,
+.module-name a:visited {
+color: inherit;
+}
+
+.module-name a:hover {
+  color: var(--link-hover-color);
+}
+
+.sidebar-module-link {
+  box-sizing: border-box;
+  font-size: 18px;
+  line-height: 24px;
+  font-family: var(--font-mono);
+  display: block;
+  width: 100%;
+  padding: 8px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-module-link.active {
+  font-weight: bold;
+}
+
+a,
+a:visited {
+  color: var(--link-color);
+}
+
+h3 {
+  font-size: 32px;
+  margin: 48px 0 24px 0;
+}
+
+h4 {
+  font-size: 24px;
+}
+
+.type-def {
+  font-size: 24px;
+  color: var(--link-color);
+}
+
+.code-snippet {
+  padding: 8px 16px;
+  display: block;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  background-color: var(--code-bg);
+}
+
+code {
+  font-family: var(--font-mono);
+  color: var(--code-color);
+  background-color: var(--code-bg);
+  display: inline-block;
+}
+
+p code {
+  padding: 0 8px;
+}
+
+code a,
+a code {
+  text-decoration: none;
+  color: var(--code-link-color);
+  background: none;
+  padding: 0;
+}
+
+code a:visited,
+a:visited code {
+  color: var(--code-link-color);
+}
+
+pre {
+  margin: 36px 0;
+  padding: 8px 16px;
+  box-sizing: border-box;
+  background-color: var(--code-bg);
+  overflow-x: hidden;
+  position: relative;
+  word-wrap: normal;
+}
+
+pre>samp {
+  overflow-x: auto;
+  display: block;
+}
+
+.hidden {
+  /* Use !important to win all specificity fights. */
+  display: none !important;
+}
+
+#module-search:placeholder-shown {
+  padding: 0;
+  opacity: 0;
+  height: 0;
+}
+
+#module-search,
+#module-search:focus {
+  opacity: 1;
+  padding: 12px 16px;
+  height: 48px;
+}
+
+/* Show the "Search" label link when the text input has a placeholder */
+#module-search:placeholder-shown + #search-link {
+  display: flex;
+}
+
+/* Hide the "Search" label link when the text input has focus */
+#module-search:focus + #search-link {
+  display: none;
+}
+
+#module-search {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 18px;
+  line-height: 18px;
+  margin-top: 6px;
+  border: none;
+  color: var(--faded-color);
+  background-color: var(--code-bg);
+  font-family: var(--font-serif);
+}
+
+#module-search::placeholder {
+  color: var(--faded-color);
+  opacity: 1;
+}
+
+#search-link {
+  box-sizing: border-box;
+  display: none;
+  align-items: center;
+  font-size: 18px;
+  line-height: 18px;
+  padding: 12px 16px;
+  height: 48px;
+  cursor: pointer;
+}
+
+#search-link:hover #search-link-text {
+  text-decoration: underline;
+}
+
+#search-link-hint {
+  margin-left: 1em;
+  opacity: 0.6;
+}
+
+#search-shortcut-key {
+  font-family: monospace;
+  border: 1px solid #666;
+  padding: 1px 3px 3px;
+  font-style: normal;
+  line-height: 15px;
+}
+
+.builtins-tip {
+  padding: 1em;
+  font-style: italic;
+  line-height: 1.3em;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+      /* WCAG AAA Compliant colors */
+      --code-bg: #202746;
+      --gray: #b6b6b6;
+      --orange: #fd6e08;
+      --green: #8ecc88;
+      --cyan: #12c9be;
+      --blue: #b1afdf;
+      --violet: #CAADFB;
+      --violet-bg: #332944;
+      --magenta: #f39bac;
+      --link-hover-color: #fff;
+
+      --link-color: var(--violet);
+      --code-link-color: var(--violet);
+      --text-color: #eaeaea;
+      --body-bg-color: #0e0e0f;
+      --border-color: var(--gray);
+      --code-color: #eeeeee;
+      --logo-solid: #8f8f8f;
+      --faded-color: #bbbbbb;
+      --gray: #6e6e6e;
+  }
+
+  html {
+      scrollbar-color: #8f8f8f #2f2f2f;
+  }
+}
+
+@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+  #search-link-hint {
+      display: none;
+  }
+
+  .search-button {
+      display: block; /* This is only visible in mobile. */
+  }
+
+  .top-header {
+      justify-content: space-between;
+      width: auto;
+      /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+      min-width: 0;
+  }
+
+  .pkg-full-name {
+      margin-left: 8px;
+      margin-right: 12px;
+      font-size: 24px;
+      padding-bottom: 14px;
+  }
+
+  .pkg-full-name a {
+      vertical-align: middle;
+      padding: 18px 0;
+  }
+
+  .logo {
+      padding-left: 2px;
+      width: 50px;
+      height: 54px;
+  }
+
+  .version {
+      margin: 0;
+      font-weight: normal;
+      font-size: 18px;
+      padding-bottom: 16px;
+  }
+
+  .module-name {
+      font-size: 36px;
+      margin-top: 8px;
+      margin-bottom: 8px;
+      max-width: calc(100% - 18px);
+      overflow: hidden;
+      text-overflow: ellipsis;
+  }
+
+  main {
+      grid-column-start: none;
+      grid-column-end: none;
+      grid-row-start: above-footer;
+      grid-row-end: above-footer;
+      padding: 18px;
+      font-size: 16px;
+      max-width: none;
+  }
+
+  #sidebar-nav {
+      grid-column-start: none;
+      grid-column-end: none;
+      grid-row-start: sidebar;
+      grid-row-end: sidebar;
+      margin-top: 0;
+      padding-left: 0;
+      width: auto;
+  }
+
+  #sidebar-heading {
+      font-size: 24px;
+      margin: 16px;
+  }
+
+  h3 {
+      font-size: 18px;
+      margin: 0;
+      padding: 0;
+  }
+
+  h4 {
+      font-size: 16px;
+  }
+
+  body {
+      grid-template-columns: auto;
+      grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
+      /* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
+
+      margin: 0;
+      min-width: 320px;
+      max-width: 100%;
+  }
+
+  .top-header-triangle {
+      display: none;
+  }
+
+  .pkg-and-logo {
+      width: 100%;
+  }
+
+  .pkg-full-name {
+      flex-grow: 1;
+  }
+
+  .pkg-full-name a {
+      padding-top: 24px;
+      padding-bottom: 12px;
+  }
+}
+
+/* Comments `#` and Documentation comments `##` */
+samp .comment,
+code .comment {
+  color: var(--green);
+}
+
+/* Number, String, Tag literals */
+samp .storage.type,
+code .storage.type,
+samp .string,
+code .string,
+samp .string.begin,
+code .string.begin,
+samp .string.end,
+code .string.end,
+samp .constant,
+code .constant,
+samp .literal,
+code .literal {
+  color: var(--cyan);
+}
+
+/* Keywords and punctuation */
+samp .keyword,
+code .keyword,
+samp .punctuation.section,
+code .punctuation.section,
+samp .punctuation.separator,
+code .punctuation.separator,
+samp .punctuation.terminator,
+code .punctuation.terminator,
+samp .kw,
+code .kw {
+    color: var(--magenta);
+}
+
+/* Operators */
+samp .op,
+code .op,
+samp .keyword.operator,
+code .keyword.operator {
+  color: var(--orange);
+}
+
+/* Delimieters */
+samp .delimeter,
+code .delimeter {
+  color: var(--gray);
+}
+
+/* Variables modules and field names */
+samp .function,
+code .function,
+samp .meta.group,
+code .meta.group,
+samp .meta.block,
+code .meta.block,
+samp .lowerident,
+code .lowerident {
+  color: var(--blue);
+}
+
+/* Types, Tags, and Modules */
+samp .type,
+code .type,
+samp .meta.path,
+code .meta.path,
+samp .upperident,
+code .upperident {
+  color: var(--green);
+}
+
+samp .dim,
+code .dim {
+  opacity: 0.55;
+}
+
+.button-container {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+.copy-button {
+  background: var(--code-bg);
+  border: 1px solid var(--magenta);
+  color: var(--magenta);
+  display: inline-block;
+  cursor: pointer;
+  margin: 8px;
+}
+
+.copy-button:hover {
+  border-color: var(--link-hover-color);
+  color: var(--link-hover-color);
+}

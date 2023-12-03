@@ -1,0 +1,33 @@
+[package]
+name = "roc_parse"
+description = "Implements the Roc parser, which transforms a textual representation of a Roc program to an AST."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+"parse_debug_trace" = []
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_module = { path = "../module" }
+roc_region = { path = "../region" }
+roc_error_macros = { path = "../../error_macros" }
+
+bumpalo.workspace = true
+encode_unicode.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+indoc.workspace = true
+pretty_assertions.workspace = true
+proptest.workspace = true
+quickcheck.workspace = true
+quickcheck_macros.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+harness = false
+name = "bench_parse"

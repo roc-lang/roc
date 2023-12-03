@@ -1,10 +1,10 @@
 name: deploy www.roc-lang.org
 
-# Whenever a commit lands on trunk, deploy the site
+# Whenever a commit lands on `main`, deploy the site
 on:
   push:
     branches:
-      - deploy-www # TODO change to trunk
+      - deploy-www
 
 jobs:
   deploy:

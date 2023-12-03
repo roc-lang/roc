@@ -1,0 +1,22 @@
+app "test" provides [f] to "./platform"
+
+J implements j : j -> (k -> {}) where j implements J, k implements K
+K implements k : k -> {} where k implements K
+
+C := {} implements [J {j: jC}]
+jC = \@C _ -> k
+
+D := {} implements [J {j: jD}]
+jD = \@D _ -> k
+
+E := {} implements [K {k}]
+k = \@E _ -> {}
+
+f = \flag, a, c ->
+    it =
+        when flag is
+            A -> j a
+            B -> j a
+    it c
+#      ^ k where k implements K
+#   ^^ k -[[] + j:j(2):2]-> {} where j implements J, k implements K

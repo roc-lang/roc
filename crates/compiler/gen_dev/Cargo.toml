@@ -1,0 +1,38 @@
+[package]
+name = "roc_gen_dev"
+description = "The development backend for the Roc compiler"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_builtins = { path = "../builtins" }
+roc_collections = { path = "../collections" }
+roc_error_macros = { path = "../../error_macros" }
+roc_module = { path = "../module" }
+roc_mono = { path = "../mono" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_solve = { path = "../solve" }
+roc_target = { path = "../roc_target" }
+roc_types = { path = "../types" }
+roc_unify = { path = "../unify" }
+
+bumpalo.workspace = true
+object.workspace = true
+packed_struct.workspace = true
+target-lexicon.workspace = true
+
+[dev-dependencies]
+roc_can = { path = "../can" }
+roc_parse = { path = "../parse" }
+roc_std = { path = "../../roc_std" }
+
+bumpalo.workspace = true
+capstone.workspace = true
+
+[features]
+target-aarch64 = []
+target-x86_64 = []

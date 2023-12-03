@@ -1,0 +1,9 @@
+app "test" provides [foo] to "./platform"
+
+F a : { foo : a }
+
+foo = \arg ->
+#^^^{-1} F b -[[foo(0)]]-> b
+    x : F b
+    x = arg
+    x.foo

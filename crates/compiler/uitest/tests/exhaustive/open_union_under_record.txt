@@ -1,0 +1,16 @@
+# +opt infer:print_only_under_alias
+
+app "test" provides [limitedKind] to "./platform"
+
+Kind : [ A, B, C ]
+Data : {kind: Kind}
+
+limitedKind : Data -> Str
+limitedKind = \data ->
+    when data is
+#        ^^^^ { kind : [A, B, C] }
+        {kind: A} -> "A is special"
+        {kind} -> when kind is
+            B -> "B"
+            C -> "C"
+            _ -> ""

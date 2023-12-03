@@ -1,0 +1,13 @@
+[package]
+name = "roc_tracing"
+description = "Utilities for setting up tracing at various executable entry points."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+tracing.workspace = true

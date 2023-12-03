@@ -1,0 +1,7 @@
+RecordAccess(
+    Var {
+        module_name: "",
+        ident: "rec",
+    },
+    "field",
+)

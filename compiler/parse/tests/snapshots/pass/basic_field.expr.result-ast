@@ -1,7 +1,0 @@
-Access(
-    Var {
-        module_name: "",
-        ident: "rec",
-    },
-    "field",
-)

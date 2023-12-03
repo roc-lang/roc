@@ -1,0 +1,16 @@
+# +opt infer:print_only_under_alias
+app "test" provides [main] to "./platform"
+
+main =
+    Named : [Named Str (List Named)]
+
+    foo : Named
+    foo = Named "outer" [Named "inner" []]
+#   ^^^ [Named Str (List a)] as a
+
+    Named name outerList = foo
+#   ^^^^^^^^^^^^^^^^^^^^ [Named Str (List a)] as a
+#              ^^^^^^^^^ List ([Named Str (List a)] as a)
+#         ^^^^ Str
+
+    {name, outerList}

@@ -1,0 +1,6 @@
+MalformedIdent(
+    "I.5",
+    QualifiedTupleAccessor(
+        @1,
+    ),
+)

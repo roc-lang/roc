@@ -1,6 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
+# run from root of repo with `./www/build.sh`
+# check www/README.md to run a test server
+
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
+
+# check if jq is installed
+jq --version
 
 # cd into the directory where this script lives.
 # This allows us to run this script from the root project directory,
@@ -11,32 +18,127 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
+# download the latest code for the examples
+echo 'Downloading latest examples...'
+curl -fL -o examples-main.zip https://github.com/roc-lang/examples/archive/refs/heads/main.zip
+rm -rf examples-main/
+unzip -o examples-main.zip
+cp -R examples-main/examples/ content/examples/
+
+# relace links in content/examples/index.md to work on the WIP site
+perl -pi -e 's|\]\(/|\]\(/examples/|g' content/examples/index.md
+
+# clean up examples artifacts
+rm -rf examples-main examples-main.zip
+
+# download fonts just-in-time so we don't have to bloat the repo with them.
+DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
+DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
+DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
+
+curl -fLJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
+tar -xzf $DESIGN_ASSETS_TARFILE
+mv $DESIGN_ASSETS_DIR/fonts build/
+rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
+
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
-wget https://github.com/rtfeldman/elm-css/files/8849069/roc-source-code.zip
+curl -fLJO https://github.com/roc-lang/roc/archive/www.tar.gz
+
+# Download the latest pre-built Web REPL as a zip file. (Build takes longer than Netlify's timeout.)
+REPL_TARFILE="roc_repl_wasm.tar.gz"
+curl -fLJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
+mkdir repl
+tar -xzf $REPL_TARFILE -C repl
+rm $REPL_TARFILE
+ls -lh repl
+
 popd
 
 pushd ..
-echo 'Generating docs...'
 cargo --version
-rustc --version
-
-# removing `-C link-arg=-fuse-ld=lld` from RUSTFLAGS because this causes an error when compiling `roc_repl_wasm`
-RUSTFLAGS="-C target-cpu=native"
 
 # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/builtins/" rather than "/" - which is what we want based on how the server
 # is set up to serve them.
 export ROC_DOCS_URL_ROOT=/builtins
 
-cargo run --bin roc-docs compiler/builtins/roc/*.roc
-mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
-mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
+cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
 
-echo "Building Web REPL..."
-repl_www/build.sh www/build
+mv generated-docs/ www/build/builtins # move everything to build/builtins/
 
-echo "Asset sizes:"
-ls -lh www/build/*
+# Manually add this tip to all the builtin docs.
+find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
 
-popd
+
+# cleanup files that could have stayed behind if the script failed
+rm -rf roc_nightly roc_releases.json
+
+# we use `! [ -v GITHUB_TOKEN_READ_ONLY ];` to check if we're on a netlify server
+if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
+  cargo build --release --bin roc
+
+  roc=target/release/roc
+else
+  echo 'Fetching latest roc nightly...'
+
+  # get roc release archive
+  curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+  # extract archive
+  ls | grep "roc_nightly" | xargs tar -xzvf
+  # delete archive
+  ls | grep "roc_nightly.*tar.gz" | xargs rm
+  # simplify dir name
+  mv roc_nightly* roc_nightly
+
+  roc='./roc_nightly/roc'
+fi
+
+$roc version
+
+echo 'Building site markdown content'
+$roc run www/main.roc -- www/content/ www/build/
+
+# cleanup
+rm -rf roc_nightly roc_releases.json
+
+echo 'Generating CLI example platform docs...'
+# Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
+# "/packages/basic-cli/" rather than "/builtins/"
+export ROC_DOCS_URL_ROOT=/packages/basic-cli
+
+rm -rf ./downloaded-basic-cli
+
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+
+cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+
+rm -rf ./downloaded-basic-cli
+
+BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
+mkdir -p $BASIC_CLI_PACKAGE_DIR
+mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
+
+# set up docs for older basic-cli versions
+# we need a github token
+if [ -v GITHUB_TOKEN_READ_ONLY ]; then
+
+  curl -v -H "Authorization: $GITHUB_TOKEN_READ_ONLY" -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
+
+  DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
+
+  rm basic_cli_releases.json
+
+  VERSION_NUMBERS=$(echo "$DOCS_LINKS" | grep -oP '(?<=/download/)[^/]+(?=/docs.tar.gz)')
+
+  while read -r VERSION_NR; do
+      echo $VERSION_NR
+      BASIC_CLI_DIR=$BASIC_CLI_PACKAGE_DIR/$VERSION_NR
+      mkdir -p $BASIC_CLI_DIR
+      curl -fL --output $BASIC_CLI_DIR/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/$VERSION_NR/docs.tar.gz
+      tar -xf $BASIC_CLI_DIR/docs.tar.gz -C $BASIC_CLI_DIR/
+      rm $BASIC_CLI_DIR/docs.tar.gz
+      mv $BASIC_CLI_DIR/generated-docs/* $BASIC_CLI_DIR
+      rm -rf $BASIC_CLI_DIR/generated-docs
+  done <<< "$VERSION_NUMBERS"
+fi

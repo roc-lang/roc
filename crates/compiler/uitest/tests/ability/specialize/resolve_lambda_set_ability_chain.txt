@@ -1,0 +1,19 @@
+app "test" provides [main] to "./platform"
+
+Id1 implements id1 : a -> a where a implements Id1
+Id2 implements id2 : a -> a where a implements Id2
+
+A := {} implements [Id1 {id1}, Id2 {id2}]
+id1 = \@A {} -> @A {}
+#^^^{-1} A#id1(6): A -[[id1(6)]]-> A
+
+id2 = \@A {} -> id1 (@A {})
+#               ^^^ A#id1(6): A -[[id1(6)]]-> A
+#^^^{-1} A#id2(7): A -[[id2(7)]]-> A
+
+main =
+    a : A
+    a = id2 (@A {})
+    #   ^^^ A#id2(7): A -[[id2(7)]]-> A
+
+    a

@@ -1,0 +1,44 @@
+app "test" provides [myU8] to "./platform"
+
+MDecodeError : [TooShort, Leftover (List U8)]
+
+MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
+
+MDecoding implements
+    decoder : MDecoder val fmt where val implements MDecoding, fmt implements MDecoderFormatting
+
+MDecoderFormatting implements
+    u8 : MDecoder U8 fmt where fmt implements MDecoderFormatting
+
+decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
+decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
+
+fromBytes : List U8, fmt -> Result val MDecodeError
+            where fmt implements MDecoderFormatting, val implements MDecoding
+fromBytes = \lst, fmt ->
+    when decodeWith lst decoder fmt is
+        { result, rest } ->
+            when result is
+                Ok val -> if List.isEmpty rest then Ok val else Err (Leftover rest)
+                Err e -> Err e
+
+
+Linear := {} implements [MDecoderFormatting {u8}]
+
+u8 = @MDecoder \lst, @Linear {} ->
+#^^{-1} Linear#u8(11): MDecoder U8 Linear
+        when List.first lst is
+            Ok n -> { result: Ok n, rest: List.dropFirst lst 1 }
+            Err _ -> { result: Err TooShort, rest: [] }
+
+MyU8 := U8 implements [MDecoding {decoder}]
+
+decoder = @MDecoder \lst, fmt ->
+#^^^^^^^{-1} MyU8#decoder(12): MDecoder MyU8 fmt where fmt implements MDecoderFormatting
+    when decodeWith lst u8 fmt is
+        { result, rest } ->
+            { result: Result.map result (\n -> @MyU8 n), rest }
+
+myU8 : Result MyU8 _
+myU8 = fromBytes [15] (@Linear {})
+#^^^^{-1} Result MyU8 MDecodeError

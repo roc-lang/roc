@@ -1,0 +1,10 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Other a b : { y: a, z: b }
+
+    f : { x : Str }(Other Str Str)
+    f
+
+main = entry
+#      ^^^^^ { x : Str, y : Str, z : Str }

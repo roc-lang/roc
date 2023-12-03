@@ -1,0 +1,15 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Outer k := [Empty, Wrapped k]
+
+    insert : Outer k, k -> Outer k
+    insert = \m, var ->
+        when m is
+            @Outer Empty -> @Outer (Wrapped var)
+            @Outer (Wrapped _) -> @Outer (Wrapped var)
+
+    insert
+
+main = entry
+#      ^^^^^ Outer k, k -[[insert(3)]]-> Outer k

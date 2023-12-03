@@ -1,0 +1,13 @@
+[package]
+name = "roc_target"
+description = "Provides types and helpers for compiler targets such as default_x86_64."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+strum.workspace = true
+strum_macros.workspace = true
+target-lexicon.workspace = true

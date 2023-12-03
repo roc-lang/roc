@@ -1,0 +1,15 @@
+app "test" provides [result] to "./platform"
+
+MHash implements
+    hash : a -> U64 where a implements MHash
+
+mulMHashes = \x, y -> hash x * hash y
+
+Id := U64 implements [MHash { hash: hashId }]
+hashId = \@Id n -> n
+
+Three := {} implements [MHash { hash: hashThree }]
+hashThree = \@Three _ -> 3
+
+result = mulMHashes (@Id 100) (@Three {})
+#^^^^^^{-1} U64

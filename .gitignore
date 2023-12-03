@@ -5,31 +5,38 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.so
+*.so.*
+*.obj
+*.dll
+*.dylib
+*.lib
+*.def
 *.tmp
+*.wasm
+*.exe
+*.pdb
 
 # llvm human-readable output
 *.ll
 *.bc
 
-#valgrind
+# valgrind
 vgcore.*
+
+# roc cache files
+*.rh*
+*.rm*
+preprocessedhost
+metadata
 
 #editors
 .idea/
 .vscode/
 .ignore
-
-#files too big to track in git
-editor/benches/resources/100000_lines.roc
-editor/benches/resources/10000_lines.roc
-editor/benches/resources/1000_lines.roc
-editor/benches/resources/100_lines.roc
-editor/benches/resources/25000000_lines.roc
-editor/benches/resources/50000_lines.roc
-editor/benches/resources/500_lines.roc
-
-# file editor creates when no arg is passed
-new-roc-project
+.exrc
+.vimrc
+.nvimrc
 
 # rust cache (sccache folder)
 sccache_dir
@@ -45,3 +52,33 @@ roc_linux_x86_64.tar.gz
 
 # macOS .DS_Store files
 .DS_Store
+
+# files geneated when formatting fails
+*.roc-format-failed
+*.roc-format-failed-ast-after
+*.roc-format-failed-ast-before
+
+# nix
+result
+
+# Only keep Cargo.lock dependencies for the main compiler.
+# Examples and test only crates should be fine to be unlocked.
+# This remove unneccessary lock file versioning.
+# It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
+/**/Cargo.lock
+!/Cargo.lock
+
+# snapshot tests temp file
+*.pending-snap
+
+# checkmate
+checkmate_*.json
+
+www/build/
+www/main
+www/dist
+
+# ignore the examples folder in the WIP website, this is copied from roc-lang/examples in when building the site
+www/content/examples
+www/examples-main.zip
+www/examples-main

@@ -1,0 +1,11 @@
+[package]
+name = "roc_serialize"
+description = "Provides helpers for serializing and deserializing to/from bytes."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_collections = { path = "../collections" }

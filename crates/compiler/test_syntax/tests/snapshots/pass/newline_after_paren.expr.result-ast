@@ -1,0 +1,10 @@
+ParensAround(
+    SpaceBefore(
+        Tag(
+            "A",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

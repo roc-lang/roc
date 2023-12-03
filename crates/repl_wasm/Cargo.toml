@@ -1,0 +1,46 @@
+[package]
+name = "roc_repl_wasm"
+description = "Provides a build of the REPL for the Roc website using WebAssembly."
+
+authors = ["The Roc Contributors"]
+edition = "2021"
+license = "UPL-1.0"
+version = "0.0.1"
+
+[lib]
+crate-type = ["cdylib"]
+
+[build-dependencies]
+roc_bitcode = { path = "../compiler/builtins/bitcode" }
+roc_builtins = { path = "../compiler/builtins" }
+wasi_libc_sys = { path = "../wasi-libc-sys" }
+
+tempfile.workspace = true
+
+[dependencies]
+bumpalo.workspace = true
+console_error_panic_hook = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+getrandom = { version = "0.2", features = ["js"] } # not a direct dependency, needed because of https://docs.rs/getrandom/latest/getrandom/#webassembly-support
+js-sys.workspace = true
+wasm-bindgen-futures.workspace = true
+wasm-bindgen.workspace = true
+
+roc_collections = { path = "../compiler/collections" }
+roc_gen_wasm = { path = "../compiler/gen_wasm" }
+roc_load = { path = "../compiler/load" }
+roc_parse = { path = "../compiler/parse" }
+roc_repl_eval = { path = "../repl_eval" }
+roc_repl_ui = { path = "../repl_ui" }
+roc_reporting = { path = "../reporting" }
+roc_solve = { path = "../compiler/solve" }
+roc_target = { path = "../compiler/roc_target" }
+roc_types = { path = "../compiler/types" }
+
+[features]
+wasi_test = ["futures"]
+
+# Tell wasm-pack not to run wasm-opt automatically. We run it explicitly when we need to.
+# (Workaround for a CI install issue with wasm-pack https://github.com/rustwasm/wasm-pack/issues/864)
+[package.metadata.wasm-pack.profile.profiling]
+wasm-opt = false

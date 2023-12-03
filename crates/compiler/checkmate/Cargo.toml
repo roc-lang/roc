@@ -1,0 +1,19 @@
+[package]
+name = "roc_checkmate"
+description = "A framework for debugging the solver."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_checkmate_schema = { path = "../checkmate_schema" }
+roc_module = { path = "../module" }
+roc_solve_schema = { path = "../solve_schema" }
+roc_types = { path = "../types" }
+chrono.workspace = true
+
+[build-dependencies]
+roc_checkmate_schema = { path = "../checkmate_schema" }
+serde_json.workspace = true

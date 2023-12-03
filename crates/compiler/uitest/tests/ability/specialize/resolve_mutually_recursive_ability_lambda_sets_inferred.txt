@@ -1,0 +1,22 @@
+app "test" provides [main] to "./platform"
+
+Bounce implements
+    ping : a -> a where a implements Bounce
+    pong : a -> a where a implements Bounce
+
+A := {} implements [Bounce {ping, pong}]
+
+ping = \@A {} -> pong (@A {})
+#                ^^^^ A#pong(6): A -[[pong(6)]]-> A
+#^^^^{-1} A#ping(5): A -[[ping(5)]]-> A
+
+pong = \@A {} -> ping (@A {})
+#                ^^^^ A#ping(5): A -[[ping(5)]]-> A
+#^^^^{-1} A#pong(6): A -[[pong(6)]]-> A
+
+main =
+    a : A
+    a = ping (@A {})
+    #   ^^^^ A#ping(5): A -[[ping(5)]]-> A
+
+    a

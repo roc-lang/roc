@@ -14,11 +14,47 @@
   [headers.values]
     X-Frame-Options = "DENY"
     X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    # Firefox prefetch requires some cache-control to be set
+    # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
+    Cache-Control = "public, max-age=1200"
+
+[[headers]]
+  for = "/packages/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
     # unsafe-eval is needed for wasm compilation in the repl to work on Safari and Chrome;
     # otherwise they block it.
     # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval';"
-    X-Content-Type-Options = "nosniff"
+    #
+    # This style-src hash is to permit the <style> in the favicon so it looks good in both light and
+    # dark mode. Favicons can only do this using inline <style> tags, so this exception is needed!
+    #
+    # When changing the favicon's <style>, generate a new hash and put it here using:
+    #
+    #   $ echo -n "polygon{fill:#7d59dd}@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}" | openssl dgst -sha256 -binary | openssl enc -base64
+    #
+    # Details on how this works: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/style-src
+    #
+    # Also note that the sha256 in the script-src is for the <script> in the <head>
+    # which removes the 'no-js' class. When changing it, use:
+    #
+    #   $ echo -n "document.documentElement.className = document.documentElement.className.replace('no-js', '');" | openssl dgst -sha256 -binary | openssl enc -base64
+    #
+    # In both cases, the sha256 should be in this format: 'sha256-MySha256GoesHere'
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'sha256-glHRII/7b3zzlpV/fHgyDU43eehue/Hg2K6Ihbt7o6Q='; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=' 'unsafe-inline';"
+    # Firefox prefetch requires some cache-control to be set
+    # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
+    Cache-Control = "public, max-age=1200"
+
+[[headers]]
+  for = "/fonts/*"
+
+  [headers.values]
+    # Preloading fonts requires CORS headers for some reason
+    Access-Control-Allow-Origin = "*"
 
 # Redirect roc-lang.org/authors to the AUTHORS file in this repo
 #
@@ -26,10 +62,6 @@
 # for a list of authors!
 [[redirects]]
   from = "/authors"
-  to = "https://github.com/rtfeldman/roc/blob/trunk/AUTHORS"
+  to = "https://raw.githubusercontent.com/roc-lang/roc/main/AUTHORS"
   force = true
-  status = 302 # TODO once the repo is public, use status = 200 and this URL:
-               # https://raw.githubusercontent.com/rtfeldman/roc/trunk/AUTHORS
-               #
-               # This way, roc-lang.org/authors will show the authors directly,
-               # proxied from the current AUTHORS file on GitHub, no redirects.
+  status = 200

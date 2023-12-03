@@ -1,0 +1,12 @@
+*.dSYM
+libhost.a
+libapp.so
+dynhost
+preprocessedhost
+metadata
+
+expects/expects
+benchmarks/rbtree-ck
+benchmarks/rbtree-insert
+benchmarks/test-astar
+benchmarks/test-base64

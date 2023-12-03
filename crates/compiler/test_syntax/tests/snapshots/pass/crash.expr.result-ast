@@ -1,0 +1,210 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483648),
+            Index(2147483649),
+            Index(2147483650),
+            Index(2147483651),
+            Index(2147483652),
+        ],
+        regions: [
+            @0-12,
+            @13-28,
+            @29-45,
+            @46-74,
+            @75-101,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+            Slice(start = 0, length = 1),
+            Slice(start = 1, length = 1),
+            Slice(start = 2, length = 1),
+            Slice(start = 3, length = 1),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+            Slice(start = 1, length = 0),
+            Slice(start = 2, length = 0),
+            Slice(start = 3, length = 0),
+            Slice(start = 4, length = 0),
+        ],
+        spaces: [
+            Newline,
+            Newline,
+            Newline,
+            Newline,
+        ],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @0-1 Underscore(
+                    "",
+                ),
+                @4-12 Apply(
+                    @4-9 Crash,
+                    [
+                        @10-12 Str(
+                            PlainLine(
+                                "",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+            Body(
+                @13-14 Underscore(
+                    "",
+                ),
+                @17-28 Apply(
+                    @17-22 Crash,
+                    [
+                        @23-25 Str(
+                            PlainLine(
+                                "",
+                            ),
+                        ),
+                        @26-28 Str(
+                            PlainLine(
+                                "",
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+            Body(
+                @29-30 Underscore(
+                    "",
+                ),
+                @33-45 Apply(
+                    @33-38 Crash,
+                    [
+                        @39-41 Num(
+                            "15",
+                        ),
+                        @42-45 Num(
+                            "123",
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+            Body(
+                @46-47 Underscore(
+                    "",
+                ),
+                @50-74 Apply(
+                    @50-53 Var {
+                        module_name: "",
+                        ident: "try",
+                    },
+                    [
+                        @54-57 Var {
+                            module_name: "",
+                            ident: "foo",
+                        },
+                        @59-73 ParensAround(
+                            Closure(
+                                [
+                                    @60-61 Underscore(
+                                        "",
+                                    ),
+                                ],
+                                @65-73 Apply(
+                                    @65-70 Crash,
+                                    [
+                                        @71-73 Str(
+                                            PlainLine(
+                                                "",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+            Body(
+                @75-76 Underscore(
+                    "",
+                ),
+                @81-101 SpaceBefore(
+                    Defs(
+                        Defs {
+                            tags: [
+                                Index(2147483648),
+                            ],
+                            regions: [
+                                @81-93,
+                            ],
+                            space_before: [
+                                Slice(start = 0, length = 0),
+                            ],
+                            space_after: [
+                                Slice(start = 0, length = 0),
+                            ],
+                            spaces: [],
+                            type_defs: [],
+                            value_defs: [
+                                Body(
+                                    @81-82 Underscore(
+                                        "",
+                                    ),
+                                    @85-93 Apply(
+                                        @85-90 Crash,
+                                        [
+                                            @91-93 Str(
+                                                PlainLine(
+                                                    "",
+                                                ),
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                ),
+                            ],
+                        },
+                        @96-101 SpaceBefore(
+                            Crash,
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+    },
+    @103-118 SpaceBefore(
+        Record(
+            [
+                @105-116 RequiredValue(
+                    @105-106 "f",
+                    [],
+                    @108-116 Apply(
+                        @108-113 Crash,
+                        [
+                            @114-116 Str(
+                                PlainLine(
+                                    "",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ],
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

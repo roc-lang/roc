@@ -1,0 +1,11 @@
+app
+*.o
+*.dSYM
+dynhost
+libapp.so
+metadata
+preprocessedhost
+packages-test
+
+multi-dep-str/multi-dep-str
+multi-dep-thunk/multi-dep-thunk

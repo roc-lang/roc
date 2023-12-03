@@ -1,0 +1,40 @@
+[package]
+name = "repl_test"
+description = "Tests the roc REPL."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[build-dependencies]
+roc_cli = { path = "../cli" }
+
+[dev-dependencies]
+roc_build = { path = "../compiler/build" }
+roc_repl_cli = { path = "../repl_cli" }
+roc_repl_ui = { path = "../repl_ui" }
+roc_test_utils = { path = "../test_utils" }
+roc_wasm_interp = { path = "../wasm_interp" }
+roc_reporting = { path = "../reporting" }
+roc_target = { path = "../compiler/roc_target" }
+
+bumpalo.workspace = true
+indoc.workspace = true
+strip-ansi-escapes.workspace = true
+target-lexicon.workspace = true
+rustyline.workspace = true
+
+[features]
+default = ["target-aarch64", "target-x86_64", "target-wasm32"]
+target-aarch64 = ["roc_build/target-aarch64", "roc_repl_cli/target-aarch64"]
+target-arm = ["roc_build/target-arm", "roc_repl_cli/target-arm"]
+target-wasm32 = ["roc_build/target-wasm32"]
+target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
+target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
+wasm = ["target-wasm32"]
+
+target-all = ["target-aarch64", "target-arm", "target-x86", "target-x86_64", "target-wasm32"]
+
+[package.metadata.cargo-udeps.ignore]
+development = ["roc_wasm_interp"]

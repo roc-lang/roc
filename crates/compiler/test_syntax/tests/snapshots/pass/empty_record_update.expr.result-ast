@@ -1,0 +1,7 @@
+RecordUpdate {
+    update: @1-2 Var {
+        module_name: "",
+        ident: "e",
+    },
+    fields: [],
+}

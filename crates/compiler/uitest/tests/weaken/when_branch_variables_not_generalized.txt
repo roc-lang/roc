@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+main = \{} -> when Red is
+#^^^^{-1} {}* -[[main(0)]]-> { y : [Green, Red]a, z : [Green, Red]a }
+    x ->
+        y : [Red]_
+        y = x
+
+        z : [Red, Green]_
+        z = x
+
+        {y, z}

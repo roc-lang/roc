@@ -1,0 +1,10 @@
+app "test" provides [main] to "./platform"
+
+f : U16 -> _
+f = \c ->
+    when c is
+        '.' -> 'A'
+        c1 -> c1
+
+main = f
+#      ^ U16 -[[f(1)]]-> U16

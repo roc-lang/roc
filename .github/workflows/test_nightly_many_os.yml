@@ -1,0 +1,46 @@
+on:
+  workflow_dispatch:
+
+name: Test latest nightly releases for macOS and Linux x86_64
+
+jobs:
+  test-nightly:
+    name: test nightly macos 11/12/13, ubuntu 20.04/22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-11, macos-12, macos-13, ubuntu-20.04, ubuntu-22.04 ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v3
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.11.0
+
+      - name: get the latest release archive for linux (x86_64)
+        if: startsWith(matrix.os, 'ubuntu')
+        run:  | 
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+
+
+      - name: get the latest release archive for macos (x86_64)
+        if: startsWith(matrix.os, 'macos')
+        run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
+
+      - run: zig version
+
+      - name: prep and run basic tests
+        run: |
+          ./ci/basic_nightly_test.sh
+
+      - name: clean up, get old linux release (x86_64), run tests
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          rm -rf roc_nightly
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz
+          ./ci/basic_nightly_test.sh
+
+
+
+

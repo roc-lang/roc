@@ -1,0 +1,8 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    A := U8
+    List.map [1, 2, 3] @A
+
+main = entry
+#      ^^^^^ List A

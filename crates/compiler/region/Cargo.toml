@@ -1,0 +1,11 @@
+[package]
+name = "roc_region"
+description = "Data structures for storing source-code-location information, used heavily for contextual error messages."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+static_assertions.workspace = true

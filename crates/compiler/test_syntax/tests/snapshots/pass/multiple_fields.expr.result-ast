@@ -1,0 +1,13 @@
+RecordAccess(
+    RecordAccess(
+        RecordAccess(
+            Var {
+                module_name: "",
+                ident: "rec",
+            },
+            "abc",
+        ),
+        "def",
+    ),
+    "ghi",
+)

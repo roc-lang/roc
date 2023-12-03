@@ -1,0 +1,29 @@
+[package]
+name = "roc_packaging"
+description = "Functionality for packaging Roc source code - e.g. for distribution over the network"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_error_macros = { path = "../error_macros" }
+roc_parse = { path = "../compiler/parse" }
+
+base64-url.workspace = true
+blake3.workspace = true
+brotli.workspace = true     # used for decompressing tarballs over HTTPS, if the server supports brotli
+bumpalo.workspace = true
+flate2.workspace = true
+fs_extra.workspace = true
+tar.workspace = true        # used for `roc build --tar`
+tempfile.workspace = true
+walkdir.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+reqwest.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

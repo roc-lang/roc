@@ -1,0 +1,13 @@
+app "test" provides [doIt] to "./platform"
+
+Effect : [
+    DoIt {} ({} -> Effect),
+]
+
+Task := ({} -> Effect) -> Effect
+
+doIt : {} -> Task
+doIt = \{} ->
+#^^^^{-1} {} -[[doIt(0)]]-> Task
+    @Task \toNext ->
+        DoIt {} \{} -> (toNext {})

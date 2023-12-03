@@ -52,7 +52,7 @@ limitations under the License.
 
 * Elm - https://github.com/elm/compiler
 
-This source code can be found in editor/src/lang/solve.rs and compiler/src/solve.rs, and is licensed under the following terms:
+This source code can be found in compiler/src/solve.rs, and is licensed under the following terms:
 
 
 Copyright 2012-present Evan Czaplicki
@@ -119,23 +119,6 @@ limitations under the License.
 
 ===========================================================
 
-* learn-wgpu - https://github.com/sotrh/learn-wgpu
-
-This source code can be found in editor/src/graphics/lowlevel/buffer.rs, editor/src/graphics/primitives/text.rs, and editor/src/graphics/primitives/lowlevel/vertex.rs, and is licensed under the following terms:
-
-
-MIT License
-
-Copyright (c) 2020 Benjamin Hansen
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-===========================================================
-
 * pretty - https://github.com/Marwes/pretty.rs
 
 This source code can be found in vendor/pretty/ and is licensed under the following terms:
@@ -186,24 +169,9 @@ limitations under the License.
 
 ===========================================================
 
-* Ropey - https://github.com/cessen/ropey
-
-This source code can be found in editor/src/ui/text/lines.rs and is licensed under the following terms:
-
-
-Copyright (c) 2017 Nathan Vegdahl
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-===========================================================
-
 * Zig - https://ziglang.org
 
-This source code can be found in compiler/builtins/bitcode/src/hash.zig, highlight/tests/peg_grammar.rs and highlight/src/highlight_parser.rs and is licensed under the following terms:
+This source code can be found in highlight/tests/peg_grammar.rs and highlight/src/highlight_parser.rs and is licensed under the following terms:
 
 
 The MIT License (Expat)

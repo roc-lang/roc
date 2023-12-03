@@ -1,0 +1,9 @@
+procedure Num.37 (#Attr.2, #Attr.3):
+    let Num.291 : Decimal = lowlevel NumDivFrac #Attr.2 #Attr.3;
+    ret Num.291;
+
+procedure Test.0 ():
+    let Test.2 : Decimal = 1dec;
+    let Test.3 : Decimal = 200dec;
+    let Test.1 : Decimal = CallByName Num.37 Test.2 Test.3;
+    ret Test.1;

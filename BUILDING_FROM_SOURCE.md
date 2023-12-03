@@ -1,80 +1,61 @@
 # Building the Roc compiler from source
 
+If you run into any problems getting Roc built from source, please ask for help in the `#beginners` channel on [Roc Zulip](https://roc.zulipchat.com) (the fastest way), or create an issue in this repo!
+
 ## Using Nix
 
-### On Linux/MacOS/NixOS x86_64/aarch64/arm64
+On MacOS and Linux, we highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+
+:warning: If you tried to run `cargo` in the repo folder before installing nix, make sure to execute `cargo clean` first. To prevent you from executing `cargo` outside of nix, tools like [direnv](https://github.com/nix-community/nix-direnv) and [lorri](https://github.com/nix-community/lorri) can put you in a nix shell automatically when you `cd` into the directory.
+
+### On Linux x86_64 or MacOS aarch64/arm64/x86_64
 
 #### Install
-
-We highly recommend Using [nix](https://nixos.org/download.html) to automatically install all dependencies necessary to build roc.
 
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
 Install nix (not necessary on NixOS):
-```
-curl -L https://nixos.org/nix/install | sh
+
+- If you are using WSL (Windows subsystem for Linux):
+
+```sh
+sh <(curl -L https://nixos.org/nix/install) --no-daemon
 ```
 
-Start a fresh terminal session (= open a new terminal).
+- For everything else:
 
-install nixFlakes in your environment:
-```
-nix-env -iA nixpkgs.nixFlakes
+```sh
+sh <(curl -L https://nixos.org/nix/install) --daemon
 ```
 
-Edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
-```
+Open a new terminal and edit either `~/.config/nix/nix.conf` or `/etc/nix/nix.conf` and add:
+
+```text
 experimental-features = nix-command flakes
 ```
 
- If Nix was installed in multi-user mode, make sure to restart the nix-daemon.
- If you don't know how to do this, restarting your computer will also do the job.
+If Nix was installed in multi-user mode, make sure to restart the nix-daemon.
+If you don't know how to do this, restarting your computer will also do the job.
 
 #### Usage
 
 Now with nix set up, you just need to run one command from the roc project root directory:
-```
+
+```sh
 nix develop
 ```
+
 You should be in a shell with everything needed to build already installed.
 Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 Use `cargo build` to build the whole project.
 
+Read the instructions [here](devtools/README.md) to make nix work well with your development tools (vscode, vim, rust-analyzer...)
+
 #### Extra tips
 
-If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/) and [lorri](https://github.com/nix-community/lorri).
+If you want to load all dependencies automatically whenever you `cd` into `roc`, check out [direnv](https://direnv.net/).
 Then you will no longer need to execute `nix develop` first.
-
-### Editor
-
-The editor is a :construction:WIP:construction: and not ready yet to replace your favorite editor, although if you want to try it out on nix, read on.
-`cargo run edit` should work from NixOS, if you use another OS, follow the instructions below.
-
-#### Nvidia GPU
-
-```
-nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanNvidia -- cargo run edit
-```
-
-If you get an error like:
-```
-error: unable to execute '/nix/store/qk6...wjla-nixVulkanNvidia-470.103.01/bin/nixVulkanNvidia': No such file or directory
-```
-The intel command should work:
-```
-nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanIntel -- cargo run edit
-```
-
-##### Integrated Intel Graphics
-
-```
-nix run --override-input nixpkgs nixpkgs/nixos-21.11 --impure github:guibou/nixGL#nixVulkanIntel -- cargo run edit
-```
-
-##### Other configs
-
-Check the [nixGL repo](https://github.com/guibou/nixGL) for other graphics configurations. Feel free to ask us for help if you get stuck.
 
 ## Troubleshooting
 
@@ -85,14 +66,14 @@ That will help us improve this document for everyone who reads it in the future!
 
 To build the compiler, you need these installed:
 
-* [Zig](https://ziglang.org/), see below for version
-* `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
-* On Debian/Ubuntu `sudo apt-get install pkg-config`
-* LLVM, see below for version
+- [Zig](https://ziglang.org/), see below for version
+- On Debian/Ubuntu `sudo apt-get install pkg-config`
+- LLVM, see below for version
+- [rust](https://rustup.rs/)
 
 To run the test suite (via `cargo test`), you additionally need to install:
 
-* [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
+- [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
 For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal development you should be fine without it.
@@ -101,7 +82,7 @@ For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir).
 
 You may see an error like this during builds:
 
-```
+```text
 /usr/bin/ld: cannot find -lxcb-render
 /usr/bin/ld: cannot find -lxcb-shape
 /usr/bin/ld: cannot find -lxcb-xfixes
@@ -109,51 +90,32 @@ You may see an error like this during builds:
 
 If so, you can fix it like so:
 
-```
+```sh
 sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
 ### Zig
-**version: 0.9.1**
+
+**version: 0.11.0**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 
 If you prefer a package manager, you can try the following:
-- For MacOS, you can install with `brew install zig`
-- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
-- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
-If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
+- MacOS: `brew install zig@0.11.0`
+- Systems with snap (such as Ubuntu): `snap install zig --classic --beta`
+- Other systems: refer to the [zig documentation](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+
+If you want to install it manually, you can [download the binary](https://ziglang.org/download/#release-0.11.0) and place it on your PATH.
+Apart from the binary, the archive contains a `lib` folder, which needs to be copied next to the binary.
+
+> WINDOWS NOTE: when you unpack the Zig archive on windows, the result is nested in an extra directory. The instructions on the zig website will seem to not work. So, double-check that the path to zig executable does not include the same directory name twice.
 
 ### LLVM
-**version: 13.0.x**
 
-For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
-`$(brew --prefix llvm@13)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 13.0.0" at the top.
-You may also need to manually specify a prefix env var like so:
-```
-export LLVM_SYS_130_PREFIX=/usr/local/opt/llvm@13
-```
+**version: 16.0.x**
 
-For Ubuntu and Debian:
-```
-sudo apt -y install lsb-release software-properties-common gnupg
-wget https://apt.llvm.org/llvm.sh
-chmod +x llvm.sh
-./llvm.sh 13
-```
-
-If you use this script, you'll need to add `clang` to your `PATH`.
-By default, the script installs it as `clang-13`. You can address this with symlinks like so:
-
-```
-sudo ln -s /usr/bin/clang-13 /usr/bin/clang
-```
-
-There are also alternative installation options at http://releases.llvm.org/download.html
-
-[Troubleshooting](#troubleshooting)
+See below for operating system specific installation instructions.
 
 ### Building
 
@@ -161,9 +123,41 @@ Use `cargo build` to build the whole project.
 Use `cargo run help` to see all subcommands.
 To use the `repl` subcommand, execute `cargo run repl`.
 
+The default is a developer build. For an optimized build, use:
+
+```
+cargo build --release --bin roc
+```
+
 ### LLVM installation on Linux
 
-For a current list of all dependency versions and their names in apt, see the Earthfile.
+For Ubuntu and Debian:
+
+```sh
+sudo apt -y install lsb-release software-properties-common gnupg
+wget https://apt.llvm.org/llvm.sh
+chmod +x llvm.sh
+./llvm.sh 16
+```
+
+If you use this script, you'll need to add `clang` to your `PATH`.
+By default, the script installs it as `clang-16`. You can address this with symlinks like so:
+
+```sh
+sudo ln -s /usr/bin/clang-16 /usr/bin/clang
+```
+
+There are also alternative installation options at <http://releases.llvm.org/download.html>
+
+[Troubleshooting](#troubleshooting)
+
+For Fedora:
+
+```sh
+sudo dnf install llvm16 llvm16-devel
+```
+
+#### LLVM Linux troubleshooting
 
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
@@ -171,43 +165,56 @@ On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 If you encounter `cannot find -lz` run `sudo apt install zlib1g-dev`.
 
 If you encounter:
-```
-error: No suitable version of LLVM was found system-wide or pointed
-       to by LLVM_SYS_130_PREFIX.
-```
-Add `export LLVM_SYS_130_PREFIX=/usr/lib/llvm-13` to your `~/.bashrc` or equivalent file for your shell.
 
-### LLVM installation on macOS
+```text
+error: No suitable version of LLVM was found system-wide or pointed
+       to by LLVM_SYS_160_PREFIX.
+```
+
+Add `export LLVM_SYS_160_PREFIX=/usr/lib/llvm-16` to your `~/.bashrc` or equivalent file for your shell.
+
+### LLVM installation on MacOS
+
+For macOS, you can install LLVM 16 using `brew install llvm@16` and then adding
+`$(brew --prefix llvm@16)/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 16.0.x" at the top.
+You may also need to manually specify a prefix env var like so:
+
+```sh
+export LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)
+```
+
+#### LLVM MacOS troubleshooting
 
 If installing LLVM fails, it might help to run `sudo xcode-select -r` before installing again.
 
 It might also be useful to add these exports to your shell:
 
-```
+```sh
 export LDFLAGS="-L/usr/local/opt/llvm/lib -Wl,-rpath,/usr/local/opt/llvm/lib"
 export CPPFLAGS="-I/usr/local/opt/llvm/include"
 ```
 
 ### LLVM installation on Windows
 
-**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, the editor and many tests will not work on windows.
-Installing LLVM's prebuilt binaries doesn't seem to be enough for the `llvm-sys` crate that Roc depends on, so I had to follow the steps below:
+**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, and many tests will not work on windows.
+The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
-1. I downloaded and installed [Build Tools for Visual Studio 2019](https://visualstudio.microsoft.com/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16) (a full Visual Studio install should work too; the Build Tools are just the CLI tools, which is all I wanted)
-1. Download the custom LLVM 7z archive [here](https://github.com/PLC-lang/llvm-package-windows/releases/tag/v13.0.1).
+1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v16.0.6/LLVM-16.0.6-win64.7z).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
-1. Extract the 7z file to where you want to permanently keep the folder.
-1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-changes-to-environment-variables) to make this a permanent environment variable):
-```
-[Environment]::SetEnvironmentVariable(
-   "Path",
-   [Environment]::GetEnvironmentVariable("Path", "User") + ";C:\Users\anton\Downloads\LLVM-13.0.1-win64\bin",
-   "User"
-)
-```
+1. Extract the 7z file to where you want to permanently keep the folder. We recommend you pick a path without any spaces in it.
+1. In powershell, set the `LLVM_SYS_160_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
 
+```text
+<# ! Replace YOUR_USERNAME ! #>
+$env:LLVM_SYS_160_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-16.0.6-win64'
+```
 
 Once all that was done, `cargo build` ran successfully for Roc!
+
+#### LLVM Windows troubleshooting
+
+If you see the build failing because some internal file is not available, it might be your anti-virus program. Cargo's behavior is kind of similar to a virus (downloading files from the internet, creating many files), and this has been known to cause problems.
 
 ### Build speed on WSL/WSL2
 
@@ -221,15 +228,15 @@ makes build times a lot faster, and I highly recommend it.
 
 Create `~/.cargo/config.toml` if it does not exist and add this to it:
 
-```
+```toml
 [build]
 # Link with lld, per https://github.com/rust-lang/rust/issues/39915#issuecomment-538049306
 # Use target-cpu=native, per https://deterministic.space/high-performance-rust.html
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 13 (e.g. with `$ sudo apt-get install lld-13`)
+Then install `lld` version 16 (e.g. with `$ sudo apt-get install lld-16`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-13`.
+is symlinked to `lld-16`.
 
 That's it! Enjoy the faster builds.

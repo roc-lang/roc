@@ -1,0 +1,5 @@
+zig-out
+zig-cache
+src/zig-cache
+benchmark/zig-cache
+dec

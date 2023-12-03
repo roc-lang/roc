@@ -1,0 +1,10 @@
+app "test" provides [main] to "./platform"
+
+input : List Str
+input = [ "foo", "bar" ]
+
+main = when input is
+    #       ^^^^^ List Str
+    [ _first, .. as rest ] -> 1 + List.len rest
+    #                                      ^^^^ List Str
+    [] -> 0

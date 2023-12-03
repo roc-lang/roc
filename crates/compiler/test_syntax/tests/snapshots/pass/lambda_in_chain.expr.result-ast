@@ -1,0 +1,71 @@
+BinOps(
+    [
+        (
+            @0-10 SpaceAfter(
+                Str(
+                    PlainLine(
+                        "a string",
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            @11-13 Pizza,
+        ),
+        (
+            @14-24 SpaceAfter(
+                Var {
+                    module_name: "Str",
+                    ident: "toUtf8",
+                },
+                [
+                    Newline,
+                ],
+            ),
+            @25-27 Pizza,
+        ),
+        (
+            @28-54 SpaceAfter(
+                Apply(
+                    @28-36 Var {
+                        module_name: "List",
+                        ident: "map",
+                    },
+                    [
+                        @37-54 Closure(
+                            [
+                                @38-42 Identifier(
+                                    "byte",
+                                ),
+                            ],
+                            @46-54 BinOps(
+                                [
+                                    (
+                                        @46-50 Var {
+                                            module_name: "",
+                                            ident: "byte",
+                                        },
+                                        @51-52 Plus,
+                                    ),
+                                ],
+                                @53-54 Num(
+                                    "1",
+                                ),
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            @55-57 Pizza,
+        ),
+    ],
+    @58-70 Var {
+        module_name: "List",
+        ident: "reverse",
+    },
+)

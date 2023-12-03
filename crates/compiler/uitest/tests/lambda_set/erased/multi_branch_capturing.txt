@@ -1,0 +1,87 @@
+# +set function_kind=erased
+# +emit:mono
+app "test" provides [main] to "./platform"
+
+f = \s ->
+  if Bool.true
+  then \{} -> ""
+  #    ^^^^^^^^^ {}* -?-> Str
+  else \{} -> s
+  #    ^^^^^^^^ {}* -?-> Str
+
+main = (f "") {}
+#       ^^^^ {} -?-> Str
+
+# -emit:mono
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
+
+procedure Test.1 (Test.2):
+    let Test.34 : Int1 = CallByName Bool.2;
+    if Test.34 then
+        dec Test.2;
+        let Test.38 : FunPtr(({}) -> Str) = FunctionPointer Test.3;
+        let Test.35 : ?Erased = ErasedMake { value: <null>, callee: Test.38 };
+        ret Test.35;
+    else
+        let Test.33 : {Str} = Struct {Test.2};
+        let Test.31 : [<rnu><null>, C {Str}] = TagId(0) Test.33;
+        let Test.32 : FunPtr(({}, ?Erased) -> Str) = FunctionPointer Test.4;
+        let Test.26 : ?Erased = ErasedMake { value: Test.31, callee: Test.32 };
+        ret Test.26;
+
+procedure Test.3 (Test.36):
+    let Test.37 : Str = "";
+    ret Test.37;
+
+procedure Test.4 (Test.27, #Attr.12):
+    let Test.29 : [<rnu><null>, C {Str}] = ErasedLoad #Attr.12 .Value;
+    let Test.30 : {Str} = UnionAtIndex (Id 0) (Index 0) Test.29;
+    joinpoint #Derived_gen.0:
+        let Test.2 : Str = StructAtIndex 0 Test.30;
+        ret Test.2;
+    in
+    let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.29;
+    if #Derived_gen.1 then
+        free Test.29;
+        jump #Derived_gen.0;
+    else
+        inc Test.30;
+        decref Test.29;
+        jump #Derived_gen.0;
+
+procedure Test.0 ():
+    let Test.6 : {} = Struct {};
+    let Test.16 : Str = "";
+    let Test.39 : FunPtr((Str) -> ?Erased) = FunctionPointer Test.1;
+    let Test.17 : ?Erased = ErasedMake { value: <null>, callee: Test.39 };
+    joinpoint Test.18 Test.7:
+        joinpoint Test.8 Test.5:
+            ret Test.5;
+        in
+        let Test.9 : Ptr([]) = ErasedLoad Test.7 .ValuePtr;
+        let Test.11 : Ptr([]) = NullPointer;
+        let Test.10 : Int1 = lowlevel Eq Test.9 Test.11;
+        if Test.10 then
+            dec Test.7;
+            let Test.12 : FunPtr(({}) -> Str) = ErasedLoad Test.7 .Callee;
+            let Test.13 : Str = CallByPtr Test.12 Test.6;
+            jump Test.8 Test.13;
+        else
+            let Test.14 : FunPtr(({}, ?Erased) -> Str) = ErasedLoad Test.7 .Callee;
+            let Test.15 : Str = CallByPtr Test.14 Test.6 Test.7;
+            jump Test.8 Test.15;
+    in
+    let Test.19 : Ptr([]) = ErasedLoad Test.17 .ValuePtr;
+    let Test.21 : Ptr([]) = NullPointer;
+    let Test.20 : Int1 = lowlevel Eq Test.19 Test.21;
+    if Test.20 then
+        dec Test.17;
+        let Test.22 : FunPtr((Str) -> ?Erased) = ErasedLoad Test.17 .Callee;
+        let Test.23 : ?Erased = CallByPtr Test.22 Test.16;
+        jump Test.18 Test.23;
+    else
+        let Test.24 : FunPtr((Str, ?Erased) -> ?Erased) = ErasedLoad Test.17 .Callee;
+        let Test.25 : ?Erased = CallByPtr Test.24 Test.16 Test.17;
+        jump Test.18 Test.25;

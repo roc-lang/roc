@@ -1,0 +1,166 @@
+procedure List.18 (List.154, List.155, List.156):
+    let List.554 : U64 = 0i64;
+    let List.555 : U64 = CallByName List.6 List.154;
+    let List.553 : [<r>C {}, C *self {{}, []}] = CallByName List.88 List.154 List.155 List.156 List.554 List.555;
+    ret List.553;
+
+procedure List.6 (#Attr.2):
+    let List.564 : U64 = lowlevel ListLen #Attr.2;
+    ret List.564;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.563 : [] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.563;
+
+procedure List.88 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.6, #Derived_gen.7):
+    joinpoint List.556 List.157 List.158 List.159 List.160 List.161:
+        let List.558 : Int1 = CallByName Num.22 List.160 List.161;
+        if List.558 then
+            let List.562 : [] = CallByName List.66 List.157 List.160;
+            let List.162 : [<r>C {}, C *self {{}, []}] = CallByName Test.29 List.158 List.562 List.159;
+            let List.561 : U64 = 1i64;
+            let List.560 : U64 = CallByName Num.51 List.160 List.561;
+            jump List.556 List.157 List.162 List.159 List.560 List.161;
+        else
+            dec List.157;
+            ret List.158;
+    in
+    jump List.556 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.292;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.291 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.291;
+
+procedure Test.10 (Test.69, #Attr.12):
+    let Test.72 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let #Derived_gen.20 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.20 then
+        free #Attr.12;
+        ret Test.72;
+    else
+        decref #Attr.12;
+        ret Test.72;
+
+procedure Test.10 (Test.69, #Attr.12):
+    let Test.80 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    ret Test.80;
+
+procedure Test.14 (Test.45, #Attr.12):
+    let Test.55 : {{}, []} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+    let Test.54 : [<r>C {}, C *self {{}, []}] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    joinpoint #Derived_gen.18:
+        let Test.50 : {} = Struct {};
+        let Test.51 : U8 = GetTagId Test.54;
+        joinpoint Test.52 Test.15:
+            let Test.16 : [C {}, C []] = CallByName Test.20 Test.15 Test.55;
+            let Test.48 : {} = Struct {};
+            let Test.49 : U8 = GetTagId Test.16;
+            switch Test.49:
+                case 0:
+                    let Test.47 : {} = CallByName Test.10 Test.48 Test.16;
+                    ret Test.47;
+            
+                default:
+                    let Test.47 : {} = CallByName Test.25 Test.48 Test.16;
+                    ret Test.47;
+            
+        in
+        switch Test.51:
+            case 0:
+                let Test.53 : {} = CallByName Test.10 Test.50 Test.54;
+                jump Test.52 Test.53;
+        
+            default:
+                let Test.53 : {} = CallByName Test.14 Test.50 Test.54;
+                jump Test.52 Test.53;
+        
+    in
+    let #Derived_gen.19 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.19 then
+        free #Attr.12;
+        jump #Derived_gen.18;
+    else
+        inc Test.54;
+        decref #Attr.12;
+        jump #Derived_gen.18;
+
+procedure Test.20 (Test.21, Test.18):
+    let Test.23 : [C {}, C []] = CallByName Test.32 Test.21 Test.18;
+    ret Test.23;
+
+procedure Test.25 (Test.59, #Attr.12):
+    let Test.63 : [] = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.62 : Str = "voided tag constructor is unreachable";
+    Crash Test.62
+
+procedure Test.29 (Test.30, Test.31, Test.28):
+    let Test.42 : {{}, []} = Struct {Test.28, Test.31};
+    let Test.41 : [<r>C {}, C *self {{}, []}] = CallByName Test.5 Test.30 Test.42;
+    ret Test.41;
+
+procedure Test.3 (Test.9):
+    let Test.68 : [<r>C {}, C *self {{}, []}] = TagId(0) Test.9;
+    ret Test.68;
+
+procedure Test.3 (Test.9):
+    let Test.76 : [C {}, C []] = TagId(0) Test.9;
+    ret Test.76;
+
+procedure Test.32 (Test.64, #Attr.12):
+    let Test.31 : [] = StructAtIndex 1 #Attr.12;
+    let Test.28 : {} = StructAtIndex 0 #Attr.12;
+    let Test.66 : [C {}, C []] = CallByName Test.33 Test.31;
+    ret Test.66;
+
+procedure Test.33 (Test.73):
+    let Test.75 : {} = Struct {};
+    let Test.74 : [C {}, C []] = CallByName Test.3 Test.75;
+    ret Test.74;
+
+procedure Test.4 (Test.12, Test.13):
+    let Test.46 : [<r>C {}, C *self {{}, []}] = TagId(1) Test.12 Test.13;
+    ret Test.46;
+
+procedure Test.5 (Test.17, Test.18):
+    let Test.19 : [<r>C {}, C *self {{}, []}] = CallByName Test.4 Test.17 Test.18;
+    ret Test.19;
+
+procedure Test.6 (Test.27, Test.28):
+    let Test.67 : {} = Struct {};
+    let Test.38 : [<r>C {}, C *self {{}, []}] = CallByName Test.3 Test.67;
+    let Test.37 : [<r>C {}, C *self {{}, []}] = CallByName List.18 Test.27 Test.38 Test.28;
+    ret Test.37;
+
+procedure Test.81 (Test.82):
+    let Test.83 : {{}, []} = UnionAtIndex (Id 0) (Index 0) Test.82;
+    dec Test.82;
+    let Test.84 : {} = StructAtIndex 0 Test.83;
+    ret Test.84;
+
+procedure Test.85 (Test.86):
+    let Test.87 : {{}, []} = UnionAtIndex (Id 0) (Index 0) Test.86;
+    dec Test.86;
+    let Test.88 : [] = StructAtIndex 1 Test.87;
+    ret Test.88;
+
+procedure Test.89 (Test.91, #Attr.12):
+    let Test.92 : U8 = GetTagId #Attr.12;
+    switch Test.92:
+        case 0:
+            let Test.90 : {} = CallByName Test.10 Test.91 #Attr.12;
+            ret Test.90;
+    
+        default:
+            let Test.90 : {} = CallByName Test.14 Test.91 #Attr.12;
+            ret Test.90;
+    
+
+procedure Test.0 ():
+    let Test.35 : List [] = Array [];
+    let Test.36 : {} = Struct {};
+    let Test.34 : [<r>C {}, C *self {{}, []}] = CallByName Test.6 Test.35 Test.36;
+    ret Test.34;

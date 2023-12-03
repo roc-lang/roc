@@ -1,0 +1,7 @@
+app "test" provides [main] to "./platform"
+
+main =
+#^^^^{-1} (a -[[]]-> b) -[[main(0)]]-> (a -[[y(2) (a -[[]]-> b)]]-> b)
+  \x ->
+      y = \z -> x z
+      y

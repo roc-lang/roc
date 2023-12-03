@@ -1,0 +1,29 @@
+[package]
+name = "roc_reporting"
+description = "Responsible for generating warning and error messages."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_can = { path = "../compiler/can" }
+roc_collections = { path = "../compiler/collections" }
+roc_error_macros = { path = "../error_macros" }
+roc_exhaustive = { path = "../compiler/exhaustive" }
+roc_fmt = { path = "../compiler/fmt" }
+roc_module = { path = "../compiler/module" }
+roc_parse = { path = "../compiler/parse" }
+roc_packaging = { path = "../packaging" }
+roc_problem = { path = "../compiler/problem" }
+roc_region = { path = "../compiler/region" }
+roc_solve_problem = { path = "../compiler/solve_problem" }
+roc_std = { path = "../roc_std" }
+roc_types = { path = "../compiler/types" }
+ven_pretty = { path = "../vendor/pretty" }
+byte-unit = "4.0.19"
+itertools = "0.10.5"
+
+bumpalo.workspace = true
+distance.workspace = true

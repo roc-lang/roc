@@ -1,0 +1,15 @@
+procedure Test.3 (Test.12):
+    let Test.15 : [C List [<rnu><null>, C List *self], C U16, C ] = TagId(2) ;
+    ret Test.15;
+
+procedure Test.3 (Test.12):
+    let Test.17 : [<rnu><null>, C List *self] = TagId(1) ;
+    ret Test.17;
+
+procedure Test.0 ():
+    let Test.16 : {} = Struct {};
+    let Test.4 : [<rnu><null>, C List *self] = CallByName Test.3 Test.16;
+    let Test.14 : {} = Struct {};
+    let Test.5 : [C List [<rnu><null>, C List *self], C U16, C ] = CallByName Test.3 Test.14;
+    let Test.13 : {[<rnu><null>, C List *self], [C List [<rnu><null>, C List *self], C U16, C ]} = Struct {Test.4, Test.5};
+    ret Test.13;

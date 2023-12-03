@@ -1,0 +1,3 @@
+procedure Test.0 ():
+    let Test.5 : Str = "abc";
+    ret Test.5;

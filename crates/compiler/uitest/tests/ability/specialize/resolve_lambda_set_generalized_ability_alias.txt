@@ -1,0 +1,19 @@
+app "test" provides [main] to "./platform"
+
+Id implements id : a -> a where a implements Id
+
+A := {} implements [Id {id}]
+id = \@A {} -> @A {}
+#^^{-1} A#id(4): A -[[id(4)]]-> A
+
+main =
+    alias1 = \x -> id x
+    #              ^^ Id#id(2): a -[[] + a:id(2):1]-> a where a implements Id
+    alias2 = \x -> alias1 x
+    #              ^^^^^^ a -[[alias1(6)]]-> a where a implements Id
+
+    a : A
+    a = alias2 (@A {})
+    #   ^^^^^^ A -[[alias2(7)]]-> A
+
+    a

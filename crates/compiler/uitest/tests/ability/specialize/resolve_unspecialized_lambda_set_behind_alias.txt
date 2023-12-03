@@ -1,0 +1,20 @@
+# +opt infer:print_only_under_alias
+app "test" provides [main] to "./platform"
+
+Thunk a : {} -> a
+
+Id implements id : a -> Thunk a where a implements Id
+
+A := {} implements [Id {id}]
+id = \@A {} -> \{} -> @A {}
+#^^{-1} A#id(5): {} -[[id(5)]]-> ({} -[[8]]-> {})
+
+main =
+    alias = \x -> id x
+    #             ^^ Id#id(3): a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) where a implements Id
+
+    a : A
+    a = (alias (@A {})) {}
+    #    ^^^^^ {} -[[alias(9)]]-> ({} -[[8]]-> {})
+
+    a

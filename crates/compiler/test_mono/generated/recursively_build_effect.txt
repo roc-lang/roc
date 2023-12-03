@@ -1,0 +1,99 @@
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.291 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.291;
+
+procedure Str.3 (#Attr.2, #Attr.3):
+    let Str.294 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.294;
+
+procedure Test.11 (Test.29, #Attr.12):
+    let Test.32 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    let #Derived_gen.11 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if #Derived_gen.11 then
+        free #Attr.12;
+        ret Test.32;
+    else
+        decref #Attr.12;
+        ret Test.32;
+
+procedure Test.11 (Test.29, Test.10):
+    ret Test.10;
+
+procedure Test.14 (#Derived_gen.0, #Derived_gen.1):
+    joinpoint Test.38 Test.37 #Attr.12:
+        let Test.46 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+        let Test.45 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+        joinpoint #Derived_gen.9:
+            let Test.44 : {} = Struct {};
+            let Test.43 : {} = CallByName Test.11 Test.44 Test.46;
+            let Test.39 : [<r>C {}, C I64 {}] = CallByName Test.9 Test.43 Test.45;
+            let Test.41 : {} = Struct {};
+            let Test.42 : U8 = GetTagId Test.39;
+            switch Test.42:
+                case 0:
+                    let Test.40 : {} = CallByName Test.11 Test.41 Test.39;
+                    ret Test.40;
+            
+                default:
+                    jump Test.38 Test.41 Test.39;
+            
+        in
+        let #Derived_gen.10 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if #Derived_gen.10 then
+            free #Attr.12;
+            jump #Derived_gen.9;
+        else
+            decref #Attr.12;
+            jump #Derived_gen.9;
+    in
+    jump Test.38 #Derived_gen.0 #Derived_gen.1;
+
+procedure Test.2 ():
+    let Test.6 : Str = "Hello";
+    let Test.7 : Str = "World";
+    let Test.21 : Str = ", ";
+    let Test.23 : Str = "!";
+    let Test.22 : Str = CallByName Str.3 Test.7 Test.23;
+    dec Test.23;
+    let Test.20 : Str = CallByName Str.3 Test.21 Test.22;
+    dec Test.22;
+    let Test.19 : Str = CallByName Str.3 Test.6 Test.20;
+    dec Test.20;
+    ret Test.19;
+
+procedure Test.3 (Test.8):
+    let Test.57 : I64 = 0i64;
+    let Test.58 : Int1 = lowlevel Eq Test.57 Test.8;
+    if Test.58 then
+        let Test.27 : {} = Struct {};
+        let Test.26 : [<r>C {}, C I64 {}] = CallByName Test.4 Test.27;
+        ret Test.26;
+    else
+        let Test.52 : {} = Struct {};
+        let Test.34 : {} = CallByName Test.4 Test.52;
+        let Test.33 : [<r>C {}, C I64 {}] = CallByName Test.5 Test.34 Test.8;
+        ret Test.33;
+
+procedure Test.4 (Test.10):
+    let Test.28 : [<r>C {}, C I64 {}] = TagId(0) Test.10;
+    ret Test.28;
+
+procedure Test.4 (Test.10):
+    ret Test.10;
+
+procedure Test.5 (Test.16, Test.13):
+    let Test.36 : [<r>C {}, C I64 {}] = TagId(1) Test.13 Test.16;
+    ret Test.36;
+
+procedure Test.9 (Test.47, Test.8):
+    let Test.51 : I64 = 1i64;
+    let Test.50 : I64 = CallByName Num.20 Test.8 Test.51;
+    let Test.49 : [<r>C {}, C I64 {}] = CallByName Test.3 Test.50;
+    ret Test.49;
+
+procedure Test.0 ():
+    let Test.24 : I64 = 4i64;
+    let Test.17 : [<r>C {}, C I64 {}] = CallByName Test.3 Test.24;
+    dec Test.17;
+    let Test.18 : Str = CallByName Test.2;
+    ret Test.18;

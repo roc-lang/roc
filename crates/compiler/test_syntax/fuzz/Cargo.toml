@@ -1,0 +1,32 @@
+[package]
+name = "test_syntax-fuzz"
+publish = false
+
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+test_syntax = { path = "../../test_syntax" }
+
+bumpalo.workspace = true
+libfuzzer-sys.workspace = true
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_expr"
+path = "fuzz_targets/fuzz_expr.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_module"
+path = "fuzz_targets/fuzz_module.rs"
+test = false
+doc = false

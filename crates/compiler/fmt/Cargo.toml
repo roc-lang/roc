@@ -1,0 +1,16 @@
+[package]
+name = "roc_fmt"
+description = "The roc code formatter."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_module = { path = "../module" }
+roc_parse = { path = "../parse" }
+roc_region = { path = "../region" }
+
+bumpalo.workspace = true
