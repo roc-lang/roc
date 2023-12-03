@@ -1112,7 +1112,7 @@ powInt : Int a, Int a -> Int a
 ##
 ## 8
 ## ```
-countLeadingZeroBits : Int a -> Nat
+countLeadingZeroBits : Int a -> U8
 
 ## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
 ##
@@ -1125,7 +1125,7 @@ countLeadingZeroBits : Int a -> Nat
 ##
 ## 8
 ## ```
-countTrailingZeroBits : Int a -> Nat
+countTrailingZeroBits : Int a -> U8
 
 ## Counts the number of set bits in an integer.
 ##
@@ -1138,7 +1138,7 @@ countTrailingZeroBits : Int a -> Nat
 ##
 ## 0
 ## ```
-countOneBits : Int a -> Nat
+countOneBits : Int a -> U8
 
 addWrap : Int range, Int range -> Int range
 
