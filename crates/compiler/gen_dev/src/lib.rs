@@ -57,6 +57,14 @@ impl AssemblyBackendMode {
             AssemblyBackendMode::Repl => true,
         }
     }
+
+    fn generate_roc_dbg(self) -> bool {
+        match self {
+            AssemblyBackendMode::Binary => false,
+            AssemblyBackendMode::Test => true,
+            AssemblyBackendMode::Repl => true,
+        }
+    }
 }
 
 pub struct Env<'a> {
@@ -182,7 +190,7 @@ impl<'a> LastSeenMap<'a> {
                     Expr::UnionAtIndex { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
-                    Expr::UnionFieldPtrAtIndex { structure, .. } => {
+                    Expr::GetElementPointer { structure, .. } => {
                         self.set_last_seen(*structure, stmt);
                     }
                     Expr::Array { elems, .. } => {
@@ -849,13 +857,20 @@ trait Backend<'a> {
             } => {
                 self.load_union_at_index(sym, structure, *tag_id, *index, union_layout);
             }
-            Expr::UnionFieldPtrAtIndex {
+            Expr::GetElementPointer {
                 structure,
-                tag_id,
                 union_layout,
-                index,
+                indices,
+                ..
             } => {
-                self.load_union_field_ptr_at_index(sym, structure, *tag_id, *index, union_layout);
+                debug_assert!(indices.len() >= 2);
+                self.load_union_field_ptr_at_index(
+                    sym,
+                    structure,
+                    indices[0] as u16,
+                    indices[1],
+                    union_layout,
+                );
             }
             Expr::GetTagId {
                 structure,

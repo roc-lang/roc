@@ -205,12 +205,12 @@ fn specialize_drops_stmt<'a, 'i>(
                         // So if we UnionAtIndex, we must know the tag and we can use it to specialize the drop.
                         environment.symbol_tag.insert(*structure, *tag_id);
                     }
-                    UnionFieldPtrAtIndex {
-                        structure, tag_id, ..
+                    GetElementPointer {
+                        structure, indices, ..
                     } => {
                         // Generated code might know the tag of the union without switching on it.
-                        // So if we UnionFieldPtrAtIndex, we must know the tag and we can use it to specialize the drop.
-                        environment.symbol_tag.insert(*structure, *tag_id);
+                        // So if we GetElementPointer, we must know the tag and we can use it to specialize the drop.
+                        environment.symbol_tag.insert(*structure, indices[0] as u16);
                     }
                     Array {
                         elems: children, ..

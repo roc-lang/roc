@@ -20,7 +20,7 @@ use target_lexicon::Triple;
 use crate::cli_gen::eval_llvm;
 
 pub const WELCOME_MESSAGE: &str = concatcp!(
-    "\n  The rockin’ ",
+    "\n  The rockin' ",
     BLUE,
     "roc repl",
     END_COL,

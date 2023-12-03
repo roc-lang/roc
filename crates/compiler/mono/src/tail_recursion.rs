@@ -907,13 +907,14 @@ impl<'a> TrmcEnv<'a> {
                                 reuse: None,
                             };
 
-                            let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
+                            let indices = arena
+                                .alloc([cons_info.tag_id as u64, recursive_field_index as u64]);
 
-                            let get_reference_expr = Expr::UnionFieldPtrAtIndex {
+                            let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
+                            let get_reference_expr = Expr::GetElementPointer {
                                 structure: *symbol,
-                                tag_id: cons_info.tag_id,
                                 union_layout: cons_info.tag_layout,
-                                index: recursive_field_index as _,
+                                indices,
                             };
 
                             let new_hole_symbol = env.named_unique_symbol("newHole");
@@ -1091,7 +1092,7 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
         Expr::StructAtIndex { structure, .. }
         | Expr::GetTagId { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
-        | Expr::UnionFieldPtrAtIndex { structure, .. } => needle == *structure,
+        | Expr::GetElementPointer { structure, .. } => needle == *structure,
         Expr::Array { elems, .. } => elems.iter().any(|element| match element {
             crate::ir::ListLiteralElement::Literal(_) => false,
             crate::ir::ListLiteralElement::Symbol(symbol) => needle == *symbol,

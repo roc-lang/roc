@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: Nix apple silicon cargo test
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -17,6 +13,10 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v3
+
+      # These started to accumulate quickly since #5990, not sure why
+      - name: Clean up old nix shells
+        run: rm -rf /private/tmp/nix-shell.*
 
       - run: zig version
 

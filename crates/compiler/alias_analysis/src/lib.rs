@@ -1436,13 +1436,15 @@ fn expr_spec<'a>(
                 builder.add_get_tuple_field(block, variant_id, index)
             }
         },
-        UnionFieldPtrAtIndex {
-            index,
-            tag_id,
+        GetElementPointer {
+            indices,
             structure,
             union_layout,
+            ..
         } => {
-            let index = (*index) as u32;
+            debug_assert!(indices.len() >= 2);
+            let tag_id = indices[0] as u32;
+            let index = indices[1];
             let tag_value_id = env.symbols[structure];
 
             let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
@@ -1459,9 +1461,9 @@ fn expr_spec<'a>(
             builder.add_touch(block, heap_cell)?;
 
             // next, unwrap the union at the tag id that we've got
-            let variant_id = builder.add_unwrap_union(block, union_data, *tag_id as u32)?;
+            let variant_id = builder.add_unwrap_union(block, union_data, tag_id)?;
 
-            let value = builder.add_get_tuple_field(block, variant_id, index)?;
+            let value = builder.add_get_tuple_field(block, variant_id, index as u32)?;
 
             // construct the box. Here the heap_cell of the tag is re-used, I'm hoping that that
             // conveys to morphic that we're borrowing into the existing tag?!

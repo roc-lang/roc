@@ -17,16 +17,16 @@ cd $SCRIPT_RELATIVE_DIR
 
 rm -rf build/
 cp -r public/ build/
-mkdir build/wip # for WIP site
 
 # download the latest code for the examples
 echo 'Downloading latest examples...'
-curl -fLJO https://github.com/roc-lang/examples/archive/refs/heads/main.zip
-unzip examples-main.zip
-cp -R examples-main/examples/ wip_new_website/content/examples/
+curl -fL -o examples-main.zip https://github.com/roc-lang/examples/archive/refs/heads/main.zip
+rm -rf examples-main/
+unzip -o examples-main.zip
+cp -R examples-main/examples/ content/examples/
 
-# relace links in wip_new_website/content/examples/index.md to work on the WIP site
-sed -i 's|](/|](/wip/examples/|g' wip_new_website/content/examples/index.md
+# relace links in content/examples/index.md to work on the WIP site
+perl -pi -e 's|\]\(/|\]\(/examples/|g' content/examples/index.md
 
 # clean up examples artifacts
 rm -rf examples-main examples-main.zip
@@ -48,11 +48,10 @@ curl -fLJO https://github.com/roc-lang/roc/archive/www.tar.gz
 # Download the latest pre-built Web REPL as a zip file. (Build takes longer than Netlify's timeout.)
 REPL_TARFILE="roc_repl_wasm.tar.gz"
 curl -fLJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
+mkdir repl
 tar -xzf $REPL_TARFILE -C repl
-tar -xzf $REPL_TARFILE -C wip # note we also need this for WIP repl
 rm $REPL_TARFILE
 ls -lh repl
-ls -lh wip
 
 popd
 
@@ -77,9 +76,6 @@ rm -rf roc_nightly roc_releases.json
 
 # we use `! [ -v GITHUB_TOKEN_READ_ONLY ];` to check if we're on a netlify server
 if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
-  echo 'Building tutorial.html from tutorial.md...'
-  mkdir www/build/tutorial
-
   cargo build --release --bin roc
 
   roc=target/release/roc
@@ -96,19 +92,12 @@ else
   mv roc_nightly* roc_nightly
 
   roc='./roc_nightly/roc'
-
-  echo 'Building tutorial.html from tutorial.md...'
-  mkdir www/build/tutorial
 fi
 
 $roc version
-$roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
-mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
-# For WIP site
-echo 'Building WIP site...'
-$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip/
-cp -r www/wip_new_website/static/* www/build/wip/
+echo 'Building site markdown content'
+$roc run www/main.roc -- www/content/ www/build/
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
@@ -153,5 +142,3 @@ if [ -v GITHUB_TOKEN_READ_ONLY ]; then
       rm -rf $BASIC_CLI_DIR/generated-docs
   done <<< "$VERSION_NUMBERS"
 fi
-
-popd

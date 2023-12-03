@@ -549,6 +549,9 @@ pub fn parse_single_def<'a>(
     let spaces_before_current_start = state.pos();
 
     let state = match space0_e(EExpr::IndentStart).parse(arena, state, min_indent) {
+        Err((MadeProgress, bad_input @ EExpr::Space(_, _))) => {
+            return Err((MadeProgress, bad_input));
+        }
         Err((MadeProgress, _)) => {
             return Err((MadeProgress, EExpr::DefMissingFinalExpr(initial.pos())));
         }
@@ -1930,6 +1933,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::When(_, _)
         | Expr::Expect(_, _)
         | Expr::Dbg(_, _)
+        | Expr::LowLevelDbg(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
         | Expr::MultipleRecordBuilders { .. }

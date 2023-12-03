@@ -925,7 +925,7 @@ fn insert_refcount_operations_binding<'a>(
         Expr::GetTagId { structure, .. }
         | Expr::StructAtIndex { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
-        | Expr::UnionFieldPtrAtIndex { structure, .. } => {
+        | Expr::GetElementPointer { structure, .. } => {
             // All structures are alive at this point and don't have to be copied in order to take an index out/get tag id/copy values to the stack.
             // But we do want to make sure to decrement this item if it is the last reference.
             let new_stmt = dec_borrowed!([*structure], stmt);
@@ -938,7 +938,7 @@ fn insert_refcount_operations_binding<'a>(
                 match expr {
                     Expr::StructAtIndex { .. }
                     | Expr::UnionAtIndex { .. }
-                    | Expr::UnionFieldPtrAtIndex { .. } => {
+                    | Expr::GetElementPointer { .. } => {
                         insert_inc_stmt(arena, *binding, 1, new_stmt)
                     }
                     // No usage of an element of a reference counted symbol. No need to increment.

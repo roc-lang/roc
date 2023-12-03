@@ -199,6 +199,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     ];
     const SHADOW_SPACE_SIZE: u8 = 0;
 
+    // These are registers that a called function must save and restore if it wants to use them.
     #[inline(always)]
     fn general_callee_saved(reg: &X86_64GeneralReg) -> bool {
         matches!(
@@ -1409,6 +1410,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     ];
     const SHADOW_SPACE_SIZE: u8 = 32;
 
+    // These are registers that a called function must save and restore if it wants to use them.
+    //
     // Refer https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170#callercallee-saved-registers
     // > The x64 ABI considers registers RBX, RBP, RDI, RSI, RSP, R12, R13, R14, R15, and XMM6-XMM15 nonvolatile.
     // > They must be saved and restored by a function that uses them.

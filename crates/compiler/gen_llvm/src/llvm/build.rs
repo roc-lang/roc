@@ -897,26 +897,52 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         let function = self.module.get_function("roc_panic").unwrap();
         let tag_id = self.context.i32_type().const_int(tag as u32 as u64, false);
 
-        let msg = match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => {
-                // we need to pass the message by reference, but we currently hold the value.
-                let alloca = env
-                    .builder
-                    .new_build_alloca(message.get_type(), "alloca_panic_msg");
-                env.builder.new_build_store(alloca, message);
-                alloca.into()
-            }
-            PtrWidth::Bytes8 => {
-                // string is already held by reference
-                message
-            }
-        };
+        let msg = self.string_to_arg(env, message);
 
         let call = self
             .builder
             .new_build_call(function, &[msg.into(), tag_id.into()], "roc_panic");
 
         call.set_call_convention(C_CALL_CONV);
+    }
+
+    pub fn call_dbg(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        location: BasicValueEnum<'ctx>,
+        message: BasicValueEnum<'ctx>,
+    ) {
+        let function = self.module.get_function("roc_dbg").unwrap();
+
+        let loc = self.string_to_arg(env, location);
+        let msg = self.string_to_arg(env, message);
+
+        let call = self
+            .builder
+            .new_build_call(function, &[loc.into(), msg.into()], "roc_dbg");
+
+        call.set_call_convention(C_CALL_CONV);
+    }
+
+    fn string_to_arg(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        string: BasicValueEnum<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the string by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .new_build_alloca(string.get_type(), "alloca_string");
+                env.builder.new_build_store(alloca, string);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                string
+            }
+        }
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
@@ -2003,12 +2029,15 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
             }
         }
 
-        UnionFieldPtrAtIndex {
-            tag_id,
+        GetElementPointer {
             structure,
-            index,
+            indices,
             union_layout,
+            ..
         } => {
+            debug_assert!(indices.len() >= 2);
+            let tag_id = indices[0];
+            let index = indices[1] as usize;
             // cast the argument bytes into the desired shape for this tag
             let argument = scope.load_symbol(structure);
             let ret_repr = layout_interner.get_repr(layout);
@@ -2018,7 +2047,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                 UnionLayout::Recursive(tag_layouts) => {
                     debug_assert!(argument.is_pointer_value());
 
-                    let field_layouts = tag_layouts[*tag_id as usize];
+                    let field_layouts = tag_layouts[tag_id as usize];
 
                     let ptr = tag_pointer_clear_tag_id(env, argument.into_pointer_value());
                     let target_loaded_type = basic_type_from_layout(env, layout_interner, ret_repr);
@@ -2028,7 +2057,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         None,
-                        *index as usize,
+                        index,
                         ptr,
                         target_loaded_type,
                     )
@@ -2044,7 +2073,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         Some(struct_type.into_struct_type()),
-                        *index as usize,
+                        index,
                         argument.into_pointer_value(),
                         target_loaded_type,
                     )
@@ -2054,10 +2083,11 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     other_tags,
                 } => {
                     debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id, *nullable_id);
+                    debug_assert_ne!(tag_id as u16, *nullable_id);
 
-                    let tag_index = if *tag_id < *nullable_id {
-                        *tag_id
+                    let tag_id = tag_id as u16;
+                    let tag_index = if tag_id < *nullable_id {
+                        tag_id
                     } else {
                         tag_id - 1
                     };
@@ -2072,7 +2102,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         layout_interner,
                         field_layouts,
                         None,
-                        *index as usize,
+                        index,
                         ptr,
                         target_loaded_type,
                     )
@@ -2082,7 +2112,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                     other_fields,
                 } => {
                     debug_assert!(argument.is_pointer_value());
-                    debug_assert_ne!(*tag_id != 0, *nullable_id);
+                    debug_assert_ne!(tag_id != 0, *nullable_id);
 
                     let field_layouts = other_fields;
                     let struct_layout = LayoutRepr::struct_(field_layouts);
@@ -2096,7 +2126,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
                         field_layouts,
                         Some(struct_type.into_struct_type()),
                         // the tag id is not stored
-                        *index as usize,
+                        index,
                         argument.into_pointer_value(),
                         target_loaded_type,
                     )
@@ -3498,26 +3528,16 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
 
         Dbg {
             symbol,
-            variable: specialized_var,
+            variable: _,
             remainder,
         } => {
             if env.mode.runs_expects() {
-                let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
-                let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
-
-                crate::llvm::expect::clone_to_shared_memory(
-                    env,
-                    layout_interner,
-                    scope,
-                    layout_ids,
-                    &shared_memory,
-                    *symbol,
-                    region,
-                    &[*symbol],
-                    &[*specialized_var],
-                );
-
-                crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
+                // TODO: Change location to `filename:line_number`
+                // let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
+                let location =
+                    build_string_literal(env, parent, symbol.module_string(&env.interns));
+                let message = scope.load_symbol(symbol);
+                env.call_dbg(env, location, message);
             }
 
             build_exp_stmt(

@@ -4269,7 +4269,7 @@ mod test_reporting {
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    I trying to parse a record field access here:
+    I am trying to parse a record field access here:
 
     4│      foo.bar.
                     ^
@@ -4563,7 +4563,7 @@ mod test_reporting {
         comment_with_control_character,
         "# comment with a \x07\n",
         @r###"
-    ── ASII CONTROL CHARACTER ──────── tmp/comment_with_control_character/Test.roc ─
+    ── ASCII CONTROL CHARACTER ─────── tmp/comment_with_control_character/Test.roc ─
 
     I encountered an ASCII control character:
 
@@ -5667,7 +5667,7 @@ All branches in an `if` must have the same type!
         @r###"
     ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    I trying to parse a record field access here:
+    I am trying to parse a record field access here:
 
     4│      Num.add . 23
                      ^
@@ -5978,6 +5978,60 @@ In roc, functions are always written as a lambda, like{}
 
                     provides [Animal, default, tame]
             "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_missing_to_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    provides [main]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  app "broken"
+                2│      provides [main]
+                                       ^
+
+                I am expecting the `to` keyword next, like:
+
+                    to pf
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_to_missing_platform_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    provides [main] to
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  app "broken"
+                2│      provides [main] to
+                                          ^
+
+                I am expecting the platform name next, like:
+
+                    to pf
+                "#
             ),
         )
     }
@@ -9744,7 +9798,7 @@ In roc, functions are always written as a lambda, like{}
 
     Only builtin abilities can be derived.
 
-    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`
+    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`, `Inspect`
     "###
     );
 
@@ -12594,6 +12648,60 @@ In roc, functions are always written as a lambda, like{}
 
     I would have to crash if I saw one of those! Add branches for them!
     "###
+    );
+
+    test_no_problem!(
+        list_match_spread_required_front_back,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, ..] -> ""
+                [.., A] -> ""
+                [..] -> ""
+            "#
+        )
+    );
+
+    test_report!(
+        list_match_spread_redundant_front_back,
+        indoc!(
+            r#"
+            l : List [A]
+
+            when l is
+                [A, ..] -> ""
+                [.., A] -> ""
+                [..] -> ""
+            "#
+        ),
+    @r###"
+    ── REDUNDANT PATTERN ───────────────────────────────────── /code/proj/Main.roc ─
+    
+    The 2nd pattern is redundant:
+    
+    6│       when l is
+    7│           [A, ..] -> ""
+    8│>          [.., A] -> ""
+    9│           [..] -> ""
+    
+    Any value of this shape will be handled by a previous pattern, so this
+    one should be removed.
+    "###
+    );
+
+    test_no_problem!(
+        list_match_spread_as,
+        indoc!(
+            r#"
+            l : List [A, B]
+
+            when l is
+                [A, .. as rest] | [.. as rest, A] -> rest
+                [.. as rest] -> rest
+            "#
+        )
     );
 
     test_no_problem!(

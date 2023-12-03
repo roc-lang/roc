@@ -1892,11 +1892,10 @@ pub enum Expr<'a> {
         union_layout: UnionLayout<'a>,
         index: u64,
     },
-    UnionFieldPtrAtIndex {
+    GetElementPointer {
         structure: Symbol,
-        tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
-        index: u64,
+        indices: &'a [u64],
     },
 
     Array {
@@ -2153,14 +2152,17 @@ impl<'a> Expr<'a> {
             } => text!(alloc, "UnionAtIndex (Id {tag_id}) (Index {index}) ")
                 .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            UnionFieldPtrAtIndex {
-                tag_id,
-                structure,
-                index,
-                ..
-            } => text!(alloc, "UnionFieldPtrAtIndex (Id {tag_id}) (Index {index}) ",)
-                .append(symbol_to_doc(alloc, *structure, pretty)),
-
+            GetElementPointer {
+                structure, indices, ..
+            } => {
+                let it = indices.iter().map(|num| alloc.as_string(num));
+                let it = alloc.intersperse(it, ", ");
+                text!(alloc, "GetElementPointer (Indices [",)
+                    .append(it)
+                    .append(alloc.text("]) "))
+                    .append(symbol_to_doc(alloc, *structure, pretty))
+            }
+            // .append(alloc.intersperse(index.iter(), ", "))},
             Alloca { initializer, .. } => match initializer {
                 Some(initializer) => {
                     text!(alloc, "Alloca ").append(symbol_to_doc(alloc, *initializer, pretty))
@@ -4604,7 +4606,7 @@ pub fn with_hole<'a>(
         Expect { .. } => unreachable!("I think this is unreachable"),
         ExpectFx { .. } => unreachable!("I think this is unreachable"),
         Dbg {
-            loc_condition,
+            loc_message,
             loc_continuation,
             variable: cond_variable,
             symbol: dbg_symbol,
@@ -4624,7 +4626,7 @@ pub fn with_hole<'a>(
                 procs,
                 layout_cache,
                 dbg_symbol,
-                *loc_condition,
+                *loc_message,
                 cond_variable,
                 rest,
             )
@@ -6022,7 +6024,12 @@ fn compile_struct_like<'a, L, UnusedLayout>(
         match take_elem_expr(index) {
             Some((var, loc_expr)) => {
                 match can_reuse_symbol(env, layout_cache, procs, &loc_expr.value, var) {
-                    Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
+                    Imported(symbol) => {
+                        // we cannot re-use the symbol in this case; it is used as a value, but defined as a thunk
+                        elem_symbols.push(env.unique_symbol());
+                        can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
+                    }
+                    LocalFunction(symbol) | UnspecializedExpr(symbol) => {
                         elem_symbols.push(symbol);
                         can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
                     }
@@ -6070,15 +6077,15 @@ fn compile_struct_like<'a, L, UnusedLayout>(
             Field::ValueSymbol => {
                 // this symbol is already defined; nothing to do
             }
-            Field::FunctionOrUnspecialized(symbol, variable) => {
+            Field::FunctionOrUnspecialized(can_symbol, variable) => {
                 stmt = specialize_symbol(
                     env,
                     procs,
                     layout_cache,
                     Some(variable),
-                    symbol,
+                    *symbol,
                     env.arena.alloc(stmt),
-                    symbol,
+                    can_symbol,
                 );
             }
             Field::Field(var, loc_expr) => {
@@ -7134,7 +7141,7 @@ pub fn from_can<'a>(
         }
 
         Dbg {
-            loc_condition,
+            loc_message,
             loc_continuation,
             variable: cond_variable,
             symbol: dbg_symbol,
@@ -7146,7 +7153,7 @@ pub fn from_can<'a>(
                 procs,
                 layout_cache,
                 dbg_symbol,
-                *loc_condition,
+                *loc_message,
                 cond_variable,
                 rest,
             )
@@ -7959,16 +7966,14 @@ fn substitute_in_expr<'a>(
         },
 
         // currently only used for tail recursion modulo cons (TRMC)
-        UnionFieldPtrAtIndex {
+        GetElementPointer {
             structure,
-            tag_id,
-            index,
+            indices,
             union_layout,
         } => match substitute(subs, *structure) {
-            Some(structure) => Some(UnionFieldPtrAtIndex {
+            Some(structure) => Some(GetElementPointer {
                 structure,
-                tag_id: *tag_id,
-                index: *index,
+                indices,
                 union_layout: *union_layout,
             }),
             None => None,

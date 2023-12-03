@@ -67,7 +67,6 @@ That will help us improve this document for everyone who reads it in the future!
 To build the compiler, you need these installed:
 
 - [Zig](https://ziglang.org/), see below for version
-- `libxkbcommon` - macOS seems to have it already; on Ubuntu or Debian you can get it with `apt-get install libxkbcommon-dev`
 - On Debian/Ubuntu `sudo apt-get install pkg-config`
 - LLVM, see below for version
 - [rust](https://rustup.rs/)
@@ -103,11 +102,12 @@ For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage
 
 If you prefer a package manager, you can try the following:
 
-- For MacOS, you can install with `brew install zig@0.11.0`
-- For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
-- For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+- MacOS: `brew install zig@0.11.0`
+- Systems with snap (such as Ubuntu): `snap install zig --classic --beta`
+- Other systems: refer to the [zig documentation](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
-If you want to install it manually, you can also download Zig directly [here](https://ziglang.org/download/). Just make sure you download the right version, the bleeding edge master build is the first download link on this page.
+If you want to install it manually, you can [download the binary](https://ziglang.org/download/#release-0.11.0) and place it on your PATH.
+Apart from the binary, the archive contains a `lib` folder, which needs to be copied next to the binary.
 
 > WINDOWS NOTE: when you unpack the Zig archive on windows, the result is nested in an extra directory. The instructions on the zig website will seem to not work. So, double-check that the path to zig executable does not include the same directory name twice.
 
@@ -115,14 +115,21 @@ If you want to install it manually, you can also download Zig directly [here](ht
 
 **version: 16.0.x**
 
-For macOS, you can install LLVM 16 using `brew install llvm@16` and then adding
-`$(brew --prefix llvm@16)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 16.0.x" at the top.
-You may also need to manually specify a prefix env var like so:
+See below for operating system specific installation instructions.
 
-```sh
-export LLVM_SYS_160_PREFIX=/usr/local/opt/llvm@16
+### Building
+
+Use `cargo build` to build the whole project.
+Use `cargo run help` to see all subcommands.
+To use the `repl` subcommand, execute `cargo run repl`.
+
+The default is a developer build. For an optimized build, use:
+
 ```
+cargo build --release --bin roc
+```
+
+### LLVM installation on Linux
 
 For Ubuntu and Debian:
 
@@ -144,13 +151,13 @@ There are also alternative installation options at <http://releases.llvm.org/dow
 
 [Troubleshooting](#troubleshooting)
 
-### Building
+For Fedora:
 
-Use `cargo build` to build the whole project.
-Use `cargo run help` to see all subcommands.
-To use the `repl` subcommand, execute `cargo run repl`.
+```sh
+sudo dnf install llvm16 llvm16-devel
+```
 
-### LLVM installation on Linux
+#### LLVM Linux troubleshooting
 
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
@@ -167,6 +174,17 @@ error: No suitable version of LLVM was found system-wide or pointed
 Add `export LLVM_SYS_160_PREFIX=/usr/lib/llvm-16` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on MacOS
+
+For macOS, you can install LLVM 16 using `brew install llvm@16` and then adding
+`$(brew --prefix llvm@16)/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 16.0.x" at the top.
+You may also need to manually specify a prefix env var like so:
+
+```sh
+export LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)
+```
+
+#### LLVM MacOS troubleshooting
 
 If installing LLVM fails, it might help to run `sudo xcode-select -r` before installing again.
 
@@ -194,7 +212,7 @@ $env:LLVM_SYS_160_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-16.0.6-win64'
 
 Once all that was done, `cargo build` ran successfully for Roc!
 
-#### Build issues on Windows
+#### LLVM Windows troubleshooting
 
 If you see the build failing because some internal file is not available, it might be your anti-virus program. Cargo's behavior is kind of similar to a virus (downloading files from the internet, creating many files), and this has been known to cause problems.
 

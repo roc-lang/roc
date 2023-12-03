@@ -33,7 +33,7 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
-// NOTE roc_panic is provided in the JS file, so it can throw an exception
+// NOTE roc_panic and roc_dbg is provided in the JS file, so it can throw an exception
 
 extern fn roc__mainForHost_1_exposed(*RocStr) void;
 

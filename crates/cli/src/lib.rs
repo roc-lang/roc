@@ -1137,19 +1137,6 @@ fn roc_dev_native(
 
                         memory.reset();
                     }
-                    ChildProcessMsg::Dbg => {
-                        roc_repl_expect::run::render_dbgs_in_memory(
-                            &mut writer,
-                            arena,
-                            &mut expectations,
-                            &interns,
-                            &layout_interner,
-                            &memory,
-                        )
-                        .unwrap();
-
-                        memory.reset();
-                    }
                 }
             };
 

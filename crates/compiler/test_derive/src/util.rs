@@ -68,6 +68,11 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::BOOL),
             builtins_path.join("Bool.roc"),
         ),
+        DeriveBuiltin::ToInspector => (
+            ModuleId::INSPECT,
+            module_source(ModuleId::INSPECT),
+            builtins_path.join("Inspect.roc"),
+        ),
     }
 }
 

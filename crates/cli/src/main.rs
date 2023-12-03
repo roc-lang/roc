@@ -333,7 +333,10 @@ fn main() -> io::Result<()> {
                                 }
                             }
                             FormatMode::WriteToStdout => {
-                                std::io::stdout().lock().write_all(src.as_bytes()).unwrap();
+                                std::io::stdout()
+                                    .lock()
+                                    .write_all(formatted_src.as_bytes())
+                                    .unwrap();
 
                                 0
                             }

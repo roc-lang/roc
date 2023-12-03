@@ -15,11 +15,7 @@ Community := {
     people : List Person,
     friends : List (Set Nat),
 }
-    implements [
-        Inspect {
-            toInspector: inspectCommunity,
-        },
-    ]
+    implements [Inspect]
 
 Person := {
     firstName : Str,
@@ -28,11 +24,7 @@ Person := {
     hasBeard : Bool,
     favoriteColor : Color,
 }
-    implements [
-        Inspect {
-            toInspector: inspectPerson,
-        },
-    ]
+    implements [Inspect]
 
 Color : [
     Red,
@@ -90,61 +82,3 @@ walkFriendNames = \@Community { people, friends }, s0, nextFn ->
         (nextFn s1 personName friendNames, id + 1)
     out
 
-# The functions below will be auto-generated in the future
-inspectCommunity : Community -> Inspector f where f implements InspectFormatter
-inspectCommunity = \@Community { people, friends } ->
-    f0 <- Inspect.custom
-    [
-        { key: "people", value: Inspect.list people List.walk Inspect.toInspector },
-        {
-            key: "friends",
-            value: Inspect.list
-                friends
-                List.walk
-                (\s -> Inspect.set
-                        s
-                        Set.walk
-                        (\num -> num |> Num.toU64 |> Inspect.u64)
-                ),
-            # value: Inspect.dict
-            #     (@Community { people, friends })
-            #     walkFriendNames
-            #     Inspect.str
-            #     (\s -> Inspect.set s Set.walk Inspect.str),
-        },
-    ]
-    |> Inspect.record
-    |> Inspect.apply f0
-
-inspectPerson : Person -> Inspector f where f implements InspectFormatter
-inspectPerson = \@Person { firstName, lastName, age, hasBeard, favoriteColor } ->
-    # In practice, this would never be done manually due to autoderive.
-    # Instead you would just write:
-    #     Inspect.inspect innerRecord
-    # This is what the auto-derive would generate.
-
-    f0 <- Inspect.custom
-
-    favoriteColorTag =
-        when favoriteColor is
-            Red ->
-                Inspect.tag "Red" []
-
-            Green ->
-                Inspect.tag "Green" []
-
-            Blue ->
-                Inspect.tag "Blue" []
-
-            RGB (r, g, b) ->
-                Inspect.tag "RGB" [Inspect.tuple [Inspect.u8 r, Inspect.u8 g, Inspect.u8 b]]
-
-    [
-        { key: "firstName", value: Inspect.str firstName },
-        { key: "lastName", value: Inspect.str lastName },
-        { key: "age", value: Inspect.u8 age },
-        { key: "hasBeard", value: Inspect.bool hasBeard },
-        { key: "favoriteColor", value: favoriteColorTag },
-    ]
-    |> Inspect.record
-    |> Inspect.apply f0

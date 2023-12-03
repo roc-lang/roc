@@ -110,13 +110,13 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
         .replace("<!-- base -->", &base_url())
         .replace(
             "<!-- Module links -->",
-            render_sidebar(loaded_module.docs_by_module.values()).as_str(),
+            render_sidebar(loaded_module.docs_by_module.iter().map(|(_, docs)| docs)).as_str(),
         );
 
     let all_exposed_symbols = {
         let mut set = VecSet::default();
 
-        for docs in loaded_module.docs_by_module.values() {
+        for (_, docs) in loaded_module.docs_by_module.iter() {
             set.insert_all(docs.exposed_symbols.iter().copied());
         }
 
@@ -146,7 +146,7 @@ pub fn generate_docs_html(root_file: PathBuf, build_dir: &Path) {
     }
 
     // Write each package module's index.html file
-    for module_docs in loaded_module.docs_by_module.values() {
+    for (_, module_docs) in loaded_module.docs_by_module.iter() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
 
@@ -183,7 +183,7 @@ fn render_package_index(root_module: &LoadedModule) -> String {
     // The list items containing module links
     let mut module_list_buf = String::new();
 
-    for module in root_module.docs_by_module.values() {
+    for (_, module) in root_module.docs_by_module.iter() {
         // The anchor tag containing the module link
         let mut link_buf = String::new();
 
@@ -200,7 +200,12 @@ fn render_package_index(root_module: &LoadedModule) -> String {
     // The HTML for the index page
     let mut index_buf = String::new();
 
-    push_html(&mut index_buf, "h2", vec![], "Exposed Modules");
+    push_html(
+        &mut index_buf,
+        "h2",
+        vec![("class", "module-name")],
+        "Exposed Modules",
+    );
     push_html(
         &mut index_buf,
         "ul",
@@ -222,7 +227,7 @@ fn render_module_documentation(
     push_html(&mut buf, "h2", vec![("class", "module-name")], {
         let mut link_buf = String::new();
 
-        push_html(&mut link_buf, "a", vec![("href", "/#")], module_name);
+        push_html(&mut link_buf, "a", vec![("href", "/")], module_name);
 
         link_buf
     });

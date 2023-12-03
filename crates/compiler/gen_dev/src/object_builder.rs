@@ -296,6 +296,23 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
     }
 }
 
+fn generate_roc_dbg<'a, B: Backend<'a>>(_backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: "roc_dbg".as_bytes().to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let _proc_id = output.add_symbol(proc_symbol);
+    // TODO: Actually generate an impl instead of just an empty symbol.
+    // At a minimum, it should just be a ret.
+}
+
 fn generate_wrapper<'a, B: Backend<'a>>(
     backend: &mut B,
     output: &mut Object,
@@ -410,6 +427,10 @@ fn build_object<'a, B: Backend<'a>>(
         generate_roc_panic(&mut backend, &mut output);
         generate_setjmp(&mut backend, &mut output);
         generate_longjmp(&mut backend, &mut output);
+    }
+
+    if backend.env().mode.generate_roc_dbg() {
+        generate_roc_dbg(&mut backend, &mut output);
     }
 
     if backend.env().mode.generate_allocators() {
