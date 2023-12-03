@@ -1230,6 +1230,26 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::NotFound => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to download this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([alloc.reflow(r"But the file was not found on the server")]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Perhaps you can check that this URL is correct?"),
+                ]),
+            ]);
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "NOTFOUND".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
         Problem::IoErr(io_error) => {
             let doc = alloc.stack([
