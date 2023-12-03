@@ -71,6 +71,9 @@ The first of these problems could be addressed by having function equality alway
 Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
 brittle to change. Disallowing function equality at compile time eliminates all of these drawbacks.
 
+Note that you can provide a custom implementation of the `Eq` ability for an opaque type that contains a function,
+in any way you like (including ignoring the function for equality).
+
 ## Why is there no way to specify "import everything this module exposes" in `imports`?
 
 In [Elm](https://elm-lang.org), it's possible to import a module in a way that brings everything that module
