@@ -39,7 +39,7 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 * [Lucas Rosa](https://github.com/rvcas)
 * [Jonas Schell](https://github.com/Ocupe)
 * [Christopher Dolan](https://github.com/cdolan)
-* [Nick Gravgaard](https://github.com/nickgravgaard)
+* [Nick Gravgaard](https://github.com/nick-gravgaard)
 * [Zeljko Nesic](https://github.com/popara)
 * [Shritesh Bhattarai](https://github.com/shritesh)
 * [Richard Feldman](https://github.com/rtfeldman)
