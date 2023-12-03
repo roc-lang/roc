@@ -2252,7 +2252,7 @@ impl<'a> LowLevelCall<'a> {
 
     fn num_to_str(&self, backend: &mut WasmBackend<'a, '_>) {
         let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-        match backend.layout_interner.get_repr(arg_layout) {
+        match backend.layout_interner.runtime_representation(arg_layout) {
             LayoutRepr::Builtin(Builtin::Int(width)) => {
                 self.load_args_and_call_zig(backend, &bitcode::STR_FROM_INT[width])
             }

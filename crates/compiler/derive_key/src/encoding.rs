@@ -55,6 +55,7 @@ impl FlatEncodable {
                 FlatType::Record(fields, ext) => {
                     let (fields_iter, ext) = fields.unsorted_iterator_and_ext(subs, ext);
 
+                    // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
                     check_derivable_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyRecord))
                     })?;
@@ -71,6 +72,7 @@ impl FlatEncodable {
                 FlatType::Tuple(elems, ext) => {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
+                    // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
                     check_derivable_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTuple))
                     })?;
@@ -89,6 +91,7 @@ impl FlatEncodable {
                     // `t`-prefixed payload types.
                     let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
 
+                    // TODO someday we can put #[cfg(debug_assertions)] around this, but for now let's always do it.
                     check_derivable_ext_var(subs, ext.var(), |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
@@ -115,10 +118,9 @@ impl FlatEncodable {
                     )))
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
-                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
-                //
                 FlatType::Func(..) => Err(Underivable),
+                FlatType::EmptyTuple => unreachable!("Somehow Encoding derivation got an expression that's an empty tuple, which shouldn't be possible!"),
             },
             Content::Alias(sym, _, real_var, _) => match from_builtin_symbol(sym) {
                 Some(lambda) => lambda,
@@ -129,9 +131,7 @@ impl FlatEncodable {
             Content::RangedNumber(range) => {
                 Self::from_var(subs, range.default_compilation_variable())
             }
-            //
             Content::RecursionVar { structure, .. } => Self::from_var(subs, structure),
-            //
             Content::Error => Err(Underivable),
             Content::FlexVar(_)
             | Content::RigidVar(_)

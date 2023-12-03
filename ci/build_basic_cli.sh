@@ -36,14 +36,14 @@ mv roc_nightly* roc_nightly
 cd roc_nightly
 
 # build the basic cli platform
-./roc build ../basic-cli/examples/countdown.roc
+./roc build ../basic-cli/examples/countdown.roc --optimize
 
 # We need this extra variable so we can safely check if $2 is empty later
 EXTRA_ARGS=${2:-}
 
 # In some rare cases it's nice to be able to use the legacy linker, so we produce the .o file to be able to do that
 if [ -n "${EXTRA_ARGS}" ];
- then ./roc build $EXTRA_ARGS ../basic-cli/examples/countdown.roc
+ then ./roc build $EXTRA_ARGS ../basic-cli/examples/countdown.roc --optimize
 fi
 
 cd ..

@@ -718,6 +718,7 @@ fn canonicalize_opaque<'a>(
 
             let ability_region = ability.region;
 
+            // Op := {} has [Eq]
             let (ability, members) = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {

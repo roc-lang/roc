@@ -5983,6 +5983,60 @@ In roc, functions are always written as a lambda, like{}
     }
 
     #[test]
+    fn provides_missing_to_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    provides [main]
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  app "broken"
+                2│      provides [main]
+                                       ^
+
+                I am expecting the `to` keyword next, like:
+
+                    to pf
+                "#
+            ),
+        )
+    }
+
+    #[test]
+    fn provides_to_missing_platform_in_app_header() {
+        report_header_problem_as(
+            indoc!(
+                r#"
+                app "broken"
+                    provides [main] to
+                "#
+            ),
+            indoc!(
+                r#"
+                ── WEIRD PROVIDES ──────────────────────────────────────── /code/proj/Main.roc ─
+
+                I am partway through parsing a header, but I got stuck here:
+
+                1│  app "broken"
+                2│      provides [main] to
+                                          ^
+
+                I am expecting the platform name next, like:
+
+                    to pf
+                "#
+            ),
+        )
+    }
+
+    #[test]
     fn platform_requires_rigids() {
         report_header_problem_as(
             indoc!(
@@ -9744,7 +9798,7 @@ In roc, functions are always written as a lambda, like{}
 
     Only builtin abilities can be derived.
 
-    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`
+    Note: The builtin abilities are `Encoding`, `Decoding`, `Hash`, `Eq`, `Inspect`
     "###
     );
 

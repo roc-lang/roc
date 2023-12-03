@@ -324,7 +324,9 @@ footer p {
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-left: 36px;
+  margin-left: 14px;
+  padding-left: 26px;
+  border-left: 2px solid var(--violet);
 }
 
 .module-name {

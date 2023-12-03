@@ -460,6 +460,10 @@ pub const RocDec = extern struct {
         return RocDec{ .num = out };
     }
 
+    pub fn log(self: RocDec) RocDec {
+        return fromF64(@log(self.toF64())).?;
+    }
+
     // I belive the output of the trig functions is always in range of Dec.
     // If not, we probably should just make it saturate the Dec.
     // I don't think this should crash or return errors.
@@ -1187,6 +1191,10 @@ test "div: 500 / 1000" {
     try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
 }
 
+test "log: 1" {
+    try expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1)));
+}
+
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
@@ -1281,6 +1289,10 @@ pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
+}
+
+pub fn logC(arg: RocDec) callconv(.C) i128 {
+    return @call(.always_inline, RocDec.log, .{arg}).num;
 }
 
 pub fn sinC(arg: RocDec) callconv(.C) i128 {

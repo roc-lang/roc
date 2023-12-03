@@ -408,6 +408,7 @@ pub const DEC_FROM_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.dec.fro
 pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_int");
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
+pub const DEC_LOG: &str = "roc_builtins.dec.log";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
@@ -439,7 +440,6 @@ pub const UTILS_EXPECT_FAILED_START_SHARED_FILE: &str =
     "roc_builtins.utils.expect_failed_start_shared_file";
 pub const UTILS_EXPECT_READ_ENV_SHARED_BUFFER: &str = "roc_builtins.utils.read_env_shared_buffer";
 pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect";
-pub const NOTIFY_PARENT_DBG: &str = "roc_builtins.utils.notify_parent_dbg";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";

@@ -510,7 +510,7 @@ outside a record field. Optionality is a concept that exists only in record
 fields, and it's intended for the use case of config records like this. The
 ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead.
 
-## [Tags](#tags) {#tags}
+## [Tags &amp; Pattern Matching](#tags) {#tags}
 
 Sometimes we want to represent that something can have one of several values. For example:
 
@@ -660,6 +660,8 @@ when myList is
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
 
 > **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
+
+See the [Pattern Matching example](https://www.roc-lang.org/examples/PatternMatching/README.html) which shows different ways to do pattern matching in Roc using tags, strings, and numbers.
 
 ## [Booleans](#booleans) {#booleans}
 
@@ -1417,7 +1419,7 @@ app "hello"
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.
 
-The line `app "hello"` states that this module defines a Roc application, and that building this application should produce an executable named `hello`. This means when you run `roc dev`, the Roc compiler will build an executable named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable without running it by running `roc build`.
+The line `app "hello"` shows that this module is a Roc application. The "hello" after the `app` keyword will be removed soon and is no longer used. If the file is named hello.roc, building this application should produce an executable named `hello`. This means when you run `roc dev`, the Roc compiler will build an executable named `hello` (or `hello.exe` on Windows) and run it. You can also build the executable without running it by running `roc build`.
 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
@@ -1490,6 +1492,19 @@ See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
 See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rust-platform/main.roc) for an example.
+
+### [Importing Files](#importing-files) {#importing-files}
+
+You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful for when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
+
+```roc
+imports [
+    "some-file" as someStr : Str,
+    "some-file" as someBytes : List U8,
+]
+```
+
+See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
 
 ## [Tasks](#tasks) {#tasks}
 
@@ -1685,9 +1700,19 @@ Some important things to note about backpassing and `await`:
 - Backpassing syntax does not need to be used with `await` in particular. It can be used with any function.
 - Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between `\text ->` and `text <-` is how they look, so feel free to use whichever looks nicer to you!
 
+See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
+
 ## [Abilities](#abilities) {#abilities}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
+
+## Examples
+
+Well done on making it this far! 
+
+We've covered all of the basic syntax and features of Roc in this Tutorial. You should now have a good foundation and be ready to start writing your own applications.
+
+You can continue reading through more advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
 
 ## [Appendix: Advanced Concepts](#appendix-advanced-concepts) {#appendix-advanced-concepts}
 
@@ -1992,9 +2017,35 @@ For this reason, any time you see a function that only runs a `when` on its only
 >
 > Also just like with records, you can use this to compose tag union type aliases. For example, you can write `NetworkError : [Timeout, Disconnected]` and then `Problem : [InvalidInput, UnknownFormat]NetworkError`
 
-### [Phantom Types](#phantom-types) {#phantom-types}
+### [Record Builder](#record-builder) {#record-builder}
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
+The record builder syntax sugar is a useful feature which leverages the functional programming concept of [applicative functors](https://lucamug.medium.com/functors-applicatives-and-monads-in-pictures-784c2b5786f7), to provide a flexible method for constructing complex types.
+
+The record builder syntax sugar helps to build up a record by applying a series of functions to it. 
+
+For example, let's say we write a record-builder as follows:
+
+```roc
+{ aliceID, bobID, trudyID } = 
+    initIDCount {
+        aliceID: <- incID,
+        bobID: <- incID,
+        trudyID: <- incID,
+    } |> extractState
+```
+
+The above desguars to the following.
+
+```roc
+{ aliceID, bobID, trudyID } =
+    initIDCount (\aID -> \bID -> \cID -> { aliceID: aID, bobID: bID, trudyID: cID })
+    |> incID
+    |> incID
+    |> incID
+    |> extractState
+```
+
+See the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for an explanation of how to use this feature.
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 

@@ -53,6 +53,10 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
     (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
+    (
+        Symbol::INSPECT_INSPECT_ABILITY,
+        &[Symbol::INSPECT_TO_INSPECTOR],
+    ),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -1609,22 +1613,26 @@ define_builtins! {
         13 INSPECT_BOOL: "bool"
         14 INSPECT_STR: "str"
         15 INSPECT_OPAQUE: "opaque"
-        16 INSPECT_U8: "u8"
-        17 INSPECT_I8: "i8"
-        18 INSPECT_U16: "u16"
-        19 INSPECT_I16: "i16"
-        20 INSPECT_U32: "u32"
-        21 INSPECT_I32: "i32"
-        22 INSPECT_U64: "u64"
-        23 INSPECT_I64: "i64"
-        24 INSPECT_U128: "u128"
-        25 INSPECT_I128: "i128"
-        26 INSPECT_F32: "f32"
-        27 INSPECT_F64: "f64"
-        28 INSPECT_DEC: "dec"
-        29 INSPECT_CUSTOM: "custom"
-        30 INSPECT_APPLY: "apply"
-        31 INSPECT_TO_INSPECTOR: "toInspector"
+        16 INSPECT_FUNCTION: "function"
+        17 INSPECT_U8: "u8"
+        18 INSPECT_I8: "i8"
+        19 INSPECT_U16: "u16"
+        20 INSPECT_I16: "i16"
+        21 INSPECT_U32: "u32"
+        22 INSPECT_I32: "i32"
+        23 INSPECT_U64: "u64"
+        24 INSPECT_I64: "i64"
+        25 INSPECT_U128: "u128"
+        26 INSPECT_I128: "i128"
+        27 INSPECT_F32: "f32"
+        28 INSPECT_F64: "f64"
+        29 INSPECT_DEC: "dec"
+        30 INSPECT_CUSTOM: "custom"
+        31 INSPECT_APPLY: "apply"
+        32 INSPECT_TO_INSPECTOR: "toInspector"
+        33 INSPECT_NAT: "nat"
+        34 INSPECT_DBG_FORMATTER: "DbgFormatter" exposed_type=true
+        35 INSPECT_TO_DBG_STR: "toDbgStr"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"

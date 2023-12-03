@@ -38,13 +38,23 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }
 
-export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
-
+export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
     const stderr = std.io.getStdErr().writer();
-    const msg = @as([*:0]const u8, @ptrCast(c_ptr));
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-    std.process.exit(0);
+    switch (tag_id) {
+        0 => {
+            stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        1 => {
+            stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        else => unreachable,
+    }
+    std.process.exit(1);
+}
+
+export fn roc_dbg(loc: *RocStr, msg: *RocStr) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[{s}] {s}\n", .{ loc.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
 extern fn kill(pid: c_int, sig: c_int) c_int;

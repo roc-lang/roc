@@ -87,7 +87,8 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
             &self.copied_bytes[addr..][..len]
         } else {
             let chars_index = self.deref_usize(addr);
-            let len = self.deref_usize(addr + 4);
+            let seamless_slice_mask = u32::MAX as usize >> 1;
+            let len = self.deref_usize(addr + 4) & seamless_slice_mask;
             &self.copied_bytes[chars_index..][..len]
         };
 

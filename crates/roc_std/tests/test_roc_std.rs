@@ -32,18 +32,14 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 
 #[cfg(test)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
-    use std::ffi::CStr;
-    use std::os::raw::c_char;
+pub unsafe extern "C" fn roc_panic(msg: *mut roc_std::RocStr, _tag_id: u32) {
+    panic!("roc_panic during test: {}", &*msg);
+}
 
-    match tag_id {
-        0 => {
-            let c_str = CStr::from_ptr(c_ptr as *const c_char);
-            let string = c_str.to_str().unwrap();
-            panic!("roc_panic during test: {string}");
-        }
-        _ => todo!(),
-    }
+#[cfg(test)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_dbg(loc: *mut roc_std::RocStr, msg: *mut roc_std::RocStr) {
+    eprintln!("[{}] {}", &*loc, &*msg);
 }
 
 #[cfg(test)]

@@ -4662,7 +4662,9 @@ pub fn add_imports(
 
     let mut cached_symbol_vars = VecMap::default();
 
-    for &symbol in &exposed_for_module.imported_values {
+    let imported_values = exposed_for_module.imported_values.iter().copied();
+
+    for symbol in imported_values {
         import_variable_for_symbol(
             subs,
             constraints,

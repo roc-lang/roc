@@ -34,7 +34,7 @@ install-zig-llvm:
     RUN apt -y install libssl-dev
     RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
     # sccache
-    RUN cargo install sccache
+    RUN cargo install sccache --locked
     RUN sccache -V
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ENV SCCACHE_DIR=/earthbuild/sccache_dir
