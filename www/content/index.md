@@ -153,7 +153,7 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
     <li><a href="https://github.com/rvcas">Lucas Rosa</a></li>
     <li><a href="https://github.com/Ocupe">Jonas Schell</a></li>
     <li><a href="https://github.com/cdolan">Christopher Dolan</a></li>
-    <li><a href="https://github.com/nickgravgaard">Nick Gravgaard</a></li>
+    <li><a href="https://github.com/nick-gravgaard">Nick Gravgaard</a></li>
     <li><a href="https://github.com/popara">Zeljko Nesic</a></li>
     <li><a href="https://github.com/shritesh">Shritesh Bhattarai</a></li>
     <li><a href="https://github.com/rtfeldman">Richard Feldman</a></li>
