@@ -24,6 +24,10 @@ Much like with builtins, we periodically make changes to code generation or to t
 
 As with builtins, it's hard to predict when these will happen and what they'll be, but right now it's a safe bet that they will happen from time to time.
 
+### `Nat` becomes `U64`
+
+The `Nat` type will be removed from the language, and everywhere that today a `Nat` appears, instead it will be a `U64`. 
+
 ### Import syntax
 
 Implementing the very important [module params](https://docs.google.com/document/d/110MwQi7Dpo1Y69ECFXyyvDWzF4OYv1BLojIm08qDTvg/edit?usp=sharing) feature requires a breaking syntax change to how imports work. This plan is not at all tentative; there is a high degree of confidence that it will happen!
