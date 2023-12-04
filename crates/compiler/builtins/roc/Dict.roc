@@ -1515,3 +1515,37 @@ expect
         |> Dict.insert "Charlie" 19
 
     d1 == d2
+
+expect
+    keysToDelete = [1,2]
+    d1 = Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 2 2
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+        |> Dict.keepIf (\(k,_v) -> List.contains keysToDelete k |> Bool.not)
+
+    d2 = Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+
+    d1 == d2
+
+expect
+    keysToDelete = [2,4]
+    d1 = Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 2 2
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+        |> Dict.keepIf (\(k,_v) -> List.contains keysToDelete k |> Bool.not)
+
+    d2 = Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 3 3
+
+    d1 == d2
