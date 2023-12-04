@@ -340,7 +340,7 @@ pub fn helper<'a>(
     if !config.emit_debug_info {
         module.strip_debug_info();
     }
-    let res_lib = llvm_module_to_dylib(&module, &target, config.opt_level);
+    let res_lib = llvm_module_to_dylib(module, &target, config.opt_level);
 
     let lib = res_lib.expect("Error loading compiled dylib for test");
 

@@ -138,6 +138,7 @@ pub fn gen_from_mono_module<'a>(
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
+#[allow(clippy::too_many_arguments)]
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
