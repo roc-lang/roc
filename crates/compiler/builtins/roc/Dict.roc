@@ -150,6 +150,32 @@ empty = \{} ->
         size: 0,
     }
 
+## Return a dictionary with space allocated for a number of entries. This
+## may provide a performance optimization if you know how many entries will be
+## inserted.
+withCapacity : Nat -> Dict * *
+withCapacity = \size ->
+    if size == 0 then
+        empty {}
+    else
+        cap =
+            size
+            |> Num.toU64
+            |> containingPowerOfTwo
+            |> Num.max 8
+            |> Num.toNat
+
+        @Dict {
+            metadata: List.repeat emptySlot cap,
+            dataIndices: List.repeat 0 cap,
+            data: List.withCapacity cap,
+            size: 0,
+        }
+
+containingPowerOfTwo : U64 -> U64
+containingPowerOfTwo = \size ->
+    Num.shiftLeftBy 1 (64 - Num.countLeadingZeroBits (size - 1))
+
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
 ## ```
 ## foodDict =
@@ -163,14 +189,6 @@ capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
     Num.subWrap cap (Num.shiftRightZfBy cap 3)
-
-## Return a dictionary with space allocated for a number of entries. This
-## may provide a performance optimization if you know how many entries will be
-## inserted.
-withCapacity : Nat -> Dict * *
-withCapacity = \_ ->
-    # TODO: power of 2 * 8 and actual implementation
-    empty {}
 
 ## Returns a dictionary containing the key and value provided as input.
 ## ```
@@ -193,8 +211,15 @@ single = \k, v ->
 ## ```
 fromList : List (k, v) -> Dict k v where k implements Hash & Eq
 fromList = \data ->
-    # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
-    List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
+    # TODO: make more efficient.
+    # Want to just set the data and then set all indicies in the hashmap.
+    # That said, we need to also deal with duplicates.
+
+    size = List.len data
+    if size > 0 then
+        List.walk data (withCapacity size) (\dict, (k, v) -> insert dict k v)
+    else
+        empty {}
 
 ## Returns the number of values in the dictionary.
 ## ```
