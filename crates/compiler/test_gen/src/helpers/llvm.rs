@@ -233,9 +233,6 @@ fn create_llvm_module<'a>(
         exposed_to_host: MutSet::default(),
     };
 
-    // strip Zig debug stuff
-    module.strip_debug_info();
-
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
     add_default_roc_externs(&env);
@@ -278,9 +275,6 @@ fn create_llvm_module<'a>(
     };
 
     env.dibuilder.finalize();
-
-    // strip all debug info: we don't use it at the moment and causes weird validation issues
-    module.strip_debug_info();
 
     // Uncomment this to see the module's un-optimized LLVM instruction output:
     // env.module.print_to_stderr();

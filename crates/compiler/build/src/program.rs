@@ -151,9 +151,6 @@ fn gen_from_mono_module_llvm<'a>(
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
-    // strip Zig debug stuff
-    // module.strip_debug_info();
-
     // mark our zig-defined builtins as internal
     let app_ll_file = {
         let mut temp = PathBuf::from(roc_file_path);
@@ -245,8 +242,7 @@ fn gen_from_mono_module_llvm<'a>(
 
     env.dibuilder.finalize();
 
-    // we don't use the debug info, and it causes weird errors.
-    module.strip_debug_info();
+    // TODO: pipeline flag here to conditionally strip debug info.
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -361,8 +357,6 @@ fn gen_from_mono_module_llvm<'a>(
 
         MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
     } else if emit_debug_info {
-        module.strip_debug_info();
-
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
 

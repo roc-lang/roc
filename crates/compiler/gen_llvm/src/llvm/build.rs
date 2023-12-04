@@ -4717,6 +4717,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, c_function);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
