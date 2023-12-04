@@ -1484,6 +1484,8 @@ define_builtins! {
         24 DICT_IS_EMPTY: "isEmpty"
         25 DICT_MAP: "map"
         26 DICT_JOINMAP: "joinMap"
+        27 DICT_KEEP_IF: "keepIf"
+        28 DICT_DROP_IF: "dropIf"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1506,6 +1508,8 @@ define_builtins! {
         17 SET_IS_EMPTY: "isEmpty"
         18 SET_MAP: "map"
         19 SET_JOIN_MAP: "joinMap"
+        20 SET_KEEP_IF: "keepIf"
+        21 SET_DROP_IF: "dropIf"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type

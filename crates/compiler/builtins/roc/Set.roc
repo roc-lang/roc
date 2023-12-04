@@ -5,6 +5,8 @@ interface Set
         single,
         walk,
         walkUntil,
+        keepIf,
+        dropIf,
         insert,
         len,
         isEmpty,
@@ -344,6 +346,29 @@ walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state w
 walkUntil = \@Set dict, state, step ->
     Dict.walkUntil dict state (\s, k, _ -> step s k)
 
+
+## Run the given function on each element in the `Set`, and return
+## a `Set` with just the elements for which the function returned `Bool.true`.
+## ```
+## expect Set.fromList [1,2,3,4,5]
+##     |> Set.keepIf \k -> k >= 3
+##     |> Bool.isEq (Set.fromList [3,4,5])
+## ```
+keepIf : Set k, (k -> Bool) -> Set k
+keepIf = \@Set dict, predicate ->
+    @Set (Dict.keepIf dict (\(k,_v) -> predicate k))
+
+## Run the given function on each element in the `Set`, and return
+## a `Set` with just the elements for which the function returned `Bool.false`.
+## ```
+## expect Set.fromList [1,2,3,4,5]
+##     |> Set.dropIf \k -> k >= 3
+##     |> Bool.isEq (Set.fromList [1,2])
+## ```
+dropIf : Set k, (k -> Bool) -> Set k
+dropIf = \@Set dict, predicate ->
+    @Set (Dict.dropIf dict (\(k,_v) -> predicate k))
+
 expect
     first =
         single "Keep Me"
@@ -443,3 +468,11 @@ expect
         |> insert orderOne
 
     wrapperOne == wrapperTwo
+
+expect Set.fromList [1,2,3,4,5]
+    |> Set.keepIf \k -> k >= 3
+    |> Bool.isEq (Set.fromList [3,4,5])
+
+expect Set.fromList [1,2,3,4,5]
+    |> Set.dropIf \k -> k >= 3
+    |> Bool.isEq (Set.fromList [1,2])
