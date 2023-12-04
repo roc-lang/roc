@@ -326,7 +326,7 @@ mod test_snapshots {
         pass/if_def.expr,
         pass/import.moduledefs,
         pass/import_with_alias.moduledefs,
-        pass/import_with_everything.moduledefs,
+        pass/import_with_comments.moduledefs,
         pass/import_with_exposed.moduledefs,
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,

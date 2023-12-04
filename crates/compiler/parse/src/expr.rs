@@ -838,54 +838,53 @@ pub fn parse_single_def<'a>(
     }
 }
 
-#[inline(always)]
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
     map!(
         skip_first!(
+            crate::parser::keyword_e(crate::keyword::IMPORT, EImport::Import),
             and!(
-                crate::parser::keyword_e(crate::keyword::IMPORT, EImport::Import),
-                spaces()
-            ),
-            and!(
-                optional(skip_second!(
-                    skip_second!(
-                        collection_trailing_sep_e!(
-                            word1(b'[', EImport::ExposedListStart),
-                            loc!(import_exposed_name()),
-                            word1(b',', EImport::ExposedListEnd),
-                            word1(b']', EImport::ExposedListEnd),
-                            Spaced::SpaceBefore
-                        ),
-                        spaces()
-                    ),
-                    skip_second!(
-                        crate::parser::keyword_e(crate::keyword::FROM, EImport::From),
-                        spaces()
-                    )
-                )),
+                spaces_around(loc!(map!(
+                    crate::module::module_name_help(EImport::ModuleName),
+                    Spaced::Item
+                ))),
                 and!(
-                    loc!(crate::module::module_name_help(EImport::ModuleName)),
-                    optional(backtrackable(skip_first!(
+                    optional(skip_first!(
+                        crate::parser::keyword_e(crate::keyword::AS, EImport::As),
+                        spaces_around(loc!(map!(
+                            crate::module::module_name_help(EImport::ModuleName),
+                            Spaced::Item
+                        )))
+                    )),
+                    optional(skip_first!(
+                        crate::parser::keyword_e(crate::keyword::EXPOSING, EImport::Exposing),
                         and!(
                             spaces(),
-                            and!(
-                                crate::parser::keyword_e(crate::keyword::AS, EImport::As),
-                                spaces()
+                            collection_trailing_sep_e!(
+                                word1(b'[', EImport::ExposedListStart),
+                                loc!(import_exposed_name()),
+                                word1(b',', EImport::ExposedListEnd),
+                                word1(b']', EImport::ExposedListEnd),
+                                Spaced::SpaceBefore
                             )
-                        ),
-                        loc!(crate::module::module_name_help(EImport::Alias))
-                    )))
+                        )
+                    ))
                 )
             )
         ),
-        |(exposed, (name, alias)): (
-            Option<Collection<'a, Loc<Spaced<'a, crate::header::ExposedName<'a>>>>>,
-            _
+        |(name, (alias, exposed)): (
+            Loc<Spaced<'a, crate::header::ModuleName<'a>>>,
+            (
+                Option<Loc<Spaced<'a, crate::header::ModuleName<'a>>>>,
+                Option<(
+                    &'a [CommentOrNewline<'a>],
+                    Collection<'a, Loc<Spaced<'a, crate::header::ExposedName<'a>>>>
+                )>
+            )
         )| {
             ValueDef::ModuleImport {
-                exposed: exposed.unwrap_or_else(Collection::empty),
                 name,
                 alias,
+                exposed,
             }
         }
     )

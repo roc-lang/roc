@@ -1,12 +1,13 @@
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_default_newline, fmt_spaces, INDENT};
+use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef,
-    TypeHeader, ValueDef,
+    AbilityMember, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Pattern, Spaced,
+    Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
+use roc_parse::header::{ExposedName, ModuleName};
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -198,10 +199,14 @@ impl<'a> Formattable for ValueDef<'a> {
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
             ModuleImport {
-                name: _,
-                alias: _,
+                name,
+                alias,
                 exposed,
-            } => is_collection_multiline(exposed),
+            } => {
+                name.is_multiline()
+                    || alias.map_or(false, |a| a.is_multiline())
+                    || exposed.map_or(false, |(_, exp)| is_collection_multiline(&exp))
+            }
         }
     }
 
@@ -250,27 +255,77 @@ impl<'a> Formattable for ValueDef<'a> {
                 exposed,
             } => {
                 buf.indent(indent);
-
                 buf.push_str("import");
-                buf.spaces(1);
-
-                if !exposed.is_empty() {
-                    fmt_collection(buf, indent, Braces::Square, *exposed, Newlines::No);
-                    buf.spaces(1);
-                    buf.push_str("from");
-                    buf.spaces(1);
-                }
-
-                buf.push_str(name.value.as_str());
-
-                if let Some(alias_name) = alias {
-                    buf.spaces(1);
-                    buf.push_str("as");
-                    buf.spaces(1);
-                    buf.push_str(alias_name.value.as_str());
-                }
+                fmt_import_body(buf, &name, &alias, &exposed, indent + INDENT);
             }
         }
+    }
+}
+
+fn fmt_import_body<'a>(
+    buf: &mut Buf,
+    name: &'a Loc<Spaced<'a, ModuleName>>,
+    alias: &'a Option<Loc<Spaced<'a, ModuleName>>>,
+    exposed: &'a Option<(
+        &[CommentOrNewline<'a>],
+        Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    )>,
+    indent: u16,
+) -> () {
+    let name_spaces = name.extract_spaces();
+    fmt_default_spaces(buf, name_spaces.before, indent);
+
+    buf.indent(indent);
+    buf.push_str(name.value.item().as_str());
+
+    fmt_default_spaces(buf, name_spaces.after, indent);
+
+    if let Some(alias_name) = alias {
+        let alias_spaces = alias_name.extract_spaces();
+
+        if !alias_spaces.before.is_empty() {
+            buf.ensure_ends_with_newline();
+        }
+
+        buf.indent(indent);
+        buf.push_str("as");
+
+        fmt_default_spaces(buf, alias_spaces.before, indent + INDENT);
+
+        buf.indent(indent + INDENT);
+        buf.push_str(alias_name.value.item().as_str());
+
+        fmt_default_spaces(buf, alias_spaces.after, indent);
+
+        if alias_name.is_multiline() {
+            buf.ensure_ends_with_newline();
+        }
+    }
+
+    if let Some((spaces_before_list, exposed_list)) = exposed {
+        let content_indent = if spaces_before_list.is_empty() {
+            if buf.ends_with_newline() {
+                indent
+            } else {
+                // Align list's closing brace with import keyword if we are in the same line
+                indent - INDENT
+            }
+        } else {
+            buf.ensure_ends_with_newline();
+            indent + INDENT
+        };
+
+        buf.indent(indent);
+        buf.push_str("exposing");
+
+        fmt_default_spaces(buf, spaces_before_list, content_indent);
+        fmt_collection(
+            buf,
+            content_indent,
+            Braces::Square,
+            *exposed_list,
+            Newlines::No,
+        );
     }
 }
 

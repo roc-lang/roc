@@ -19,7 +19,7 @@ Defs {
                 "Json",
             ),
             alias: None,
-            exposed: [],
+            exposed: None,
         },
     ],
 }

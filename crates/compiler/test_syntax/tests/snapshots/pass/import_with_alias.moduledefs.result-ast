@@ -4,20 +4,18 @@ Defs {
         Index(2147483649),
     ],
     regions: [
-        @0-23,
+        @0-24,
         @24-49,
     ],
     space_before: [
         Slice(start = 0, length = 0),
-        Slice(start = 0, length = 1),
+        Slice(start = 0, length = 0),
     ],
     space_after: [
         Slice(start = 0, length = 0),
-        Slice(start = 1, length = 0),
+        Slice(start = 0, length = 0),
     ],
-    spaces: [
-        Newline,
-    ],
+    spaces: [],
     type_defs: [],
     value_defs: [
         ModuleImport {
@@ -25,11 +23,16 @@ Defs {
                 "JsonEncode",
             ),
             alias: Some(
-                @21-23 ModuleName(
-                    "JE",
+                @21-23 SpaceAfter(
+                    ModuleName(
+                        "JE",
+                    ),
+                    [
+                        Newline,
+                    ],
                 ),
             ),
-            exposed: [],
+            exposed: None,
         },
         ModuleImport {
             name: @31-42 ModuleName(
@@ -40,7 +43,7 @@ Defs {
                     "BD",
                 ),
             ),
-            exposed: [],
+            exposed: None,
         },
     ],
 }

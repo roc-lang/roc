@@ -572,7 +572,11 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
             } => ModuleImport {
                 name: name.remove_spaces(arena),
                 alias: alias.map(|alias_name| alias_name.remove_spaces(arena)),
-                exposed: exposed.remove_spaces(arena),
+                exposed: if let Some((spaces, exposed)) = exposed {
+                    Some((spaces, exposed.remove_spaces(arena)))
+                } else {
+                    None
+                },
             },
         }
     }
