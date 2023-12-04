@@ -88,8 +88,8 @@ interface Num
         bitwiseOr,
         bitwiseNot,
         shiftLeftBy,
-        shiftRightBy,
-        shiftRightZfBy,
+        By,
+        ZfBy,
         subWrap,
         subChecked,
         subSaturated,
@@ -1068,11 +1068,11 @@ shiftRightBy : Int a, U8 -> Int a
 ## The most significant bits always become 0. This means that shifting right is
 ## like dividing by factors of two for unsigned integers.
 ## ```
-## shiftRightBy 0b0010_1000 2 == 0b0000_1010
+## shiftRightZfBy 0b0010_1000 2 == 0b0000_1010
 ##
-## 0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
+## 0b0010_1000 |> shiftRightZfBy 2 == 0b0000_1010
 ##
-## 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
+## 0b1001_0000 |> shiftRightZfBy 2 == 0b0010_0100
 ## ```
 ## In some languages `shiftRightZfBy` is implemented as a binary operator `>>`.
 shiftRightZfBy : Int a, U8 -> Int a
