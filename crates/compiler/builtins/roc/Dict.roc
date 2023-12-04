@@ -137,6 +137,9 @@ toInspectorDict = \dict ->
     fmt <- Inspect.custom
     Inspect.apply (Inspect.dict dict walk Inspect.toInspector Inspect.toInspector) fmt
 
+emptyMetadata = [emptySlot, emptySlot, emptySlot, emptySlot, emptySlot, emptySlot, emptySlot, emptySlot]
+emptyDataIndices = [0, 0, 0, 0, 0, 0, 0, 0]
+
 ## Return an empty dictionary.
 ## ```
 ## emptyDict = Dict.empty {}
@@ -144,8 +147,8 @@ toInspectorDict = \dict ->
 empty : {} -> Dict * *
 empty = \{} ->
     @Dict {
-        metadata: List.repeat emptySlot 8,
-        dataIndices: List.repeat 0 8,
+        metadata: emptyMetadata,
+        dataIndices: emptyDataIndices,
         data: [],
         size: 0,
     }
