@@ -120,7 +120,7 @@ fn union() {
                 |> Set.toList
             "#
         ),
-        RocList::from_slice(&[1, 2, 3, 4]),
+        RocList::from_slice(&[1, 3, 4, 2]),
         RocList<i64>
     );
 }

@@ -629,23 +629,26 @@ insertAll = \xs, ys ->
 
 ## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the key-value pairs. This means that we keep only those pairs
-## that are in both dictionaries. Note that where there are pairs with
-## the same key, the value contained in the first input will be retained,
-## and the value in the second input will be removed.
+## that are in both dictionaries. Both the key and value must match to be kept.
 ## ```
 ## first =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
+##     |> Dict.insert 3 "Not this one"
 ##
 ## second =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
-##     |> Dict.insert 3 "But Not Me"
+##     |> Dict.insert 3 "This has a different value"
 ##     |> Dict.insert 4 "Or Me"
 ##
-## expect Dict.keepShared first second == first
+## expected =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
+##
+## expect Dict.keepShared first second == expected
 ## ```
-keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
+keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq, v implements Eq
 keepShared = \xs, ys ->
     if len ys < len xs then
         keepShared ys xs
@@ -654,10 +657,11 @@ keepShared = \xs, ys ->
             xs
             (withCapacity (len xs))
             (\state, k, v ->
-                if contains ys k then
-                    insert state k v
-                else
-                    state
+                when get ys k is
+                    Ok yv if v == yv ->
+                        insert state k v
+                    _ ->
+                        state
             )
 
 ## Remove the key-value pairs in the first input that are also in the second
