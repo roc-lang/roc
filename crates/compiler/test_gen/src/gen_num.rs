@@ -3869,7 +3869,7 @@ fn condition_polymorphic_num_becomes_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_leading_zero_bits() {
     assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u8"#, 2, u8);
     assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u16"#, 10, u8);
@@ -3878,7 +3878,7 @@ fn num_count_leading_zero_bits() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_trailing_zero_bits() {
     assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1000u8"#, 3, u8);
     assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_0000u16"#, 5, u8);
@@ -3887,7 +3887,7 @@ fn num_count_trailing_zero_bits() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_one_bits() {
     assert_evals_to!(r#"Num.countOneBits 0b0010_1000u8"#, 2, u8);
     assert_evals_to!(r#"Num.countOneBits 0b0010_0000u16"#, 1, u8);
