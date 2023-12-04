@@ -161,9 +161,14 @@ withCapacity = \size ->
     if size == 0 then
         empty {}
     else
+        # Max load is 7/8.
+        # To avoid potential rehash, multiply size by 8/7.
+        # Then map to containing power of 2 to make dict indices happy.
         cap =
             size
             |> Num.toU64
+            |> Num.mul 8
+            |> Num.divTrunc 7
             |> containingPowerOfTwo
             |> Num.max 8
             |> Num.toNat
