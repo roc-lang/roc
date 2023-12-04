@@ -487,7 +487,7 @@ where
 
     let config = HelperConfig {
         mode: LlvmBackendMode::WasmGenTest,
-        add_debug_info: false,
+        emit_debug_info: false,
         ignore_problems,
         opt_level: OPT_LEVEL,
     };
