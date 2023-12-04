@@ -1,3 +1,4 @@
+use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, BuilderExt, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
@@ -253,6 +254,8 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         let subprogram = env.new_subprogram("roc_panic");
         fn_val.set_subprogram(subprogram);
+
+        debug_info_init!(env, fn_val);
 
         env.dibuilder.finalize();
 
