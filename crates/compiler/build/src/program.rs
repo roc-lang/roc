@@ -85,6 +85,7 @@ pub struct CodeGenOptions {
     pub backend: CodeGenBackend,
     pub opt_level: OptLevel,
     pub emit_debug_info: bool,
+    pub emit_llvm_ir: bool,
 }
 
 type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
@@ -101,6 +102,7 @@ pub fn gen_from_mono_module<'a>(
 ) -> GenFromMono<'a> {
     let path = roc_file_path;
     let debug = code_gen_options.emit_debug_info;
+    let emit_llvm_ir = code_gen_options.emit_llvm_ir;
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
@@ -120,9 +122,16 @@ pub fn gen_from_mono_module<'a>(
             wasm_dev_stack_bytes,
             backend_mode,
         ),
-        CodeGenBackend::Llvm(backend_mode) => {
-            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
-        }
+        CodeGenBackend::Llvm(backend_mode) => gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            path,
+            target,
+            opt,
+            backend_mode,
+            debug,
+            emit_llvm_ir,
+        ),
     }
 }
 
@@ -137,6 +146,7 @@ fn gen_from_mono_module_llvm<'a>(
     opt_level: OptLevel,
     backend_mode: LlvmBackendMode,
     emit_debug_info: bool,
+    emit_llvm_ir: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -242,7 +252,9 @@ fn gen_from_mono_module_llvm<'a>(
 
     env.dibuilder.finalize();
 
-    // TODO: pipeline flag here to conditionally strip debug info.
+    if !emit_debug_info {
+        module.strip_debug_info();
+    }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -356,7 +368,7 @@ fn gen_from_mono_module_llvm<'a>(
         assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
 
         MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
-    } else if emit_debug_info {
+    } else if emit_llvm_ir {
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
 
@@ -1320,6 +1332,7 @@ pub fn build_str_test<'a>(
         backend: CodeGenBackend::Llvm(LlvmBackendMode::Binary),
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
+        emit_llvm_ir: false,
     };
 
     let emit_timings = false;
