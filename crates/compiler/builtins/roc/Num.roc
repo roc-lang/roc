@@ -1074,7 +1074,7 @@ shiftRightBy : Int a, U8 -> Int a
 ##
 ## 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
 ## ```
-## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
+## In some languages `shiftRightZfBy` is implemented as a binary operator `>>`.
 shiftRightZfBy : Int a, U8 -> Int a
 
 ## Round off the given fraction to the nearest integer.
