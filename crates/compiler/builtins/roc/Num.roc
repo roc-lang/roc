@@ -1054,7 +1054,7 @@ shiftLeftBy : Int a, U8 -> Int a
 ##
 ## The most significant bits are copied from the current.
 ## ```
-## shiftRightBy 0b0000_0011 2 == 0b0000_1100
+## shiftRightBy 0b0000_1100 2 == 0b0000_0011
 ##
 ## 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
 ##
@@ -1065,7 +1065,7 @@ shiftRightBy : Int a, U8 -> Int a
 
 ## Bitwise logical right shift of a number by another
 ##
-## The most significant bits always become 0. This means that shifting left is
+## The most significant bits always become 0. This means that shifting right is
 ## like dividing by factors of two for unsigned integers.
 ## ```
 ## shiftRightBy 0b0010_1000 2 == 0b0000_1010
