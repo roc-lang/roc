@@ -64,29 +64,6 @@
               curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
             ]);
 
-        # For debugging LLVM IR
-        debugir = pkgs.stdenv.mkDerivation {
-          name = "debugir";
-          src = pkgs.fetchFromGitHub {
-            owner = "vaivaswatha";
-            repo = "debugir";
-            rev = "b981e0b74872d9896ba447dd6391dfeb63332b80";
-            sha256 = "Gzey0SF0NZkpiObk5e29nbc41dn4Olv1dx+6YixaZH0=";
-          };
-          buildInputs = with pkgs; [ cmake libxml2 llvmPkgs.llvm.dev ];
-          buildPhase = ''
-            mkdir build
-            cd build
-            cmake -DLLVM_DIR=${llvmPkgs.llvm.dev} -DCMAKE_BUILD_TYPE=Release ../
-            cmake --build ../
-            cp ../debugir .
-          '';
-          installPhase = ''
-            mkdir -p $out/bin
-            cp debugir $out/bin
-          '';
-        };
-
         sharedInputs = (with pkgs; [
           # build libraries
           cmake
@@ -109,8 +86,6 @@
           python3
           libiconv # for examples/gui
           libxkbcommon # for examples/gui
-          # debugir needs to be updated to llvm 15
-          # debugir # used in crates/compiler/build/src/program.rs
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm

@@ -76,7 +76,7 @@ To run the test suite (via `cargo test`), you additionally need to install:
 - [`valgrind`](https://www.valgrind.org/) (needs special treatment to [install on macOS](https://stackoverflow.com/a/61359781)
 Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specific_tests` to skip over the valgrind failures & tests.
 
-For debugging LLVM IR, we use [DebugIR](https://github.com/vaivaswatha/debugir). This dependency is only required to build with the `--debug` flag, and for normal development you should be fine without it.
+For emitting LLVM IR for debugging purposes, the `--emit-llvm-ir` flag can be used.
 
 ### libxcb libraries
 

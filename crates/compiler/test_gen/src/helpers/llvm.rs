@@ -319,7 +319,7 @@ fn create_llvm_module<'a>(
 pub struct HelperConfig {
     pub mode: LlvmBackendMode,
     pub ignore_problems: bool,
-    pub add_debug_info: bool,
+    pub emit_debug_info: bool,
     pub opt_level: OptLevel,
 }
 
@@ -337,54 +337,14 @@ pub fn helper<'a>(
     let (main_fn_name, delayed_errors, module) =
         create_llvm_module(arena, src, config, context, &target, function_kind);
 
-    let res_lib = if config.add_debug_info {
-        let module = annotate_with_debug_info(module, context);
-        llvm_module_to_dylib(&module, &target, config.opt_level)
-    } else {
-        llvm_module_to_dylib(module, &target, config.opt_level)
-    };
+    if !config.emit_debug_info {
+        module.strip_debug_info();
+    }
+    let res_lib = llvm_module_to_dylib(&module, &target, config.opt_level);
 
     let lib = res_lib.expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors, lib)
-}
-
-fn annotate_with_debug_info<'ctx>(
-    module: &Module<'ctx>,
-    context: &'ctx inkwell::context::Context,
-) -> Module<'ctx> {
-    use std::process::Command;
-
-    let app_ll_file = "/tmp/roc-debugir.ll";
-    let app_dbg_ll_file = "/tmp/roc-debugir.dbg.ll";
-    let app_bc_file = "/tmp/roc-debugir.bc";
-
-    // write the ll code to a file, so we can modify it
-    module.print_to_file(app_ll_file).unwrap();
-
-    // run the debugir https://github.com/vaivaswatha/debugir tool
-    match Command::new("debugir")
-        .args(["-instnamer", app_ll_file])
-        .output()
-    {
-        Ok(_) => {}
-        Err(error) => {
-            use std::io::ErrorKind;
-            match error.kind() {
-                ErrorKind::NotFound => panic!(
-                    r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
-                ),
-                _ => panic!("{error:?}"),
-            }
-        }
-    }
-
-    Command::new("llvm-as")
-        .args([app_dbg_ll_file, "-o", app_bc_file])
-        .output()
-        .unwrap();
-
-    inkwell::module::Module::parse_bitcode_from_path(app_bc_file, context).unwrap()
 }
 
 #[allow(dead_code)]
@@ -605,7 +565,7 @@ pub(crate) fn llvm_evals_to<T, U, F>(
 
     let config = crate::helpers::llvm::HelperConfig {
         mode: LlvmBackendMode::GenTest,
-        add_debug_info: false,
+        emit_debug_info: false,
         ignore_problems,
         opt_level: crate::helpers::llvm::OPT_LEVEL,
     };
