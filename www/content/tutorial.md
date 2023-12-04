@@ -165,7 +165,7 @@ Make a file named `main.roc` and put this in it:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1412,7 +1412,7 @@ Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
 app "hello"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1424,7 +1424,7 @@ The line `app "hello"` shows that this module is a Roc application. The "hello" 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 ```roc
-packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 ```
@@ -1523,7 +1523,7 @@ Let's start with a basic "Hello World" program.
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1557,7 +1557,7 @@ Let's change `main` to read a line from `stdin`, and then print what we got:
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1602,7 +1602,7 @@ This works, but we can make it a little nicer to read. Let's change it to the fo
 
 ```roc
 app "cli-tutorial"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
