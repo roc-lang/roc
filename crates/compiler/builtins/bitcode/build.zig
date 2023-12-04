@@ -57,7 +57,7 @@ fn generateLlvmIrFile(
     object_name: []const u8,
 ) void {
     const obj = b.addObject(.{ .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
-    obj.strip = false;
+    obj.strip = true;
     obj.disable_stack_probing = true;
 
     // Generating the bin seems required to get zig to generate the llvm ir.
@@ -87,7 +87,7 @@ fn generateObjectFile(
     object_name: []const u8,
 ) void {
     const obj = b.addObject(.{ .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
-    obj.strip = false;
+    obj.strip = true;
     obj.link_function_sections = true;
     obj.force_pic = true;
     obj.disable_stack_probing = true;
