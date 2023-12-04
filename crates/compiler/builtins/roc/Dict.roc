@@ -622,7 +622,10 @@ values = \@Dict { data } ->
 ## ```
 insertAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 insertAll = \xs, ys ->
-    walk ys xs insert
+    if len ys > len xs then
+        insertAll ys xs
+    else
+        walk ys xs insert
 
 ## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the key-value pairs. This means that we keep only those pairs
@@ -644,15 +647,18 @@ insertAll = \xs, ys ->
 ## ```
 keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 keepShared = \xs, ys ->
-    walk
-        xs
-        (empty {})
-        (\state, k, v ->
-            if contains ys k then
-                insert state k v
-            else
-                state
-        )
+    if len ys < len xs then
+        keepShared ys xs
+    else
+        walk
+            xs
+            (withCapacity (len xs))
+            (\state, k, v ->
+                if contains ys k then
+                    insert state k v
+                else
+                    state
+            )
 
 ## Remove the key-value pairs in the first input that are also in the second
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
