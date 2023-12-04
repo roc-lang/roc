@@ -346,7 +346,6 @@ walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state w
 walkUntil = \@Set dict, state, step ->
     Dict.walkUntil dict state (\s, k, _ -> step s k)
 
-
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.true`.
 ## ```
@@ -356,7 +355,7 @@ walkUntil = \@Set dict, state, step ->
 ## ```
 keepIf : Set k, (k -> Bool) -> Set k
 keepIf = \@Set dict, predicate ->
-    @Set (Dict.keepIf dict (\(k,_v) -> predicate k))
+    @Set (Dict.keepIf dict (\(k, _v) -> predicate k))
 
 ## Run the given function on each element in the `Set`, and return
 ## a `Set` with just the elements for which the function returned `Bool.false`.
@@ -367,7 +366,7 @@ keepIf = \@Set dict, predicate ->
 ## ```
 dropIf : Set k, (k -> Bool) -> Set k
 dropIf = \@Set dict, predicate ->
-    @Set (Dict.dropIf dict (\(k,_v) -> predicate k))
+    @Set (Dict.dropIf dict (\(k, _v) -> predicate k))
 
 expect
     first =
@@ -469,10 +468,12 @@ expect
 
     wrapperOne == wrapperTwo
 
-expect Set.fromList [1,2,3,4,5]
+expect
+    Set.fromList [1, 2, 3, 4, 5]
     |> Set.keepIf \k -> k >= 3
-    |> Bool.isEq (Set.fromList [3,4,5])
+    |> Bool.isEq (Set.fromList [3, 4, 5])
 
-expect Set.fromList [1,2,3,4,5]
+expect
+    Set.fromList [1, 2, 3, 4, 5]
     |> Set.dropIf \k -> k >= 3
-    |> Bool.isEq (Set.fromList [1,2])
+    |> Bool.isEq (Set.fromList [1, 2])

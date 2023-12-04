@@ -1491,42 +1491,48 @@ expect
     |> Bool.isEq Bool.true
 
 expect
-    d1 = Dict.empty {}
+    d1 =
+        Dict.empty {}
         |> Dict.insert "Alice" 17
         |> Dict.insert "Bob" 18
         |> Dict.insert "Charlie" 19
         |> Dict.keepIf \(_k, v) -> v >= 18
 
-    d2 = Dict.empty {}
+    d2 =
+        Dict.empty {}
         |> Dict.insert "Bob" 18
         |> Dict.insert "Charlie" 19
 
     d1 == d2
 
 expect
-    d1 = Dict.empty {}
+    d1 =
+        Dict.empty {}
         |> Dict.insert "Alice" 17
         |> Dict.insert "Bob" 18
         |> Dict.insert "Charlie" 19
         |> Dict.keepIf \(k, _v) -> Str.endsWith k "e"
 
-    d2 = Dict.empty {}
+    d2 =
+        Dict.empty {}
         |> Dict.insert "Alice" 17
         |> Dict.insert "Charlie" 19
 
     d1 == d2
 
 expect
-    keysToDelete = [1,2]
-    d1 = Dict.empty {}
+    keysToDelete = [1, 2]
+    d1 =
+        Dict.empty {}
         |> Dict.insert 0 0
         |> Dict.insert 1 1
         |> Dict.insert 2 2
         |> Dict.insert 3 3
         |> Dict.insert 4 4
-        |> Dict.keepIf (\(k,_v) -> List.contains keysToDelete k |> Bool.not)
+        |> Dict.keepIf (\(k, _v) -> List.contains keysToDelete k |> Bool.not)
 
-    d2 = Dict.empty {}
+    d2 =
+        Dict.empty {}
         |> Dict.insert 0 0
         |> Dict.insert 3 3
         |> Dict.insert 4 4
@@ -1534,16 +1540,18 @@ expect
     d1 == d2
 
 expect
-    keysToDelete = [2,4]
-    d1 = Dict.empty {}
+    keysToDelete = [2, 4]
+    d1 =
+        Dict.empty {}
         |> Dict.insert 0 0
         |> Dict.insert 1 1
         |> Dict.insert 2 2
         |> Dict.insert 3 3
         |> Dict.insert 4 4
-        |> Dict.keepIf (\(k,_v) -> List.contains keysToDelete k |> Bool.not)
+        |> Dict.keepIf (\(k, _v) -> List.contains keysToDelete k |> Bool.not)
 
-    d2 = Dict.empty {}
+    d2 =
+        Dict.empty {}
         |> Dict.insert 0 0
         |> Dict.insert 1 1
         |> Dict.insert 3 3
