@@ -1238,10 +1238,7 @@ pub fn to_https_problem_report<'b>(
                     .annotate(Annotation::Url)
                     .indent(4),
                 alloc.concat([alloc.reflow(r"But the file was not found (404).")]),
-                alloc.concat([
-                    alloc.tip(),
-                    alloc.reflow(r"Is the URL correct?"),
-                ]),
+                alloc.concat([alloc.tip(), alloc.reflow(r"Is the URL correct?")]),
             ]);
             Report {
                 filename: "UNKNOWN.roc".into(),
