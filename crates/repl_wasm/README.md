@@ -14,13 +14,14 @@ crates/repl_wasm/build-www.sh
 ### 2. Make symlinks to the generated Wasm and JS
 
 ```bash
-cd www/public
+mkdir -p www/public/repl
+cd www/public/repl
 ln -s ../../../crates/repl_wasm/build/roc_repl_wasm_bg.wasm
 ln -s ../../../crates/repl_wasm/build/roc_repl_wasm.js
 ```
 These symlinks are ignored by Git.
 
-> This is a bit different from the production build, where we copy all the files to `www/build/`. But for development, it's convenient to have just one copy of files like `www/public/repl.js`. You can make changes, reload your browser to see them, and commit them to Git, without getting mixed up between different copies of the same file.
+> This is a bit different from the production build, where we copy all the files to `www/build/`. But for development, it's convenient to have just one copy of files like `www/public/repl/repl.js`. You can make changes, reload your browser to see them, and commit them to Git, without getting mixed up between different copies of the same file.
 
 ### 3. Run a local HTTP server
 

@@ -2934,7 +2934,7 @@ fn list_map_with_index() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer addition overflowed!"#)]
 fn cleanup_because_exception() {
     assert_evals_to!(
         indoc!(

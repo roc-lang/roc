@@ -233,7 +233,9 @@ pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const 
 pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(a: T, b: T) callconv(.C) T {
-            return math.divCeil(T, a, b) catch @panic("TODO runtime exception for dividing by 0!");
+            return math.divCeil(T, a, b) catch {
+                roc_panic("Integer division by 0!", 0);
+            };
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
@@ -379,8 +381,7 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("integer addition overflowed!", 0);
-                unreachable;
+                roc_panic("Integer addition overflowed!", 0);
             } else {
                 return result.value;
             }
@@ -437,8 +438,7 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("integer subtraction overflowed!", 0);
-                unreachable;
+                roc_panic("Integer subtraction overflowed!", 0);
             } else {
                 return result.value;
             }
@@ -622,8 +622,7 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
         fn func(self: T, other: T) callconv(.C) T {
             const result = @call(.always_inline, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
-                roc_panic("integer multiplication overflowed!", 0);
-                unreachable;
+                roc_panic("Integer multiplication overflowed!", 0);
             } else {
                 return result.value;
             }

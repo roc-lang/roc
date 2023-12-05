@@ -91,6 +91,7 @@
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
+          zls # zig language server
         ]);
 
         aliases = ''
@@ -135,7 +136,7 @@
         # You can build this package (the roc CLI) with the `nix build` command.
         packages = {
           default = rocBuild.roc-cli;
-          
+
           # all rust crates in workspace.members of Cargo.toml
           full = rocBuild.roc-full;
           # only the CLI crate = executable provided in nightly releases
