@@ -26,7 +26,7 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 Most contributors execute the following commands before pushing their code:
 
 ```sh
-cargo test
+cargo test --release
 cargo fmt --all -- --check
 cargo clippy --workspace --tests -- --deny warnings
 ```
