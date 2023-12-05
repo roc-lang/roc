@@ -1130,7 +1130,7 @@ pub fn to_https_problem_report<'b>(
     match https_problem {
         Problem::UnsupportedEncoding(not_supported_encoding) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
                 alloc.concat([
                     alloc.reflow(r"But the server replied with a "),
@@ -1162,7 +1162,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::MultipleEncodings(multiple_encodings) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
                 alloc.concat([
                     alloc.reflow(r"But the server replied with multiple "),
@@ -1230,10 +1230,27 @@ pub fn to_https_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        Problem::NotFound => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([alloc.reflow(r"But the file was not found (404).")]),
+                alloc.concat([alloc.tip(), alloc.reflow(r"Is the URL correct?")]),
+            ]);
+            Report {
+                filename: "UNKNOWN.roc".into(),
+                doc,
+                title: "NOTFOUND".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
         Problem::IoErr(io_error) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1260,7 +1277,7 @@ pub fn to_https_problem_report<'b>(
         // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
         Problem::FsExtraErr(fs_extra_error) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1286,7 +1303,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::HttpErr(reqwest_error) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1323,7 +1340,7 @@ pub fn to_https_problem_report<'b>(
             };
 
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1356,7 +1373,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingTarExt) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1391,7 +1408,7 @@ pub fn to_https_problem_report<'b>(
             invalid_fragment,
         )) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1427,7 +1444,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHash) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1465,7 +1482,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHttps) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1491,7 +1508,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MisleadingCharacter) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1537,7 +1554,7 @@ pub fn to_https_problem_report<'b>(
                 .get_appropriate_unit(false)
                 .format(3);
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
