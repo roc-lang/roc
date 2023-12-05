@@ -1230,6 +1230,8 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
         let subprogram = env.new_subprogram(main_fn_name);
         c_function.set_subprogram(subprogram);
 
+        debug_info_init!(env, c_function);
+
         // STEP 2: build the exposed function's body
         let builder = env.builder;
         let context = env.context;
@@ -4367,6 +4369,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, c_function);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
@@ -4374,8 +4378,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
-
-    debug_info_init!(env, c_function);
 
     // drop the first argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
@@ -4422,6 +4424,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     let call_result = if env.mode.returns_roc_result() {
         debug_assert_eq!(args.len(), roc_function.get_params().len());
 
+        let dbg_loc = builder.get_current_debug_location().unwrap();
         let roc_wrapper_function =
             make_exception_catcher(env, layout_interner, roc_function, return_layout);
         debug_assert_eq!(
@@ -4430,6 +4433,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         );
 
         builder.position_at_end(entry);
+        builder.set_current_debug_location(dbg_loc);
 
         let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
         call_direct_roc_function(
@@ -4515,6 +4519,8 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, c_function);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
@@ -4522,8 +4528,6 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
-
-    debug_info_init!(env, c_function);
 
     // drop the final argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
@@ -4571,10 +4575,12 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let (call_result, call_result_layout) = {
         let last_block = builder.get_insert_block().unwrap();
 
+        let dbg_loc = builder.get_current_debug_location().unwrap();
         let roc_wrapper_function =
             make_exception_catcher(env, layout_interner, roc_function, return_layout);
 
         builder.position_at_end(last_block);
+        builder.set_current_debug_location(dbg_loc);
 
         let wrapper_result = roc_call_result_layout(env.arena, return_layout);
 
@@ -4626,11 +4632,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let subprogram = env.new_subprogram(&size_function_name);
     size_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, size_function);
+
     let entry = context.append_basic_block(size_function, "entry");
 
     builder.position_at_end(entry);
-
-    debug_info_init!(env, size_function);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.new_build_return(Some(&size));
@@ -4716,6 +4722,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
 
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
+
+    debug_info_init!(env, c_function);
 
     // STEP 2: build the exposed function's body
     let builder = env.builder;
@@ -4945,11 +4953,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
     let subprogram = env.new_subprogram(&size_function_name);
     size_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, size_function);
+
     let entry = env.context.append_basic_block(size_function, "entry");
 
     env.builder.position_at_end(entry);
-
-    debug_info_init!(env, size_function);
 
     let return_type = match env.mode {
         LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
@@ -5346,6 +5354,8 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
 
     let subprogram = env.new_subprogram(wrapper_function_name);
     wrapper_function.set_subprogram(subprogram);
+
+    debug_info_init!(env, wrapper_function);
 
     // The exposed main function must adhere to the C calling convention, but the wrapper can still be fastcc.
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
@@ -5822,6 +5832,8 @@ fn build_proc_header<'a, 'ctx>(
 
     let subprogram = env.new_subprogram(&fn_name);
     fn_val.set_subprogram(subprogram);
+
+    debug_info_init!(env, fn_val);
 
     if env.exposed_to_host.contains(&symbol) {
         let arguments = Vec::from_iter_in(proc.args.iter().map(|(layout, _)| *layout), env.arena);

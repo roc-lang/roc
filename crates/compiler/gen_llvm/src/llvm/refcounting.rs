@@ -156,6 +156,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
                 let subprogram = env.new_subprogram(fn_name);
                 function_value.set_subprogram(subprogram);
 
+                debug_info_init!(env, function_value);
+
                 Self::build_decrement_function_body(env, function_value, alignment);
 
                 function_value
@@ -1048,6 +1050,8 @@ pub fn build_header_help<'ctx>(
 
     let subprogram = env.new_subprogram(fn_name);
     fn_val.set_subprogram(subprogram);
+
+    debug_info_init!(env, fn_val);
 
     env.dibuilder.finalize();
 

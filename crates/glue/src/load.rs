@@ -55,6 +55,7 @@ pub fn generate(
                 backend,
                 opt_level: OptLevel::Development,
                 emit_debug_info: false,
+                emit_llvm_ir: false,
             };
 
             let load_config = standard_load_config(

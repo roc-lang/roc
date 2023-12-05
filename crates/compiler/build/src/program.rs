@@ -85,6 +85,7 @@ pub struct CodeGenOptions {
     pub backend: CodeGenBackend,
     pub opt_level: OptLevel,
     pub emit_debug_info: bool,
+    pub emit_llvm_ir: bool,
 }
 
 type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
@@ -101,6 +102,7 @@ pub fn gen_from_mono_module<'a>(
 ) -> GenFromMono<'a> {
     let path = roc_file_path;
     let debug = code_gen_options.emit_debug_info;
+    let emit_llvm_ir = code_gen_options.emit_llvm_ir;
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
@@ -120,15 +122,23 @@ pub fn gen_from_mono_module<'a>(
             wasm_dev_stack_bytes,
             backend_mode,
         ),
-        CodeGenBackend::Llvm(backend_mode) => {
-            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
-        }
+        CodeGenBackend::Llvm(backend_mode) => gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            path,
+            target,
+            opt,
+            backend_mode,
+            debug,
+            emit_llvm_ir,
+        ),
     }
 }
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
+#[allow(clippy::too_many_arguments)]
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
@@ -137,6 +147,7 @@ fn gen_from_mono_module_llvm<'a>(
     opt_level: OptLevel,
     backend_mode: LlvmBackendMode,
     emit_debug_info: bool,
+    emit_llvm_ir: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -150,9 +161,6 @@ fn gen_from_mono_module_llvm<'a>(
     let target_info = roc_target::TargetInfo::from(target);
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(target, &context, "app"));
-
-    // strip Zig debug stuff
-    // module.strip_debug_info();
 
     // mark our zig-defined builtins as internal
     let app_ll_file = {
@@ -245,8 +253,9 @@ fn gen_from_mono_module_llvm<'a>(
 
     env.dibuilder.finalize();
 
-    // we don't use the debug info, and it causes weird errors.
-    module.strip_debug_info();
+    if !emit_debug_info {
+        module.strip_debug_info();
+    }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
@@ -263,6 +272,11 @@ fn gen_from_mono_module_llvm<'a>(
             app_ll_file,
             errors.to_string(),
         );
+    }
+
+    if emit_llvm_ir {
+        eprintln!("Emitting LLVM IR to {}", &app_ll_file.display());
+        module.print_to_file(&app_ll_file).unwrap();
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
@@ -358,65 +372,6 @@ fn gen_from_mono_module_llvm<'a>(
             .unwrap();
 
         assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
-
-        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
-    } else if emit_debug_info {
-        module.strip_debug_info();
-
-        let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
-        app_ll_dbg_file.set_extension("dbg.ll");
-
-        let mut app_o_file = PathBuf::from(roc_file_path);
-        app_o_file.set_extension("o");
-
-        use std::process::Command;
-
-        // write the ll code to a file, so we can modify it
-        module.print_to_file(&app_ll_file).unwrap();
-
-        // run the debugir https://github.com/vaivaswatha/debugir tool
-        match Command::new("debugir")
-            .args(["-instnamer", app_ll_file.to_str().unwrap()])
-            .output()
-        {
-            Ok(_) => {}
-            Err(error) => {
-                use std::io::ErrorKind;
-                match error.kind() {
-                    ErrorKind::NotFound => internal_error!(
-                        r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
-                    ),
-                    _ => internal_error!("{:?}", error),
-                }
-            }
-        }
-
-        use target_lexicon::Architecture;
-        match target.architecture {
-            Architecture::X86_64
-            | Architecture::X86_32(_)
-            | Architecture::Aarch64(_)
-            | Architecture::Wasm32 => {
-                // write the .o file. Note that this builds the .o for the local machine,
-                // and ignores the `target_machine` entirely.
-                //
-                // different systems name this executable differently, so we shotgun for
-                // the most common ones and then give up.
-                let ll_to_object = Command::new("llc")
-                    .args([
-                        "-relocation-model=pic",
-                        "-filetype=obj",
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_o_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                assert!(ll_to_object.stderr.is_empty(), "{ll_to_object:#?}");
-            }
-            _ => unreachable!(),
-        }
 
         MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
     } else {
@@ -1326,6 +1281,7 @@ pub fn build_str_test<'a>(
         backend: CodeGenBackend::Llvm(LlvmBackendMode::Binary),
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
+        emit_llvm_ir: false,
     };
 
     let emit_timings = false;
