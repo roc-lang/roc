@@ -15,6 +15,8 @@ interface Dict
         update,
         walk,
         walkUntil,
+        keepIf,
+        dropIf,
         toList,
         fromList,
         keys,
@@ -315,6 +317,47 @@ walk = \@Dict { data }, initialState, transform ->
 walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state where k implements Hash & Eq
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, (k, v) -> transform state k v)
+
+## Run the given function on each key-value pair of a dictionary, and return
+## a dictionary with just the pairs for which the function returned `Bool.true`.
+## ```
+## expect Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
+##     |> Dict.keepIf \(_k, v) -> v >= 18
+##     |> Dict.len
+##     |> Bool.isEq 2
+## ```
+keepIf : Dict k v, ((k, v) -> Bool) -> Dict k v
+keepIf = \dict, predicate ->
+    keepIfHelp dict predicate 0 (Dict.len dict)
+
+keepIfHelp : Dict k v, ((k, v) -> Bool), Nat, Nat -> Dict k v
+keepIfHelp = \@Dict dict, predicate, index, length ->
+    if index < length then
+        (key, value) = listGetUnsafe dict.data index
+        if predicate (key, value) then
+            keepIfHelp (@Dict dict) predicate (index + 1) length
+        else
+            keepIfHelp (Dict.remove (@Dict dict) key) predicate index (length - 1)
+    else
+        @Dict dict
+
+## Run the given function on each key-value pair of a dictionary, and return
+## a dictionary with just the pairs for which the function returned `Bool.false`.
+## ```
+## expect Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
+##     |> Dict.dropIf \(_k, v) -> v >= 18
+##     |> Dict.len
+##     |> Bool.isEq 1
+## ```
+dropIf : Dict k v, ((k, v) -> Bool) -> Dict k v
+dropIf = \dict, predicate ->
+    Dict.keepIf dict (\e -> Bool.not (predicate e))
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
@@ -1446,3 +1489,71 @@ expect
     |> Dict.insert "Charlie" 19
     |> Dict.walkUntil Bool.false (\_, _, age -> if age >= 18 then Break Bool.true else Continue Bool.false)
     |> Bool.isEq Bool.true
+
+expect
+    d1 =
+        Dict.empty {}
+        |> Dict.insert "Alice" 17
+        |> Dict.insert "Bob" 18
+        |> Dict.insert "Charlie" 19
+        |> Dict.keepIf \(_k, v) -> v >= 18
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert "Bob" 18
+        |> Dict.insert "Charlie" 19
+
+    d1 == d2
+
+expect
+    d1 =
+        Dict.empty {}
+        |> Dict.insert "Alice" 17
+        |> Dict.insert "Bob" 18
+        |> Dict.insert "Charlie" 19
+        |> Dict.keepIf \(k, _v) -> Str.endsWith k "e"
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert "Alice" 17
+        |> Dict.insert "Charlie" 19
+
+    d1 == d2
+
+expect
+    keysToDelete = [1, 2]
+    d1 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 2 2
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+        |> Dict.keepIf (\(k, _v) -> List.contains keysToDelete k |> Bool.not)
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+
+    d1 == d2
+
+expect
+    keysToDelete = [2, 4]
+    d1 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 2 2
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+        |> Dict.keepIf (\(k, _v) -> List.contains keysToDelete k |> Bool.not)
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 3 3
+
+    d1 == d2

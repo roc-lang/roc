@@ -8,5 +8,5 @@ main =
     s2 = Set.empty {}
 
     Bool.isEq s1 s1 && Bool.isEq s2 s2
-#                      ^^^^^^^^^ Set#Bool.isEq(20): Set Str, Set Str -[[Set.isEq(20)]]-> Bool
-#   ^^^^^^^^^ Set#Bool.isEq(20): Set U8, Set U8 -[[Set.isEq(20)]]-> Bool
+#                      ^^^^^^^^^ Set#Bool.isEq(22): Set Str, Set Str -[[Set.isEq(22)]]-> Bool
+#   ^^^^^^^^^ Set#Bool.isEq(22): Set U8, Set U8 -[[Set.isEq(22)]]-> Bool
