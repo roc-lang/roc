@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
+    slice::SliceIndex,
 };
 
 use bumpalo::Bump;
@@ -15,13 +16,16 @@ use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Subs, Variable};
 use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, Diagnostic, GotoDefinitionResponse, Hover, HoverContents,
-    Location, MarkedString, Position, Range, SemanticTokenType, SemanticTokens,
-    SemanticTokensResult, TextEdit, Url,
+    CompletionItem, CompletionItemKind, CompletionItemTag, Diagnostic, GotoDefinitionResponse,
+    Hover, HoverContents, Location, MarkedString, Position, Range, SemanticTokenType,
+    SemanticTokens, SemanticTokensResult, TextEdit, Url,
 };
 
 use crate::{
-    analysis::completion::get_completions,
+    analysis::completion::{
+        find_record_fields, get_completion_items, get_completions, make_completion_items,
+        make_completion_items_string,
+    },
     convert::{
         diag::{IntoLspDiagnostic, ProblemFmt},
         ToRange, ToRocPosition,
@@ -378,7 +382,7 @@ impl AnalyzedDocument {
             .iter()
             .rev()
             //TODO proper regex here
-            .take_while(|&&a| matches!(a as char,'a'..='z'|'A'..='Z'|'0'..='9'|'_'))
+            .take_while(|&&a| matches!(a as char,'a'..='z'|'A'..='Z'|'0'..='9'|'_'|'.'))
             .map(|&a| a)
             .collect::<Vec<u8>>();
         symbol.reverse();
@@ -437,7 +441,7 @@ impl AnalyzedDocument {
         symbol_prefix: String,
     ) -> Option<Vec<CompletionItem>> {
         let mut stderr = std::io::stderr();
-        writeln!(&mut stderr, "starting to get completion items");
+        writeln!(&mut stderr, "starting to get completion items for prefix:");
         let line_info = self.line_info();
         let position = position.to_roc_position(&line_info);
         let AnalyzedModule {
@@ -447,18 +451,65 @@ impl AnalyzedDocument {
             declarations,
             ..
         } = self.module_mut()?;
-        writeln!(&mut stderr, "prefix is: {:?}", symbol_prefix);
 
-        //TODO: to impliment record destructuring and other complex patterns i should pass in the completion item maker into this call and call it directly from the visitor
-        let completions = get_completions(
-            position,
-            declarations,
-            subs,
-            symbol_prefix,
-            interns,
-            module_id,
-        );
-        writeln!(&mut stderr, "got completions: ");
-        Some(completions)
+        if symbol_prefix.contains('.') {
+            writeln!(&mut stderr, "getting record field completions: ");
+            let mut parts: Vec<_> = symbol_prefix.split('.').collect();
+            let (variable, fields) = parts.split_first_mut()?;
+
+            let mut empty = "";
+            let (field, middle) = match fields.split_last_mut() {
+                Some(a) => a,
+
+                None => {
+                    let out: &mut [&str] = [].as_mut_slice();
+
+                    (&mut empty, out)
+                }
+            };
+            writeln!(
+                &mut stderr,
+                "getting record field completions: variable:{:?} field{:?} middle{:?} ",
+                variable, field, middle
+            );
+            //get the variable from within the region
+            //TODO: this is kind of just a hack. We are gettting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
+            let completion = get_completions(position, declarations, variable.to_string(), interns)
+                .into_iter()
+                .map(|a| (a.0.as_str(&interns).to_string(), a.1))
+                .next()?;
+
+            //We iterate through all the intermediate chunks eg var.field1.field2.field3 this iterates through fields until we get to field2, becuase it's second last
+            let second_last = middle.iter().fold(completion, |state, a| {
+                let fields_vars = find_record_fields(state.1, subs);
+                match fields_vars
+                    .into_iter()
+                    .find(|field| a.to_string() == field.0)
+                {
+                    None => state,
+                    Some(a) => a,
+                }
+            });
+
+            let field_completions: Vec<_> = find_record_fields(second_last.1, subs)
+                .into_iter()
+                .filter(|(str, _)| str.starts_with(&field.to_string()))
+                .collect();
+
+            let field_completions =
+                make_completion_items_string(subs, module_id, interns, field_completions);
+            Some(field_completions)
+        } else {
+            let completions = get_completion_items(
+                position,
+                symbol_prefix,
+                declarations,
+                subs,
+                module_id,
+                interns,
+            );
+            writeln!(&mut stderr, "got completions: ");
+            Some(completions)
+        }
     }
 }
