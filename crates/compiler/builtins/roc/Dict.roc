@@ -649,21 +649,23 @@ insertAll = \xs, ys ->
 ## expect Dict.keepShared first second == expected
 ## ```
 keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq, v implements Eq
-keepShared = \xs, ys ->
-    if len ys < len xs then
-        keepShared ys xs
-    else
-        walk
-            xs
-            (withCapacity (len xs))
-            (\state, k, v ->
-                when get ys k is
-                    Ok yv if v == yv ->
-                        insert state k v
+keepShared = \xs0, ys0 ->
+    (xs1, ys1) =
+        if len ys0 < len xs0 then
+            (ys0, xs0)
+        else
+            (xs0, ys0)
+    walk
+        xs1
+        (withCapacity (len xs1))
+        (\state, k, v ->
+            when get ys1 k is
+                Ok yv if v == yv ->
+                    insert state k v
 
-                    _ ->
-                        state
-            )
+                _ ->
+                    state
+        )
 
 ## Remove the key-value pairs in the first input that are also in the second
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
