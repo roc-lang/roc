@@ -237,9 +237,10 @@ toList = \@Set dict ->
 ## ```
 fromList : List k -> Set k where k implements Hash & Eq
 fromList = \list ->
-    initial = @Set (Dict.withCapacity (List.len list))
-
-    List.walk list initial insert
+    list
+    |> List.map \k -> (k, {})
+    |> Dict.fromList
+    |> @Set
 
 ## Combine two `Set` collection by keeping the
 ## [union](https://en.wikipedia.org/wiki/Union_(set_theory))

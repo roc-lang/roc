@@ -102,7 +102,6 @@ Dict k v := {
     metadata : List I8,
     dataIndices : List Nat,
     data : List (k, v),
-    size : Nat,
 } where k implements Hash & Eq
     implements [
         Eq {
@@ -137,6 +136,9 @@ toInspectorDict = \dict ->
     fmt <- Inspect.custom
     Inspect.apply (Inspect.dict dict walk Inspect.toInspector Inspect.toInspector) fmt
 
+emptyMetadata = [emptySlot, emptySlot, emptySlot, emptySlot, emptySlot, emptySlot, emptySlot, emptySlot]
+emptyDataIndices = [0, 0, 0, 0, 0, 0, 0, 0]
+
 ## Return an empty dictionary.
 ## ```
 ## emptyDict = Dict.empty {}
@@ -144,11 +146,40 @@ toInspectorDict = \dict ->
 empty : {} -> Dict * *
 empty = \{} ->
     @Dict {
-        metadata: List.repeat emptySlot 8,
-        dataIndices: List.repeat 0 8,
+        metadata: emptyMetadata,
+        dataIndices: emptyDataIndices,
         data: [],
-        size: 0,
     }
+
+## Return a dictionary with space allocated for a number of entries. This
+## may provide a performance optimization if you know how many entries will be
+## inserted.
+withCapacity : Nat -> Dict * *
+withCapacity = \size ->
+    if size == 0 then
+        empty {}
+    else
+        # Max load is 7/8.
+        # To avoid potential rehash, multiply size by 8/7.
+        # Then map to containing power of 2 to make dict indices happy.
+        cap =
+            size
+            |> Num.toU64
+            |> Num.mul 8
+            |> Num.divTrunc 7
+            |> containingPowerOfTwo
+            |> Num.max 8
+            |> Num.toNat
+
+        @Dict {
+            metadata: List.repeat emptySlot cap,
+            dataIndices: List.repeat 0 cap,
+            data: List.withCapacity cap,
+        }
+
+containingPowerOfTwo : U64 -> U64
+containingPowerOfTwo = \size ->
+    Num.shiftLeftBy 1 (64 - Num.countLeadingZeroBits (size - 1))
 
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
 ## ```
@@ -163,14 +194,6 @@ capacity = \@Dict { dataIndices } ->
     cap = List.len dataIndices
 
     Num.subWrap cap (Num.shiftRightZfBy cap 3)
-
-## Return a dictionary with space allocated for a number of entries. This
-## may provide a performance optimization if you know how many entries will be
-## inserted.
-withCapacity : Nat -> Dict * *
-withCapacity = \_ ->
-    # TODO: power of 2 * 8 and actual implementation
-    empty {}
 
 ## Returns a dictionary containing the key and value provided as input.
 ## ```
@@ -193,8 +216,15 @@ single = \k, v ->
 ## ```
 fromList : List (k, v) -> Dict k v where k implements Hash & Eq
 fromList = \data ->
-    # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
-    List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
+    # TODO: make more efficient.
+    # Want to just set the data and then set all indicies in the hashmap.
+    # That said, we need to also deal with duplicates.
+
+    size = List.len data
+    if size > 0 then
+        List.walk data (withCapacity size) (\dict, (k, v) -> insert dict k v)
+    else
+        empty {}
 
 ## Returns the number of values in the dictionary.
 ## ```
@@ -207,8 +237,8 @@ fromList = \data ->
 ##     |> Bool.isEq 3
 ## ```
 len : Dict * * -> Nat
-len = \@Dict { size } ->
-    size
+len = \@Dict { data } ->
+    List.len data
 
 ## Check if the dictinoary is empty.
 ## ```
@@ -217,8 +247,8 @@ len = \@Dict { size } ->
 ## Dict.isEmpty (Dict.empty {})
 ## ```
 isEmpty : Dict * * -> Bool
-isEmpty = \@Dict { size } ->
-    size == 0
+isEmpty = \@Dict { data } ->
+    List.isEmpty data
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
 ## ```
@@ -246,7 +276,6 @@ clear = \@Dict { metadata, dataIndices, data } ->
             dataIndices,
             # use takeFirst to keep around the capacity.
             data: List.takeFirst data 0,
-            size: 0,
         }
 
 ## Convert each value in the dictionary to something new, by calling a conversion
@@ -424,7 +453,7 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Bool.isEq (Ok 12)
 ## ```
 insert : Dict k v, k, v -> Dict k v where k implements Hash & Eq
-insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
+insert = \@Dict { metadata, dataIndices, data }, key, value ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
@@ -441,7 +470,6 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
                 metadata,
                 dataIndices,
                 data: List.set data dataIndex (key, value),
-                size,
             }
 
         Err NotFound ->
@@ -453,7 +481,6 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
                             metadata,
                             dataIndices,
                             data,
-                            size: Num.addWrap size 1,
                         }
                     )
 
@@ -470,7 +497,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
 ##     |> Bool.isEq 0
 ## ```
 remove : Dict k v, k -> Dict k v where k implements Hash & Eq
-remove = \@Dict { metadata, dataIndices, data, size }, key ->
+remove = \@Dict { metadata, dataIndices, data }, key ->
     # TODO: change this from swap remove to tombstone and test is performance is still good.
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -490,13 +517,12 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
                     metadata: List.set metadata index deletedSlot,
                     dataIndices,
                     data: List.dropLast data 1,
-                    size: Num.subWrap size 1,
                 }
             else
-                swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data, size }) index last
+                swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data }) index last
 
         Err NotFound ->
-            @Dict { metadata, dataIndices, data, size }
+            @Dict { metadata, dataIndices, data }
 
 ## Insert or remove a value for a specified key. This function enables a
 ## performance optimization for the use case of providing a default when a value
@@ -596,36 +622,49 @@ values = \@Dict { data } ->
 ## ```
 insertAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
 insertAll = \xs, ys ->
-    walk ys xs insert
+    if len ys > len xs then
+        insertAll ys xs
+    else
+        walk ys xs insert
 
 ## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the key-value pairs. This means that we keep only those pairs
-## that are in both dictionaries. Note that where there are pairs with
-## the same key, the value contained in the first input will be retained,
-## and the value in the second input will be removed.
+## that are in both dictionaries. Both the key and value must match to be kept.
 ## ```
 ## first =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
+##     |> Dict.insert 3 "Not this one"
 ##
 ## second =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
-##     |> Dict.insert 3 "But Not Me"
+##     |> Dict.insert 3 "This has a different value"
 ##     |> Dict.insert 4 "Or Me"
 ##
-## expect Dict.keepShared first second == first
+## expected =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
+##
+## expect Dict.keepShared first second == expected
 ## ```
-keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
-keepShared = \xs, ys ->
+keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq, v implements Eq
+keepShared = \xs0, ys0 ->
+    (xs1, ys1) =
+        if len ys0 < len xs0 then
+            (ys0, xs0)
+        else
+            (xs0, ys0)
     walk
-        xs
-        (empty {})
+        xs1
+        (withCapacity (len xs1))
         (\state, k, v ->
-            if contains ys k then
-                insert state k v
-            else
-                state
+            when get ys1 k is
+                Ok yv if v == yv ->
+                    insert state k v
+
+                _ ->
+                    state
         )
 
 ## Remove the key-value pairs in the first input that are also in the second
@@ -653,7 +692,7 @@ removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
 swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v where k implements Hash & Eq
-swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
+swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data }, removedIndex, lastIndex ->
     (key, _) = listGetUnsafe data lastIndex
     hashKey =
         createLowLevelHasher PseudoRandSeed
@@ -678,7 +717,6 @@ swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIn
                 # Update index of swaped element.
                 dataIndices: List.set dataIndices index dataIndex,
                 data: nextData,
-                size: Num.subWrap size 1,
             }
 
         Err NotFound ->
@@ -686,7 +724,7 @@ swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIn
             crash "unreachable state in dict swapAndUpdateDataIndex hit. Definitely a standard library bug."
 
 insertNotFoundHelper : Dict k v, k, v, U64, I8 -> Dict k v
-insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value, h1Key, h2Key ->
+insertNotFoundHelper = \@Dict { metadata, dataIndices, data }, key, value, h1Key, h2Key ->
     probe = newProbe h1Key (div8 (List.len metadata))
     index = nextEmptyOrDeletedHelper metadata probe 0
     dataIndex = List.len data
@@ -696,7 +734,6 @@ insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value,
         metadata: List.set metadata index h2Key,
         dataIndices: List.set dataIndices index dataIndex,
         data: nextData,
-        size,
     }
 
 nextEmptyOrDeletedHelper : List I8, Probe, Nat -> Nat
@@ -749,27 +786,26 @@ findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
 # If we aren't to the load factor yet, just ignore this.
 # The container must have an updated size including any elements about to be inserted.
 maybeRehash : Dict k v -> Dict k v where k implements Hash & Eq
-maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
+maybeRehash = \@Dict { metadata, dataIndices, data } ->
     cap = List.len dataIndices
     maxLoadCap =
         # This is 7/8 * capacity, which is the max load factor.
         Num.subWrap cap (Num.shiftRightZfBy cap 3)
 
-    if size > maxLoadCap then
-        rehash (@Dict { metadata, dataIndices, data, size })
+    if (List.len data + 1) > maxLoadCap then
+        rehash (@Dict { metadata, dataIndices, data })
     else
-        @Dict { metadata, dataIndices, data, size }
+        @Dict { metadata, dataIndices, data }
 
 # TODO: switch rehash to iterate data and eventually clear out tombstones as well.
 rehash : Dict k v -> Dict k v where k implements Hash & Eq
-rehash = \@Dict { metadata, dataIndices, data, size } ->
+rehash = \@Dict { metadata, dataIndices, data } ->
     newLen = 2 * List.len dataIndices
     newDict =
         @Dict {
             metadata: List.repeat emptySlot newLen,
             dataIndices: List.repeat 0 newLen,
             data,
-            size,
         }
 
     rehashHelper newDict metadata dataIndices data 0
@@ -796,7 +832,7 @@ rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
             dict
 
 insertForRehash : Dict k v, k, Nat -> Dict k v where k implements Hash & Eq
-insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
+insertForRehash = \@Dict { metadata, dataIndices, data }, key, dataIndex ->
     hashKey =
         createLowLevelHasher PseudoRandSeed
         |> Hash.hash key
@@ -810,7 +846,6 @@ insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex -
         metadata: List.set metadata index h2Key,
         dataIndices: List.set dataIndices index dataIndex,
         data,
-        size,
     }
 
 emptySlot : I8

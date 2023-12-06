@@ -436,7 +436,7 @@ fn keep_shared() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn keep_shared_prefer_first() {
+fn keep_shared_value_must_match() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -453,14 +453,14 @@ fn keep_shared_prefer_first() {
             dict2 =
                 Dict.empty {}
                     |> Dict.insert 0 100
-                    |> Dict.insert 2 200
+                    |> Dict.insert 2 2
                     |> Dict.insert 4 300
 
             Dict.keepShared dict1 dict2
                 |> Dict.values
             "#
         ),
-        RocList::from_slice(&[2, 4]),
+        RocList::from_slice(&[2]),
         RocList<i64>
     );
 }
