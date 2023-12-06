@@ -1513,6 +1513,8 @@ pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C)
             output.setLen(length);
             return output;
         } else {
+            // Shifting right by 1 is required to avoid the highest bit of capacity being set.
+            // If it was set, the slice would get interpreted as a small string.
             const str_ref_ptr = (@intFromPtr(source_ptr) >> 1);
             const slice_ref_ptr = string.str_capacity;
             const slice_mask = string.seamlessSliceMask();
