@@ -1498,8 +1498,35 @@ pub fn getCapacity(string: RocStr) callconv(.C) usize {
 }
 
 pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
-    const slice = string.asSlice()[start .. start + length];
-    return RocStr.fromSlice(slice);
+    if (string.isSmallStr()) {
+        if (start == 0) {
+            var output = string;
+            output.setLen(length);
+            return output;
+        }
+        const slice = string.asSlice()[start .. start + length];
+        return RocStr.fromSlice(slice);
+    }
+    if (string.str_bytes) |source_ptr| {
+        if (start == 0 and string.isUnique()) {
+            var output = string;
+            output.setLen(length);
+            return output;
+        } else {
+            // Shifting right by 1 is required to avoid the highest bit of capacity being set.
+            // If it was set, the slice would get interpreted as a small string.
+            const str_ref_ptr = (@intFromPtr(source_ptr) >> 1);
+            const slice_ref_ptr = string.str_capacity;
+            const slice_mask = string.seamlessSliceMask();
+            const ref_ptr = (str_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
+            return RocStr{
+                .str_bytes = source_ptr + start,
+                .str_len = length | SEAMLESS_SLICE_BIT,
+                .str_capacity = ref_ptr,
+            };
+        }
+    }
+    return RocStr.empty();
 }
 
 pub fn getUnsafe(string: RocStr, index: usize) callconv(.C) u8 {
