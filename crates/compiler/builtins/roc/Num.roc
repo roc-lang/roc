@@ -1433,12 +1433,11 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
+## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated!
 ## Since [Nat] has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
-## `Num.maxU32`. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
+## For example, on a 32-bit system, calling `Num.toNat 9_000_000_000` on a 32-bit
 ## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
 ## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
 ##
