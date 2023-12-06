@@ -23,7 +23,7 @@ The project has [many contributors](https://github.com/roc-lang/roc/graphs/contr
 
 Roc doesn't have a formal process for managing design proposals.
 
-At the current size of the project, having a formal process (like a [RFC](https://en.wikipedia.org/wiki/Change_request) system) would be more heavyweight than it's worth. Fow now, the guiding principle is that as a community we should all be friendly, supportive, and openly share and discuss ideas without the expectation that they will necessarily be accepted or not. We follow a [BDFN](/bdfn) leadership model today, although this is planned to change someday.
+At the current size of the project, having a formal process (like a [RFC](https://en.wikipedia.org/wiki/Change_request) system) would be more heavyweight than it's worth. For now, the guiding principle is that as a community we should all be friendly, supportive, and openly share and discuss ideas without the expectation that they will necessarily be accepted or not. We follow a [BDFN](/bdfn) leadership model today, although this is planned to change someday.
 
 There are three loose stages that a design proposal can go through in Roc: idea, proposal, and implementation. These are guidelines, not strict requirements; their goal is to prevent the outcome where someone does a lot of implementation work only to have their contribution never make it into the code base because it's determined that we wanted to go in a different design direction. Confirming ahead of time that the design direction is desired can prevent implementing something that ends up not being used.
 
