@@ -206,7 +206,11 @@ pub fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
     match line.trim().to_lowercase().as_str() {
         "" => ParseOutcome::Empty,
         ":help" => ParseOutcome::Help,
-        ":exit" | ":quit" | ":q" => ParseOutcome::Exit,
+        // These are all common things beginners try.
+        // Let people exit the repl easily!
+        // If you really need to evaluate `exit` for some reason,
+        // you can do `foo = exit` and then evaluate `foo` instead.
+        ":exit" | ":quit" | ":q" | "exit" | "quit" | "exit()" | "quit()" => ParseOutcome::Exit,
         _ => {
             let src_bytes = line.as_bytes();
 
