@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
+    future::Future,
     io::Write,
     path::{Path, PathBuf},
+    result,
     slice::SliceIndex,
 };
 
@@ -15,6 +17,7 @@ use roc_region::all::{LineColumn, LineInfo};
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Subs, Variable};
+use tokio::{sync::Mutex, task::JoinHandle};
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, Diagnostic, GotoDefinitionResponse,
     Hover, HoverContents, Location, MarkedString, Position, Range, SemanticTokenType,
@@ -23,8 +26,8 @@ use tower_lsp::lsp_types::{
 
 use crate::{
     analysis::completion::{
-        find_record_fields, get_completion_items, get_completions, make_completion_items,
-        make_completion_items_string,
+        field_completion, find_record_fields, get_completion_items, get_completions,
+        make_completion_items, make_completion_items_string,
     },
     convert::{
         diag::{IntoLspDiagnostic, ProblemFmt},
@@ -39,10 +42,6 @@ mod tokens;
 
 use self::{parse_ast::Ast, semantic_tokens::arrange_semantic_tokens, tokens::Token};
 pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
-
-pub(crate) struct GlobalAnalysis {
-    pub documents: Vec<AnalyzedDocument>,
-}
 
 fn format_var_type(
     var: Variable,
@@ -61,14 +60,23 @@ fn format_var_type(
     subs.rollback_to(snapshot);
     type_str
 }
-impl GlobalAnalysis {
-    pub fn new(source_url: Url, source: String) -> GlobalAnalysis {
+pub(crate) fn global_anal(
+    source_url: Url,
+    source: String,
+    version: u32,
+) -> (impl Future<Output = Vec<AnalyzedDocument>>, DocInfo) {
+    let fi = source_url.to_file_path().unwrap();
+    let src_dir = find_src_dir(&fi).to_path_buf();
+    let line_info = LineInfo::new(&source);
+    let doc_info = DocInfo {
+        url: source_url.clone(),
+        line_info: line_info.clone(),
+        source: source.clone(),
+        version,
+    };
+    let doc_info_return = doc_info.clone();
+    let documents_future = async move {
         let arena = Bump::new();
-
-        let fi = source_url.to_file_path().unwrap();
-        let src_dir = find_src_dir(&fi).to_path_buf();
-        let line_info = LineInfo::new(&source);
-
         let loaded = roc_load::load_and_typecheck_str(
             &arena,
             fi,
@@ -90,16 +98,14 @@ impl GlobalAnalysis {
                     .collect::<Vec<_>>();
 
                 let analyzed_document = AnalyzedDocument {
-                    url: source_url,
-                    line_info,
-                    source,
-                    module: None,
-                    diagnostics: all_problems,
+                    doc_info,
+                    analysys_result: AnalysisResult {
+                        module: None,
+                        diagnostics: all_problems,
+                    },
                 };
 
-                return GlobalAnalysis {
-                    documents: vec![analyzed_document],
-                };
+                return vec![analyzed_document];
             }
         };
 
@@ -132,12 +138,15 @@ impl GlobalAnalysis {
             root_module: &mut root_module,
         };
 
+        writeln!(std::io::stderr(), "sources:{:?}", sources);
         for (module_id, (path, source)) in sources {
-            documents.push(builder.build_document(path, source, module_id));
+            documents.push(builder.build_document(path, source, module_id, version));
         }
 
-        GlobalAnalysis { documents }
-    }
+        writeln!(std::io::stderr(), "documents:{:?}", documents.len());
+        documents
+    };
+    (documents_future, doc_info_return)
 }
 
 fn find_src_dir(path: &Path) -> &Path {
@@ -196,6 +205,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         path: PathBuf,
         source: Box<str>,
         module_id: ModuleId,
+        version: u32,
     ) -> AnalyzedDocument {
         let subs;
         let abilities;
@@ -225,11 +235,16 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         let diagnostics = self.build_diagnostics(&path, &source, &line_info, module_id);
 
         AnalyzedDocument {
-            url: path_to_url(&path),
-            line_info,
-            source: source.into(),
-            module: Some(analyzed_module),
-            diagnostics,
+            doc_info: DocInfo {
+                url: path_to_url(&path),
+                line_info,
+                source: source.into(),
+                version,
+            },
+            analysys_result: AnalysisResult {
+                module: Some(analyzed_module),
+                diagnostics,
+            },
         }
     }
 
@@ -285,97 +300,42 @@ struct AnalyzedModule {
     module_id_to_url: ModuleIdToUrl,
 }
 
+//This needs a rewrite
+/*
+Requirements:
+We should be able to get the latest results of analysis as well as the last good analysis resutl
+We should be able to get the source, lineinfo and url of the document without having completed the anaylys
+We need a way for functions that need the completed anaylisis to be completed to wait on that completion
+
+*/
+/*
+access completed result
+I could make a type that either contains an async task or the async result, when you access it it blocks and either awaits the task or returns the completed result.
+I could make it so that it contains an async mutex and it holds the first lock open then it is created it releases the lock once the task is completed
+*/
+
 #[derive(Debug, Clone)]
-pub(crate) struct AnalyzedDocument {
-    url: Url,
-    line_info: LineInfo,
-    source: String,
-    module: Option<AnalyzedModule>,
-    diagnostics: Vec<Diagnostic>,
+
+pub struct AnalyzedDocument {
+    //TOODO make not pugb
+    pub doc_info: DocInfo,
+    pub analysys_result: AnalysisResult,
 }
-
-impl AnalyzedDocument {
-    pub fn url(&self) -> &Url {
-        &self.url
-    }
-
-    fn line_info(&self) -> &LineInfo {
-        &self.line_info
-    }
-
-    fn module_mut(&mut self) -> Option<&mut AnalyzedModule> {
-        self.module.as_mut()
-    }
-
-    fn module(&self) -> Option<&AnalyzedModule> {
-        self.module.as_ref()
-    }
-
-    fn location(&self, range: Range) -> Location {
-        Location {
-            uri: self.url.clone(),
-            range,
-        }
-    }
-
+#[derive(Debug, Clone)]
+pub struct DocInfo {
+    pub url: Url,
+    pub line_info: LineInfo,
+    pub source: String,
+    pub version: u32,
+}
+impl DocInfo {
     fn whole_document_range(&self) -> Range {
-        let line_info = self.line_info();
         let start = Position::new(0, 0);
-        let end = Position::new(line_info.num_lines(), 0);
+        let end = Position::new(self.line_info.num_lines(), 0);
         Range::new(start, end)
     }
-    pub fn type_checked(&self) -> bool {
-        self.module.is_some()
-    }
-
-    pub fn diagnostics(&mut self) -> Vec<Diagnostic> {
-        self.diagnostics.clone()
-    }
-
-    pub fn symbol_at(&self, position: Position) -> Option<Symbol> {
-        let line_info = self.line_info();
-
-        let position = position.to_roc_position(line_info);
-
-        let AnalyzedModule {
-            declarations,
-            abilities,
-            ..
-        } = self.module()?;
-
-        let found_symbol =
-            roc_can::traverse::find_closest_symbol_at(position, declarations, abilities)?;
-
-        Some(found_symbol.implementation_symbol())
-    }
-
-    pub fn hover(&mut self, position: Position) -> Option<Hover> {
-        let line_info = self.line_info();
-
-        let pos = position.to_roc_position(line_info);
-
-        let AnalyzedModule {
-            subs,
-            declarations,
-            module_id,
-            interns,
-            ..
-        } = self.module_mut()?;
-
-        let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
-        let type_str = format_var_type(var, subs, module_id, interns);
-
-        let range = region.to_range(self.line_info());
-
-        Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::String(type_str)),
-            range: Some(range),
-        })
-    }
-
     pub fn get_prefix_at_position(&self, position: Position) -> String {
-        let line_info = self.line_info();
-        let position = position.to_roc_position(&line_info);
+        let position = position.to_roc_position(&self.line_info);
         let offset = position.offset;
         let source = self.source.as_bytes().split_at(offset as usize).0;
         let mut symbol = source
@@ -389,17 +349,6 @@ impl AnalyzedDocument {
 
         String::from_utf8(symbol).unwrap()
     }
-
-    pub fn definition(&self, symbol: Symbol) -> Option<GotoDefinitionResponse> {
-        let AnalyzedModule { declarations, .. } = self.module()?;
-
-        let found_declaration = roc_can::traverse::find_declaration(symbol, declarations)?;
-
-        let range = found_declaration.region().to_range(self.line_info());
-
-        Some(GotoDefinitionResponse::Scalar(self.location(range)))
-    }
-
     pub fn format(&self) -> Option<Vec<TextEdit>> {
         let source = &self.source;
         let arena = &Bump::new();
@@ -430,85 +379,149 @@ impl AnalyzedDocument {
             data,
         }))
     }
+}
+#[derive(Debug, Clone)]
+pub struct AnalysisResult {
+    module: Option<AnalyzedModule>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl AnalyzedDocument {
+    pub fn url(&self) -> &Url {
+        &self.doc_info.url
+    }
+
+    fn line_info(&self) -> &LineInfo {
+        &self.doc_info.line_info
+    }
+
+    fn module(&self) -> Option<&AnalyzedModule> {
+        self.analysys_result.module.as_ref()
+    }
+    pub fn doc_info(&self) -> &DocInfo {
+        &self.doc_info
+    }
+
+    fn location(&self, range: Range) -> Location {
+        Location {
+            uri: self.doc_info.url.clone(),
+            range,
+        }
+    }
+
+    pub fn type_checked(&self) -> bool {
+        self.analysys_result.module.is_some()
+    }
+
+    pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.analysys_result.diagnostics.clone()
+    }
+
+    pub fn symbol_at(&self, position: Position) -> Option<Symbol> {
+        let line_info = self.line_info();
+
+        let position = position.to_roc_position(line_info);
+
+        let AnalyzedModule {
+            declarations,
+            abilities,
+            ..
+        } = self.module()?;
+
+        let found_symbol =
+            roc_can::traverse::find_closest_symbol_at(position, declarations, abilities)?;
+
+        Some(found_symbol.implementation_symbol())
+    }
+
+    pub fn hover(&self, position: Position) -> Option<Hover> {
+        let line_info = self.line_info();
+
+        let pos = position.to_roc_position(line_info);
+
+        let AnalyzedModule {
+            subs,
+            declarations,
+            module_id,
+            interns,
+            ..
+        } = self.module()?;
+
+        let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
+        let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
+
+        let range = region.to_range(self.line_info());
+
+        Some(Hover {
+            contents: HoverContents::Scalar(MarkedString::String(type_str)),
+            range: Some(range),
+        })
+    }
+
+    pub fn definition(&self, symbol: Symbol) -> Option<GotoDefinitionResponse> {
+        let AnalyzedModule { declarations, .. } = self.module()?;
+
+        let found_declaration = roc_can::traverse::find_declaration(symbol, declarations)?;
+
+        let range = found_declaration.region().to_range(self.line_info());
+
+        Some(GotoDefinitionResponse::Scalar(self.location(range)))
+    }
 
     pub(crate) fn module_url(&self, module_id: ModuleId) -> Option<Url> {
         self.module()?.module_id_to_url.get(&module_id).cloned()
     }
 
     pub fn completion_items(
-        &mut self,
+        &self,
         position: Position,
+        latest_doc: &DocInfo,
         symbol_prefix: String,
     ) -> Option<Vec<CompletionItem>> {
-        let mut stderr = std::io::stderr();
-        writeln!(&mut stderr, "starting to get completion items for prefix:");
-        let line_info = self.line_info();
-        let position = position.to_roc_position(&line_info);
+        let mut position = position;
+        writeln!(
+            std::io::stderr(),
+            "starting to get completion items for prefix: {:?}",
+            symbol_prefix
+        );
+        let len_diff = latest_doc.source.len() as i32 - self.doc_info.source.len() as i32;
+
+        //TODO: this is a hack we can move our position back by getting the difference in the number of chars on this line and what the line was before and doing the same with the number of lines
+        let mut position = position.to_roc_position(&latest_doc.line_info);
+        position.offset = (position.offset as i32 - len_diff - 1) as u32;
+        writeln!(
+            std::io::stderr(),
+            "completion offset: {:?}",
+            position.offset
+        );
+
         let AnalyzedModule {
             module_id,
             interns,
             subs,
             declarations,
             ..
-        } = self.module_mut()?;
+        } = self.module()?;
 
         if symbol_prefix.contains('.') {
-            writeln!(&mut stderr, "getting record field completions: ");
-            let mut parts: Vec<_> = symbol_prefix.split('.').collect();
-            let (variable, fields) = parts.split_first_mut()?;
-
-            let mut empty = "";
-            let (field, middle) = match fields.split_last_mut() {
-                Some(a) => a,
-
-                None => {
-                    let out: &mut [&str] = [].as_mut_slice();
-
-                    (&mut empty, out)
-                }
-            };
-            writeln!(
-                &mut stderr,
-                "getting record field completions: variable:{:?} field{:?} middle{:?} ",
-                variable, field, middle
-            );
-            //get the variable from within the region
-            //TODO: this is kind of just a hack. We are gettting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
-            let completion = get_completions(position, declarations, variable.to_string(), interns)
-                .into_iter()
-                .map(|a| (a.0.as_str(&interns).to_string(), a.1))
-                .next()?;
-
-            //We iterate through all the intermediate chunks eg var.field1.field2.field3 this iterates through fields until we get to field2, becuase it's second last
-            let second_last = middle.iter().fold(completion, |state, a| {
-                let fields_vars = find_record_fields(state.1, subs);
-                match fields_vars
-                    .into_iter()
-                    .find(|field| a.to_string() == field.0)
-                {
-                    None => state,
-                    Some(a) => a,
-                }
-            });
-
-            let field_completions: Vec<_> = find_record_fields(second_last.1, subs)
-                .into_iter()
-                .filter(|(str, _)| str.starts_with(&field.to_string()))
-                .collect();
-
-            let field_completions =
-                make_completion_items_string(subs, module_id, interns, field_completions);
-            Some(field_completions)
+            field_completion(
+                position,
+                symbol_prefix,
+                &declarations,
+                &interns,
+                &mut subs.clone(),
+                &module_id,
+            )
         } else {
             let completions = get_completion_items(
                 position,
                 symbol_prefix,
                 declarations,
-                subs,
+                &mut subs.clone(),
                 module_id,
                 interns,
             );
-            writeln!(&mut stderr, "got completions: ");
+            writeln!(std::io::stderr(), "got completions: ");
             Some(completions)
         }
     }

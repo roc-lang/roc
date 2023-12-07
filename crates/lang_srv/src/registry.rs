@@ -1,129 +1,254 @@
-use std::{collections::HashMap, io::Write};
-
-use tower_lsp::lsp_types::{
-    CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
-    TextEdit, Url,
+use std::{
+    cell::OnceCell, collections::HashMap, future::Future, io::Write, ops::Deref, rc::Rc, sync::Arc,
 };
 
-use crate::analysis::{AnalyzedDocument, GlobalAnalysis};
+use tokio::{
+    io::AsyncRead,
+    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    task::JoinHandle,
+};
+use tower_lsp::lsp_types::{
+    notification::Notification, CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover,
+    Position, SemanticTokensResult, TextEdit, Url,
+};
+
+use crate::analysis::{global_anal, AnalysisResult, AnalyzedDocument, DocInfo};
 
 pub(crate) enum DocumentChange {
-    Modified(Url, String),
+    Modified(Url, String, u32),
     Closed(Url),
+}
+#[derive(Debug)]
+pub(crate) struct LatestDocument {
+    info: DocInfo,
+    //We can hold this mutex locked during updating while the latest and doc_info are out of sync
+    //the lock should be aquired and immediately freed by and task looking to get a copy of info
+    //At the top level we will need to store our lock
+    latest: tokio::sync::watch::Receiver<Option<Arc<AnalyzedDocument>>>,
+    latest_sender: tokio::sync::watch::Sender<Option<Arc<AnalyzedDocument>>>,
+}
+impl LatestDocument {
+    pub(crate) async fn get_latest(&self) -> Arc<AnalyzedDocument> {
+        let mut my_reciever = self.latest.clone();
+
+        let a = my_reciever.wait_for(|x| x.is_some()).await.unwrap();
+        match a.as_ref() {
+            Some(latest) => latest.clone(),
+            None => todo!(),
+        }
+    }
+    pub(crate) fn set_latest(&self, latest: Arc<AnalyzedDocument>) {
+        self.latest_sender.send(Some(latest)).unwrap()
+    }
+    pub(crate) fn waiting_for_doc(&self) -> bool {
+        self.latest.borrow().is_none()
+    }
+    pub(crate) fn new(doc_info: DocInfo) -> LatestDocument {
+        let chan = tokio::sync::watch::channel(None);
+        LatestDocument {
+            info: doc_info,
+            latest_sender: chan.0,
+            latest: chan.1,
+        }
+    }
+    pub(crate) fn new_initialised(doc: Arc<AnalyzedDocument>) -> LatestDocument {
+        let info = doc.doc_info.clone();
+        let chan = tokio::sync::watch::channel(Some(doc));
+        LatestDocument {
+            info,
+            latest_sender: chan.0,
+            latest: chan.1,
+        }
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct Document {
-    latest_document: AnalyzedDocument,
-    last_good_document: AnalyzedDocument,
+pub(crate) struct DocumentPair {
+    latest_document: LatestDocument,
+    last_good_document: Arc<AnalyzedDocument>,
 }
+
+// pub(crate) fn new(latest: AnalyzedDocument, last_good: AnalyzedDocument) -> DocumentPair {
+//     DocumentPair {
+//         //TODO not sure if i should actually be cloning here?
+//         latest_document: (latest.doc_info, Arc::new(RwLock::new(last_good.clone()))),
+//         last_good_document: last_good,
+//     }
+// }
+// pub(crate) fn new_latest_type_checked(latest_doc: AnalyzedDocument) -> DocumentPair {
+//     DocumentPair {
+//         //TODO not sure if i should actually be cloning here?
+//         latest_document: (
+//             latest_doc.doc_info.clone(),
+//             Arc::new(RwLock::new(latest_doc.clone())),
+//         ),
+//         last_good_document: latest_doc,
+//     }
+// }
+
 #[derive(Debug, Default)]
 pub(crate) struct Registry {
-    documents: HashMap<Url, Document>,
+    documents: Mutex<HashMap<Url, DocumentPair>>,
 }
 
 impl Registry {
-    fn update_document(&mut self, document: AnalyzedDocument) {
+    fn update_document<'a>(
+        documents: &mut MutexGuard<'a, HashMap<Url, DocumentPair>>,
+        document: AnalyzedDocument,
+    ) {
         let url = document.url().clone();
+        let document = Arc::new(document);
+        writeln!(
+            std::io::stderr(),
+            "updating doc{:?}. version:{:?}",
+            &url,
+            &document.doc_info.version
+        );
 
-        match self.documents.get_mut(&url) {
-            Some(doc) => {
+        let latest_doc = LatestDocument::new_initialised(document.clone());
+        match documents.get_mut(&url) {
+            Some(old_doc) => {
+                //This is a special case where we know we should
+                if old_doc.latest_document.waiting_for_doc() {
+                    old_doc.latest_document.set_latest(document.clone());
+                }
                 if document.type_checked() {
-                    self.documents.insert(
-                        url.clone(),
-                        Document {
-                            //TODO not sure if i should actually be cloning here?
-                            latest_document: document.clone(),
-                            last_good_document: document,
-                        },
-                    );
+                    *old_doc = DocumentPair {
+                        latest_document: latest_doc,
+                        last_good_document: document,
+                    };
                 } else {
                     //TODO this seems ugly but for now i'll let it slide. shoudl be immutable
-                    doc.latest_document = document;
+                    *old_doc = DocumentPair {
+                        latest_document: latest_doc,
+                        last_good_document: old_doc.last_good_document.clone(),
+                    };
                 }
             }
             None => {
-                self.documents.insert(
+                documents.insert(
                     url.clone(),
-                    Document {
-                        latest_document: document.clone(),
+                    DocumentPair {
+                        latest_document: latest_doc,
                         last_good_document: document,
                     },
                 );
             }
         }
     }
-    pub fn apply_change(&mut self, change: DocumentChange) {
-        match change {
-            DocumentChange::Modified(url, source) => {
-                let GlobalAnalysis { documents } = GlobalAnalysis::new(url, source);
 
+    pub async fn apply_change(&self, change: DocumentChange) -> () {
+        match change {
+            DocumentChange::Modified(url, source, version) => {
+                let (results, partial) = global_anal(url.clone(), source, version);
+
+                writeln!(std::io::stderr(), "starting global analysis");
+                let handle = tokio::task::spawn(results);
+                //Update the latest document with the partial analysis
                 // Only replace the set of documents and all dependencies that were re-analyzed.
                 // Note that this is actually the opposite of what we want - in truth we want to
                 // re-evaluate all dependents!
-                for document in documents {
-                    self.update_document(document);
+
+                let mut lock = self.documents.lock().await;
+                let doc = lock.get_mut(&url);
+                match doc {
+                    Some(a) => a.latest_document = LatestDocument::new(partial),
+                    None => (),
+                }
+                drop(lock);
+                writeln!(
+                    std::io::stderr(),
+                    "updated the latest document with docinfo"
+                );
+
+                let analised_docs = handle.await.unwrap();
+                let mut documents = self.documents.lock().await;
+                writeln!(
+                    std::io::stderr(),
+                    "finised doc analasys updating docs {:?}",
+                    analised_docs
+                        .iter()
+                        .map(|a| &a.doc_info)
+                        .collect::<Vec<_>>()
+                );
+
+                for document in analised_docs {
+                    Registry::update_document(&mut documents, document);
                 }
             }
-            DocumentChange::Closed(_url) => {
-                // Do nothing.
-            }
+            DocumentChange::Closed(_url) => (),
         }
     }
 
-    fn document_by_url(&mut self, url: &Url) -> Option<&mut AnalyzedDocument> {
-        self.documents.get_mut(url).map(|a| &mut a.latest_document)
+    fn document_info_by_url(&self, url: &Url) -> Option<DocInfo> {
+        self.documents
+            .blocking_lock()
+            .get(url)
+            .map(|a| a.latest_document.info.clone())
     }
-    fn document_pair_by_url(&mut self, url: &Url) -> Option<&mut Document> {
-        self.documents.get_mut(url)
+    async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
+        match self.documents.lock().await.get(url) {
+            Some(a) => Some(a.latest_document.get_latest().await),
+            None => None,
+        }
     }
+    // fn document_last_good(self, url: &Url) -> Option<&AnalyzedDocument> {
+    //     self.documents.get(url)(|x| x.last_good_document)
+    // }
+    // fn document_last_good(self, url: &Url) -> Option<&AnalyzedDocument> {
+    //     self.documents.get(url)(|x| x.last_good_document)
+    // }
 
-    pub fn diagnostics(&mut self, url: &Url) -> Vec<Diagnostic> {
-        let Some(document) = self.document_by_url(url) else {
+    pub async fn diagnostics(&self, url: &Url) -> Vec<Diagnostic> {
+        let Some( document) = self.latest_document_by_url(url).await else {
             return vec![];
         };
         document.diagnostics()
     }
 
-    pub fn hover(&mut self, url: &Url, position: Position) -> Option<Hover> {
-        self.document_by_url(url)?.hover(position)
+    pub async fn hover(&self, url: &Url, position: Position) -> Option<Hover> {
+        self.latest_document_by_url(url).await?.hover(position)
     }
 
-    pub fn goto_definition(
-        &mut self,
+    pub async fn goto_definition(
+        &self,
         url: &Url,
         position: Position,
     ) -> Option<GotoDefinitionResponse> {
-        let document = self.document_by_url(url)?;
+        let document = self.latest_document_by_url(url).await?;
         let symbol = document.symbol_at(position)?;
         let def_document_url = document.module_url(symbol.module_id())?;
-        let def_document = self.document_by_url(&def_document_url)?;
+        let def_document = self.latest_document_by_url(&def_document_url).await?;
         def_document.definition(symbol)
     }
 
-    pub fn formatting(&mut self, url: &Url) -> Option<Vec<TextEdit>> {
-        let document = self.document_by_url(url)?;
+    pub fn formatting(&self, url: &Url) -> Option<Vec<TextEdit>> {
+        let document = self.document_info_by_url(url)?;
         document.format()
     }
 
-    pub fn semantic_tokens(&mut self, url: &Url) -> Option<SemanticTokensResult> {
-        let document = self.document_by_url(url)?;
+    pub fn semantic_tokens(&self, url: &Url) -> Option<SemanticTokensResult> {
+        let document = self.document_info_by_url(url)?;
         document.semantic_tokens()
     }
-    pub fn completion_items(
-        &mut self,
+    pub async fn completion_items(
+        &self,
         url: &Url,
         position: Position,
     ) -> Option<CompletionResponse> {
-        let Document {
-            latest_document,
-            last_good_document,
-        } = self.document_pair_by_url(url)?;
+        let lock = self.documents.lock().await;
+        let pair = lock.get(url)?;
         let mut stderr = std::io::stderr();
         writeln!(&mut stderr, "got document");
-        let symbol_prefix = latest_document.get_prefix_at_position(position);
+        let latest_doc_info = &pair.latest_document.info;
+        writeln!(&mut stderr, "latest version:{:?} ", latest_doc_info.version);
+
+        let symbol_prefix = latest_doc_info.get_prefix_at_position(position);
+
         //this strategy probably won't work for record fields
-        let completions = last_good_document.completion_items(position, symbol_prefix)?;
+        let completions =
+            pair.last_good_document
+                .completion_items(position, &latest_doc_info, symbol_prefix)?;
 
         Some(CompletionResponse::Array(completions))
     }

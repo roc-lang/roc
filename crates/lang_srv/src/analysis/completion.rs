@@ -36,7 +36,7 @@ impl Visitor for CompletionVisitor<'_> {
     }
     fn visit_annotation(&mut self, _pat: &roc_can::def::Annotation) {
         let mut stderr = std::io::stderr();
-        writeln!(&mut stderr, "annotation:{:?}", _pat);
+        // writeln!(&mut stderr, "annotation:{:?}", _pat);
     }
 
     // fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
@@ -301,12 +301,12 @@ impl CompletionVisitor<'_> {
 
     fn is_match(&self, symbol: &Symbol) -> bool {
         let mut stderr = std::io::stderr();
-        writeln!(
-            &mut stderr,
-            "check if prefix {:?} matches {:?}",
-            self.prefix,
-            symbol.as_str(self.interns)
-        );
+        // writeln!(
+        //     &mut stderr,
+        //     "check if prefix {:?} matches {:?}",
+        //     self.prefix,
+        //     symbol.as_str(self.interns)
+        // );
         symbol.as_str(self.interns).starts_with(&self.prefix)
     }
 
@@ -319,11 +319,11 @@ impl CompletionVisitor<'_> {
                 ..
             } => {
                 let mut stderr = std::io::stderr();
-                writeln!(
-                    &mut stderr,
-                    "decl:{:?}",
-                    loc_symbol.value.as_str(self.interns)
-                );
+                // writeln!(
+                //     &mut stderr,
+                //     "decl:{:?}",
+                //     loc_symbol.value.as_str(self.interns)
+                // );
 
                 self.patterns(pattern, expr_var)
             }
@@ -378,7 +378,7 @@ pub fn get_completions<'a>(
     visitor.found_decls
 }
 //TODO: this should be replaced with a more specific solution. I can likely use the variable type to figure out what the completion item kind is
-// fn make_completion_item_var(subs:&mut Subs,symbol: &Symbol, var: &Variable) -> CompletionItem {
+// fn make_completion_item_var(subs:&Subs,symbol: &Symbol, var: &Variable) -> CompletionItem {
 //     make_completion_item(symbol, var, CompletionItemKind::VARIABLE)
 // }
 fn make_completion_item(
@@ -512,12 +512,72 @@ pub fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variab
         },
         // roc_types::subs::Content::Alias(_, _, _, _) => todo!(),
         // roc_types::subs::Content::RangedNumber(_) => todo!(),
-        // roc_types::subs::Content::Error => todo!(),
+        roc_types::subs::Content::Error => {
+            writeln!(std::io::stderr(), "ERROR: variable was of type error",);
+            vec![]
+        }
         a => {
             writeln!(std::io::stderr(), "variable before field type:{:?}", a);
             todo!();
         }
     }
+}
+pub fn field_completion(
+    position: Position,
+    symbol_prefix: String,
+    declarations: &Declarations,
+    interns: &Interns,
+    subs: &mut Subs,
+    module_id: &ModuleId,
+) -> Option<Vec<CompletionItem>> {
+    writeln!(std::io::stderr(), "getting record field completions: ");
+    let mut parts: Vec<_> = symbol_prefix.split('.').collect();
+    let (variable, fields) = parts.split_first_mut()?;
+
+    let mut empty = "";
+    let (field, middle) = match fields.split_last_mut() {
+        Some(a) => a,
+
+        None => {
+            let out: &mut [&str] = [].as_mut_slice();
+            (&mut empty, out)
+        }
+    };
+
+    writeln!(
+        std::io::stderr(),
+        "getting record field completions: variable:{:?} field{:?} middle{:?} ",
+        variable,
+        field,
+        middle
+    );
+    //get the variable from within the region
+    //TODO: this is kind of just a hack. We are gettting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
+    let completion = get_completions(position, declarations, variable.to_string(), interns)
+        .into_iter()
+        .map(|a| (a.0.as_str(&interns).to_string(), a.1))
+        .next()?;
+
+    //We iterate through all the intermediate chunks eg var.field1.field2.field3 this iterates through fields until we get to field2, becuase it's second last
+    let second_last = middle.iter().fold(completion, |state, a| {
+        let fields_vars = find_record_fields(state.1, subs);
+        match fields_vars
+            .into_iter()
+            .find(|field| a.to_string() == field.0)
+        {
+            None => state,
+            Some(a) => a,
+        }
+    });
+
+    let field_completions: Vec<_> = find_record_fields(second_last.1, subs)
+        .into_iter()
+        .filter(|(str, _)| str.starts_with(&field.to_string()))
+        .collect();
+
+    let field_completions =
+        make_completion_items_string(subs, module_id, interns, field_completions);
+    Some(field_completions)
 }
 // fn make_completion_item_string(
 //     &mut self,

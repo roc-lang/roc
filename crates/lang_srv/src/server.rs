@@ -1,7 +1,12 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
-use parking_lot::{Mutex, MutexGuard};
 use registry::{DocumentChange, Registry};
+use std::future::Future;
+use std::io::Write;
+use std::sync::Arc;
+use tokio::sync::{Mutex, MutexGuard, RwLock};
+use tokio::task::JoinHandle;
 use tower_lsp::jsonrpc::Result;
+use tower_lsp::lsp_types::request::RegisterCapability;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -12,7 +17,8 @@ mod registry;
 #[derive(Debug)]
 struct RocLs {
     client: Client,
-    registry: Mutex<Registry>,
+    registry: Registry,
+    // change_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl std::panic::RefUnwindSafe for RocLs {}
@@ -21,12 +27,16 @@ impl RocLs {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            registry: Mutex::new(Registry::default()),
+            registry: Registry::default(),
+            // change_handle: Mutex::new(None),
         }
     }
 
-    fn registry(&self) -> MutexGuard<Registry> {
-        self.registry.lock()
+    fn registry(&self) -> &Registry {
+        &self.registry
+    }
+    fn registry_write(&mut self) -> &mut Registry {
+        &mut self.registry
     }
 
     pub fn capabilities() -> ServerCapabilities {
@@ -83,13 +93,25 @@ impl RocLs {
 
     /// Records a document content change.
     async fn change(&self, fi: Url, text: String, version: i32) {
-        self.registry()
-            .apply_change(DocumentChange::Modified(fi.clone(), text));
+        // match self.change_handle.lock().await.as_ref() {
+        //     Some(a) => a.abort(),
+        //     None => (),
+        // }
 
-        let diagnostics = match std::panic::catch_unwind(|| self.registry().diagnostics(&fi)) {
-            Ok(ds) => ds,
-            Err(_) => return,
-        };
+        writeln!(std::io::stderr(), "starting change");
+        self.registry()
+            .apply_change(DocumentChange::Modified(fi.clone(), text, version as u32))
+            .await;
+        // let handle = tokio::task::spawn(self.registry().apply_change(DocumentChange::Modified(
+        //     fi.clone(),
+        //     text,
+        //     version as u32,
+        // )));
+        writeln!(std::io::stderr(), "applied_change getting diagnostics");
+        //We do this to briefly yeild
+
+        let diagnostics = self.registry().diagnostics(&fi).await;
+        writeln!(std::io::stderr(), "applied_change returning diagnostics");
 
         self.client
             .publish_diagnostics(fi, diagnostics, Some(version))
@@ -97,7 +119,9 @@ impl RocLs {
     }
 
     async fn close(&self, fi: Url) {
-        self.registry().apply_change(DocumentChange::Closed(fi));
+        self.registry()
+            .apply_change(DocumentChange::Closed(fi))
+            .await;
     }
 }
 
@@ -153,7 +177,8 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper(|| self.registry().hover(&text_document.uri, position))
+        panic_wrapper_async(|| async { self.registry().hover(&text_document.uri, position).await })
+            .await
     }
 
     async fn goto_definition(
@@ -170,10 +195,12 @@ impl LanguageServer for RocLs {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper(|| {
+        panic_wrapper_async(|| async {
             self.registry()
                 .goto_definition(&text_document.uri, position)
+                .await
         })
+        .await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -183,7 +210,7 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper(|| self.registry().formatting(&text_document.uri))
+        panic_wrapper_async(|| async { self.registry().formatting(&text_document.uri) }).await
     }
 
     async fn semantic_tokens_full(
@@ -196,15 +223,21 @@ impl LanguageServer for RocLs {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper(|| self.registry().semantic_tokens(&text_document.uri))
+        panic_wrapper_async(|| async { self.registry().semantic_tokens(&text_document.uri) }).await
     }
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
+        writeln!(std::io::stderr(), "starting completion");
 
-        panic_wrapper(|| {
+        let res = panic_wrapper_async(|| async {
             self.registry()
                 .completion_items(&doc.text_document.uri, doc.position)
+                .await
         })
+        .await;
+
+        writeln!(std::io::stderr(), "finished completion");
+        res
     }
     // async fn completion(
     //     &self,
@@ -230,6 +263,17 @@ impl LanguageServer for RocLs {
 fn panic_wrapper<T>(f: impl FnOnce() -> Option<T> + std::panic::UnwindSafe) -> Result<Option<T>> {
     match std::panic::catch_unwind(f) {
         Ok(r) => Ok(r),
+        Err(_) => Err(tower_lsp::jsonrpc::Error::internal_error()),
+    }
+}
+async fn panic_wrapper_async<Fut, T>(
+    f: impl FnOnce() -> Fut + std::panic::UnwindSafe,
+) -> Result<Option<T>>
+where
+    Fut: Future<Output = Option<T>>,
+{
+    match std::panic::catch_unwind(f) {
+        Ok(r) => Ok(r.await),
         Err(_) => Err(tower_lsp::jsonrpc::Error::internal_error()),
     }
 }
