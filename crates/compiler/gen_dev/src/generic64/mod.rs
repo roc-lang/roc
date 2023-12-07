@@ -1306,6 +1306,27 @@ impl<
         }
     }
 
+    fn build_num_add_or_panic(
+        &mut self,
+        dst: &Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match self.layout_interner.get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(i @ IntWidth::I64)) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::NUM_ADD_OR_PANIC_INT[i].to_string(),
+                    &[src1, src2],
+                    &[Layout::I64, Layout::I64],
+                    &Layout::I64,
+                );
+            }
+            _ => self.build_num_add(dst, &src1, &src2, &layout),
+        }
+    }
+
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
             LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {

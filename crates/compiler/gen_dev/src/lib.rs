@@ -983,7 +983,7 @@ trait Backend<'a> {
                     arg_layouts[0], *ret_layout,
                     "NumAdd: expected to have the same argument and return layout"
                 );
-                self.build_num_add(sym, &args[0], &args[1], ret_layout)
+                self.build_num_add_or_panic(sym, args[0], args[1], *ret_layout)
             }
             LowLevel::NumAddSaturated => {
                 self.build_num_add_saturated(*sym, args[0], args[1], *ret_layout);
@@ -2051,6 +2051,16 @@ trait Backend<'a> {
 
     /// build_num_add stores the sum of src1 and src2 into dst.
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_add_or_panic stores the sum of src1 and src2 into dst.
+    /// panics on overflow
+    fn build_num_add_or_panic(
+        &mut self,
+        dst: &Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    );
 
     /// build_num_add_saturated stores the sum of src1 and src2 into dst.
     fn build_num_add_saturated(
