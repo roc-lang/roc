@@ -4,10 +4,11 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Pattern, Spaced,
-    Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AbilityMember, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, ImportAlias,
+    ImportedModuleName, Pattern, Spaced, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader,
+    ValueDef,
 };
-use roc_parse::header::{ExposedName, ModuleName};
+use roc_parse::header::ExposedName;
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -185,6 +186,48 @@ impl<'a> Formattable for TypeHeader<'a> {
     }
 }
 
+impl<'a> Formattable for ImportedModuleName<'a> {
+    fn is_multiline(&self) -> bool {
+        // No newlines in module name itself.
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+
+        if let Some(package_shorthand) = self.package {
+            buf.push_str(package_shorthand);
+            buf.push_str(".");
+        }
+
+        buf.push_str(self.name);
+    }
+}
+
+impl<'a> Formattable for ImportAlias<'a> {
+    fn is_multiline(&self) -> bool {
+        // No newlines in alias itself.
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(self.as_str());
+    }
+}
+
 impl<'a> Formattable for ValueDef<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::ValueDef::*;
@@ -256,7 +299,7 @@ impl<'a> Formattable for ValueDef<'a> {
             } => {
                 buf.indent(indent);
                 buf.push_str("import");
-                fmt_import_body(buf, &name, &alias, &exposed, indent + INDENT);
+                fmt_import_body(buf, name, alias, exposed, indent + INDENT);
             }
         }
     }
@@ -264,19 +307,18 @@ impl<'a> Formattable for ValueDef<'a> {
 
 fn fmt_import_body<'a>(
     buf: &mut Buf,
-    name: &'a Loc<Spaced<'a, ModuleName>>,
-    alias: &'a Option<Loc<Spaced<'a, ModuleName>>>,
+    name: &'a Loc<Spaced<'a, ImportedModuleName<'a>>>,
+    alias: &'a Option<Loc<Spaced<'a, ImportAlias<'a>>>>,
     exposed: &'a Option<(
         &[CommentOrNewline<'a>],
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     )>,
     indent: u16,
-) -> () {
+) {
     let name_spaces = name.extract_spaces();
     fmt_default_spaces(buf, name_spaces.before, indent);
 
-    buf.indent(indent);
-    buf.push_str(name.value.item().as_str());
+    name.value.item().format(buf, indent);
 
     fmt_default_spaces(buf, name_spaces.after, indent);
 
@@ -291,9 +333,7 @@ fn fmt_import_body<'a>(
         buf.push_str("as");
 
         fmt_default_spaces(buf, alias_spaces.before, indent + INDENT);
-
-        buf.indent(indent + INDENT);
-        buf.push_str(alias_name.value.item().as_str());
+        alias_name.value.item().format(buf, indent + INDENT);
 
         fmt_default_spaces(buf, alias_spaces.after, indent);
 

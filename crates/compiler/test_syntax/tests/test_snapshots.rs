@@ -325,6 +325,7 @@ mod test_snapshots {
         pass/highest_int.expr,
         pass/if_def.expr,
         pass/import.moduledefs,
+        pass/import_from_package.moduledefs,
         pass/import_with_alias.moduledefs,
         pass/import_with_comments.moduledefs,
         pass/import_with_exposed.moduledefs,

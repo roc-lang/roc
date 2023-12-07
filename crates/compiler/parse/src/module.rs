@@ -590,7 +590,7 @@ fn shortname<'a>() -> impl Parser<'a, &'a str, EImports> {
     specialize(|_, pos| EImports::Shorthand(pos), lowercase_ident())
 }
 
-pub fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
+fn module_name_help<'a, F, E>(to_expectation: F) -> impl Parser<'a, ModuleName<'a>, E>
 where
     F: Fn(Position) -> E,
     E: 'a,

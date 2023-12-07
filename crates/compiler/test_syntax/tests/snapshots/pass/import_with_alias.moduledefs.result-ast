@@ -19,12 +19,13 @@ Defs {
     type_defs: [],
     value_defs: [
         ModuleImport {
-            name: @7-17 ModuleName(
-                "JsonEncode",
-            ),
+            name: @7-17 ImportedModuleName {
+                package: None,
+                name: "JsonEncode",
+            },
             alias: Some(
                 @21-23 SpaceAfter(
-                    ModuleName(
+                    ImportAlias(
                         "JE",
                     ),
                     [
@@ -35,11 +36,12 @@ Defs {
             exposed: None,
         },
         ModuleImport {
-            name: @31-42 ModuleName(
-                "BytesDecode",
-            ),
+            name: @31-42 ImportedModuleName {
+                package: None,
+                name: "BytesDecode",
+            },
             alias: Some(
-                @47-49 ModuleName(
+                @47-49 ImportAlias(
                     "BD",
                 ),
             ),

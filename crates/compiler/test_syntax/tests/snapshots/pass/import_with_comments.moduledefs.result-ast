@@ -75,9 +75,10 @@ Defs {
     value_defs: [
         ModuleImport {
             name: @25-29 SpaceBefore(
-                ModuleName(
-                    "Json",
-                ),
+                ImportedModuleName {
+                    package: None,
+                    name: "Json",
+                },
                 [
                     Newline,
                     LineComment(
@@ -86,7 +87,7 @@ Defs {
                 ],
             ),
             alias: Some(
-                @33-34 ModuleName(
+                @33-34 ImportAlias(
                     "J",
                 ),
             ),
@@ -103,9 +104,10 @@ Defs {
         },
         ModuleImport {
             name: @58-62 SpaceAfter(
-                ModuleName(
-                    "Json",
-                ),
+                ImportedModuleName {
+                    package: None,
+                    name: "Json",
+                },
                 [
                     Newline,
                     LineComment(
@@ -114,7 +116,7 @@ Defs {
                 ],
             ),
             alias: Some(
-                @84-85 ModuleName(
+                @84-85 ImportAlias(
                     "J",
                 ),
             ),
@@ -130,13 +132,14 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @109-113 ModuleName(
-                "Json",
-            ),
+            name: @109-113 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: Some(
                 @135-136 SpaceBefore(
                     SpaceAfter(
-                        ModuleName(
+                        ImportAlias(
                             "J",
                         ),
                         [
@@ -155,12 +158,13 @@ Defs {
             exposed: None,
         },
         ModuleImport {
-            name: @145-149 ModuleName(
-                "Json",
-            ),
+            name: @145-149 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: Some(
                 @171-172 SpaceBefore(
-                    ModuleName(
+                    ImportAlias(
                         "J",
                     ),
                     [
@@ -183,12 +187,13 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @196-200 ModuleName(
-                "Json",
-            ),
+            name: @196-200 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: Some(
                 @222-223 SpaceBefore(
-                    ModuleName(
+                    ImportAlias(
                         "J",
                     ),
                     [
@@ -220,9 +225,10 @@ Defs {
         },
         ModuleImport {
             name: @261-265 SpaceAfter(
-                ModuleName(
-                    "Json",
-                ),
+                ImportedModuleName {
+                    package: None,
+                    name: "Json",
+                },
                 [
                     Newline,
                     LineComment(
@@ -251,12 +257,13 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @321-325 ModuleName(
-                "Json",
-            ),
+            name: @321-325 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: Some(
                 @329-330 SpaceAfter(
-                    ModuleName(
+                    ImportAlias(
                         "J",
                     ),
                     [
@@ -279,9 +286,10 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @372-376 ModuleName(
-                "Json",
-            ),
+            name: @372-376 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: None,
             exposed: Some(
                 (
@@ -300,11 +308,12 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @418-422 ModuleName(
-                "Json",
-            ),
+            name: @418-422 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: Some(
-                @426-427 ModuleName(
+                @426-427 ImportAlias(
                     "J",
                 ),
             ),
@@ -325,11 +334,12 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @469-473 ModuleName(
-                "Json",
-            ),
+            name: @469-473 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: Some(
-                @477-478 ModuleName(
+                @477-478 ImportAlias(
                     "J",
                 ),
             ),
@@ -360,9 +370,10 @@ Defs {
         ModuleImport {
             name: @542-546 SpaceBefore(
                 SpaceAfter(
-                    ModuleName(
-                        "Json",
-                    ),
+                    ImportedModuleName {
+                        package: None,
+                        name: "Json",
+                    },
                     [
                         Newline,
                         LineComment(
@@ -380,7 +391,7 @@ Defs {
             alias: Some(
                 @590-591 SpaceBefore(
                     SpaceAfter(
-                        ModuleName(
+                        ImportAlias(
                             "J",
                         ),
                         [

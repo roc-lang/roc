@@ -1,14 +1,15 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
-    ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation,
-    TypeDef, TypeHeader, ValueDef,
+    ImplementsAbilities, ImportAlias, ImportedModuleName, Pattern, RecordBuilderField, Spaceable,
+    Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{
-    integer_ident, lowercase_ident, parse_ident, unqualified_ident, Accessor, Ident,
+    integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
+    Ident,
 };
 use crate::keyword;
 use crate::parser::{
@@ -841,22 +842,16 @@ pub fn parse_single_def<'a>(
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
     map!(
         skip_first!(
-            crate::parser::keyword_e(crate::keyword::IMPORT, EImport::Import),
+            parser::keyword_e(keyword::IMPORT, EImport::Import),
             and!(
-                spaces_around(loc!(map!(
-                    crate::module::module_name_help(EImport::ModuleName),
-                    Spaced::Item
-                ))),
+                spaces_around(loc!(map!(imported_module_name(), Spaced::Item))),
                 and!(
                     optional(skip_first!(
-                        crate::parser::keyword_e(crate::keyword::AS, EImport::As),
-                        spaces_around(loc!(map!(
-                            crate::module::module_name_help(EImport::ModuleName),
-                            Spaced::Item
-                        )))
+                        parser::keyword_e(keyword::AS, EImport::As),
+                        spaces_around(loc!(map!(import_alias(), Spaced::Item)))
                     )),
                     optional(skip_first!(
-                        crate::parser::keyword_e(crate::keyword::EXPOSING, EImport::Exposing),
+                        parser::keyword_e(keyword::EXPOSING, EImport::Exposing),
                         and!(
                             spaces(),
                             collection_trailing_sep_e!(
@@ -871,22 +866,32 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
                 )
             )
         ),
-        |(name, (alias, exposed)): (
-            Loc<Spaced<'a, crate::header::ModuleName<'a>>>,
-            (
-                Option<Loc<Spaced<'a, crate::header::ModuleName<'a>>>>,
-                Option<(
-                    &'a [CommentOrNewline<'a>],
-                    Collection<'a, Loc<Spaced<'a, crate::header::ExposedName<'a>>>>
-                )>
-            )
-        )| {
+        |(name, (alias, exposed))| {
             ValueDef::ModuleImport {
                 name,
                 alias,
                 exposed,
             }
         }
+    )
+}
+
+#[inline(always)]
+fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport> {
+    record!(ImportedModuleName {
+        package: optional(skip_second!(
+            specialize(|_, pos| EImport::PackageShorthand(pos), lowercase_ident()),
+            word1(b'.', EImport::PackageShorthandDot)
+        )),
+        name: specialize(|_, pos| EImport::ModuleName(pos), uppercase_ident()),
+    })
+}
+
+#[inline(always)]
+fn import_alias<'a>() -> impl Parser<'a, ImportAlias<'a>, EImport> {
+    map!(
+        specialize(|_, pos| EImport::Alias(pos), uppercase_ident()),
+        ImportAlias::new
     )
 }
 

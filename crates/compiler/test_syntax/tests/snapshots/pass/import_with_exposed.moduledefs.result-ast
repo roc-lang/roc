@@ -26,9 +26,10 @@ Defs {
     type_defs: [],
     value_defs: [
         ModuleImport {
-            name: @7-11 ModuleName(
-                "Json",
-            ),
+            name: @7-11 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: None,
             exposed: Some(
                 (
@@ -45,9 +46,10 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @43-47 ModuleName(
-                "Json",
-            ),
+            name: @43-47 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: None,
             exposed: Some(
                 (
@@ -69,9 +71,10 @@ Defs {
             ),
         },
         ModuleImport {
-            name: @83-87 ModuleName(
-                "Json",
-            ),
+            name: @83-87 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: None,
             exposed: Some(
                 (

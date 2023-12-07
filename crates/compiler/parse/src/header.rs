@@ -128,10 +128,6 @@ impl<'a> ModuleName<'a> {
     pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
-
-    pub fn contains_dot(&self) -> bool {
-        self.0.contains('.')
-    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

@@ -4,9 +4,9 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
-        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Module,
-        Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
+        ImportedModuleName, Module, Pattern, PatternAs, RecordBuilderField, Spaced, Spaces,
+        StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -571,7 +571,7 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 exposed,
             } => ModuleImport {
                 name: name.remove_spaces(arena),
-                alias: alias.map(|alias_name| alias_name.remove_spaces(arena)),
+                alias: alias.remove_spaces(arena),
                 exposed: if let Some((spaces, exposed)) = exposed {
                     Some((spaces, exposed.remove_spaces(arena)))
                 } else {
@@ -579,6 +579,21 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 },
             },
         }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportedModuleName<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ImportedModuleName {
+            package: self.package.remove_spaces(arena),
+            name: self.name.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportAlias<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
     }
 }
 

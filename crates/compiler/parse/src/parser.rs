@@ -522,6 +522,8 @@ pub enum EExpect<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EImport {
     Import(Position),
+    PackageShorthand(Position),
+    PackageShorthandDot(Position),
     ModuleName(Position),
     As(Position),
     Alias(Position),

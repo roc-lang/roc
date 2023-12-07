@@ -458,13 +458,32 @@ pub enum ValueDef<'a> {
 
     /// e.g. `import InternalHttp as Http exposing [Req]`.
     ModuleImport {
-        name: Loc<Spaced<'a, crate::header::ModuleName<'a>>>,
-        alias: Option<Loc<Spaced<'a, crate::header::ModuleName<'a>>>>,
+        name: Loc<Spaced<'a, ImportedModuleName<'a>>>,
+        alias: Option<Loc<Spaced<'a, ImportAlias<'a>>>>,
         exposed: Option<(
             &'a [CommentOrNewline<'a>],
             Collection<'a, Loc<Spaced<'a, crate::header::ExposedName<'a>>>>,
         )>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportedModuleName<'a> {
+    pub package: Option<&'a str>,
+    pub name: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportAlias<'a>(&'a str);
+
+impl<'a> ImportAlias<'a> {
+    pub const fn new(name: &'a str) -> Self {
+        ImportAlias(name)
+    }
+
+    pub const fn as_str(&'a self) -> &'a str {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1803,13 +1822,10 @@ impl<'a> Malformed for ValueDef<'a> {
                 preceding_comment: _,
             } => condition.is_malformed(),
             ValueDef::ModuleImport {
-                name,
-                alias,
+                name: _,
+                alias: _,
                 exposed: _,
-            } => {
-                name.value.item().contains_dot()
-                    || alias.map_or(false, |x| x.value.item().contains_dot())
-            }
+            } => false,
         }
     }
 }

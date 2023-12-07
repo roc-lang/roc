@@ -15,9 +15,10 @@ Defs {
     type_defs: [],
     value_defs: [
         ModuleImport {
-            name: @8-12 ModuleName(
-                "Json",
-            ),
+            name: @8-12 ImportedModuleName {
+                package: None,
+                name: "Json",
+            },
             alias: None,
             exposed: None,
         },
