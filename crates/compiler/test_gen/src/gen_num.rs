@@ -1808,7 +1808,7 @@ fn atan() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
 fn int_add_overflow() {
     assert_evals_to!(
