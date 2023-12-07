@@ -1,6 +1,6 @@
 on:
   pull_request:
-  
+
 name: CI manager
 
 # cancel current runs when a new commit is pushed
@@ -21,7 +21,7 @@ jobs:
               id: filecheck
               run: |
                 git fetch origin ${{ github.base_ref }}
-                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$)'; then
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$)'; then
                     echo "run_tests=full" >> $GITHUB_OUTPUT
                 else
                     echo "run_tests=none" >> $GITHUB_OUTPUT
@@ -114,5 +114,5 @@ jobs:
         - run: echo "Workflow succeeded :)"
 
 
-        
-  
+
+
