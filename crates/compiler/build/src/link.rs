@@ -537,7 +537,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2023-05-28", "cargo"]);
+            cmd.args(["run", "nightly-2023-07-09", "cargo"]);
 
             cmd
         } else {
