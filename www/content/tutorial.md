@@ -18,7 +18,6 @@
     <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
     <li><a href="#modules">Modules</a></li>
     <li><a href="#tasks">Tasks</a></li>
-    <li><a href="#abilities">Abilities</a></li>
     <li><a href="#appendix-advanced-concepts">Advanced Concepts</a></li>
     <li><a href="#reserved-keywords">Reserved Keywords</a></li>
     <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
