@@ -27,7 +27,7 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
 &nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://www.decem.com.au/assets/img/decem.svg" height="60" alt="Decem logo"/>](https://www.decem.com.au)
+[<img src="https://github.com/roc-lang/roc/assets/1094080/fd2a759c-7f6d-4f57-9eca-9601deba87b6" height="60" alt="Decem logo"/>](https://www.decem.com.au)
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
