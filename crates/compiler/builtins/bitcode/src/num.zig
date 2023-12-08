@@ -215,9 +215,7 @@ pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8
 pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(input: F) callconv(.C) T {
-            // intFromFloat just returns the integer part of the float.
-            // This means it automatically floors. No need for an explicit call to floor.
-            return @as(T, @intFromFloat(input));
+            return @as(T, @intFromFloat((math.floor(input))));
         }
     }.func;
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });

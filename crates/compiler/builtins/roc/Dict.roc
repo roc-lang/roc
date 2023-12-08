@@ -235,7 +235,7 @@ len : Dict * * -> Nat
 len = \@Dict { data } ->
     List.len data
 
-## Check if the dictinoary is empty.
+## Check if the dictionary is empty.
 ## ```
 ## Dict.isEmpty (Dict.empty {} |> Dict.insert "key" 42)
 ##
