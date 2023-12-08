@@ -1813,7 +1813,7 @@ fn ceiling() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn floor() {
     assert_evals_to!("Num.floor 1.9f64", 1, i64);
-    assert_evals_to!("Num.floor -1.9f64", -1, i64);
+    assert_evals_to!("Num.floor -1.9f64", -2, i64);
 }
 
 #[test]
