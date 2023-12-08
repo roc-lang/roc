@@ -17,7 +17,7 @@ You can 💜 **sponsor** 💜 Roc on:
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), [Tweede golf](https://tweedegolf.nl/en), and [ohne-makler](https://www.ohne-makler.net):
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), [Tweede golf](https://tweedegolf.nl/en), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
