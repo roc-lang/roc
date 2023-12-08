@@ -978,8 +978,8 @@ fn issue_2300() {
 #[test]
 fn function_in_list() {
     expect_success(
-        r#"[\x -> x + 1, \s -> s * 2]"#,
-        r#"[<function>, <function>] : List (Num a -> Num a)"#,
+        r"[\x -> x + 1, \s -> s * 2]",
+        r"[<function>, <function>] : List (Num a -> Num a)",
     )
 }
 
@@ -987,8 +987,8 @@ fn function_in_list() {
 #[test]
 fn function_in_record() {
     expect_success(
-        r#"{ n: 1, adder: \x -> x + 1 }"#,
-        r#"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }"#,
+        r"{ n: 1, adder: \x -> x + 1 }",
+        r"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }",
     )
 }
 
@@ -996,8 +996,8 @@ fn function_in_record() {
 #[test]
 fn function_in_unwrapped_record() {
     expect_success(
-        r#"{ adder: \x -> x + 1 }"#,
-        r#"{ adder: <function> } : { adder : Num a -> Num a }"#,
+        r"{ adder: \x -> x + 1 }",
+        r"{ adder: <function> } : { adder : Num a -> Num a }",
     )
 }
 
@@ -1005,16 +1005,16 @@ fn function_in_unwrapped_record() {
 #[test]
 fn function_in_tag() {
     expect_success(
-        r#"Adder (\x -> x + 1)"#,
-        r#"Adder <function> : [Adder (Num a -> Num a)]"#,
+        r"Adder (\x -> x + 1)",
+        r"Adder <function> : [Adder (Num a -> Num a)]",
     )
 }
 
 #[test]
 fn newtype_of_record_of_tag_of_record_of_tag() {
     expect_success(
-        r#"A {b: C {d: 1}}"#,
-        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }] }]"#,
+        r"A {b: C {d: 1}}",
+        r"A { b: C { d: 1 } } : [A { b : [C { d : Num * }] }]",
     )
 }
 
@@ -1022,11 +1022,11 @@ fn newtype_of_record_of_tag_of_record_of_tag() {
 fn print_u8s() {
     expect_success(
         indoc!(
-            r#"
+            r"
                 x : U8
                 x = 129
                 x
-                "#
+                "
         ),
         "129 : U8",
     )
@@ -1062,17 +1062,17 @@ fn parse_problem() {
 fn issue_2343_complete_mono_with_shadowed_vars() {
     expect_failure(
         indoc!(
-            r#"
+            r"
                 b = False
                 f = \b ->
                     when b is
                         True -> 5
                         False -> 15
                 f b
-                "#
+                "
         ),
         indoc!(
-            r#"
+            r"
                 ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
 
                 The b name is first defined here:
@@ -1087,7 +1087,7 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
 
                 Since these variables have the same name, it's easy to use the wrong
                 one by accident. Give one of them a new name.
-                "#
+                "
         ),
     );
 }
@@ -1126,12 +1126,12 @@ fn tag_with_type_behind_alias() {
 fn issue_2588_record_with_function_and_nonfunction() {
     expect_success(
         indoc!(
-            r#"
+            r"
             x = 1
             f = \n -> n * 2
-            { y: f x, f }"#
+            { y: f x, f }"
         ),
-        r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
+        r"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }",
     )
 }
 
@@ -1139,10 +1139,10 @@ fn issue_2588_record_with_function_and_nonfunction() {
 fn opaque_apply() {
     expect_success(
         indoc!(
-            r#"
+            r"
             Age := U32
 
-            @Age 23"#
+            @Age 23"
         ),
         "@Age 23 : Age",
     )
@@ -1165,14 +1165,14 @@ fn opaque_apply_polymorphic() {
 fn opaque_pattern_and_call() {
     expect_success(
         indoc!(
-            r#"
+            r"
             F t u := [Package t u]
 
             f = \@F (Package A {}) -> @F (Package {} A)
 
-            f (@F (Package A {}))"#
+            f (@F (Package A {}))"
         ),
-        r#"@F (Package {} A) : F {} [A]"#,
+        r"@F (Package {} A) : F {} [A]",
     )
 }
 
@@ -1180,10 +1180,10 @@ fn opaque_pattern_and_call() {
 fn dec_in_repl() {
     expect_success(
         indoc!(
-            r#"
+            r"
             x: Dec
             x=1.23
-            x"#
+            x"
         ),
         "1.23 : Dec",
     )
@@ -1193,12 +1193,12 @@ fn dec_in_repl() {
 fn print_i8_issue_2710() {
     expect_success(
         indoc!(
-            r#"
+            r"
             a : I8
             a = -1
-            a"#
+            a"
         ),
-        r#"-1 : I8"#,
+        r"-1 : I8",
     )
 }
 
@@ -1243,11 +1243,11 @@ fn issue_2582_specialize_result_value() {
 fn issue_2818() {
     expect_success(
         indoc!(
-            r#"
+            r"
             f : {} -> List Str
             f = \_ ->
               x = []
-              x"#
+              x"
         ),
         r"<function> : {} -> List Str",
     )
@@ -1338,16 +1338,16 @@ fn record_of_poly_function_and_string() {
 fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
-            r#"
-            Result.try (Err 42) (\x -> Err (x+1))"#
+            r"
+            Result.try (Err 42) (\x -> Err (x+1))"
         ),
         r#"Err 42 : Result b (Num *)"#,
     );
 
     expect_success(
         indoc!(
-            r#"
-            Result.try (Ok 42) (\x -> Ok (x+1))"#
+            r"
+            Result.try (Ok 42) (\x -> Ok (x+1))"
         ),
         r#"Ok 43 : Result (Num *) err"#,
     );

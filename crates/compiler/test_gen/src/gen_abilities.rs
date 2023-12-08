@@ -1458,7 +1458,7 @@ mod hash {
     use indoc::indoc;
 
     const TEST_HASHER: &str = indoc!(
-        r#"
+        r"
         THasher := List U8 implements [Hasher {
             addBytes: tAddBytes,
             addU8: tAddU8,
@@ -1507,7 +1507,7 @@ mod hash {
         tComplete = \@THasher _ -> Num.maxU64
 
         tRead = \@THasher bytes -> bytes
-        "#
+        "
     );
 
     fn build_test(input: &str) -> String {
@@ -2152,7 +2152,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
-                r###"
+                r#"
                 app "test"
                         imports [TotallyNotJson]
                         provides [main] to "./platform"
@@ -2173,7 +2173,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
                 main =
                     getNumber |> Result.map .val |> Result.withDefault 0
-                "###
+                "#
             ),
             1234i64,
             i64

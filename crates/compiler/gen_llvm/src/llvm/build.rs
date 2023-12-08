@@ -4055,7 +4055,6 @@ fn const_i128<'ctx>(env: &Env<'_, 'ctx, '_>, value: i128) -> IntValue<'ctx> {
 
 fn const_u128<'ctx>(env: &Env<'_, 'ctx, '_>, value: u128) -> IntValue<'ctx> {
     // truncate the lower 64 bits
-    let value = value;
     let a = value as u64;
 
     // get the upper 64 bits

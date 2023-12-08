@@ -76,10 +76,10 @@ fn print_declarations_help<'a>(
 
 macro_rules! maybe_paren {
     ($paren_if_above:expr, $my_prec:expr, $doc:expr) => {
-        maybe_paren!($paren_if_above, $my_prec, || true, $doc)
+        maybe_paren!($paren_if_above, $my_prec, true, $doc)
     };
     ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {
-        if $my_prec > $paren_if_above && $extra_cond() {
+        if $my_prec > $paren_if_above && $extra_cond {
             $doc.parens().group()
         } else {
             $doc
@@ -396,7 +396,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         } => maybe_paren!(
             Free,
             p,
-            || !arguments.is_empty(),
+            !arguments.is_empty(),
             f.text(name.0.as_str())
                 .append(if arguments.is_empty() {
                     f.nil()
@@ -418,7 +418,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         OpaqueRef { name, argument, .. } => maybe_paren!(
             Free,
             p,
-            || true,
+            true,
             pp_sym(c, f, *name)
                 .append(f.space())
                 .append(expr(c, AppArg, f, &argument.1.value))

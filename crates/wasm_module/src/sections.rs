@@ -90,7 +90,9 @@ macro_rules! section_impl {
                 let mut bytes = Vec::<u8>::with_capacity_in(range.len() * 2, arena);
                 *cursor = range.end;
                 bytes.extend_from_slice(&module_bytes[range]);
-                Ok($from_count_and_bytes(count, bytes))
+
+                let from_count_and_bytes = $from_count_and_bytes;
+                Ok(from_count_and_bytes(count, bytes))
             }
         }
 

@@ -317,9 +317,9 @@ fn list_sublist() {
 fn list_map_try_ok() {
     assert_evals_to!(
         // No transformation
-        r#"
+        r"
             List.mapTry [1, 2, 3] \elem -> Ok elem
-        "#,
+        ",
         // Result I64 [] is unwrapped to just I64
         RocList::<i64>::from_slice(&[1, 2, 3]),
         RocList<i64>
@@ -348,22 +348,22 @@ fn list_map_try_err() {
     use core::convert::Infallible;
 
     assert_evals_to!(
-        r#"
+        r"
             List.mapTry [1, 2, 3] \_ -> Err -1
-        "#,
+        ",
         RocResult::err(-1),
         RocResult<RocList<Infallible>, i64>
     );
 
     assert_evals_to!(
         // If any element returns Err, the whole thing returns Err
-        r#"
+        r"
             List.mapTry [1, 2, 3] \num ->
                 if num > 2 then
                     Err -1
                 else
                     Ok num
-        "#,
+        ",
         RocResult::err(-1),
         RocResult<RocList<i64>, i64>
     );
@@ -614,12 +614,12 @@ fn list_drop_at_shared() {
 fn list_drop_if_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             empty : List I64
             empty = []
 
             List.dropIf empty \_ -> Bool.true
-            "#
+            "
         ),
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
@@ -631,12 +631,12 @@ fn list_drop_if_empty_list_of_int() {
 fn list_drop_if_empty_list() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             alwaysTrue : I64 -> Bool
             alwaysTrue = \_ -> Bool.true
 
             List.dropIf [] alwaysTrue
-            "#
+            "
         ),
         RocList::<i64>::from_slice(&[]),
         RocList<i64>
@@ -648,9 +648,9 @@ fn list_drop_if_empty_list() {
 fn list_drop_if_always_false_for_non_empty_list() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             List.dropIf [1,2,3,4,5,6,7,8] (\_ -> Bool.false)
-            "#
+            "
         ),
         RocList::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]),
         RocList<i64>

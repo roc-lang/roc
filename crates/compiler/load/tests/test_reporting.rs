@@ -522,14 +522,14 @@ mod test_reporting {
     test_report!(
         report_shadowing,
         indoc!(
-            r#"
+            r"
            i = 1
 
            s = \i ->
                i + 1
 
            s i
-       "#
+       "
         ),
         @r###"
     ── DUPLICATE NAME ──────────────────────────────────────── /code/proj/Main.roc ─
@@ -795,12 +795,12 @@ mod test_reporting {
     fn report_region_in_color() {
         color_report_problem_as(
             indoc!(
-                r#"
+                r"
                     isDisabled = \user -> user.isAdmin
 
                     theAdmin
                         |> isDisabled
-                "#
+                "
             ),
             indoc!(
                 r#"
@@ -1103,11 +1103,11 @@ mod test_reporting {
     test_report!(
         circular_type,
         indoc!(
-            r#"
+            r"
             f = \g -> g g
 
             f
-            "#
+            "
         ),
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1128,11 +1128,11 @@ mod test_reporting {
     test_report!(
         polymorphic_recursion,
         indoc!(
-            r#"
+            r"
             f = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1153,12 +1153,12 @@ mod test_reporting {
     test_report!(
         polymorphic_mutual_recursion,
         indoc!(
-            r#"
+            r"
             f = \x -> g x
             g = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1192,13 +1192,13 @@ mod test_reporting {
     test_report!(
         polymorphic_mutual_recursion_annotated,
         indoc!(
-            r#"
+            r"
             f : a -> List a
             f = \x -> g x
             g = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1227,14 +1227,14 @@ mod test_reporting {
     test_report!(
         polymorphic_mutual_recursion_dually_annotated_lie,
         indoc!(
-            r#"
+            r"
             f : a -> List a
             f = \x -> g x
             g : b -> List b
             g = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1263,12 +1263,12 @@ mod test_reporting {
     test_report!(
         polymorphic_recursion_inference_var,
         indoc!(
-            r#"
+            r"
             f : _
             f = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1289,12 +1289,12 @@ mod test_reporting {
     test_report!(
         polymorphic_recursion_with_deep_inference_var,
         indoc!(
-            r#"
+            r"
             f : _ -> List _
             f = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1315,13 +1315,13 @@ mod test_reporting {
     test_report!(
         mutual_polymorphic_recursion_with_inference_var,
         indoc!(
-            r#"
+            r"
             f : _ -> List _
             f = \x -> g x
             g = \x -> f [x]
 
             f
-            "#
+            "
         ),
         // TODO: the second error is duplicated because when solving `f : _ -> List _`, we
         // introduce the variable for `f` twice: once to solve `f` without generalization,
@@ -1366,13 +1366,13 @@ mod test_reporting {
     test_report!(
         mutual_polymorphic_recursion_with_inference_var_second,
         indoc!(
-            r#"
+            r"
             f = \x -> g x
             g : _ -> List _
             g = \x -> f [x]
 
             f
-            "#
+            "
         ),
         @r###"
     ── CIRCULAR TYPE ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1406,14 +1406,14 @@ mod test_reporting {
     test_report!(
         record_field_mismatch,
         indoc!(
-            r#"
+            r"
             bar = { bar : 0x3 }
 
             f : { foo : Num.Int * } -> [Yes, No]
             f = \_ -> Yes
 
             f bar
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1442,12 +1442,12 @@ mod test_reporting {
     test_report!(
         tag_mismatch,
         indoc!(
-            r#"
+            r"
             f : [Red, Green] -> [Yes, No]
             f = \_ -> Yes
 
             f Blue
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1583,12 +1583,12 @@ mod test_reporting {
     test_report!(
         from_annotation_function,
         indoc!(
-            r#"
+            r"
             x : Num.Int * -> Num.Int *
             x = \_ -> 3.14
 
             x
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1637,12 +1637,12 @@ mod test_reporting {
     test_report!(
         fncall_overapplied,
         indoc!(
-            r#"
+            r"
             f : Num.I64 -> Num.I64
             f = \_ -> 42
 
             f 1 2
-            "#
+            "
         ),
         @r###"
     ── TOO MANY ARGS ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -1659,12 +1659,12 @@ mod test_reporting {
     test_report!(
         fncall_underapplied,
         indoc!(
-            r#"
+            r"
             f : Num.I64, Num.I64 -> Num.I64
             f = \_, _ -> 42
 
             f 1
-            "#
+            "
         ),
         @r###"
     ── TOO FEW ARGS ────────────────────────────────────────── /code/proj/Main.roc ─
@@ -2091,12 +2091,12 @@ mod test_reporting {
     test_report!(
         bad_double_rigid,
         indoc!(
-            r#"
+            r"
             f : a, b -> a
             f = \x, y -> if Bool.true then x else y
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2125,12 +2125,12 @@ mod test_reporting {
     test_report!(
         bad_rigid_function,
         indoc!(
-            r#"
+            r"
             f : Str -> msg
             f = \_ -> Foo
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2196,12 +2196,12 @@ mod test_reporting {
     test_report!(
         typo_lowercase_ok,
         indoc!(
-            r#"
+            r"
             f : Str -> [Ok Num.I64, InvalidFoo]
             f = \_ -> ok 4
 
             f
-            "#
+            "
         ),
         @r###"
     ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
@@ -2224,7 +2224,7 @@ mod test_reporting {
     test_report!(
         typo_uppercase_ok,
         indoc!(
-            r#"
+            r"
             f : Str -> Num.I64
             f = \_ ->
                 ok = 3
@@ -2232,7 +2232,7 @@ mod test_reporting {
                 Ok
 
             f
-            "#
+            "
         ),
         @r###"
     ── UNUSED DEFINITION ───────────────────────────────────── /code/proj/Main.roc ─
@@ -2375,7 +2375,7 @@ mod test_reporting {
     test_report!(
         update_record_ext,
         indoc!(
-            r#"
+            r"
             f : { fo: Num.I64 }ext -> Num.I64
             f = \r ->
                 r2 = { r & foo: r.fo }
@@ -2383,7 +2383,7 @@ mod test_reporting {
                 r2.fo
 
             f
-            "#
+            "
         ),
         // TODO also suggest fields with the correct type
         @r###"
@@ -2518,12 +2518,12 @@ mod test_reporting {
     test_report!(
         tag_missing,
         indoc!(
-            r#"
+            r"
             f : [A] -> [A, B]
             f = \a -> a
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2552,12 +2552,12 @@ mod test_reporting {
     test_report!(
         tags_missing,
         indoc!(
-            r#"
+            r"
             f : [A] -> [A, B, C]
             f = \a -> a
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -2590,7 +2590,7 @@ mod test_reporting {
     test_report!(
         patterns_fn_not_exhaustive,
         indoc!(
-            r#"
+            r"
             Either : [Left {}, Right Str]
 
             x : Either
@@ -2600,7 +2600,7 @@ mod test_reporting {
             f = \Left v -> v
 
             f x
-            "#
+            "
         ),
         @r###"
     ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
@@ -2898,14 +2898,14 @@ mod test_reporting {
     test_report!(
         unify_alias_other,
         indoc!(
-            r#"
+            r"
             Foo a : { x : Num.Int a }
 
             f : Foo a -> Num.Int a
             f = \r -> r.x
 
             f { y: 3.14 }
-            "#
+            "
         ),
         // de-aliases the alias to give a better error message
         @r###"
@@ -3161,13 +3161,13 @@ mod test_reporting {
     test_report!(
         annotation_definition_mismatch,
         indoc!(
-            r#"
+            r"
             bar : Num.I64
             foo = \x -> x
 
             # NOTE: neither bar or foo are defined at this point
             4
-            "#
+            "
         ),
         @r###"
     ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
@@ -3185,13 +3185,13 @@ mod test_reporting {
     test_report!(
         annotation_newline_body_is_fine,
         indoc!(
-            r#"
+            r"
             bar : Num.I64
 
             foo = \x -> x
 
             foo bar
-            "#
+            "
         ),
         @""
     );
@@ -3274,12 +3274,12 @@ mod test_reporting {
     test_report!(
         invalid_num_fn,
         indoc!(
-            r#"
+            r"
             f : Str -> Num.Num Num.I64 Num.F64
             f = \_ -> 3
 
             f
-            "#
+            "
         ),
         @r###"
     ── TOO MANY TYPE ARGUMENTS ─────────────────────────────── /code/proj/Main.roc ─
@@ -3836,9 +3836,9 @@ mod test_reporting {
     test_report!(
         optional_record_default_type_error,
         indoc!(
-            r#"
+            r"
             \{ x, y ? True } -> x + y
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -3889,13 +3889,13 @@ mod test_reporting {
     test_report!(
         optional_record_invalid_let_binding,
         indoc!(
-            r#"
+            r"
             \rec ->
                 { x, y } : { x : Num.I64, y ? Str }
                 { x, y } = rec
 
                 { x, y }
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -3921,12 +3921,12 @@ mod test_reporting {
     test_report!(
         optional_record_invalid_function,
         indoc!(
-            r#"
+            r"
             f : { x : Num.I64, y ? Num.I64 } -> Num.I64
             f = \{ x, y } -> x + y
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -3952,14 +3952,14 @@ mod test_reporting {
     test_report!(
         optional_record_invalid_when,
         indoc!(
-            r#"
+            r"
             f : { x : Num.I64, y ? Num.I64 } -> Num.I64
             f = \r ->
                     when r is
                         { x, y } -> x + y
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -3987,12 +3987,12 @@ mod test_reporting {
     test_report!(
         optional_record_invalid_access,
         indoc!(
-            r#"
+            r"
             f : { x : Num.I64, y ? Num.I64 } -> Num.I64
             f = \r -> r.y
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -4018,12 +4018,12 @@ mod test_reporting {
     test_report!(
         optional_record_invalid_accessor,
         indoc!(
-            r#"
+            r"
                 f : { x : Num.I64, y ? Num.I64 } -> Num.I64
                 f = \r -> .y r
 
                 f
-                "#
+                "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -4197,11 +4197,11 @@ mod test_reporting {
     test_report!(
         unused_argument,
         indoc!(
-            r#"
+            r"
             f = \foo -> 1
 
             f
-            "#
+            "
         ),
         @r###"
     ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
@@ -5105,9 +5105,9 @@ mod test_reporting {
     test_report!(
         lambda_double_comma,
         indoc!(
-            r#"
+            r"
             \a,,b -> 1
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED ARGUMENT LIST ───────────────── tmp/lambda_double_comma/Test.roc ─
@@ -5126,9 +5126,9 @@ mod test_reporting {
     test_report!(
         lambda_leading_comma,
         indoc!(
-            r#"
+            r"
             \,b -> 1
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED ARGUMENT LIST ──────────────── tmp/lambda_leading_comma/Test.roc ─
@@ -5719,9 +5719,9 @@ All branches in an `if` must have the same type!
     test_report!(
         closure_underscore_ident,
         indoc!(
-            r#"
+            r"
             \the_answer -> 100
-            "#
+            "
         ),
         @r###"
     ── NAMING PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
@@ -5860,12 +5860,12 @@ All branches in an `if` must have the same type!
     test_report!(
         inline_hastype,
         indoc!(
-            r#"
+            r"
             main =
                 (\x -> x) : I64
 
                 3
-            "#
+            "
         ),
         @r###"
     ── UNKNOWN OPERATOR ────────────────────────────── tmp/inline_hastype/Test.roc ─
@@ -6254,9 +6254,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         pattern_in_parens_open,
         indoc!(
-            r#"
+            r"
             \( a
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED PARENTHESES ──────────────── tmp/pattern_in_parens_open/Test.roc ─
@@ -6277,9 +6277,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         pattern_in_parens_end_comma,
         indoc!(
-            r#"
+            r"
             \( a,
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED PARENTHESES ─────────── tmp/pattern_in_parens_end_comma/Test.roc ─
@@ -6300,9 +6300,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         pattern_in_parens_end,
         indoc!(
-            r#"
+            r"
             \( a
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED PARENTHESES ───────────────── tmp/pattern_in_parens_end/Test.roc ─
@@ -6323,10 +6323,10 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         unfinished_closure_pattern_in_parens,
         indoc!(
-            r#"
+            r"
             x = \( a
             )
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED FUNCTION ───── tmp/unfinished_closure_pattern_in_parens/Test.roc ─
@@ -6344,9 +6344,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         pattern_in_parens_indent_open,
         indoc!(
-            r#"
+            r"
             \(
-            "#
+            "
         ),
         @r###"
     ── UNFINISHED PARENTHESES ───────── tmp/pattern_in_parens_indent_open/Test.roc ─
@@ -6421,12 +6421,12 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         num_too_general_wildcard,
         indoc!(
-            r#"
+            r"
             mult : Num.Num *, Num.F64 -> Num.F64
             mult = \a, b -> a * b
 
             mult 0 0
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -6465,12 +6465,12 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         num_too_general_named,
         indoc!(
-            r#"
+            r"
             mult : Num.Num a, Num.F64 -> Num.F64
             mult = \a, b -> a * b
 
             mult 0 0
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -6585,11 +6585,11 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         inference_var_conflict_in_rigid_links,
         indoc!(
-            r#"
+            r"
             f : a -> (_ -> b) where a implements Eq
             f = \x -> \y -> if x == y then x else y
             f
-            "#
+            "
         ),
         // TODO: We should tell the user that we inferred `_` as `a`
         @r###"
@@ -6619,12 +6619,12 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         error_wildcards_are_related,
         indoc!(
-            r#"
+            r"
             f : * -> *
             f = \x -> x
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -6651,12 +6651,12 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         error_nested_wildcards_are_related,
         indoc!(
-            r#"
+            r"
             f : a, b, * -> {x: a, y: b, z: *}
             f = \x, y, z -> {x, y, z}
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -6688,7 +6688,7 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         error_wildcards_are_related_in_nested_defs,
         indoc!(
-            r#"
+            r"
             f : a, b, * -> *
             f = \_, _, x2 ->
                 inner : * -> *
@@ -6696,7 +6696,7 @@ In roc, functions are always written as a lambda, like{}
                 inner x2
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -6818,14 +6818,14 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         issue_2326,
         indoc!(
-            r#"
+            r"
             C a b : a -> D a b
             D a b : { a, b }
 
             f : C a Num.Nat -> D a Num.Nat
             f = \c -> c 6
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -8016,14 +8016,14 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         opaque_mismatch_pattern_check,
         indoc!(
-            r#"
+            r"
             Age := Num.U8
 
             f : Age -> Num.U8
             f = \Age n -> n
 
             f
-            "#
+            "
         ),
         // TODO(opaques): error could be improved by saying that the user-provided pattern
         // probably wants to change "Age" to "@Age"!
@@ -8151,7 +8151,7 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         let_polymorphism_with_scoped_type_variables,
         indoc!(
-            r#"
+            r"
             f : a -> a
             f = \x ->
                 y : a -> a
@@ -8162,7 +8162,7 @@ In roc, functions are always written as a lambda, like{}
                 (\_ -> x1) n
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -8258,7 +8258,7 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         unknown_type,
         indoc!(
-            r#"
+            r"
             Type : [Constructor UnknownType]
 
             insertHelper : UnknownType, Type -> Type
@@ -8267,7 +8267,7 @@ In roc, functions are always written as a lambda, like{}
                     Constructor _ -> Constructor h
 
             insertHelper
-            "#
+            "
         ),
         @r###"
     ── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
@@ -9169,11 +9169,11 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         always_function,
         indoc!(
-            r#"
+            r"
             always = \val -> \_ -> val
 
             always
-            "#
+            "
         ),
         @""
     );
@@ -9374,7 +9374,7 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         cycle_through_non_function,
         indoc!(
-            r#"
+            r"
             force : ({} -> I64) -> I64
             force = \eval -> eval {}
 
@@ -9383,7 +9383,7 @@ In roc, functions are always written as a lambda, like{}
             t2 = t1 {}
 
             t2
-            "#
+            "
         ),
         @r#"
         ── CIRCULAR DEFINITION ─────────────────────────────────── /code/proj/Main.roc ─
@@ -9921,7 +9921,7 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         issue_1755,
         indoc!(
-            r#"
+            r"
             Handle := {}
 
             await : Result a err, (a -> Result b err) -> Result b err
@@ -9935,7 +9935,7 @@ In roc, functions are always written as a lambda, like{}
                 close handle
 
             withOpen
-            "#
+            "
         ),
         @r#"
         ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -9965,12 +9965,12 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         recursive_body_and_annotation_with_inference_disagree,
         indoc!(
-            r#"
+            r"
             f : _ -> (_ -> Str)
             f = \_ -> if Bool.true then {} else f {}
 
             f
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -10253,14 +10253,14 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         forgot_to_remove_underscore,
         indoc!(
-            r#"
+            r"
             \_foo -> foo
-            "#
+            "
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r###"── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
+                r#"── UNRECOGNIZED NAME ───────────────────────────────────── /code/proj/Main.roc ─
 
                 Nothing is named `foo` in this scope.
 
@@ -10280,7 +10280,7 @@ In roc, functions are always written as a lambda, like{}
                     Bool
                     U8
                     F64
-                "###
+                "#
             ),
         )
     );
@@ -10288,11 +10288,11 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         call_with_underscore_identifier,
         indoc!(
-            r#"
+            r"
             f = \x, y, z -> x + y + z
 
             f 1 _ 1
-            "#
+            "
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
@@ -10314,16 +10314,16 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         call_with_declared_identifier_starting_with_underscore,
         indoc!(
-            r#"
+            r"
             f = \x, y, z -> x + y + z
 
             \a, _b -> f a _b 1
-            "#
+            "
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+                r"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
                 This variable's name starts with an underscore:
 
@@ -10338,7 +10338,7 @@ In roc, functions are always written as a lambda, like{}
                 A variable's name can only start with an underscore if the variable is
                 unused. Since you are using this variable, you could remove the
                 underscore from its name in both places.
-                "###
+                "
             ),
         )
     );
@@ -10346,16 +10346,16 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         call_with_undeclared_identifier_starting_with_underscore,
         indoc!(
-            r#"
+            r"
             f = \x, y, z -> x + y + z
 
             \a, _b -> f a _r 1
-            "#
+            "
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r###"
+                r"
                 ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
                 This variable's name starts with an underscore:
@@ -10365,7 +10365,7 @@ In roc, functions are always written as a lambda, like{}
 
                 A variable's name can only start with an underscore if the variable is
                 unused. But it looks like the variable is being used here!
-                "###
+                "
             ),
         )
     );
@@ -10373,16 +10373,16 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         underscore_in_middle_of_identifier,
         indoc!(
-            r#"
+            r"
             f = \x, y, z -> x + y + z
 
             \a, _b -> f a var_name 1
-            "#
+            "
         ),
         |golden| pretty_assertions::assert_eq!(
             golden,
             indoc!(
-                r###"
+                r"
                 ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
                 Underscores are not allowed in identifier names:
@@ -10391,7 +10391,7 @@ In roc, functions are always written as a lambda, like{}
                                       ^^^^^^^^
 
                 I recommend using camelCase. It's the standard style in Roc code!
-                "###
+                "
             ),
         )
     );
@@ -10940,9 +10940,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         anonymous_function_does_not_use_param,
         indoc!(
-            r#"
+            r"
             (\x -> 5) 1
-            "#
+            "
         ),
     @r###"
     ── UNUSED ARGUMENT ─────────────────────────────────────── /code/proj/Main.roc ─
@@ -12014,9 +12014,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         cannot_eq_functions,
         indoc!(
-            r#"
+            r"
             (\x -> x) == (\x -> x)
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
@@ -12037,9 +12037,9 @@ In roc, functions are always written as a lambda, like{}
     test_report!(
         cannot_not_eq_functions,
         indoc!(
-            r#"
+            r"
             (\x -> x) == (\x -> x)
-            "#
+            "
         ),
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─

@@ -399,8 +399,7 @@ fn hash_newtype_tag_union(
     let hasher_sym = env.new_symbol("hasher");
     let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
-    // A
-    let tag_name = tag_name;
+    // A tag_name
     // t1 .. tn
     let payload_vars = payload_variables;
     // x11 .. x1n

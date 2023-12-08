@@ -504,7 +504,7 @@ fn tree_rebalance() {
 #[test]
 fn lowlevel_list_calls() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a = List.map [1,1,1,1,1] (\x -> x + 0)
             b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
@@ -514,7 +514,7 @@ fn lowlevel_list_calls() {
 
             Num.toStr (List.len e)
         )
-        "#
+        "
     ));
 }
 

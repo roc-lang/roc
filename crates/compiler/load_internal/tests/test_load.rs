@@ -830,13 +830,13 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         (
             "Main",
             indoc!(
-                r#"
+                r"
                     interface Main exposes [twenty, readAge] imports [Age.{ Age }]
 
                     twenty = @Age 20
 
                     readAge = \@Age n -> n
-                    "#
+                    "
             ),
         ),
     ];
@@ -846,7 +846,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
     assert_eq!(
         err,
         indoc!(
-            r#"
+            r"
                 ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
@@ -883,7 +883,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                                                                       ^^^^^^^^^^^
 
                 Since Age isn't used, you don't need to import it.
-                "#
+                "
         ),
         "\n{}",
         err

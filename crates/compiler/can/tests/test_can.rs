@@ -280,12 +280,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 f = \ a -> a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -296,12 +296,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
                 f = \ a -> a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -312,12 +312,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 g = \ a -> a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -340,12 +340,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
                 g = \ a -> a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -368,13 +368,13 @@ mod test_can {
     #[test]
     fn separated_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
                 f = \ a -> a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -389,13 +389,13 @@ mod test_can {
     #[test]
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 # comment
                 f = \ a -> a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -911,7 +911,7 @@ mod test_can {
     #[test]
     fn recognize_tail_calls() {
         let src = indoc!(
-            r#"
+            r"
                 g = \x ->
                     when x is
                         0 -> 0
@@ -936,7 +936,7 @@ mod test_can {
                         { x: p, y: h }
                     )
                 )
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1012,14 +1012,14 @@ mod test_can {
     #[test]
     fn when_tail_call() {
         let src = indoc!(
-            r#"
+            r"
                 g = \x ->
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
 
                 g 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1034,11 +1034,11 @@ mod test_can {
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
-            r#"
+            r"
                 f = \x -> f x
 
                 f 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1055,13 +1055,13 @@ mod test_can {
     #[test]
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
-            r#"
+            r"
             q = \x ->
                     when q x is
                         _ -> 0
 
             q 0
-        "#
+        "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1076,7 +1076,7 @@ mod test_can {
     #[test]
     fn good_mutual_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 q = \x ->
                         when x is
                             0 -> 0
@@ -1088,7 +1088,7 @@ mod test_can {
                             _ -> q (x - 1)
 
                 q p
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1107,11 +1107,11 @@ mod test_can {
     #[test]
     fn valid_self_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 boom = \_ -> boom {}
 
                 boom
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1216,14 +1216,14 @@ mod test_can {
     #[test]
     fn optional_field_not_unused() {
         let src = indoc!(
-            r#"
+            r"
                 fallbackZ = 3
 
                 fn = \{ x, y, z ? fallbackZ } ->
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1368,7 +1368,7 @@ mod test_can {
     //    );
     //}
 
-    //// UNUSED
+    // // UNUSED
 
     //#[test]
     //fn mutual_unused_circular_vars() {
@@ -1483,7 +1483,7 @@ mod test_can {
     //    );
     //}
 
-    //// ASSIGNMENT REORDERING
+    // // ASSIGNMENT REORDERING
 
     //#[test]
     //fn reorder_assignments() {
@@ -1623,7 +1623,7 @@ mod test_can {
     //    }
     //}
 
-    //// CIRCULAR ASSIGNMENT
+    // // CIRCULAR ASSIGNMENT
 
     //#[test]
     //fn circular_assignment() {
@@ -1663,74 +1663,74 @@ mod test_can {
     //    assert_eq!(problems, vec![]);
     //}
 
-    //// TODO verify that Apply handles output.references.calls correctly
+    // // TODO verify that Apply handles output.references.calls correctly
 
-    //// UNSUPPORTED PATTERNS
+    // // UNSUPPORTED PATTERNS
 
-    //// TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
+    // // TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
 
-    //// OPERATOR PRECEDENCE
+    // // OPERATOR PRECEDENCE
 
-    //// fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
-    ////     parse_without_loc(input)
-    ////         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
-    //// }
+    // // fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+    // //     parse_without_loc(input)
+    // //         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
+    // // }
 
-    //// #[test]
-    //// fn two_operator_precedence() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x + y * 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(var("x")),
-    ////                 loc(Plus),
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("y")),
-    ////                         loc(Star),
-    ////                         loc_box(Int(5))
-    ////                     )
-    ////                 ),
-    ////             ),
-    ////         ""))
-    ////     );
+    // // #[test]
+    // // fn two_operator_precedence() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x + y * 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(var("x")),
+    // //                 loc(Plus),
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("y")),
+    // //                         loc(Star),
+    // //                         loc_box(Int(5))
+    // //                     )
+    // //                 ),
+    // //             ),
+    // //         ""))
+    // //     );
 
-    ////     assert_eq!(
-    ////         parse_with_precedence("x * y + 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(Star),
-    ////                         loc_box(var("y")),
-    ////                     )
-    ////                 ),
-    ////                 loc(Plus),
-    ////                 loc_box(Int(5))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // //     assert_eq!(
+    // //         parse_with_precedence("x * y + 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(Star),
+    // //                         loc_box(var("y")),
+    // //                     )
+    // //                 ),
+    // //                 loc(Plus),
+    // //                 loc_box(Int(5))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// #[test]
-    //// fn compare_and() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x > 1 || True"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(GreaterThan),
-    ////                         loc_box(Int(1))
-    ////                     )
-    ////                 ),
-    ////                 loc(Or),
-    ////                 loc_box(ApplyVariant(vname("True"), None))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // // #[test]
+    // // fn compare_and() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x > 1 || True"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(GreaterThan),
+    // //                         loc_box(Int(1))
+    // //                     )
+    // //                 ),
+    // //                 loc(Or),
+    // //                 loc_box(ApplyVariant(vname("True"), None))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// HELPERS
+    // // HELPERS
 
     //#[test]
     //fn sort_cyclic_idents() {

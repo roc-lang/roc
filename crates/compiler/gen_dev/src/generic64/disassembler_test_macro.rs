@@ -69,8 +69,9 @@ macro_rules! disassembler_test {
                     buf.clear();
                     $assemble_fn(&mut buf, *i, *i2, *i3);
                     let instructions = cs.disasm_all(&buf, 0).unwrap();
+                    let format_fn = $format_fn;
                     assert_eq!(
-                        $format_fn(*i, *i2, *i3),
+                        format_fn(*i, *i2, *i3),
                         merge_instructions_without_line_numbers(instructions)
                     );
                 }

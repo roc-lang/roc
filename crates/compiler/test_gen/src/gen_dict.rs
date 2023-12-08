@@ -124,7 +124,7 @@ fn dict_nonempty_remove() {
 fn dict_nonempty_get() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             empty : Dict.Dict I64 F64
             empty = Dict.insert (Dict.empty {}) 42 1.23
 
@@ -137,7 +137,7 @@ fn dict_nonempty_get() {
                 |> Dict.insert 42 1.23f64
                 |> Dict.get 42
                 |> withDefault 0
-            "#
+            "
         ),
         1.23,
         f64
@@ -145,7 +145,7 @@ fn dict_nonempty_get() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             withDefault = \x, def ->
                 when  x is
                     Ok v -> v
@@ -155,7 +155,7 @@ fn dict_nonempty_get() {
                 |> Dict.insert 42 1.23f64
                 |> Dict.get 43
                 |> withDefault 0
-            "#
+            "
         ),
         0.0,
         f64
@@ -211,14 +211,14 @@ fn values() {
 fn from_list_with_fold_simple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             myDict : Dict.Dict I64 I64
             myDict =
                 [1,2,3]
                     |> List.walk (Dict.empty {}) (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
-            "#
+            "
         ),
         RocList::from_slice(&[1, 2, 3]),
         RocList<i64>
@@ -230,7 +230,7 @@ fn from_list_with_fold_simple() {
 fn from_list_with_fold_reallocates() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             range : I64, I64, List I64-> List I64
             range = \low, high, accum ->
                 if low < high then
@@ -245,7 +245,7 @@ fn from_list_with_fold_reallocates() {
                     |> List.walk (Dict.empty {}) (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
-            "#
+            "
         ),
         RocList::from_slice(&[
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
@@ -533,7 +533,7 @@ fn remove_all_prefer_first() {
 fn walk_sum_keys() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             dict1 : Dict.Dict I64 I64
             dict1 =
                 Dict.empty {}
@@ -544,7 +544,7 @@ fn walk_sum_keys() {
                     |> Dict.insert 5 5
 
             Dict.walk dict1 0 \k, _, a -> k + a
-            "#
+            "
         ),
         15,
         i64
