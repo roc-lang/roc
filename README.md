@@ -24,7 +24,10 @@ We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/),
 [<img src="https://github.com/roc-lang/roc/assets/1094080/82c0868e-d23f-42a0-ac2d-c6e6b2e16575" height="60" alt="RWX logo"/>](https://www.rwx.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
+&nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
+&nbsp;&nbsp;&nbsp;&nbsp;
+[<img src="https://www.decem.com.au/assets/img/decem.svg" height="60" alt="Decem logo"/>](https://www.decem.com.au)
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
