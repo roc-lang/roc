@@ -6,11 +6,6 @@ const expect = @import("expect.zig");
 const panic_utils = @import("panic.zig");
 const dbg_utils = @import("dbg.zig");
 
-// comptime {
-// _ = @import("compiler_rt.zig");
-// _ = @import("libc.zig");
-// }
-
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
 const STR = "str";
