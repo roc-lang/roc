@@ -59,7 +59,8 @@ fn generateLlvmIrFile(
     const obj = b.addObject(.{ .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
     obj.strip = true;
     obj.disable_stack_probing = true;
-    obj.bundle_compiler_rt = true;
+    if (target.cpu_arch != .wasm32)
+        obj.bundle_compiler_rt = true;
 
     // Generating the bin seems required to get zig to generate the llvm ir.
     _ = obj.getEmittedBin();
@@ -92,7 +93,8 @@ fn generateObjectFile(
     obj.link_function_sections = true;
     obj.force_pic = true;
     obj.disable_stack_probing = true;
-    obj.bundle_compiler_rt = true;
+    if (target.cpu_arch != .wasm32)
+        obj.bundle_compiler_rt = true;
 
     const obj_file = obj.getEmittedBin();
 
