@@ -654,6 +654,7 @@ when myList is
     [Ok a, ..] -> 6 # it starts with an Ok containing a payload named `a`
     [.., Foo] -> 7 # it ends with a Foo tag
     [A, B, .., C, D] -> 8 # it has certain elements at the beginning and end
+    [head, .. as tail] -> 9 # destructure a list into a first element (head) and the rest (tail)
 ```
 
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
