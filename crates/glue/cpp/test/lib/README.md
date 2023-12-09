@@ -99,7 +99,7 @@ By keeping the fixture, test and results in a single object it means that the ex
 
 # Notable Differences
 
-My primary focus of this framework was to simplify the delcaration of test, NOT to automatically run, report, mock or do any other fancy features. In my experience the execution of the tests depends entirely on the architecture of the code in which its embedded. Reporting might go through a console, a visual app, or even reported to servers so I make no assumptions about how you might want to use it.
+My primary focus of this framework was to simplify the declaration of test, NOT to automatically run, report, mock or do any other fancy features. In my experience the execution of the tests depends entirely on the architecture of the code in which its embedded. Reporting might go through a console, a visual app, or even reported to servers so I make no assumptions about how you might want to use it.
 
 Mocking is another feature that I feel is highly dependent on the context of the code being tested and should be left up to the user on how to implement.
 
