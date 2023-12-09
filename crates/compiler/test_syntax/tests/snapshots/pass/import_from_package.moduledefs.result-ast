@@ -6,44 +6,43 @@ Defs {
         Index(2147483651),
     ],
     regions: [
-        @0-20,
-        @20-45,
+        @0-19,
+        @20-44,
         @45-92,
         @93-146,
     ],
     space_before: [
         Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
         Slice(start = 0, length = 1),
+        Slice(start = 1, length = 1),
+        Slice(start = 2, length = 1),
     ],
     space_after: [
         Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
         Slice(start = 1, length = 0),
+        Slice(start = 2, length = 0),
+        Slice(start = 3, length = 0),
     ],
     spaces: [
+        Newline,
+        Newline,
         Newline,
     ],
     type_defs: [],
     value_defs: [
         ModuleImport {
-            name: @8-19 SpaceAfter(
-                ImportedModuleName {
-                    package: Some(
-                        "json",
-                    ),
-                    name: "Decode",
-                },
-                [
-                    Newline,
-                ],
-            ),
+            before_name: [],
+            name: @8-19 ImportedModuleName {
+                package: Some(
+                    "json",
+                ),
+                name: "Decode",
+            },
             alias: None,
             exposed: None,
         },
         ModuleImport {
+            before_name: [],
             name: @27-38 ImportedModuleName {
                 package: Some(
                     "json",
@@ -51,18 +50,21 @@ Defs {
                 name: "Decode",
             },
             alias: Some(
-                @42-44 SpaceAfter(
-                    ImportAlias(
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @42-44 ImportAlias(
                         "JD",
                     ),
-                    [
-                        Newline,
-                    ],
-                ),
+                },
             ),
             exposed: None,
         },
         ModuleImport {
+            before_name: [],
             name: @52-63 ImportedModuleName {
                 package: Some(
                     "json",
@@ -71,9 +73,13 @@ Defs {
             },
             alias: None,
             exposed: Some(
-                (
-                    [],
-                    [
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportExposingKeyword,
+                        after: [],
+                    },
+                    item: [
                         @74-81 ExposedName(
                             "Decoder",
                         ),
@@ -86,10 +92,11 @@ Defs {
                             ],
                         ),
                     ],
-                ),
+                },
             ),
         },
         ModuleImport {
+            before_name: [],
             name: @100-111 ImportedModuleName {
                 package: Some(
                     "json",
@@ -97,14 +104,25 @@ Defs {
                 name: "Decode",
             },
             alias: Some(
-                @115-117 ImportAlias(
-                    "JD",
-                ),
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @115-117 ImportAlias(
+                        "JD",
+                    ),
+                },
             ),
             exposed: Some(
-                (
-                    [],
-                    [
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportExposingKeyword,
+                        after: [],
+                    },
+                    item: [
                         @128-135 ExposedName(
                             "Decoder",
                         ),
@@ -117,7 +135,7 @@ Defs {
                             ],
                         ),
                     ],
-                ),
+                },
             ),
         },
     ],

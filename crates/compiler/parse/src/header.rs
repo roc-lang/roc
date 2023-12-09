@@ -178,7 +178,7 @@ keywords! {
     ToKeyword => "to",
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct KeywordItem<'a, K, V> {
     pub keyword: Spaces<'a, K>,
     pub item: V,

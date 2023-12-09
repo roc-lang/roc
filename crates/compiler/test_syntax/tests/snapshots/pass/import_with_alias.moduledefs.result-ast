@@ -4,46 +4,59 @@ Defs {
         Index(2147483649),
     ],
     regions: [
-        @0-24,
+        @0-23,
         @24-49,
     ],
     space_before: [
         Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
+        Slice(start = 0, length = 1),
     ],
     space_after: [
         Slice(start = 0, length = 0),
-        Slice(start = 0, length = 0),
+        Slice(start = 1, length = 0),
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         ModuleImport {
+            before_name: [],
             name: @7-17 ImportedModuleName {
                 package: None,
                 name: "JsonEncode",
             },
             alias: Some(
-                @21-23 SpaceAfter(
-                    ImportAlias(
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @21-23 ImportAlias(
                         "JE",
                     ),
-                    [
-                        Newline,
-                    ],
-                ),
+                },
             ),
             exposed: None,
         },
         ModuleImport {
+            before_name: [],
             name: @31-42 ImportedModuleName {
                 package: None,
                 name: "BytesDecode",
             },
             alias: Some(
-                @47-49 ImportAlias(
-                    "BD",
-                ),
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @47-49 ImportAlias(
+                        "BD",
+                    ),
+                },
             ),
             exposed: None,
         },

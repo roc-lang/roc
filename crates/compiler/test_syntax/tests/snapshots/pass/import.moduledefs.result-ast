@@ -15,6 +15,7 @@ Defs {
     type_defs: [],
     value_defs: [
         ModuleImport {
+            before_name: [],
             name: @8-12 ImportedModuleName {
                 package: None,
                 name: "Json",

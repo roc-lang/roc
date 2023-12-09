@@ -1,7 +1,8 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
-    ImplementsAbilities, ImportAlias, ImportedModuleName, Pattern, RecordBuilderField, Spaceable,
-    Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
+    Pattern, RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader,
+    ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -11,7 +12,6 @@ use crate::ident::{
     integer_ident, lowercase_ident, parse_ident, unqualified_ident, uppercase_ident, Accessor,
     Ident,
 };
-use crate::keyword;
 use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
     sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, word1, word1_indent,
@@ -21,7 +21,8 @@ use crate::parser::{
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
-use crate::type_annotation;
+use crate::{header, keyword};
+use crate::{module, type_annotation};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
@@ -840,40 +841,19 @@ pub fn parse_single_def<'a>(
 }
 
 fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
-    map!(
-        skip_first!(
-            parser::keyword_e(keyword::IMPORT, EImport::Import),
-            and!(
-                spaces_around(loc!(map!(imported_module_name(), Spaced::Item))),
-                and!(
-                    optional(skip_first!(
-                        parser::keyword_e(keyword::AS, EImport::As),
-                        spaces_around(loc!(map!(import_alias(), Spaced::Item)))
-                    )),
-                    optional(skip_first!(
-                        parser::keyword_e(keyword::EXPOSING, EImport::Exposing),
-                        and!(
-                            spaces(),
-                            collection_trailing_sep_e!(
-                                word1(b'[', EImport::ExposedListStart),
-                                loc!(import_exposed_name()),
-                                word1(b',', EImport::ExposedListEnd),
-                                word1(b']', EImport::ExposedListEnd),
-                                Spaced::SpaceBefore
-                            )
-                        )
-                    ))
-                )
-            )
-        ),
-        |(name, (alias, exposed))| {
-            ValueDef::ModuleImport {
-                name,
-                alias,
-                exposed,
-            }
-        }
+    skip_first!(
+        parser::keyword_e(keyword::IMPORT, EImport::Import),
+        increment_min_indent(import_body())
     )
+}
+
+fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
+    record!(ValueDef::ModuleImport {
+        before_name: space0_e(EImport::IndentStart),
+        name: loc!(imported_module_name()),
+        alias: optional(backtrackable(import_as())),
+        exposed: optional(backtrackable(import_exposing()))
+    })
 }
 
 #[inline(always)]
@@ -888,11 +868,47 @@ fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport
 }
 
 #[inline(always)]
-fn import_alias<'a>() -> impl Parser<'a, ImportAlias<'a>, EImport> {
-    map!(
-        specialize(|_, pos| EImport::Alias(pos), uppercase_ident()),
-        ImportAlias::new
-    )
+fn import_as<'a>(
+) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport> {
+    record!(header::KeywordItem {
+        keyword: module::spaces_around_keyword(
+            ImportAsKeyword,
+            EImport::As,
+            EImport::IndentAs,
+            EImport::IndentAlias
+        ),
+        item: loc!(map!(
+            specialize(|_, pos| EImport::Alias(pos), uppercase_ident()),
+            ImportAlias::new
+        ))
+    })
+}
+
+#[inline(always)]
+fn import_exposing<'a>() -> impl Parser<
+    'a,
+    header::KeywordItem<
+        'a,
+        ImportExposingKeyword,
+        Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+    >,
+    EImport,
+> {
+    record!(header::KeywordItem {
+        keyword: module::spaces_around_keyword(
+            ImportExposingKeyword,
+            EImport::Exposing,
+            EImport::IndentExposing,
+            EImport::ExposingListStart,
+        ),
+        item: collection_trailing_sep_e!(
+            word1(b'[', EImport::ExposingListStart),
+            loc!(import_exposed_name()),
+            word1(b',', EImport::ExposingListEnd),
+            word1(b']', EImport::ExposingListEnd),
+            Spaced::SpaceBefore
+        )
+    })
 }
 
 #[inline(always)]

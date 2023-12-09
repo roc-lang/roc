@@ -55,3 +55,8 @@ import
     # comment 6
     map
     ]
+
+
+import A
+# comment between imports
+import B

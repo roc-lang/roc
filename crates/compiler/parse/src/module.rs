@@ -403,7 +403,7 @@ fn exposes_values<'a>() -> impl Parser<
     })
 }
 
-fn spaces_around_keyword<'a, K: Keyword, E>(
+pub fn spaces_around_keyword<'a, K: Keyword, E>(
     keyword_item: K,
     expectation: fn(Position) -> E,
     indent_problem1: fn(Position) -> E,

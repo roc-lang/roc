@@ -522,15 +522,19 @@ pub enum EExpect<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EImport {
     Import(Position),
+    IndentStart(Position),
     PackageShorthand(Position),
     PackageShorthandDot(Position),
     ModuleName(Position),
+    IndentAs(Position),
     As(Position),
+    IndentAlias(Position),
     Alias(Position),
+    IndentExposing(Position),
     Exposing(Position),
-    ExposedListStart(Position),
+    ExposingListStart(Position),
     ExposedName(Position),
-    ExposedListEnd(Position),
+    ExposingListEnd(Position),
     Space(BadInputError, Position),
 }
 

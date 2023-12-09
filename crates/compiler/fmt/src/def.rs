@@ -4,11 +4,10 @@ use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, ImportAlias,
-    ImportedModuleName, Pattern, Spaced, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader,
-    ValueDef,
+    AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
+    ImportedModuleName, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
-use roc_parse::header::ExposedName;
+use roc_parse::header::Keyword;
 use roc_region::all::Loc;
 
 /// A Located formattable value is also formattable
@@ -228,6 +227,40 @@ impl<'a> Formattable for ImportAlias<'a> {
     }
 }
 
+impl Formattable for ImportAsKeyword {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf<'_>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(ImportAsKeyword::KEYWORD);
+    }
+}
+
+impl Formattable for ImportExposingKeyword {
+    fn is_multiline(&self) -> bool {
+        false
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf<'_>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+        buf.push_str(ImportExposingKeyword::KEYWORD);
+    }
+}
+
 impl<'a> Formattable for ValueDef<'a> {
     fn is_multiline(&self) -> bool {
         use roc_parse::ast::ValueDef::*;
@@ -242,13 +275,17 @@ impl<'a> Formattable for ValueDef<'a> {
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
             ModuleImport {
+                before_name,
                 name,
                 alias,
                 exposed,
             } => {
-                name.is_multiline()
+                !before_name.is_empty()
+                    || name.is_multiline()
                     || alias.map_or(false, |a| a.is_multiline())
-                    || exposed.map_or(false, |(_, exp)| is_collection_multiline(&exp))
+                    || exposed.map_or(false, |a| {
+                        a.keyword.is_multiline() || is_collection_multiline(&a.item)
+                    })
             }
         }
     }
@@ -293,79 +330,42 @@ impl<'a> Formattable for ValueDef<'a> {
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
             ModuleImport {
+                before_name,
                 name,
                 alias,
                 exposed,
             } => {
                 buf.indent(indent);
                 buf.push_str("import");
-                fmt_import_body(buf, name, alias, exposed, indent + INDENT);
+
+                let indent = indent + INDENT;
+
+                fmt_default_spaces(buf, before_name, indent);
+
+                buf.indent(indent);
+                name.format(buf, indent);
+
+                if let Some(alias) = alias {
+                    alias.format(buf, indent);
+                }
+
+                if let Some(exposed) = exposed {
+                    exposed.keyword.format(buf, indent);
+
+                    let list_indent = if !before_name.is_empty()
+                        || alias.is_multiline()
+                        || exposed.keyword.is_multiline()
+                    {
+                        indent
+                    } else {
+                        // Align list with import keyword
+                        indent - INDENT
+                    };
+
+                    fmt_collection(buf, list_indent, Braces::Square, exposed.item, Newlines::No);
+                }
             }
         }
-    }
-}
-
-fn fmt_import_body<'a>(
-    buf: &mut Buf,
-    name: &'a Loc<Spaced<'a, ImportedModuleName<'a>>>,
-    alias: &'a Option<Loc<Spaced<'a, ImportAlias<'a>>>>,
-    exposed: &'a Option<(
-        &[CommentOrNewline<'a>],
-        Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    )>,
-    indent: u16,
-) {
-    let name_spaces = name.extract_spaces();
-    fmt_default_spaces(buf, name_spaces.before, indent);
-
-    name.value.item().format(buf, indent);
-
-    fmt_default_spaces(buf, name_spaces.after, indent);
-
-    if let Some(alias_name) = alias {
-        let alias_spaces = alias_name.extract_spaces();
-
-        if !alias_spaces.before.is_empty() {
-            buf.ensure_ends_with_newline();
-        }
-
-        buf.indent(indent);
-        buf.push_str("as");
-
-        fmt_default_spaces(buf, alias_spaces.before, indent + INDENT);
-        alias_name.value.item().format(buf, indent + INDENT);
-
-        fmt_default_spaces(buf, alias_spaces.after, indent);
-
-        if alias_name.is_multiline() {
-            buf.ensure_ends_with_newline();
-        }
-    }
-
-    if let Some((spaces_before_list, exposed_list)) = exposed {
-        let content_indent = if spaces_before_list.is_empty() {
-            if buf.ends_with_newline() {
-                indent
-            } else {
-                // Align list's closing brace with import keyword if we are in the same line
-                indent - INDENT
-            }
-        } else {
-            buf.ensure_ends_with_newline();
-            indent + INDENT
-        };
-
-        buf.indent(indent);
-        buf.push_str("exposing");
-
-        fmt_default_spaces(buf, spaces_before_list, content_indent);
-        fmt_collection(
-            buf,
-            content_indent,
-            Braces::Square,
-            *exposed_list,
-            Newlines::No,
-        );
     }
 }
 

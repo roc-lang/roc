@@ -5,8 +5,9 @@ use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
         Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
-        ImportedModuleName, Module, Pattern, PatternAs, RecordBuilderField, Spaced, Spaces,
-        StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Module, Pattern, PatternAs,
+        RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
+        TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -566,17 +567,15 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 preceding_comment: Region::zero(),
             },
             ModuleImport {
+                before_name: _,
                 name,
                 alias,
                 exposed,
             } => ModuleImport {
+                before_name: &[],
                 name: name.remove_spaces(arena),
                 alias: alias.remove_spaces(arena),
-                exposed: if let Some((spaces, exposed)) = exposed {
-                    Some((spaces, exposed.remove_spaces(arena)))
-                } else {
-                    None
-                },
+                exposed: exposed.remove_spaces(arena),
             },
         }
     }
@@ -592,6 +591,18 @@ impl<'a> RemoveSpaces<'a> for ImportedModuleName<'a> {
 }
 
 impl<'a> RemoveSpaces<'a> for ImportAlias<'a> {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportAsKeyword {
+    fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+        *self
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ImportExposingKeyword {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
     }

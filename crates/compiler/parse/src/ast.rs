@@ -1,7 +1,9 @@
 use std::fmt::Debug;
 use std::path::Path;
 
-use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
+use crate::header::{
+    self, AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader,
+};
 use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
@@ -10,7 +12,7 @@ use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
@@ -458,13 +460,31 @@ pub enum ValueDef<'a> {
 
     /// e.g. `import InternalHttp as Http exposing [Req]`.
     ModuleImport {
-        name: Loc<Spaced<'a, ImportedModuleName<'a>>>,
-        alias: Option<Loc<Spaced<'a, ImportAlias<'a>>>>,
-        exposed: Option<(
-            &'a [CommentOrNewline<'a>],
-            Collection<'a, Loc<Spaced<'a, crate::header::ExposedName<'a>>>>,
-        )>,
+        before_name: &'a [CommentOrNewline<'a>],
+        name: Loc<ImportedModuleName<'a>>,
+        alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
+        exposed: Option<
+            header::KeywordItem<
+                'a,
+                ImportExposingKeyword,
+                Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+            >,
+        >,
     },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportAsKeyword;
+
+impl header::Keyword for ImportAsKeyword {
+    const KEYWORD: &'static str = "as";
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportExposingKeyword;
+
+impl header::Keyword for ImportExposingKeyword {
+    const KEYWORD: &'static str = "exposing";
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1822,6 +1842,7 @@ impl<'a> Malformed for ValueDef<'a> {
                 preceding_comment: _,
             } => condition.is_malformed(),
             ValueDef::ModuleImport {
+                before_name: _,
                 name: _,
                 alias: _,
                 exposed: _,
