@@ -2,13 +2,16 @@ use analysis::HIGHLIGHT_TOKENS_LEGEND;
 use registry::{DocumentChange, Registry};
 use std::future::Future;
 use std::io::Write;
-use std::sync::Arc;
-use tokio::sync::{Mutex, MutexGuard, RwLock};
-use tokio::task::JoinHandle;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
+use tokio::sync::{oneshot, Mutex, MutexGuard, RwLock};
+use tokio::task::{JoinError, JoinHandle};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::request::RegisterCapability;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
+
+use crate::analysis::global_anal;
 
 mod analysis;
 mod convert;
@@ -16,29 +19,38 @@ mod registry;
 
 #[derive(Debug)]
 struct RocLs {
+    pub inner: Arc<Inner>,
+}
+#[derive(Debug)]
+struct Inner {
     client: Client,
     registry: Registry,
-    // change_handle: Mutex<Option<JoinHandle<()>>>,
+    change_handle: parking_lot::Mutex<(
+        tokio::sync::watch::Sender<i32>,
+        tokio::sync::watch::Receiver<i32>,
+    )>,
+    documents_updating: tokio::sync::Semaphore,
 }
 
 impl std::panic::RefUnwindSafe for RocLs {}
+const SEMLIMIT: u32 = 20;
 
 impl RocLs {
     pub fn new(client: Client) -> Self {
         Self {
-            client,
-            registry: Registry::default(),
-            // change_handle: Mutex::new(None),
+            inner: Arc::new(Inner {
+                client,
+                registry: Registry::default(),
+                change_handle: parking_lot::Mutex::new(tokio::sync::watch::channel(0)),
+                ///Used for identifying if the intial stage of a document update is complete
+                documents_updating: tokio::sync::Semaphore::new(SEMLIMIT as usize),
+            }),
         }
     }
-
-    fn registry(&self) -> &Registry {
-        &self.registry
+    ///Wait for all the semaphores associated with an in-progress document_info update to be released
+    async fn wait_for_changes(&self) {
+        self.inner.documents_updating.acquire_many(SEMLIMIT).await;
     }
-    fn registry_write(&mut self) -> &mut Registry {
-        &mut self.registry
-    }
-
     pub fn capabilities() -> ServerCapabilities {
         let text_document_sync = TextDocumentSyncCapability::Options(
             // TODO: later on make this incremental
@@ -93,35 +105,92 @@ impl RocLs {
 
     /// Records a document content change.
     async fn change(&self, fi: Url, text: String, version: i32) {
-        // match self.change_handle.lock().await.as_ref() {
-        //     Some(a) => a.abort(),
-        //     None => (),
-        // }
-
         writeln!(std::io::stderr(), "starting change");
-        self.registry()
-            .apply_change(DocumentChange::Modified(fi.clone(), text, version as u32))
+        let updating_doc_info = self.inner.documents_updating.acquire().await.unwrap();
+        let mut new_change = {
+            let change_handle = self.inner.change_handle.lock();
+            //This will cancel any other onging changes in favour of this one
+            change_handle
+                .0
+                .send(version)
+                .expect("change_handle disposed, this shouldn't happen");
+            let mut watched = change_handle.1.clone();
+            drop(watched.borrow_and_update());
+            watched
+        };
+        //We will wait just a tiny amount of time to catch any requests that come in at the exact same time
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        if (new_change.has_changed().unwrap()) {
+            writeln!(std::io::stderr(), "newer task started almost immediately");
+            return;
+        }
+        writeln!(std::io::stderr(), "finished checking for cancellation");
+        let (results, partial) = global_anal(fi.clone(), text, version as u32);
+
+        self.inner
+            .registry
+            .apply_doc_info_changes(fi.clone(), partial)
             .await;
-        // let handle = tokio::task::spawn(self.registry().apply_change(DocumentChange::Modified(
-        //     fi.clone(),
-        //     text,
-        //     version as u32,
-        // )));
+        drop(updating_doc_info);
+
+        writeln!(std::io::stderr(), "finished applying");
+
+        let inner_ref = self.inner.clone();
+        let handle: JoinHandle<core::result::Result<&str, JoinError>> =
+            tokio::task::spawn(async move {
+                let results = tokio::task::spawn_blocking(results).await?;
+
+                inner_ref.registry().apply_change(results).await;
+                Ok("okay")
+            });
+
+        writeln!(std::io::stderr(), "waiting on analisys or cancel");
+
+        //The analysis task can be cancelled by another change coming in which will update the watched variable
+        let cancelled = tokio::select! {
+            a=handle=>{
+                match a{
+
+                    Err(a)=>
+                    {
+                        writeln!(std::io::stderr(), "error in task{:?}",a);
+                    true},
+                    Ok(_)=>false
+
+                }
+                },
+            _=new_change.changed()=>true
+        };
+        if cancelled {
+            writeln!(std::io::stderr(), "cancelled change");
+            return;
+        }
         writeln!(std::io::stderr(), "applied_change getting diagnostics");
+
         //We do this to briefly yeild
 
-        let diagnostics = self.registry().diagnostics(&fi).await;
+        let diagnostics = self.inner.registry().diagnostics(&fi).await;
         writeln!(std::io::stderr(), "applied_change returning diagnostics");
 
-        self.client
+        self.inner
+            .client
             .publish_diagnostics(fi, diagnostics, Some(version))
             .await;
     }
+}
+
+impl Inner {
+    fn registry(&self) -> &Registry {
+        &self.registry
+    }
+    fn registry_write(&mut self) -> &mut Registry {
+        &mut self.registry
+    }
 
     async fn close(&self, fi: Url) {
-        self.registry()
-            .apply_change(DocumentChange::Closed(fi))
-            .await;
+        // self.registry()
+        //     .apply_change(DocumentChange::Closed(fi))
+        //     .await;
     }
 }
 
@@ -135,7 +204,8 @@ impl LanguageServer for RocLs {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.client
+        self.inner
+            .client
             .log_message(MessageType::INFO, "Roc language server initialized.")
             .await;
     }
@@ -160,7 +230,7 @@ impl LanguageServer for RocLs {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let TextDocumentIdentifier { uri } = params.text_document;
-        self.close(uri).await;
+        self.inner.close(uri).await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -177,8 +247,13 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper_async(|| async { self.registry().hover(&text_document.uri, position).await })
-            .await
+        panic_wrapper_async(|| async {
+            self.inner
+                .registry()
+                .hover(&text_document.uri, position)
+                .await
+        })
+        .await
     }
 
     async fn goto_definition(
@@ -196,7 +271,8 @@ impl LanguageServer for RocLs {
         } = params;
 
         panic_wrapper_async(|| async {
-            self.registry()
+            self.inner
+                .registry()
                 .goto_definition(&text_document.uri, position)
                 .await
         })
@@ -210,7 +286,7 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper_async(|| async { self.registry().formatting(&text_document.uri) }).await
+        panic_wrapper_async(|| async { self.inner.registry().formatting(&text_document.uri) }).await
     }
 
     async fn semantic_tokens_full(
@@ -223,14 +299,25 @@ impl LanguageServer for RocLs {
             partial_result_params: _,
         } = params;
 
-        panic_wrapper_async(|| async { self.registry().semantic_tokens(&text_document.uri) }).await
+        panic_wrapper_async(|| async { self.inner.registry().semantic_tokens(&text_document.uri) })
+            .await
     }
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
         writeln!(std::io::stderr(), "starting completion");
+        writeln!(
+            std::io::stderr(),
+            "permits::{:?} ",
+            self.inner.documents_updating.available_permits()
+        );
+
+        //We need to wait untill any changes that were in progress when we requested completion have applied
+        self.wait_for_changes().await;
+        writeln!(std::io::stderr(), "waited for doc update to get sorted ");
 
         let res = panic_wrapper_async(|| async {
-            self.registry()
+            self.inner
+                .registry()
                 .completion_items(&doc.text_document.uri, doc.position)
                 .await
         })
@@ -239,25 +326,6 @@ impl LanguageServer for RocLs {
         writeln!(std::io::stderr(), "finished completion");
         res
     }
-    // async fn completion(
-    //     &self,
-    //     params: GotoDefinitionParams,
-    // ) -> Result<Option<GotoDefinitionResponse>> {
-    //     let GotoDefinitionParams {
-    //         text_document_position_params:
-    //             TextDocumentPositionParams {
-    //                 text_document,
-    //                 position,
-    //             },
-    //         work_done_progress_params: _,
-    //         partial_result_params: _,
-    //     } = params;
-
-    //     panic_wrapper(|| {
-    //         self.registry()
-    //             .goto_definition(&text_document.uri, position)
-    //     })
-    // }
 }
 
 fn panic_wrapper<T>(f: impl FnOnce() -> Option<T> + std::panic::UnwindSafe) -> Result<Option<T>> {

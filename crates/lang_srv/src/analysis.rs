@@ -3,8 +3,6 @@ use std::{
     future::Future,
     io::Write,
     path::{Path, PathBuf},
-    result,
-    slice::SliceIndex,
 };
 
 use bumpalo::Bump;
@@ -13,32 +11,29 @@ use roc_collections::MutMap;
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::{LineColumn, LineInfo};
+use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Subs, Variable};
-use tokio::{sync::Mutex, task::JoinHandle};
-use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionItemTag, Diagnostic, GotoDefinitionResponse,
-    Hover, HoverContents, Location, MarkedString, Position, Range, SemanticTokenType,
-    SemanticTokens, SemanticTokensResult, TextEdit, Url,
-};
 
-use crate::{
-    analysis::completion::{
-        field_completion, find_record_fields, get_completion_items, get_completions,
-        make_completion_items, make_completion_items_string,
-    },
-    convert::{
-        diag::{IntoLspDiagnostic, ProblemFmt},
-        ToRange, ToRocPosition,
-    },
+use tower_lsp::lsp_types::{
+    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, Location,
+    MarkedString, Position, Range, SemanticTokenType, SemanticTokens, SemanticTokensResult,
+    TextEdit, Url,
 };
 
 mod completion;
 mod parse_ast;
 mod semantic_tokens;
 mod tokens;
+
+use crate::{
+    analysis::completion::{field_completion, get_completion_items},
+    convert::{
+        diag::{IntoLspDiagnostic, ProblemFmt},
+        ToRange, ToRocPosition,
+    },
+};
 
 use self::{parse_ast::Ast, semantic_tokens::arrange_semantic_tokens, tokens::Token};
 pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
@@ -64,18 +59,20 @@ pub(crate) fn global_anal(
     source_url: Url,
     source: String,
     version: u32,
-) -> (impl Future<Output = Vec<AnalyzedDocument>>, DocInfo) {
+) -> (impl FnOnce() -> Vec<AnalyzedDocument>, DocInfo) {
     let fi = source_url.to_file_path().unwrap();
     let src_dir = find_src_dir(&fi).to_path_buf();
     let line_info = LineInfo::new(&source);
+
     let doc_info = DocInfo {
         url: source_url.clone(),
         line_info: line_info.clone(),
         source: source.clone(),
         version,
     };
+    //We will return this before the analisys has completed to enable completion
     let doc_info_return = doc_info.clone();
-    let documents_future = async move {
+    let documents_future = move || {
         let arena = Bump::new();
         let loaded = roc_load::load_and_typecheck_str(
             &arena,
@@ -138,12 +135,10 @@ pub(crate) fn global_anal(
             root_module: &mut root_module,
         };
 
-        writeln!(std::io::stderr(), "sources:{:?}", sources);
         for (module_id, (path, source)) in sources {
             documents.push(builder.build_document(path, source, module_id, version));
         }
 
-        writeln!(std::io::stderr(), "documents:{:?}", documents.len());
         documents
     };
     (documents_future, doc_info_return)
@@ -338,6 +333,23 @@ impl DocInfo {
         let position = position.to_roc_position(&self.line_info);
         let offset = position.offset;
         let source = self.source.as_bytes().split_at(offset as usize).0;
+        // writeln!(std::io::stderr(), "prefix source{:?}", self.source);
+
+        // let last_few = self
+        //     .source
+        //     .split_at((offset - 5) as usize)
+        //     .1
+        //     .split_at((offset + 5) as usize)
+        //     .0;
+        // let splitter = last_few.split_at(5);
+
+        // writeln!(
+        //     std::io::stderr(),
+        //     "starting to get completion items at offset:{:?} content:: '{:?}|{:?}'",
+        //     offset,
+        //     splitter.0,
+        //     splitter.1
+        // );
         let mut symbol = source
             .iter()
             .rev()
@@ -478,16 +490,17 @@ impl AnalyzedDocument {
         latest_doc: &DocInfo,
         symbol_prefix: String,
     ) -> Option<Vec<CompletionItem>> {
-        let mut position = position;
+        let symbol_prefix = latest_doc.get_prefix_at_position(position);
         writeln!(
             std::io::stderr(),
-            "starting to get completion items for prefix: {:?}",
-            symbol_prefix
+            "starting to get completion items for prefix: {:?} docVersion:{:?}",
+            symbol_prefix,
+            latest_doc.version
         );
         let len_diff = latest_doc.source.len() as i32 - self.doc_info.source.len() as i32;
 
-        //TODO: this is a hack we can move our position back by getting the difference in the number of chars on this line and what the line was before and doing the same with the number of lines
         let mut position = position.to_roc_position(&latest_doc.line_info);
+        //TODO: this is kind of a hack and should be removed once we can do some minimal parsing without full type checking
         position.offset = (position.offset as i32 - len_diff - 1) as u32;
         writeln!(
             std::io::stderr(),
@@ -503,7 +516,8 @@ impl AnalyzedDocument {
             ..
         } = self.module()?;
 
-        if symbol_prefix.contains('.') {
+        let is_field_completion = symbol_prefix.contains('.');
+        if is_field_completion {
             field_completion(
                 position,
                 symbol_prefix,

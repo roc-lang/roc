@@ -1,14 +1,14 @@
-use std::{io::Write, path::Prefix};
+use std::io::Write;
 
 use roc_can::{
     def::Def,
     expr::{Declarations, Expr, WhenBranch},
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
-    traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, FoundDeclaration, Visitor},
+    traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
-use roc_module::symbol::{self, Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Position, Region};
-use roc_types::subs::{GetSubsSlice, Subs, Variable};
+use roc_types::subs::{Subs, Variable};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::analysis::format_var_type;
@@ -34,20 +34,7 @@ impl Visitor for CompletionVisitor<'_> {
             walk_expr(self, expr, var);
         }
     }
-    fn visit_annotation(&mut self, _pat: &roc_can::def::Annotation) {
-        let mut stderr = std::io::stderr();
-        // writeln!(&mut stderr, "annotation:{:?}", _pat);
-    }
 
-    // fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
-    //     if region.contains_pos(self.position) {
-    //         // if let Some(var) = opt_var {
-    //         //     self.region_typ = Some((region, var));
-    //         // }
-
-    //         walk_pattern(self, pat);
-    //     }
-    // }
     fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
         match decl {
             DeclarationInfo::Value { loc_expr, .. }
@@ -74,22 +61,8 @@ impl Visitor for CompletionVisitor<'_> {
     }
 }
 impl CompletionVisitor<'_> {
-    fn make_completion_items(&mut self, found: Vec<FoundDeclaration>) -> Vec<(Symbol, Variable)> {
-        found
-            .iter()
-            .flat_map(|comp| match comp {
-                FoundDeclaration::Decl(dec) => self.decl_to_completion_item(dec),
-                FoundDeclaration::Def(def) => def
-                    .pattern_vars
-                    .iter()
-                    .map(|(symbol, var)| (symbol.clone(), var.clone()))
-                    .collect(),
-            })
-            .collect()
-    }
     fn extract_defs(&mut self, def: &Def) -> Vec<(Symbol, Variable)> {
-        let mut stderr = std::io::stderr();
-        writeln!(&mut stderr, "completion begin");
+        writeln!(std::io::stderr(), "completion begin");
         def.pattern_vars
             .iter()
             .map(|(symbol, var)| (symbol.clone(), var.clone()))
@@ -106,10 +79,10 @@ impl CompletionVisitor<'_> {
             // Expr::IngestedFile(_, _, _) => todo!(),
             // Expr::Var(_, _) => todo!(),
             // Expr::AbilityMember(_, _, _) => todo!(),
-            Expr::When { loc_cond, cond_var, expr_var, region, branches, branches_cond_var, exhaustive } => {
+            Expr::When { expr_var,  branches,.. } => {
 
                 let out:Vec<_> =
-                branches.iter().flat_map(|WhenBranch{ patterns, value, guard, redundant }|{
+                branches.iter().flat_map(|WhenBranch{ patterns, value, ..}|{
                     if value.region.contains_pos(self.position) {
                     patterns.iter().flat_map(|pattern|{
                                 //We use the expression var here because if the pattern is an identifier then it must have the type of the expession given to the when is block
@@ -185,7 +158,7 @@ impl CompletionVisitor<'_> {
             .collect()
     }
 
-    fn as_pattern(&self, as_pat: &Pattern, as_symbol: Symbol) -> (Symbol, Variable) {
+    fn as_pattern(&self, as_pat: &Pattern, as_symbol: Symbol) -> Option<(Symbol, Variable)> {
         let var = match as_pat {
             Pattern::AppliedTag {
                 whole_var,
@@ -227,9 +200,9 @@ impl CompletionVisitor<'_> {
             // Pattern::OpaqueNotInScope(_) => todo!(),
             // Pattern::UnsupportedPattern(_) => todo!(),
             // Pattern::MalformedPattern(_, _) => todo!(),
-            _ => todo!(),
+            _ => return None,
         };
-        (as_symbol, var.clone())
+        Some((as_symbol, var.clone()))
     }
     fn patterns(
         &self,
@@ -263,19 +236,16 @@ impl CompletionVisitor<'_> {
                 elem_var,
                 patterns,
             } => self.list_destructure(patterns, elem_var),
-            roc_can::pattern::Pattern::As(pat, symbol) => {
-                vec![self.as_pattern(&pat.value, symbol.clone())]
+            roc_can::pattern::Pattern::As(pat, symbol) => self
+                .as_pattern(&pat.value, symbol.clone())
+                .map(|a| vec![a])
+                .unwrap_or(vec![]),
+            roc_can::pattern::Pattern::RecordDestructure { destructs, .. } => {
+                self.record_destructs(destructs)
             }
-            roc_can::pattern::Pattern::RecordDestructure {
-                whole_var,
-                ext_var,
-                destructs,
-            } => self.record_destructs(destructs),
-            roc_can::pattern::Pattern::TupleDestructure {
-                whole_var,
-                ext_var,
-                destructs,
-            } => self.tuple_destructs(destructs),
+            roc_can::pattern::Pattern::TupleDestructure { destructs, .. } => {
+                self.tuple_destructs(destructs)
+            }
             // roc_can::pattern::Pattern::List {
             //     list_var,
             //     elem_var,
@@ -300,35 +270,15 @@ impl CompletionVisitor<'_> {
     }
 
     fn is_match(&self, symbol: &Symbol) -> bool {
-        let mut stderr = std::io::stderr();
-        // writeln!(
-        //     &mut stderr,
-        //     "check if prefix {:?} matches {:?}",
-        //     self.prefix,
-        //     symbol.as_str(self.interns)
-        // );
         symbol.as_str(self.interns).starts_with(&self.prefix)
     }
 
     fn decl_to_completion_item(&self, decl: &DeclarationInfo) -> Vec<(Symbol, Variable)> {
         match decl {
             DeclarationInfo::Value {
-                loc_symbol,
-                expr_var,
-                pattern,
-                ..
-            } => {
-                let mut stderr = std::io::stderr();
-                // writeln!(
-                //     &mut stderr,
-                //     "decl:{:?}",
-                //     loc_symbol.value.as_str(self.interns)
-                // );
-
-                self.patterns(pattern, expr_var)
-            }
+                expr_var, pattern, ..
+            } => self.patterns(pattern, expr_var),
             DeclarationInfo::Function {
-                loc_symbol,
                 expr_var,
                 pattern,
                 function,
@@ -362,7 +312,7 @@ impl CompletionVisitor<'_> {
     }
 }
 
-pub fn get_completions<'a>(
+fn get_completions<'a>(
     position: Position,
     decls: &'a Declarations,
     prefix: String,
@@ -390,31 +340,19 @@ fn make_completion_item(
 ) -> CompletionItem {
     let type_str = format_var_type(var, subs, module_id, interns);
     let typ = match subs.get(var.clone()).content {
-        // roc_types::subs::Content::FlexVar(_) => todo!(),
-        // roc_types::subs::Content::RigidVar(_) => todo!(),
-        // roc_types::subs::Content::FlexAbleVar(_, _) => todo!(),
-        // roc_types::subs::Content::RigidAbleVar(_, _) => todo!(),
-        // roc_types::subs::Content::RecursionVar { structure, opt_name } => todo!(),
-        // roc_types::subs::Content::LambdaSet(_) => todo!(),
-        // roc_types::subs::Content::ErasedLambda => todo!(),
         roc_types::subs::Content::Structure(var) => match var {
             roc_types::subs::FlatType::Apply(_, _) => CompletionItemKind::FUNCTION,
             roc_types::subs::FlatType::Func(_, _, _) => CompletionItemKind::FUNCTION,
-            // roc_types::subs::FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
-            // roc_types::subs::FlatType::RecursiveTagUnion(_, _, _) => todo!(),
-            // roc_types::subs::FlatType::EmptyRecord |
-            // roc_types::subs::FlatType::Record(_, _) => todo!(),
-            // roc_types::subs::FlatType::EmptyTuple |
-            // roc_types::subs::FlatType::Tuple(_, _) => CompletionItemKind::VARIABLE,
             roc_types::subs::FlatType::EmptyTagUnion
             | roc_types::subs::FlatType::TagUnion(_, _) => CompletionItemKind::ENUM,
             _ => CompletionItemKind::VARIABLE,
         },
-        // roc_types::subs::Content::Alias(_, _, _, _) => todo!(),
-        // roc_types::subs::Content::RangedNumber(_) => todo!(),
-        // roc_types::subs::Content::Error => todo!(),
         a => {
-            writeln!(std::io::stderr(), "unhandled variable type:{:?}", a);
+            writeln!(
+                std::io::stderr(),
+                "No specific completionKind for variable type :{:?} defaulting to 'Variable'",
+                a
+            );
             CompletionItemKind::VARIABLE
         }
     };
@@ -427,6 +365,9 @@ fn make_completion_item(
         ..Default::default()
     }
 }
+///Gets completion items using the visitor pattern,
+///This will walk through declarations that would be accessable from the provided position adding them to a list of completion items untill all accessable declarations have been fully explored
+
 pub fn get_completion_items(
     position: Position,
     prefix: String,
@@ -458,7 +399,7 @@ pub fn make_completion_items(
         .collect()
 }
 
-pub fn make_completion_items_string(
+fn make_completion_items_string(
     subs: &mut Subs,
     module_id: &ModuleId,
     interns: &Interns,
@@ -470,55 +411,62 @@ pub fn make_completion_items_string(
         .collect()
 }
 
-pub fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)> {
+///Gets completion items for a record field
+///Uses
+fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)> {
     let content = subs.get(var);
     match content.content {
-        // roc_types::subs::Content::FlexVar(_) => todo!(),
-        // roc_types::subs::Content::RigidVar(_) => todo!(),
-        // roc_types::subs::Content::FlexAbleVar(_, _) => todo!(),
-        // roc_types::subs::Content::RigidAbleVar(_, _) => todo!(),
-        // roc_types::subs::Content::RecursionVar { structure, opt_name } => todo!(),
-        // roc_types::subs::Content::LambdaSet(_) => todo!(),
-        // roc_types::subs::Content::ErasedLambda => todo!(),
         roc_types::subs::Content::Structure(typ) => match typ {
-            // roc_types::subs::FlatType::Apply(_, _) => todo!(),
-            // roc_types::subs::FlatType::Func(_, _, _) => todo!(),
             roc_types::subs::FlatType::Record(fields, ext) => {
                 let field_types = fields.unsorted_iterator(subs, ext);
                 let fields: Vec<_> = match field_types {
-                    Ok(field) => field.map(|a| {
-                        let var = match a.1 {
-                            roc_types::types::RecordField::Demanded(var)
-                            | roc_types::types::RecordField::Required(var)
-                            | roc_types::types::RecordField::Optional(var)
-                            | roc_types::types::RecordField::RigidRequired(var)
-                            | roc_types::types::RecordField::RigidOptional(var) => var,
-                        };
-                        (a.0.clone().into(), var)
-                    }),
-                    Err(err) => todo!(),
-                }
-                .collect();
+                    Ok(field) => field
+                        .map(|a| {
+                            let var = match a.1 {
+                                roc_types::types::RecordField::Demanded(var)
+                                | roc_types::types::RecordField::Required(var)
+                                | roc_types::types::RecordField::Optional(var)
+                                | roc_types::types::RecordField::RigidRequired(var)
+                                | roc_types::types::RecordField::RigidOptional(var) => var,
+                            };
+                            (a.0.clone().into(), var)
+                        })
+                        .collect(),
+                    Err(err) => {
+                        writeln!(
+                            std::io::stderr(),
+                            "WARN:Error getting record field types for completion{:?}",
+                            err
+                        );
+                        vec![]
+                    }
+                };
                 fields
             }
-            _ => todo!(),
-            // roc_types::subs::FlatType::Tuple(_, _) => todo!(),
-            // roc_types::subs::FlatType::TagUnion(_, _) => todo!(),
-            // roc_types::subs::FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
-            // roc_types::subs::FlatType::RecursiveTagUnion(_, _, _) => todo!(),
-            // roc_types::subs::FlatType::EmptyRecord => todo!(),
-            // roc_types::subs::FlatType::EmptyTuple => todo!(),
-            // roc_types::subs::FlatType::EmptyTagUnion => todo!(),
+            _ => {
+                writeln!(
+                    std::io::stderr(),
+                    "WARN: Trying to get field completion for a type that is not a record   ",
+                );
+                vec![]
+            }
         },
-        // roc_types::subs::Content::Alias(_, _, _, _) => todo!(),
-        // roc_types::subs::Content::RangedNumber(_) => todo!(),
         roc_types::subs::Content::Error => {
-            writeln!(std::io::stderr(), "ERROR: variable was of type error",);
+            //This is caused by typechecking our partially typed variable name causing the typechecking to be confused as the type of the parent variable
+            //TODO! ideally i could recover using some previous typecheck result that isn't broken
+            writeln!(
+                std::io::stderr(),
+                "ERROR: variable type of record was of type error cannot access field",
+            );
             vec![]
         }
         a => {
-            writeln!(std::io::stderr(), "variable before field type:{:?}", a);
-            todo!();
+            writeln!(
+                std::io::stderr(),
+                "variable before field was unsuported type:{:?}",
+                a
+            );
+            vec![]
         }
     }
 }
@@ -579,17 +527,3 @@ pub fn field_completion(
         make_completion_items_string(subs, module_id, interns, field_completions);
     Some(field_completions)
 }
-// fn make_completion_item_string(
-//     &mut self,
-//     label: String,
-//     var: &Variable,
-// ) -> CompletionItem {
-//     let type_str = format_var_type(var.clone(), self.subs, self.module_id, self.interns);
-//     CompletionItem {
-//         label,
-//         detail: Some(type_str),
-//         kind: Some(CompletionItemKind::VARIABLE ),
-
-//         ..Default::default()
-//     }
-// }

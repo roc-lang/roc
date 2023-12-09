@@ -1,5 +1,11 @@
 use std::{
-    cell::OnceCell, collections::HashMap, future::Future, io::Write, ops::Deref, rc::Rc, sync::Arc,
+    cell::OnceCell,
+    collections::HashMap,
+    future::Future,
+    io::{stderr, Write},
+    ops::Deref,
+    rc::Rc,
+    sync::Arc,
 };
 
 use tokio::{
@@ -98,12 +104,12 @@ impl Registry {
     ) {
         let url = document.url().clone();
         let document = Arc::new(document);
-        writeln!(
-            std::io::stderr(),
-            "updating doc{:?}. version:{:?}",
-            &url,
-            &document.doc_info.version
-        );
+        // writeln!(
+        //     std::io::stderr(),
+        //     "updating doc{:?}. version:{:?}",
+        //     &url,
+        //     &document.doc_info.version
+        // );
 
         let latest_doc = LatestDocument::new_initialised(document.clone());
         match documents.get_mut(&url) {
@@ -137,46 +143,42 @@ impl Registry {
         }
     }
 
-    pub async fn apply_change(&self, change: DocumentChange) -> () {
-        match change {
-            DocumentChange::Modified(url, source, version) => {
-                let (results, partial) = global_anal(url.clone(), source, version);
+    pub async fn apply_change(&self, analysed_docs: Vec<AnalyzedDocument>) -> () {
+        writeln!(
+            std::io::stderr(),
+            "updated the latest document with docinfo"
+        );
 
-                writeln!(std::io::stderr(), "starting global analysis");
-                let handle = tokio::task::spawn(results);
-                //Update the latest document with the partial analysis
-                // Only replace the set of documents and all dependencies that were re-analyzed.
-                // Note that this is actually the opposite of what we want - in truth we want to
-                // re-evaluate all dependents!
+        let mut documents = self.documents.lock().await;
+        writeln!(
+            std::io::stderr(),
+            "finised doc analasys updating docs {:?}",
+            analysed_docs
+                .iter()
+                .map(|a| a.doc_info.url.to_string())
+                .collect::<Vec<_>>()
+        );
 
-                let mut lock = self.documents.lock().await;
-                let doc = lock.get_mut(&url);
-                match doc {
-                    Some(a) => a.latest_document = LatestDocument::new(partial),
-                    None => (),
-                }
-                drop(lock);
+        for document in analysed_docs {
+            Registry::update_document(&mut documents, document);
+        }
+    }
+
+    pub async fn apply_doc_info_changes(&self, url: Url, partial: DocInfo) {
+        let mut lock = self.documents.lock().await;
+        let doc = lock.get_mut(&url);
+        match doc {
+            Some(a) => {
                 writeln!(
                     std::io::stderr(),
-                    "updated the latest document with docinfo"
+                    "set the docInfo to version:{:?}",
+                    partial.version
                 );
 
-                let analised_docs = handle.await.unwrap();
-                let mut documents = self.documents.lock().await;
-                writeln!(
-                    std::io::stderr(),
-                    "finised doc analasys updating docs {:?}",
-                    analised_docs
-                        .iter()
-                        .map(|a| &a.doc_info)
-                        .collect::<Vec<_>>()
-                );
-
-                for document in analised_docs {
-                    Registry::update_document(&mut documents, document);
-                }
+                a.latest_document = LatestDocument::new(partial);
             }
-            DocumentChange::Closed(_url) => (),
+
+            None => (),
         }
     }
 
@@ -192,12 +194,6 @@ impl Registry {
             None => None,
         }
     }
-    // fn document_last_good(self, url: &Url) -> Option<&AnalyzedDocument> {
-    //     self.documents.get(url)(|x| x.last_good_document)
-    // }
-    // fn document_last_good(self, url: &Url) -> Option<&AnalyzedDocument> {
-    //     self.documents.get(url)(|x| x.last_good_document)
-    // }
 
     pub async fn diagnostics(&self, url: &Url) -> Vec<Diagnostic> {
         let Some( document) = self.latest_document_by_url(url).await else {
@@ -238,10 +234,9 @@ impl Registry {
     ) -> Option<CompletionResponse> {
         let lock = self.documents.lock().await;
         let pair = lock.get(url)?;
-        let mut stderr = std::io::stderr();
-        writeln!(&mut stderr, "got document");
+        writeln!(stderr(), "got document");
         let latest_doc_info = &pair.latest_document.info;
-        writeln!(&mut stderr, "latest version:{:?} ", latest_doc_info.version);
+        writeln!(stderr(), "latest version:{:?} ", latest_doc_info.version);
 
         let symbol_prefix = latest_doc_info.get_prefix_at_position(position);
 
