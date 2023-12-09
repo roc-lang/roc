@@ -6003,6 +6003,33 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn issue_6197() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                when l1 is
+                    [
+                    .. 
+                    as
+                    rest
+                    ]
+                    as 
+                    l2
+                    ->
+                        f rest
+                "#
+            ),
+            indoc!(
+                r#"
+                when l1 is
+                    [.. as rest] as l2 ->
+                        f rest
+                "#
+            ),
+        );
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {
