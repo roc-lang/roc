@@ -443,6 +443,22 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
                 };
                 fields
             }
+            roc_types::subs::FlatType::Tuple(elems, ext) => {
+                let elems = elems.unsorted_iterator(subs, ext);
+                let elems: Vec<_> = match elems {
+                    Ok(elem) => elem.map(|(num, var)| (num.to_string(), var)).collect(),
+                    Err(err) => {
+                        writeln!(
+                            std::io::stderr(),
+                            "WARN:Error getting tuple elems for completion{:?}",
+                            err
+                        );
+                        vec![]
+                    }
+                };
+                elems
+            }
+
             _ => {
                 writeln!(
                     std::io::stderr(),
