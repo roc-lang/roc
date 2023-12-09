@@ -3,13 +3,10 @@ Roc standard library in C++
 
 C++ representations of Roc's standard library data structures.
 These classes are designed for developing Roc platforms using C++.
-Create data structures that can be passed directly to a Roc app,
-and type-cast return values from Roc functions to these C++ types.
+Create C++ data structures that can be passed directly to a Roc app,
+and used to interpret its return values.
 
-https://www.roc-lang.org/
-
-https://github.com/roc-lang/roc
-
+The header files will be imported as strings into CppGlue.roc.
 
 Current progress
 ----------------
@@ -17,7 +14,7 @@ Current progress
 - [x] Str
 - [x] List
 - [x] Num
-- [ ] Dict
+- [x] Dict
 - [ ] Set
 - [x] Box
 - [x] Result
