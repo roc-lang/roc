@@ -13,6 +13,13 @@ const STR = "str";
 // Dec Module
 const dec = @import("dec.zig");
 
+var FLTUSED: i32 = 0;
+comptime {
+    if (builtin.os.tag == .windows) {
+        @export(FLTUSED, .{ .name = "_fltused", .linkage = .Weak });
+    }
+}
+
 comptime {
     exportDecFn(dec.absC, "abs");
     exportDecFn(dec.acosC, "acos");
