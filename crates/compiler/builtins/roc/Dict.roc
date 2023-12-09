@@ -94,9 +94,6 @@ interface Dict
 ## It has a list of keys value pairs that is ordered based on insertion.
 ## It uses a list of indices into the data as the backing of a hash map.
 Dict k v := {
-    # TODO: Look into adding a hashflood ordered map fall back.
-    #       That said, it would require keys to have Ord.
-    #       It probably will also pessimize normal use with an extra check on Dict type (maybe that is fine).
     buckets : List Bucket,
     data : List (k, v),
     maxBucketCapacity : U64,
