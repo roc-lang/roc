@@ -1067,7 +1067,16 @@ pub fn module_from_builtins<'ctx>(
 
     // Also, must_keep is the functions we depend on that would normally be provide by libc.
     // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
-    let must_keep = ["memcpy", "memset", "floorf"];
+    let must_keep = [
+        "_fltused",
+        "floorf",
+        "memcpy",
+        "memset",
+        // Roc special functions
+        "__roc_force_longjmp",
+        "__roc_force_setjmp",
+        "set_shared_buffer",
+    ];
     for func in module.get_functions() {
         let has_definition = func.count_basic_blocks() > 0;
         let name = func.get_name().to_string_lossy();
