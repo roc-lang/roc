@@ -1058,6 +1058,50 @@ pub fn module_from_builtins<'ctx>(
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {err:?}"));
 
+    // In my testing, this adds about 20ms extra to compilation.
+    // Long term it would be best if we could do this on the zig side.
+    // This change enables us to dce all the parts of compiler-rt we don't use.
+    // That said, it would be better to dce them before roc app compiltation time.
+    // Anything not depended on by a `roc_builtin.` function could alread by DCE'd theoretically.
+    // That said, this workaround is good enough and fixes compilations times.
+
+    // Also, must_keep is the functions we depend on that would normally be provide by libc.
+    // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
+    let must_keep = [
+        "_fltused",
+        "floorf",
+        "memcpy",
+        "memset",
+        // Roc special functions
+        "__roc_force_longjmp",
+        "__roc_force_setjmp",
+        "set_shared_buffer",
+    ];
+    for func in module.get_functions() {
+        let has_definition = func.count_basic_blocks() > 0;
+        let name = func.get_name().to_string_lossy();
+        if has_definition
+            && !name.starts_with("roc_builtins.")
+            && !must_keep.contains(&name.as_ref())
+        {
+            func.set_linkage(Linkage::Private);
+        }
+    }
+
+    // Note, running DCE here is faster then waiting until full app DCE.
+    let mpm = PassManager::create(());
+    mpm.add_global_dce_pass();
+    mpm.run_on(&module);
+
+    // Now that the unused compiler-rt functions have been removed,
+    // mark that the builtin functions are allowed to be DCE'd if they aren't used.
+    for func in module.get_functions() {
+        let name = func.get_name().to_string_lossy();
+        if name.starts_with("roc_builtins.") {
+            func.set_linkage(Linkage::Private);
+        }
+    }
+
     // Add LLVM intrinsics.
     add_intrinsics(ctx, &module);
 

@@ -183,7 +183,7 @@ impl LowLevelWrapperType {
 
 /// We use a rust macro to ensure that every LowLevel gets handled
 macro_rules! map_symbol_to_lowlevel {
-    ($($lowlevel:ident <= $symbol:ident),* $(,)?) => {
+    ($($lowlevel:ident <= $($symbol:ident),+);* $(;)?) => {
 
         fn for_symbol_help(symbol: Symbol) -> LowLevelWrapperType {
             use $crate::low_level::LowLevelWrapperType::*;
@@ -191,14 +191,14 @@ macro_rules! map_symbol_to_lowlevel {
             // expands to a big (but non-exhaustive) match on symbols and maps them to a lowlevel
             match symbol {
                 $(
-                Symbol::$symbol => CanBeReplacedBy(LowLevel::$lowlevel),
+                $(Symbol::$symbol)|+ => CanBeReplacedBy(LowLevel::$lowlevel),
                 )*
 
                 _ => NotALowLevelWrapper,
             }
         }
 
-        fn _enforce_exhaustiveness(lowlevel: LowLevel) -> Symbol {
+        fn _enforce_exhaustiveness(lowlevel: LowLevel) -> &'static [Symbol] {
             // when adding a new lowlevel, this match will stop being exhaustive, and give a
             // compiler error. Most likely, you are adding a new lowlevel that maps directly to a
             // symbol. For instance, you want to have `List.foo` to stand for the `ListFoo`
@@ -209,7 +209,7 @@ macro_rules! map_symbol_to_lowlevel {
             // that it isn't and just see if that works.
             match lowlevel {
                 $(
-                LowLevel::$lowlevel => Symbol::$symbol,
+                LowLevel::$lowlevel => &[$(Symbol::$symbol),+],
                 )*
 
                 // these are higher-order lowlevels. these need the surrounding
@@ -259,107 +259,107 @@ macro_rules! map_symbol_to_lowlevel {
 // pattern of a symbol mapping directly to a lowlevel. In other words, most lowlevels (left) are generated
 // by only one specific symbol (right)
 map_symbol_to_lowlevel! {
-    StrConcat <= STR_CONCAT,
-    StrJoinWith <= STR_JOIN_WITH,
-    StrIsEmpty <= STR_IS_EMPTY,
-    StrStartsWith <= STR_STARTS_WITH,
-    StrStartsWithScalar <= STR_STARTS_WITH_SCALAR,
-    StrEndsWith <= STR_ENDS_WITH,
-    StrSplit <= STR_SPLIT,
-    StrCountGraphemes <= STR_COUNT_GRAPHEMES,
-    StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES,
-    StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL,
-    StrToUtf8 <= STR_TO_UTF8,
-    StrRepeat <= STR_REPEAT,
-    StrTrim <= STR_TRIM,
-    StrTrimStart <= STR_TRIM_START,
-    StrTrimEnd <= STR_TRIM_END,
-    StrToScalars <= STR_TO_SCALARS,
-    StrGetUnsafe <= STR_GET_UNSAFE,
-    StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE,
-    StrReserve <= STR_RESERVE,
-    StrAppendScalar <= STR_APPEND_SCALAR_UNSAFE,
-    StrGetScalarUnsafe <= STR_GET_SCALAR_UNSAFE,
-    StrToNum <= STR_TO_NUM,
-    StrGetCapacity <= STR_CAPACITY,
-    StrWithCapacity <= STR_WITH_CAPACITY,
-    StrGraphemes <= STR_GRAPHEMES,
-    StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY,
-    ListLen <= LIST_LEN,
-    ListGetCapacity <= LIST_CAPACITY,
-    ListWithCapacity <= LIST_WITH_CAPACITY,
-    ListReserve <= LIST_RESERVE,
-    ListReleaseExcessCapacity <= LIST_RELEASE_EXCESS_CAPACITY,
-    ListIsUnique <= LIST_IS_UNIQUE,
-    ListAppendUnsafe <= LIST_APPEND_UNSAFE,
-    ListPrepend <= LIST_PREPEND,
-    ListGetUnsafe <= LIST_GET_UNSAFE,
-    ListReplaceUnsafe <= LIST_REPLACE_UNSAFE,
-    ListConcat <= LIST_CONCAT,
-    ListSublist <= LIST_SUBLIST_LOWLEVEL,
-    ListDropAt <= LIST_DROP_AT,
-    ListSwap <= LIST_SWAP,
-    NumAdd <= NUM_ADD,
-    NumAddWrap <= NUM_ADD_WRAP,
-    NumAddChecked <= NUM_ADD_CHECKED_LOWLEVEL,
-    NumAddSaturated <= NUM_ADD_SATURATED,
-    NumSub <= NUM_SUB,
-    NumSubWrap <= NUM_SUB_WRAP,
-    NumSubChecked <= NUM_SUB_CHECKED_LOWLEVEL,
-    NumSubSaturated <= NUM_SUB_SATURATED,
-    NumMul <= NUM_MUL,
-    NumMulWrap <= NUM_MUL_WRAP,
-    NumMulSaturated <= NUM_MUL_SATURATED,
-    NumMulChecked <= NUM_MUL_CHECKED_LOWLEVEL,
-    NumGt <= NUM_GT,
-    NumGte <= NUM_GTE,
-    NumLt <= NUM_LT,
-    NumLte <= NUM_LTE,
-    NumCompare <= NUM_COMPARE,
-    NumDivFrac <= NUM_DIV_FRAC,
-    NumDivCeilUnchecked <= NUM_DIV_CEIL,
-    NumDivTruncUnchecked <= NUM_DIV_TRUNC,
-    NumRemUnchecked <= NUM_REM,
-    NumIsMultipleOf <= NUM_IS_MULTIPLE_OF,
-    NumAbs <= NUM_ABS,
-    NumNeg <= NUM_NEG,
-    NumSin <= NUM_SIN,
-    NumCos <= NUM_COS,
-    NumTan <= NUM_TAN,
-    NumSqrtUnchecked <= NUM_SQRT,
-    NumLogUnchecked <= NUM_LOG,
-    NumRound <= NUM_ROUND,
-    NumToFrac <= NUM_TO_FRAC,
-    NumIsNan <= NUM_IS_NAN,
-    NumIsInfinite <= NUM_IS_INFINITE,
-    NumIsFinite <= NUM_IS_FINITE,
-    NumPow <= NUM_POW,
-    NumCeiling <= NUM_CEILING,
-    NumPowInt <= NUM_POW_INT,
-    NumFloor <= NUM_FLOOR,
-    NumAtan <= NUM_ATAN,
-    NumAcos <= NUM_ACOS,
-    NumAsin <= NUM_ASIN,
-    NumBytesToU16 <= NUM_BYTES_TO_U16_LOWLEVEL,
-    NumBytesToU32 <= NUM_BYTES_TO_U32_LOWLEVEL,
-    NumBytesToU64 <= NUM_BYTES_TO_U64_LOWLEVEL,
-    NumBytesToU128 <= NUM_BYTES_TO_U128_LOWLEVEL,
-    NumBitwiseAnd <= NUM_BITWISE_AND,
-    NumBitwiseXor <= NUM_BITWISE_XOR,
-    NumBitwiseOr <= NUM_BITWISE_OR,
-    NumShiftLeftBy <= NUM_SHIFT_LEFT,
-    NumShiftRightBy <= NUM_SHIFT_RIGHT,
-    NumShiftRightZfBy <= NUM_SHIFT_RIGHT_ZERO_FILL,
-    NumToStr <= NUM_TO_STR,
-    NumCountLeadingZeroBits <= NUM_COUNT_LEADING_ZERO_BITS,
-    NumCountTrailingZeroBits <= NUM_COUNT_TRAILING_ZERO_BITS,
-    NumCountOneBits <= NUM_COUNT_ONE_BITS,
-    I128OfDec <= I128_OF_DEC,
-    Eq <= BOOL_STRUCTURAL_EQ,
-    NotEq <= BOOL_STRUCTURAL_NOT_EQ,
-    And <= BOOL_AND,
-    Or <= BOOL_OR,
-    Not <= BOOL_NOT,
-    Unreachable <= LIST_UNREACHABLE,
-    DictPseudoSeed <= DICT_PSEUDO_SEED,
+    StrConcat <= STR_CONCAT;
+    StrJoinWith <= STR_JOIN_WITH;
+    StrIsEmpty <= STR_IS_EMPTY;
+    StrStartsWith <= STR_STARTS_WITH;
+    StrStartsWithScalar <= STR_STARTS_WITH_SCALAR;
+    StrEndsWith <= STR_ENDS_WITH;
+    StrSplit <= STR_SPLIT;
+    StrCountGraphemes <= STR_COUNT_GRAPHEMES;
+    StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
+    StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL;
+    StrToUtf8 <= STR_TO_UTF8;
+    StrRepeat <= STR_REPEAT;
+    StrTrim <= STR_TRIM;
+    StrTrimStart <= STR_TRIM_START;
+    StrTrimEnd <= STR_TRIM_END;
+    StrToScalars <= STR_TO_SCALARS;
+    StrGetUnsafe <= STR_GET_UNSAFE;
+    StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE;
+    StrReserve <= STR_RESERVE;
+    StrAppendScalar <= STR_APPEND_SCALAR_UNSAFE;
+    StrGetScalarUnsafe <= STR_GET_SCALAR_UNSAFE;
+    StrToNum <= STR_TO_NUM;
+    StrGetCapacity <= STR_CAPACITY;
+    StrWithCapacity <= STR_WITH_CAPACITY;
+    StrGraphemes <= STR_GRAPHEMES;
+    StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
+    ListLen <= LIST_LEN;
+    ListGetCapacity <= LIST_CAPACITY;
+    ListWithCapacity <= LIST_WITH_CAPACITY;
+    ListReserve <= LIST_RESERVE;
+    ListReleaseExcessCapacity <= LIST_RELEASE_EXCESS_CAPACITY;
+    ListIsUnique <= LIST_IS_UNIQUE;
+    ListAppendUnsafe <= LIST_APPEND_UNSAFE;
+    ListPrepend <= LIST_PREPEND;
+    ListGetUnsafe <= LIST_GET_UNSAFE, DICT_LIST_GET_UNSAFE;
+    ListReplaceUnsafe <= LIST_REPLACE_UNSAFE;
+    ListConcat <= LIST_CONCAT;
+    ListSublist <= LIST_SUBLIST_LOWLEVEL;
+    ListDropAt <= LIST_DROP_AT;
+    ListSwap <= LIST_SWAP;
+    NumAdd <= NUM_ADD;
+    NumAddWrap <= NUM_ADD_WRAP;
+    NumAddChecked <= NUM_ADD_CHECKED_LOWLEVEL;
+    NumAddSaturated <= NUM_ADD_SATURATED;
+    NumSub <= NUM_SUB;
+    NumSubWrap <= NUM_SUB_WRAP;
+    NumSubChecked <= NUM_SUB_CHECKED_LOWLEVEL;
+    NumSubSaturated <= NUM_SUB_SATURATED;
+    NumMul <= NUM_MUL;
+    NumMulWrap <= NUM_MUL_WRAP;
+    NumMulSaturated <= NUM_MUL_SATURATED;
+    NumMulChecked <= NUM_MUL_CHECKED_LOWLEVEL;
+    NumGt <= NUM_GT;
+    NumGte <= NUM_GTE;
+    NumLt <= NUM_LT;
+    NumLte <= NUM_LTE;
+    NumCompare <= NUM_COMPARE;
+    NumDivFrac <= NUM_DIV_FRAC;
+    NumDivCeilUnchecked <= NUM_DIV_CEIL;
+    NumDivTruncUnchecked <= NUM_DIV_TRUNC;
+    NumRemUnchecked <= NUM_REM;
+    NumIsMultipleOf <= NUM_IS_MULTIPLE_OF;
+    NumAbs <= NUM_ABS;
+    NumNeg <= NUM_NEG;
+    NumSin <= NUM_SIN;
+    NumCos <= NUM_COS;
+    NumTan <= NUM_TAN;
+    NumSqrtUnchecked <= NUM_SQRT;
+    NumLogUnchecked <= NUM_LOG;
+    NumRound <= NUM_ROUND;
+    NumToFrac <= NUM_TO_FRAC;
+    NumIsNan <= NUM_IS_NAN;
+    NumIsInfinite <= NUM_IS_INFINITE;
+    NumIsFinite <= NUM_IS_FINITE;
+    NumPow <= NUM_POW;
+    NumCeiling <= NUM_CEILING;
+    NumPowInt <= NUM_POW_INT;
+    NumFloor <= NUM_FLOOR;
+    NumAtan <= NUM_ATAN;
+    NumAcos <= NUM_ACOS;
+    NumAsin <= NUM_ASIN;
+    NumBytesToU16 <= NUM_BYTES_TO_U16_LOWLEVEL;
+    NumBytesToU32 <= NUM_BYTES_TO_U32_LOWLEVEL;
+    NumBytesToU64 <= NUM_BYTES_TO_U64_LOWLEVEL;
+    NumBytesToU128 <= NUM_BYTES_TO_U128_LOWLEVEL;
+    NumBitwiseAnd <= NUM_BITWISE_AND;
+    NumBitwiseXor <= NUM_BITWISE_XOR;
+    NumBitwiseOr <= NUM_BITWISE_OR;
+    NumShiftLeftBy <= NUM_SHIFT_LEFT;
+    NumShiftRightBy <= NUM_SHIFT_RIGHT;
+    NumShiftRightZfBy <= NUM_SHIFT_RIGHT_ZERO_FILL;
+    NumToStr <= NUM_TO_STR;
+    NumCountLeadingZeroBits <= NUM_COUNT_LEADING_ZERO_BITS;
+    NumCountTrailingZeroBits <= NUM_COUNT_TRAILING_ZERO_BITS;
+    NumCountOneBits <= NUM_COUNT_ONE_BITS;
+    I128OfDec <= I128_OF_DEC;
+    Eq <= BOOL_STRUCTURAL_EQ;
+    NotEq <= BOOL_STRUCTURAL_NOT_EQ;
+    And <= BOOL_AND;
+    Or <= BOOL_OR;
+    Not <= BOOL_NOT;
+    Unreachable <= LIST_UNREACHABLE;
+    DictPseudoSeed <= DICT_PSEUDO_SEED;
 }
