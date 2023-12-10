@@ -1393,7 +1393,7 @@ fn build_string_literal<'ctx>(
 ) -> BasicValueEnum<'ctx> {
     if str_literal.len() < env.small_str_bytes() as usize {
         match env.small_str_bytes() {
-            24 => small_str_ptr_width_8(env, parent, str_literal).into(),
+            24 => small_str_ptr_width_8(env, str_literal).into(),
             12 => small_str_ptr_width_4(env, str_literal).into(),
             _ => unreachable!("incorrect small_str_bytes"),
         }
@@ -1401,14 +1401,20 @@ fn build_string_literal<'ctx>(
         let ptr = define_global_str_literal_ptr(env, str_literal);
         let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-        let alloca = const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
-
         match env.target_info.ptr_width() {
             PtrWidth::Bytes4 => {
+                // TODO just build a struct on the stack
+                let alloca =
+                    const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
                 env.builder
                     .new_build_load(zig_str_type(env), alloca, "load_const_str")
             }
-            PtrWidth::Bytes8 => alloca.into(),
+            PtrWidth::Bytes8 => {
+                // TODO store the string bytes in global memory
+                let alloca =
+                    const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
+                alloca.into()
+            }
         }
     }
 }
@@ -1431,11 +1437,7 @@ fn const_str_alloca_ptr<'ctx>(
     alloca
 }
 
-fn small_str_ptr_width_8<'ctx>(
-    env: &Env<'_, 'ctx, '_>,
-    parent: FunctionValue<'ctx>,
-    str_literal: &str,
-) -> PointerValue<'ctx> {
+fn small_str_ptr_width_8<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> PointerValue<'ctx> {
     debug_assert_eq!(env.target_info.ptr_width() as u8, 8);
 
     let mut array = [0u8; 24];
@@ -1444,19 +1446,7 @@ fn small_str_ptr_width_8<'ctx>(
 
     array[env.small_str_bytes() as usize - 1] = str_literal.len() as u8 | roc_std::RocStr::MASK;
 
-    let word1 = u64::from_ne_bytes(array[0..8].try_into().unwrap());
-    let word2 = u64::from_ne_bytes(array[8..16].try_into().unwrap());
-    let word3 = u64::from_ne_bytes(array[16..24].try_into().unwrap());
-
-    let ptr = env.ptr_int().const_int(word1, false);
-    let len = env.ptr_int().const_int(word2, false);
-    let cap = env.ptr_int().const_int(word3, false);
-
-    let address_space = AddressSpace::default();
-    let ptr_type = env.context.i8_type().ptr_type(address_space);
-    let ptr = env.builder.new_build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
-
-    const_str_alloca_ptr(env, parent, ptr, len, cap)
+    define_global_byte_array(env, array.as_slice()).as_pointer_value()
 }
 
 fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> StructValue<'ctx> {
@@ -6932,8 +6922,6 @@ fn define_global_str_literal<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     message: &str,
 ) -> inkwell::values::GlobalValue<'ctx> {
-    let module = env.module;
-
     // hash the name so we don't re-define existing messages
     let name = {
         use std::collections::hash_map::DefaultHasher;
@@ -6946,26 +6934,51 @@ fn define_global_str_literal<'ctx>(
         format!("_str_literal_{hash}")
     };
 
-    match module.get_global(&name) {
+    let it = [0u8; 8].iter().chain(message.as_bytes().iter());
+    define_global_byte_array_help(env, &name, it)
+}
+
+fn define_global_byte_array<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    message: &[u8],
+) -> inkwell::values::GlobalValue<'ctx> {
+    // hash the name so we don't re-define existing messages
+    let name = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        message.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        format!("_byte_array_{hash}")
+    };
+
+    define_global_byte_array_help(env, &name, message.iter())
+}
+
+fn define_global_byte_array_help<'a, 'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    name: &str,
+    message: impl Iterator<Item = &'a u8>,
+) -> inkwell::values::GlobalValue<'ctx> {
+    let module = env.module;
+
+    match module.get_global(name) {
         Some(current) => current,
 
         None => {
-            let size = message.bytes().len() + env.target_info.ptr_width() as usize;
+            let size = message.size_hint().0;
             let mut bytes = Vec::with_capacity_in(size, env.arena);
 
-            // insert NULL bytes for the refcount
-            for _ in 0..env.target_info.ptr_width() as usize {
-                bytes.push(env.context.i8_type().const_zero());
-            }
-
             // then add the data bytes
-            for b in message.bytes() {
-                bytes.push(env.context.i8_type().const_int(b as u64, false));
+            for b in message {
+                bytes.push(env.context.i8_type().const_int(*b as u64, false));
             }
 
             // use None for the address space (e.g. Const does not work)
             let typ = env.context.i8_type().array_type(bytes.len() as u32);
-            let global = module.add_global(typ, None, &name);
+            let global = module.add_global(typ, None, name);
 
             global.set_initializer(&env.context.i8_type().const_array(bytes.into_bump_slice()));
 
