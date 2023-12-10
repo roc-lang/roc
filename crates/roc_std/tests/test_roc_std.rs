@@ -390,6 +390,32 @@ mod test_roc_std {
     }
 
     #[test]
+    fn roc_list_push() {
+        let mut example = RocList::from_slice(&[1, 2, 3]);
+
+        // basic slice from the start
+        example.push(4);
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        // slice in the middle
+        let mut sliced = example.slice_range(0..3);
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+
+        // original did not change
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        drop(sliced);
+
+        let mut sliced = example.slice_range(0..3);
+        // make the slice unique
+        drop(example);
+
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+    }
+
+    #[test]
     fn split_whitespace() {
         let example = RocStr::from("chaos is a ladder");
 

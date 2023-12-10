@@ -413,7 +413,7 @@ impl<T> RocList<T> {
 
         match self.elements_and_storage() {
             Some((elements, storage)) => {
-                if storage.get().is_unique() {
+                if storage.get().is_unique() && !self.is_seamless_slice() {
                     unsafe {
                         let old_alloc = self.ptr_to_allocation();
 

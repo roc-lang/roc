@@ -925,7 +925,7 @@ impl BigString {
         let desired_cap = self.len() + n;
         let desired_alloc = align + desired_cap;
 
-        if self.is_unique() {
+        if self.is_unique() && !self.is_seamless_slice() {
             if self.capacity() >= desired_cap {
                 return;
             }
