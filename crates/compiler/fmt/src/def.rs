@@ -305,22 +305,16 @@ fn should_outdent(mut rhs: &TypeAnnotation) -> bool {
 fn fmt_dbg_in_def<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
-    is_multiline: bool,
+    _: bool,
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("dbg");
 
-    let return_indent = if is_multiline {
-        buf.newline();
-        indent + INDENT
-    } else {
-        buf.spaces(1);
-        indent
-    };
+    buf.spaces(1);
 
-    condition.format(buf, return_indent);
+    condition.format(buf, indent);
 }
 
 fn fmt_expect<'a>(buf: &mut Buf, condition: &'a Loc<Expr<'a>>, is_multiline: bool, indent: u16) {
