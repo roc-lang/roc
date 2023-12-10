@@ -1,5 +1,6 @@
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
+use crate::expr::fmt_str_literal;
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT};
 use crate::Buf;
@@ -287,6 +288,11 @@ impl<'a> Formattable for ValueDef<'a> {
                         a.keyword.is_multiline() || is_collection_multiline(&a.item)
                     })
             }
+            IngestedFileImport {
+                before_path,
+                path: _,
+                name,
+            } => !before_path.is_empty() || name.is_multiline(),
         }
     }
 
@@ -364,6 +370,20 @@ impl<'a> Formattable for ValueDef<'a> {
 
                     fmt_collection(buf, list_indent, Braces::Square, exposed.item, Newlines::No);
                 }
+            }
+            IngestedFileImport {
+                before_path,
+                path,
+                name,
+            } => {
+                buf.indent(indent);
+                buf.push_str("import");
+
+                let indent = indent + INDENT;
+
+                fmt_default_spaces(buf, before_path, indent);
+                fmt_str_literal(buf, path.value, indent);
+                name.format(buf, indent);
             }
         }
     }

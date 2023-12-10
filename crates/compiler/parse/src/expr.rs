@@ -20,7 +20,7 @@ use crate::parser::{
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
-use crate::string_literal::StrLikeLiteral;
+use crate::string_literal::{self, StrLikeLiteral};
 use crate::{header, keyword};
 use crate::{module, type_annotation};
 use bumpalo::collections::Vec;
@@ -840,14 +840,14 @@ pub fn parse_single_def<'a>(
     }
 }
 
-fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
+fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     skip_first!(
         parser::keyword_e(keyword::IMPORT, EImport::Import),
-        increment_min_indent(import_body())
+        increment_min_indent(one_of!(import_body(), import_ingested_file_body()))
     )
 }
 
-fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
+fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
     record!(ValueDef::ModuleImport {
         before_name: space0_e(EImport::IndentStart),
         name: loc!(imported_module_name()),
@@ -857,7 +857,7 @@ fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport> {
 }
 
 #[inline(always)]
-fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport> {
+fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport<'a>> {
     record!(ImportedModuleName {
         package: optional(skip_second!(
             specialize(|_, pos| EImport::PackageShorthand(pos), lowercase_ident()),
@@ -869,7 +869,7 @@ fn imported_module_name<'a>() -> impl Parser<'a, ImportedModuleName<'a>, EImport
 
 #[inline(always)]
 fn import_as<'a>(
-) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport> {
+) -> impl Parser<'a, header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>, EImport<'a>> {
     record!(header::KeywordItem {
         keyword: module::spaces_around_keyword(
             ImportAsKeyword,
@@ -892,7 +892,7 @@ fn import_exposing<'a>() -> impl Parser<
         ImportExposingKeyword,
         Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
     >,
-    EImport,
+    EImport<'a>,
 > {
     record!(header::KeywordItem {
         keyword: module::spaces_around_keyword(
@@ -913,11 +913,40 @@ fn import_exposing<'a>() -> impl Parser<
 
 #[inline(always)]
 fn import_exposed_name<'a>(
-) -> impl Parser<'a, crate::ast::Spaced<'a, crate::header::ExposedName<'a>>, EImport> {
+) -> impl Parser<'a, crate::ast::Spaced<'a, crate::header::ExposedName<'a>>, EImport<'a>> {
     map!(
         specialize(|_, pos| EImport::ExposedName(pos), unqualified_ident()),
         |n| Spaced::Item(crate::header::ExposedName::new(n))
     )
+}
+
+#[inline(always)]
+fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
+    record!(ValueDef::IngestedFileImport {
+        before_path: space0_e(EImport::IndentStart),
+        path: loc!(specialize(
+            |_, pos| EImport::IngestedPath(pos),
+            string_literal::parse_str_literal()
+        )),
+        name: import_ingested_file_as(),
+    })
+}
+
+#[inline(always)]
+fn import_ingested_file_as<'a>() -> impl Parser<
+    'a,
+    header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
+    EImport<'a>,
+> {
+    record!(header::KeywordItem {
+        keyword: module::spaces_around_keyword(
+            ImportAsKeyword,
+            EImport::As,
+            EImport::IndentAs,
+            EImport::IndentIngestedName
+        ),
+        item: specialize(EImport::IngestedName, loc!(module::typed_ident()))
+    })
 }
 
 /// e.g. Things that can be on their own line in a def, e.g. `expect`, `expect-fx`, or `dbg`

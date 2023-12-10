@@ -577,6 +577,15 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 alias: alias.remove_spaces(arena),
                 exposed: exposed.remove_spaces(arena),
             },
+            IngestedFileImport {
+                before_path: _,
+                path,
+                name,
+            } => IngestedFileImport {
+                before_path: &[],
+                path: path.remove_spaces(arena),
+                name: name.remove_spaces(arena),
+            },
         }
     }
 }

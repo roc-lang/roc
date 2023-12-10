@@ -471,6 +471,13 @@ pub enum ValueDef<'a> {
             >,
         >,
     },
+
+    /// e.g. `import "path/to/my/file.txt" as myFile : Str`
+    IngestedFileImport {
+        before_path: &'a [CommentOrNewline<'a>],
+        path: Loc<StrLiteral<'a>>,
+        name: header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -1847,6 +1854,11 @@ impl<'a> Malformed for ValueDef<'a> {
                 alias: _,
                 exposed: _,
             } => false,
+            ValueDef::IngestedFileImport {
+                before_path: _,
+                path,
+                name: _,
+            } => path.is_malformed(),
         }
     }
 }

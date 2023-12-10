@@ -329,6 +329,7 @@ mod test_snapshots {
         pass/import_with_alias.moduledefs,
         pass/import_with_comments.moduledefs,
         pass/import_with_exposed.moduledefs,
+        pass/ingested_file.moduledefs,
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,
         pass/lambda_in_chain.expr,

@@ -552,7 +552,7 @@ fn imports<'a>() -> impl Parser<
 }
 
 #[inline(always)]
-fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
+pub fn typed_ident<'a>() -> impl Parser<'a, Spaced<'a, TypedIdent<'a>>, ETypedIdent<'a>> {
     // e.g.
     //
     // printLine : Str -> Effect {}
