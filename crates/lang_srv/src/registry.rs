@@ -1,29 +1,13 @@
-use std::{
-    cell::OnceCell,
-    collections::HashMap,
-    future::Future,
-    io::{stderr, Write},
-    ops::Deref,
-    rc::Rc,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
-use tokio::{
-    io::AsyncRead,
-    sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard},
-    task::JoinHandle,
-};
+use tokio::sync::{Mutex, MutexGuard};
 use tower_lsp::lsp_types::{
-    notification::Notification, CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover,
-    Position, SemanticTokensResult, TextEdit, Url,
+    CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
+    TextEdit, Url,
 };
 
-use crate::analysis::{global_anal, AnalysisResult, AnalyzedDocument, DocInfo};
+use crate::analysis::{AnalyzedDocument, DocInfo};
 
-pub(crate) enum DocumentChange {
-    Modified(Url, String, u32),
-    Closed(Url),
-}
 #[derive(Debug)]
 pub(crate) struct LatestDocument {
     info: DocInfo,
@@ -74,24 +58,6 @@ pub(crate) struct DocumentPair {
     last_good_document: Arc<AnalyzedDocument>,
 }
 
-// pub(crate) fn new(latest: AnalyzedDocument, last_good: AnalyzedDocument) -> DocumentPair {
-//     DocumentPair {
-//         //TODO not sure if i should actually be cloning here?
-//         latest_document: (latest.doc_info, Arc::new(RwLock::new(last_good.clone()))),
-//         last_good_document: last_good,
-//     }
-// }
-// pub(crate) fn new_latest_type_checked(latest_doc: AnalyzedDocument) -> DocumentPair {
-//     DocumentPair {
-//         //TODO not sure if i should actually be cloning here?
-//         latest_document: (
-//             latest_doc.doc_info.clone(),
-//             Arc::new(RwLock::new(latest_doc.clone())),
-//         ),
-//         last_good_document: latest_doc,
-//     }
-// }
-
 #[derive(Debug, Default)]
 pub(crate) struct Registry {
     documents: Mutex<HashMap<Url, DocumentPair>>,
@@ -104,13 +70,6 @@ impl Registry {
     ) {
         let url = document.url().clone();
         let document = Arc::new(document);
-        // writeln!(
-        //     std::io::stderr(),
-        //     "updating doc{:?}. version:{:?}",
-        //     &url,
-        //     &document.doc_info.version
-        // );
-
         let latest_doc = LatestDocument::new_initialised(document.clone());
         match documents.get_mut(&url) {
             Some(old_doc) => {
@@ -143,16 +102,10 @@ impl Registry {
         }
     }
 
-    pub async fn apply_change(&self, analysed_docs: Vec<AnalyzedDocument>) -> () {
-        writeln!(
-            std::io::stderr(),
-            "updated the latest document with docinfo"
-        );
-
+    pub async fn apply_changes(&self, analysed_docs: Vec<AnalyzedDocument>) -> () {
         let mut documents = self.documents.lock().await;
-        writeln!(
-            std::io::stderr(),
-            "finised doc analasys updating docs {:?}",
+        eprintln!(
+            "finised doc analysis updating docs {:?}",
             analysed_docs
                 .iter()
                 .map(|a| a.doc_info.url.to_string())
@@ -169,9 +122,9 @@ impl Registry {
         let doc = lock.get_mut(&url);
         match doc {
             Some(a) => {
-                writeln!(
-                    std::io::stderr(),
-                    "set the docInfo to version:{:?}",
+                eprintln!(
+                    "set the docInfo for {:?} to version:{:?}",
+                    url.as_str(),
                     partial.version
                 );
 
@@ -234,16 +187,13 @@ impl Registry {
     ) -> Option<CompletionResponse> {
         let lock = self.documents.lock().await;
         let pair = lock.get(url)?;
-        writeln!(stderr(), "got document");
+        eprintln!("got document");
         let latest_doc_info = &pair.latest_document.info;
-        writeln!(stderr(), "latest version:{:?} ", latest_doc_info.version);
+        eprintln!("latest version:{:?} ", latest_doc_info.version);
 
-        let symbol_prefix = latest_doc_info.get_prefix_at_position(position);
-
-        //this strategy probably won't work for record fields
-        let completions =
-            pair.last_good_document
-                .completion_items(position, &latest_doc_info, symbol_prefix)?;
+        let completions = pair
+            .last_good_document
+            .completion_items(position, &latest_doc_info)?;
 
         Some(CompletionResponse::Array(completions))
     }

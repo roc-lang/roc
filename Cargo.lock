@@ -3060,7 +3060,6 @@ dependencies = [
  "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
- "roc_load",
  "roc_module",
  "roc_packaging",
  "roc_parse",
@@ -3073,7 +3072,6 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "tempfile",
- "test_solve_helpers",
 ]
 
 [[package]]
@@ -3094,6 +3092,42 @@ name = "roc_solve_schema"
 version = "0.0.1"
 dependencies = [
  "bitflags 1.3.2",
+]
+
+[[package]]
+name = "roc_solve_tests"
+version = "0.0.1"
+dependencies = [
+ "arrayvec 0.7.4",
+ "bumpalo",
+ "indoc",
+ "insta",
+ "lazy_static",
+ "libtest-mimic",
+ "pretty_assertions",
+ "regex",
+ "roc_builtins",
+ "roc_can",
+ "roc_checkmate",
+ "roc_collections",
+ "roc_debug_flags",
+ "roc_derive",
+ "roc_derive_key",
+ "roc_error_macros",
+ "roc_exhaustive",
+ "roc_load_internal",
+ "roc_module",
+ "roc_packaging",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_reporting",
+ "roc_solve_problem",
+ "roc_solve_schema",
+ "roc_target",
+ "roc_types",
+ "roc_unify",
+ "tempfile",
 ]
 
 [[package]]

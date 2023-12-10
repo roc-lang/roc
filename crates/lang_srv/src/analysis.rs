@@ -1,7 +1,5 @@
 use std::{
     collections::HashMap,
-    future::Future,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -55,10 +53,12 @@ fn format_var_type(
     subs.rollback_to(snapshot);
     type_str
 }
-pub(crate) fn global_anal(
+///Returns a closure that will run the global analysis and the docinfo for the provided source
+///This means that you can get positions within the source code before the analysis completes
+pub(crate) fn global_analysis(
     source_url: Url,
     source: String,
-    version: u32,
+    version: i32,
 ) -> (impl FnOnce() -> Vec<AnalyzedDocument>, DocInfo) {
     let fi = source_url.to_file_path().unwrap();
     let src_dir = find_src_dir(&fi).to_path_buf();
@@ -70,7 +70,7 @@ pub(crate) fn global_anal(
         source: source.clone(),
         version,
     };
-    //We will return this before the analisys has completed to enable completion
+    //We will return this before the analysis has completed to enable completion
     let doc_info_return = doc_info.clone();
     let documents_future = move || {
         let arena = Bump::new();
@@ -200,7 +200,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
         path: PathBuf,
         source: Box<str>,
         module_id: ModuleId,
-        version: u32,
+        version: i32,
     ) -> AnalyzedDocument {
         let subs;
         let abilities;
@@ -295,24 +295,9 @@ struct AnalyzedModule {
     module_id_to_url: ModuleIdToUrl,
 }
 
-//This needs a rewrite
-/*
-Requirements:
-We should be able to get the latest results of analysis as well as the last good analysis resutl
-We should be able to get the source, lineinfo and url of the document without having completed the anaylys
-We need a way for functions that need the completed anaylisis to be completed to wait on that completion
-
-*/
-/*
-access completed result
-I could make a type that either contains an async task or the async result, when you access it it blocks and either awaits the task or returns the completed result.
-I could make it so that it contains an async mutex and it holds the first lock open then it is created it releases the lock once the task is completed
-*/
-
 #[derive(Debug, Clone)]
 
 pub struct AnalyzedDocument {
-    //TOODO make not pugb
     pub doc_info: DocInfo,
     pub analysys_result: AnalysisResult,
 }
@@ -321,9 +306,25 @@ pub struct DocInfo {
     pub url: Url,
     pub line_info: LineInfo,
     pub source: String,
-    pub version: u32,
+    pub version: i32,
 }
 impl DocInfo {
+    fn debug_log_prefix(&self, offset: u32) {
+        eprintln!("prefix source{:?}", self.source);
+
+        let last_few = self
+            .source
+            .split_at((offset - 5) as usize)
+            .1
+            .split_at((offset + 5) as usize)
+            .0;
+        let splitter = last_few.split_at(5);
+
+        eprintln!(
+            "starting to get completion items at offset:{:?} content:: '{:?}|{:?}'",
+            offset, splitter.0, splitter.1
+        );
+    }
     fn whole_document_range(&self) -> Range {
         let start = Position::new(0, 0);
         let end = Position::new(self.line_info.num_lines(), 0);
@@ -333,23 +334,6 @@ impl DocInfo {
         let position = position.to_roc_position(&self.line_info);
         let offset = position.offset;
         let source = self.source.as_bytes().split_at(offset as usize).0;
-        // writeln!(std::io::stderr(), "prefix source{:?}", self.source);
-
-        // let last_few = self
-        //     .source
-        //     .split_at((offset - 5) as usize)
-        //     .1
-        //     .split_at((offset + 5) as usize)
-        //     .0;
-        // let splitter = last_few.split_at(5);
-
-        // writeln!(
-        //     std::io::stderr(),
-        //     "starting to get completion items at offset:{:?} content:: '{:?}|{:?}'",
-        //     offset,
-        //     splitter.0,
-        //     splitter.1
-        // );
         let mut symbol = source
             .iter()
             .rev()
@@ -409,9 +393,6 @@ impl AnalyzedDocument {
 
     fn module(&self) -> Option<&AnalyzedModule> {
         self.analysys_result.module.as_ref()
-    }
-    pub fn doc_info(&self) -> &DocInfo {
-        &self.doc_info
     }
 
     fn location(&self, range: Range) -> Location {
@@ -488,25 +469,19 @@ impl AnalyzedDocument {
         &self,
         position: Position,
         latest_doc: &DocInfo,
-        symbol_prefix: String,
     ) -> Option<Vec<CompletionItem>> {
         let symbol_prefix = latest_doc.get_prefix_at_position(position);
-        writeln!(
-            std::io::stderr(),
+        eprintln!(
             "starting to get completion items for prefix: {:?} docVersion:{:?}",
-            symbol_prefix,
-            latest_doc.version
+            symbol_prefix, latest_doc.version
         );
         let len_diff = latest_doc.source.len() as i32 - self.doc_info.source.len() as i32;
 
-        let mut position = position.to_roc_position(&latest_doc.line_info);
+        //We offset the position because we need the position to be in the correct scope in the most recently parsed version of the source. The quick and dirty method is to just remove the difference in lenght between the source files from the offset. This could cause issues, but is very easy
         //TODO: this is kind of a hack and should be removed once we can do some minimal parsing without full type checking
+        let mut position = position.to_roc_position(&latest_doc.line_info);
         position.offset = (position.offset as i32 - len_diff - 1) as u32;
-        writeln!(
-            std::io::stderr(),
-            "completion offset: {:?}",
-            position.offset
-        );
+        eprintln!("completion offset: {:?}", position.offset);
 
         let AnalyzedModule {
             module_id,
@@ -535,7 +510,7 @@ impl AnalyzedDocument {
                 module_id,
                 interns,
             );
-            writeln!(std::io::stderr(), "got completions: ");
+            eprintln!("got completions: ");
             Some(completions)
         }
     }
