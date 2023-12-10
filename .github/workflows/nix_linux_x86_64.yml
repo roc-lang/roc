@@ -31,3 +31,8 @@ jobs:
 
       - name: test building wasm repl
         run: nix develop -c ./ci/www-repl.sh
+      
+      - name: test c++ crate
+        run: |
+          cd crates/glue/cpp
+          nix develop -c make check
