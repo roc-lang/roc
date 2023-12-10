@@ -28,8 +28,8 @@ use inkwell::types::{
 };
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValue, BasicValueEnum, CallSiteValue, FloatMathValue,
-    FunctionValue, InstructionOpcode, InstructionValue, IntMathValue, IntValue, PhiValue,
-    PointerMathValue, PointerValue, StructValue,
+    FunctionValue, GlobalValue, InstructionOpcode, InstructionValue, IntMathValue, IntValue,
+    PhiValue, PointerMathValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
 use inkwell::{FloatPredicate, OptimizationLevel};
@@ -1410,10 +1410,14 @@ fn build_string_literal<'ctx>(
                     .new_build_load(zig_str_type(env), alloca, "load_const_str")
             }
             PtrWidth::Bytes8 => {
-                // TODO store the string bytes in global memory
-                let alloca =
-                    const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
-                alloca.into()
+                let len = number_of_elements;
+                let cap = number_of_elements;
+
+                let roc_str = zig_str_type(env);
+                let initializer = roc_str.const_named_struct(&[ptr.into(), len.into(), cap.into()]);
+                build_global_const(env, &initializer, "static_string")
+                    .as_pointer_value()
+                    .into()
             }
         }
     }
@@ -3029,17 +3033,8 @@ fn list_literal<'a, 'ctx>(
                 &global_elements[zero_elements..]
             };
 
-            // use None for the address space (e.g. Const does not work)
-            let typ = element_type.array_type(const_elements.len() as u32);
-            let global = env.module.add_global(typ, None, "roc__list_literal");
-
-            global.set_constant(true);
-            global.set_alignment(alignment);
-            global.set_unnamed_addr(true);
-            global.set_linkage(inkwell::module::Linkage::Private);
-
-            global.set_initializer(&element_type.const_array(const_elements));
-            global.as_pointer_value()
+            let initializer = element_type.const_array(const_elements);
+            build_global_const(env, &initializer, "roc__list_literal").as_pointer_value()
         };
 
         if is_all_constant {
@@ -6976,23 +6971,34 @@ fn define_global_byte_array_help<'a, 'ctx>(
                 bytes.push(env.context.i8_type().const_int(*b as u64, false));
             }
 
-            // use None for the address space (e.g. Const does not work)
-            let typ = env.context.i8_type().array_type(bytes.len() as u32);
-            let global = module.add_global(typ, None, name);
-
-            global.set_initializer(&env.context.i8_type().const_array(bytes.into_bump_slice()));
-
-            // mimic the `global_string` function; we cannot use it directly because it assumes
-            // strings are NULL-terminated, which means we can't store the refcount (which is 8
-            // NULL bytes)
-            global.set_constant(true);
-            global.set_alignment(env.target_info.ptr_width() as u32);
-            global.set_unnamed_addr(true);
-            global.set_linkage(inkwell::module::Linkage::Private);
-
-            global
+            let initializer = env.context.i8_type().const_array(bytes.into_bump_slice());
+            build_global_const(env, &initializer, name)
         }
     }
+}
+
+fn build_global_const<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    value: &dyn BasicValue<'ctx>,
+    name: &str,
+) -> GlobalValue<'ctx> {
+    // NOTE: the value needs to be a constant
+
+    // use None for the address space (e.g. Const does not work)
+    let value = value.as_basic_value_enum();
+    let global = env.module.add_global(value.get_type(), None, name);
+
+    global.set_initializer(&value);
+
+    // mimic the `global_string` function; we cannot use it directly because it assumes
+    // strings are NULL-terminated, which means we can't store the refcount (which is 8
+    // NULL bytes)
+    global.set_constant(true);
+    global.set_alignment(env.target_info.ptr_width() as u32);
+    global.set_unnamed_addr(true);
+    global.set_linkage(inkwell::module::Linkage::Private);
+
+    global
 }
 
 pub(crate) fn throw_internal_exception<'ctx>(
