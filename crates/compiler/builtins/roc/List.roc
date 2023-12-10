@@ -794,7 +794,13 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ## ```
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
 ## with `start` regardless of what `end` and `step` are set to.
-range : _
+range :
+    {
+        start : [At (Num a), After (Num a)],
+        end : [At (Num a), Before (Num a), Length Nat],
+        step ? Num a,
+    }*
+    -> List (Num a)
 range = \{ start, end, step ? 0 } ->
     { calcNext, stepIsPositive } =
         if step == 0 then
