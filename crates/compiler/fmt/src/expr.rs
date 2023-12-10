@@ -959,7 +959,6 @@ fn fmt_dbg<'a>(
     _: bool,
     indent: u16,
 ) {
-
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("dbg");

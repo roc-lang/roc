@@ -302,12 +302,7 @@ fn should_outdent(mut rhs: &TypeAnnotation) -> bool {
     }
 }
 
-fn fmt_dbg_in_def<'a>(
-    buf: &mut Buf,
-    condition: &'a Loc<Expr<'a>>,
-    _: bool,
-    indent: u16,
-) {
+fn fmt_dbg_in_def<'a>(buf: &mut Buf, condition: &'a Loc<Expr<'a>>, _: bool, indent: u16) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("dbg");
