@@ -23,7 +23,6 @@ namespace Roc
     /**
      * Base class for all Roc value types
      * Implements common logic like reference counting.
-     * We don't use virtual functions because we want to avoid the vtable.
      */
     class Value
     {
