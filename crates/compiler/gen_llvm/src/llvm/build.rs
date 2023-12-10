@@ -1058,7 +1058,7 @@ pub fn module_from_builtins<'ctx>(
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {err:?}"));
 
-    // In my testing, this adds about 20ms extra to compilation.
+    // In testing, this adds about 20ms extra to compilation.
     // Long term it would be best if we could do this on the zig side.
     // This change enables us to dce all the parts of compiler-rt we don't use.
     // That said, it would be better to dce them before roc app compiltation time.

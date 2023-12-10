@@ -7,6 +7,7 @@ interface Dict
         clear,
         capacity,
         reserve,
+        releaseExcessCapacity,
         len,
         isEmpty,
         get,
@@ -155,7 +156,7 @@ withCapacity = \requested ->
     empty {}
     |> reserve requested
 
-# Enlarge the dictionary for at least capacity additional elements
+## Enlarge the dictionary for at least capacity additional elements
 reserve : Dict k v, Nat -> Dict k v
 reserve = \@Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }, requested ->
     currentSize = List.len data
@@ -173,6 +174,28 @@ reserve = \@Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, 
             maxBucketCapacity,
             maxLoadFactor,
             shifts: requestedShifts,
+        }
+    else
+        @Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }
+
+## Shrink the memory footprint of a dictionary such that capacity is as small as possible.
+## This function will require regenerating the metadata if the size changes.
+## There will still be some overhead due to dictionary metadata always being a power of 2.
+releaseExcessCapacity : Dict k v -> Dict k v
+releaseExcessCapacity = \@Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts } ->
+    size = List.len data
+
+    # NOTE: If we want, we technically could increase the load factor here to potentially minimize size more.
+    minShifts = calcShiftsForSize (Num.toU64 size) maxLoadFactor
+    if minShifts < shifts then
+        (buckets0, maxBucketCapacity) = allocBucketsFromShift minShifts maxLoadFactor
+        buckets1 = fillBucketsFromData buckets0 data minShifts
+        @Dict {
+            buckets: buckets1,
+            data: List.releaseExcessCapacity data,
+            maxBucketCapacity,
+            maxLoadFactor,
+            shifts: minShifts,
         }
     else
         @Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }
