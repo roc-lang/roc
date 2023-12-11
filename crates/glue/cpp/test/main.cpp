@@ -29,9 +29,13 @@ int main(int argc, char **argv)
         {
             nameFilter = argv[i + 1];
             ++i;
+        } else {
+            fprintf(stderr, "Unknown argument: %s\n", argv[i]);
+            fprintf(stderr, "Usage: %s [--quiet] [--group <group>] [--name <name>]\n", argv[0]);
+            return EXIT_FAILURE;
         }
     }
 
     bool pass = TestFixture::ExecuteAllTests(groupFilter, nameFilter, output);
-    return pass ? 0 : 1;
+    return pass ? EXIT_SUCCESS : EXIT_FAILURE;
 }
