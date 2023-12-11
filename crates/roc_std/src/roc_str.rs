@@ -100,7 +100,7 @@ impl RocStr {
                 heap_allocated: ManuallyDrop::new(BigString {
                     elements: unsafe { NonNull::new_unchecked(bytes) },
                     length: len,
-                    capacity_or_ref_ptr: cap,
+                    capacity_or_alloc_ptr: cap,
                 }),
             })
         }
@@ -222,7 +222,7 @@ impl RocStr {
                 };
 
                 big_string.length = self.len();
-                big_string.capacity_or_ref_ptr = target_cap;
+                big_string.capacity_or_alloc_ptr = target_cap;
 
                 let mut updated = RocStr(RocStrInner {
                     heap_allocated: ManuallyDrop::new(big_string),
@@ -273,7 +273,7 @@ impl RocStr {
             let heap_allocated = ManuallyDrop::new(BigString {
                 elements: unsafe { NonNull::new_unchecked(ptr) },
                 length: (isize::MIN as usize) | (range.end - range.start),
-                capacity_or_ref_ptr: (big.ptr_to_first_elem() as usize) >> 1,
+                capacity_or_alloc_ptr: (big.ptr_to_first_elem() as usize) >> 1,
             });
 
             Some(RocStr(RocStrInner { heap_allocated }))
@@ -797,7 +797,7 @@ impl From<SendSafeRocStr> for RocStr {
 struct BigString {
     elements: NonNull<u8>,
     length: usize,
-    capacity_or_ref_ptr: usize,
+    capacity_or_alloc_ptr: usize,
 }
 
 const SEAMLESS_SLICE_BIT: usize = isize::MIN as usize;
@@ -811,7 +811,7 @@ impl BigString {
         if self.is_seamless_slice() {
             self.len()
         } else {
-            self.capacity_or_ref_ptr
+            self.capacity_or_alloc_ptr
         }
     }
 
@@ -830,7 +830,7 @@ impl BigString {
 
     fn ptr_to_refcount(&self) -> *mut usize {
         if self.is_seamless_slice() {
-            unsafe { ((self.capacity_or_ref_ptr << 1) as *mut usize).sub(1) }
+            unsafe { ((self.capacity_or_alloc_ptr << 1) as *mut usize).sub(1) }
         } else {
             unsafe { self.ptr_to_first_elem().cast::<usize>().sub(1) }
         }
@@ -909,7 +909,7 @@ impl BigString {
         let mut this = Self {
             elements: NonNull::dangling(),
             length: 0,
-            capacity_or_ref_ptr: 0,
+            capacity_or_alloc_ptr: 0,
         };
 
         this.reserve(cap);
@@ -944,7 +944,7 @@ impl BigString {
             let mut this = Self {
                 elements,
                 length: self.len(),
-                capacity_or_ref_ptr: desired_cap,
+                capacity_or_alloc_ptr: desired_cap,
             };
 
             std::mem::swap(&mut this, self);
@@ -961,7 +961,7 @@ impl BigString {
             let mut this = Self {
                 elements,
                 length: self.len(),
-                capacity_or_ref_ptr: desired_cap,
+                capacity_or_alloc_ptr: desired_cap,
             };
 
             std::mem::swap(&mut this, self);
@@ -975,7 +975,7 @@ impl Clone for BigString {
         let mut this = Self {
             elements: self.elements,
             length: self.length,
-            capacity_or_ref_ptr: self.capacity_or_ref_ptr,
+            capacity_or_alloc_ptr: self.capacity_or_alloc_ptr,
         };
 
         this.inc(1);
