@@ -4464,6 +4464,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     }
 
     let call_result = if env.mode.returns_roc_result() {
+        assert!(false);
         if args.len() == roc_function.get_params().len() {
             let arguments_for_call = &arguments_for_call.into_bump_slice();
 
@@ -4487,6 +4488,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
                 arguments_for_call,
             )
         } else {
+            assert!(false);
             debug_assert_eq!(args.len() + 1, roc_function.get_params().len());
 
             arguments_for_call.push(args[0]);
@@ -4548,7 +4550,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         output_arg,
         call_result,
     );
-    env.builder.new_build_store(output_arg, call_result);
 
     builder.new_build_return(None);
 
