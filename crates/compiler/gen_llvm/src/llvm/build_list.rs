@@ -450,7 +450,7 @@ pub(crate) fn list_capacity_or_ref_ptr<'ctx>(
 
 // Gets a pointer to just after the refcount for a list or seamless slice.
 // The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn list_refcount_ptr<'ctx>(
+pub(crate) fn list_allocation_ptr<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     wrapper_struct: StructValue<'ctx>,
 ) -> PointerValue<'ctx> {
@@ -459,7 +459,7 @@ pub(crate) fn list_refcount_ptr<'ctx>(
         &[wrapper_struct],
         &[],
         BitcodeReturns::Basic,
-        bitcode::LIST_REFCOUNT_PTR,
+        bitcode::LIST_ALLOCATION_PTR,
     )
     .into_pointer_value()
 }
@@ -864,7 +864,7 @@ pub(crate) fn decref<'ctx>(
     wrapper_struct: StructValue<'ctx>,
     alignment: u32,
 ) {
-    let refcount_ptr = list_refcount_ptr(env, wrapper_struct);
+    let refcount_ptr = list_allocation_ptr(env, wrapper_struct);
 
     crate::llvm::refcounting::decref_pointer_check_null(env, refcount_ptr, alignment);
 }
