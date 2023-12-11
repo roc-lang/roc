@@ -1,29 +1,29 @@
-procedure Dict.1 (Dict.679):
-    let Dict.688 : List {U32, U32} = Array [];
-    let Dict.689 : List {[], []} = Array [];
-    let Dict.690 : U64 = 0i64;
-    let Dict.41 : Float32 = CallByName Dict.41;
-    let Dict.42 : U8 = CallByName Dict.42;
-    let Dict.687 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = Struct {Dict.688, Dict.689, Dict.690, Dict.41, Dict.42};
-    ret Dict.687;
+procedure Dict.1 (Dict.692):
+    let Dict.701 : List {U32, U32} = Array [];
+    let Dict.702 : List {[], []} = Array [];
+    let Dict.703 : U64 = 0i64;
+    let Dict.42 : Float32 = CallByName Dict.42;
+    let Dict.43 : U8 = CallByName Dict.43;
+    let Dict.700 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = Struct {Dict.701, Dict.702, Dict.703, Dict.42, Dict.43};
+    ret Dict.700;
 
-procedure Dict.4 (Dict.685):
-    let Dict.138 : List {[], []} = StructAtIndex 1 Dict.685;
-    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.685;
+procedure Dict.4 (Dict.698):
+    let Dict.150 : List {[], []} = StructAtIndex 1 Dict.698;
+    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.698;
     dec #Derived_gen.0;
-    let Dict.686 : U64 = CallByName List.6 Dict.138;
-    dec Dict.138;
-    ret Dict.686;
-
-procedure Dict.41 ():
-    let Dict.694 : Float32 = 0.8f64;
-    ret Dict.694;
+    let Dict.699 : U64 = CallByName List.6 Dict.150;
+    dec Dict.150;
+    ret Dict.699;
 
 procedure Dict.42 ():
-    let Dict.692 : U8 = 64i64;
-    let Dict.693 : U8 = 3i64;
-    let Dict.691 : U8 = CallByName Num.20 Dict.692 Dict.693;
-    ret Dict.691;
+    let Dict.707 : Float32 = 0.8f64;
+    ret Dict.707;
+
+procedure Dict.43 ():
+    let Dict.705 : U8 = 64i64;
+    let Dict.706 : U8 = 3i64;
+    let Dict.704 : U8 = CallByName Num.20 Dict.705 Dict.706;
+    ret Dict.704;
 
 procedure List.6 (#Attr.2):
     let List.553 : U64 = lowlevel ListLen #Attr.2;

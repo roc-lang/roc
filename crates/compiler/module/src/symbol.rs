@@ -1487,6 +1487,7 @@ define_builtins! {
         27 DICT_KEEP_IF: "keepIf"
         28 DICT_DROP_IF: "dropIf"
         29 DICT_RESERVE: "reserve"
+        30 DICT_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1513,6 +1514,7 @@ define_builtins! {
         21 SET_DROP_IF: "dropIf"
         22 SET_WITH_CAPACITY: "withCapacity"
         23 SET_RESERVE: "reserve"
+        24 SET_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
