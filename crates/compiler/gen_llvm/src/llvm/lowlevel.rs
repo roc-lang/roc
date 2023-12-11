@@ -1099,14 +1099,22 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         }
         NumBytesToU128 => {
             arguments!(list, position);
-
-            call_list_bitcode_fn(
+            
+            let ret = call_list_bitcode_fn(
                 env,
                 &[list.into_struct_value()],
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U128,
-            )
+            );
+
+            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+                // On windows the return type is not a i128, likely due to alignment
+                env.builder.build_bitcast(ret, env.context.i128_type(), "empty_string").unwrap()
+            } else {
+                ret
+            }
+            
         }
         NumCompare => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -2596,7 +2604,14 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                         }
                     }
                     PtrWidth::Bytes8 => {
-                        if target_int_width.stack_size() as usize > env.target_info.ptr_size() {
+                        let return_by_pointer = {
+                            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+                                target_int_width.stack_size() as usize >= env.target_info.ptr_size()
+                            } else {
+                                target_int_width.stack_size() as usize > env.target_info.ptr_size()
+                            }
+                        };
+                        if return_by_pointer {
                             let bitcode_return_type =
                                 zig_to_int_checked_result_type(env, target_int_width.type_name());
 
