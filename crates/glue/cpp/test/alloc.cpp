@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "str.h"
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -18,7 +19,7 @@ void roc_dealloc(void *ptr, uint32_t _alignment)
     free(ptr);
 }
 
-void roc_panic(const char *message, uint32_t tag_id)
+void roc_panic(const Roc::Str *message, uint32_t tag_id)
 {
     const char* prefix;
     switch (tag_id) {
@@ -32,7 +33,7 @@ void roc_panic(const char *message, uint32_t tag_id)
             prefix = "An error occurred:";
             break;
     }
-    fprintf(stderr, "%s\n\n\t%s\n", prefix, message);
+    fprintf(stderr, "%s\n\n\t%s\n", prefix, message->contents());
     exit(1);
 }
 

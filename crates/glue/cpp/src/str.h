@@ -118,7 +118,8 @@ namespace Roc
                 return;
             if (big.bytes == NULL)
             {
-                roc_panic("Attempted to increment refcount of freed allocation", 0);
+                const Str msg("Attempted to increment refcount of freed allocation");
+                roc_panic(&msg, 0);
                 return;
             }
             ptrdiff_t *refcount = refcount_ptr();
@@ -131,7 +132,8 @@ namespace Roc
                 return;
             if (big.bytes == NULL)
             {
-                roc_panic("Attempted to decrement refcount of freed allocation", 0);
+                const Str msg("Attempted to decrement refcount of freed allocation");
+                roc_panic(&msg, 0);
                 return;
             }
             ptrdiff_t *refcount = refcount_ptr();

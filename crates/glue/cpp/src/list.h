@@ -111,7 +111,8 @@ namespace Roc
         {
             if (index >= m_length)
             {
-                roc_panic("Attempted to set List element out of bounds", 0);
+                const Str msg("Attempted to set List element out of bounds");
+                roc_panic(&msg, 0);
             }
             m_elements[index] = val;
         }
@@ -135,7 +136,8 @@ namespace Roc
         {
             if (m_elements == NULL)
             {
-                roc_panic("Attempted to increment refcount of freed allocation", 0);
+                const Str msg("Attempted to increment refcount of freed allocation");
+                roc_panic(&msg, 0);
                 return;
             }
             ptrdiff_t *refcount = refcount_ptr();
@@ -151,7 +153,8 @@ namespace Roc
         {
             if (m_elements == NULL)
             {
-                roc_panic("Attempted to decrement refcount of freed allocation", 0);
+                const Str msg("Attempted to decrement refcount of freed allocation");
+                roc_panic(&msg, 0);
                 return;
             }
 
@@ -254,8 +257,10 @@ namespace Roc
         void *get(size_t index) const { return NULL; }
         void set(size_t index, const void *val)
         {
-            if (index >= m_length)
-                roc_panic("Attempted to set List element out of bounds", 0);
+            if (index >= m_length) {
+                Str msg("Attempted to set List element out of bounds");
+                roc_panic(&msg, 0);
+            }
         }
         void push(const void *)
         {
