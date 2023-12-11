@@ -61,7 +61,7 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
-            Dbg(condition, continuation) => condition.is_multiline() || continuation.is_multiline(),
+            Dbg(condition, _) => condition.is_multiline(),
             LowLevelDbg(_, _, _) => unreachable!(
                 "LowLevelDbg should only exist after desugaring, not during formatting"
             ),
@@ -956,22 +956,16 @@ fn fmt_dbg<'a>(
     buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
-    is_multiline: bool,
+    _: bool,
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("dbg");
 
-    let return_indent = if is_multiline {
-        buf.newline();
-        indent + INDENT
-    } else {
-        buf.spaces(1);
-        indent
-    };
+    buf.spaces(1);
 
-    condition.format(buf, return_indent);
+    condition.format(buf, indent);
 
     // Always put a blank line after the `dbg` line(s)
     buf.ensure_ends_with_blank_line();

@@ -1,46 +1,40 @@
-procedure Dict.1 (Dict.596):
-    let Dict.606 : List {[], []} = Array [];
-    let Dict.35 : List U64 = CallByName Dict.35;
-    let Dict.34 : List I8 = CallByName Dict.34;
-    let Dict.605 : {List {[], []}, List U64, List I8} = Struct {Dict.606, Dict.35, Dict.34};
-    ret Dict.605;
+procedure Dict.1 (Dict.679):
+    let Dict.688 : List {U32, U32} = Array [];
+    let Dict.689 : List {[], []} = Array [];
+    let Dict.690 : U64 = 0i64;
+    let Dict.41 : Float32 = CallByName Dict.41;
+    let Dict.42 : U8 = CallByName Dict.42;
+    let Dict.687 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = Struct {Dict.688, Dict.689, Dict.690, Dict.41, Dict.42};
+    ret Dict.687;
 
-procedure Dict.34 ():
-    let Dict.608 : I8 = CallByName Dict.46;
-    let Dict.609 : I8 = CallByName Dict.46;
-    let Dict.610 : I8 = CallByName Dict.46;
-    let Dict.611 : I8 = CallByName Dict.46;
-    let Dict.612 : I8 = CallByName Dict.46;
-    let Dict.613 : I8 = CallByName Dict.46;
-    let Dict.614 : I8 = CallByName Dict.46;
-    let Dict.615 : I8 = CallByName Dict.46;
-    let Dict.607 : List I8 = Array [Dict.608, Dict.609, Dict.610, Dict.611, Dict.612, Dict.613, Dict.614, Dict.615];
-    ret Dict.607;
-
-procedure Dict.35 ():
-    let Dict.617 : List U64 = Array [0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64, 0i64];
-    ret Dict.617;
-
-procedure Dict.4 (Dict.603):
-    let Dict.114 : List {[], []} = StructAtIndex 0 Dict.603;
-    let #Derived_gen.1 : List U64 = StructAtIndex 1 Dict.603;
-    dec #Derived_gen.1;
-    let #Derived_gen.0 : List I8 = StructAtIndex 2 Dict.603;
+procedure Dict.4 (Dict.685):
+    let Dict.138 : List {[], []} = StructAtIndex 1 Dict.685;
+    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.685;
     dec #Derived_gen.0;
-    let Dict.604 : U64 = CallByName List.6 Dict.114;
-    dec Dict.114;
-    ret Dict.604;
+    let Dict.686 : U64 = CallByName List.6 Dict.138;
+    dec Dict.138;
+    ret Dict.686;
 
-procedure Dict.46 ():
-    let Dict.616 : I8 = -128i64;
-    ret Dict.616;
+procedure Dict.41 ():
+    let Dict.694 : Float32 = 0.8f64;
+    ret Dict.694;
+
+procedure Dict.42 ():
+    let Dict.692 : U8 = 64i64;
+    let Dict.693 : U8 = 3i64;
+    let Dict.691 : U8 = CallByName Num.20 Dict.692 Dict.693;
+    ret Dict.691;
 
 procedure List.6 (#Attr.2):
     let List.553 : U64 = lowlevel ListLen #Attr.2;
     ret List.553;
 
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.291 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.291;
+
 procedure Test.0 ():
     let Test.3 : {} = Struct {};
-    let Test.2 : {List {[], []}, List U64, List I8} = CallByName Dict.1 Test.3;
+    let Test.2 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = CallByName Dict.1 Test.3;
     let Test.1 : U64 = CallByName Dict.4 Test.2;
     ret Test.1;

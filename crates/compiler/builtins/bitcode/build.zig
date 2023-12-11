@@ -59,6 +59,8 @@ fn generateLlvmIrFile(
     const obj = b.addObject(.{ .name = object_name, .root_source_file = main_path, .optimize = mode, .target = target, .use_llvm = true });
     obj.strip = true;
     obj.disable_stack_probing = true;
+    if (target.cpu_arch != .wasm32)
+        obj.bundle_compiler_rt = true;
 
     // Generating the bin seems required to get zig to generate the llvm ir.
     _ = obj.getEmittedBin();
@@ -91,6 +93,8 @@ fn generateObjectFile(
     obj.link_function_sections = true;
     obj.force_pic = true;
     obj.disable_stack_probing = true;
+    if (target.cpu_arch != .wasm32)
+        obj.bundle_compiler_rt = true;
 
     const obj_file = obj.getEmittedBin();
 
@@ -112,7 +116,7 @@ fn makeLinux32Target() CrossTarget {
 
     target.cpu_arch = std.Target.Cpu.Arch.x86;
     target.os_tag = std.Target.Os.Tag.linux;
-    target.abi = std.Target.Abi.musl;
+    target.abi = std.Target.Abi.none;
 
     return target;
 }
@@ -122,7 +126,7 @@ fn makeLinuxAarch64Target() CrossTarget {
 
     target.cpu_arch = std.Target.Cpu.Arch.aarch64;
     target.os_tag = std.Target.Os.Tag.linux;
-    target.abi = std.Target.Abi.musl;
+    target.abi = std.Target.Abi.none;
 
     return target;
 }
@@ -132,7 +136,7 @@ fn makeLinuxX64Target() CrossTarget {
 
     target.cpu_arch = std.Target.Cpu.Arch.x86_64;
     target.os_tag = std.Target.Os.Tag.linux;
-    target.abi = std.Target.Abi.musl;
+    target.abi = std.Target.Abi.none;
 
     return target;
 }
@@ -142,7 +146,7 @@ fn makeWindows64Target() CrossTarget {
 
     target.cpu_arch = std.Target.Cpu.Arch.x86_64;
     target.os_tag = std.Target.Os.Tag.windows;
-    target.abi = std.Target.Abi.gnu;
+    target.abi = std.Target.Abi.none;
 
     return target;
 }
