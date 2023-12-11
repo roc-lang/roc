@@ -124,7 +124,7 @@ pub fn generate(
                     if problems.warnings > 0 {
                         problems.print_to_stdout(total_time);
                         println!(
-                            ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
+                            ".\n\nRunning glue despite warnings…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
