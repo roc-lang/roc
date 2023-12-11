@@ -12,13 +12,13 @@ int main(int argc, char **argv)
 {
     char const *groupFilter = nullptr;
     char const *nameFilter = nullptr;
-    TestFixture::OutputMode output = TestFixture::Normal;
+    TestFixture::OutputMode output = TestFixture::Verbose;
 
     for (int i = 1; i < argc; ++i)
     {
-        if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0)
+        if (strcmp(argv[i], "--quiet") == 0 || strcmp(argv[i], "-q") == 0)
         {
-            output = TestFixture::Verbose;
+            output = TestFixture::Normal;
         }
         else if (strcmp(argv[i], "--group") == 0 && i + 1 < argc)
         {
