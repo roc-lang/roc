@@ -710,7 +710,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => false,
-            LlvmBackendMode::BinaryGlue => false,
+            LlvmBackendMode::BinaryGlue => true,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -4463,31 +4463,68 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         }
     }
 
-    let arguments_for_call = &arguments_for_call.into_bump_slice();
-
     let call_result = if env.mode.returns_roc_result() {
-        debug_assert_eq!(args.len(), roc_function.get_params().len());
+        if args.len() == roc_function.get_params().len() {
+            let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-        let dbg_loc = builder.get_current_debug_location().unwrap();
-        let roc_wrapper_function =
-            make_exception_catcher(env, layout_interner, roc_function, return_layout);
-        debug_assert_eq!(
-            arguments_for_call.len(),
-            roc_wrapper_function.get_params().len()
-        );
+            let dbg_loc = builder.get_current_debug_location().unwrap();
+            let roc_wrapper_function =
+                make_exception_catcher(env, layout_interner, roc_function, return_layout);
+            debug_assert_eq!(
+                arguments_for_call.len(),
+                roc_wrapper_function.get_params().len()
+            );
 
-        builder.position_at_end(entry);
-        builder.set_current_debug_location(dbg_loc);
+            builder.position_at_end(entry);
+            builder.set_current_debug_location(dbg_loc);
 
-        let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
-        call_direct_roc_function(
-            env,
-            layout_interner,
-            roc_function,
-            wrapped_layout,
-            arguments_for_call,
-        )
+            let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
+            call_direct_roc_function(
+                env,
+                layout_interner,
+                roc_function,
+                wrapped_layout,
+                arguments_for_call,
+            )
+        } else {
+            debug_assert_eq!(args.len() + 1, roc_function.get_params().len());
+
+            arguments_for_call.push(args[0]);
+
+            let arguments_for_call = &arguments_for_call.into_bump_slice();
+
+            let dbg_loc = builder.get_current_debug_location().unwrap();
+            let roc_wrapper_function =
+                make_exception_catcher(env, layout_interner, roc_function, return_layout);
+
+            builder.position_at_end(entry);
+            builder.set_current_debug_location(dbg_loc);
+
+            let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
+            let call_result = call_direct_roc_function(
+                env,
+                layout_interner,
+                roc_wrapper_function,
+                wrapped_layout,
+                arguments_for_call,
+            );
+
+            let output_arg_index = 0;
+
+            let output_arg = c_function
+                .get_nth_param(output_arg_index as u32)
+                .unwrap()
+                .into_pointer_value();
+
+            env.builder.new_build_store(output_arg, call_result);
+
+            builder.new_build_return(None);
+
+            return c_function;
+        }
     } else {
+        let arguments_for_call = &arguments_for_call.into_bump_slice();
+
         call_direct_roc_function(
             env,
             layout_interner,
@@ -4511,6 +4548,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         output_arg,
         call_result,
     );
+    env.builder.new_build_store(output_arg, call_result);
+
     builder.new_build_return(None);
 
     c_function

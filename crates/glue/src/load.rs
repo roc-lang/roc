@@ -11,8 +11,9 @@ use roc_build::{
 };
 use roc_collections::MutMap;
 use roc_error_macros::todo_lambda_erasure;
+use roc_gen_llvm::run_roc::RocCallResult;
 use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_mono::ir::{generate_glue_procs, GlueProc, OptLevel};
+use roc_mono::ir::{generate_glue_procs, CrashTag, GlueProc, OptLevel};
 use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
@@ -129,8 +130,10 @@ pub fn generate(
                     }
 
                     let lib = unsafe { Library::new(lib_path) }.unwrap();
+                    type MakeGlueReturnType =
+                        roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>;
                     type MakeGlue = unsafe extern "C" fn(
-                        *mut roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
+                        *mut RocCallResult<MakeGlueReturnType>,
                         &roc_std::RocList<roc_type::Types>,
                     );
 
@@ -140,14 +143,22 @@ pub fn generate(
                     };
                     let roc_types: roc_std::RocList<roc_type::Types> =
                         types.iter().map(|x| x.into()).collect();
-                    let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
+                    let mut files =
+                        RocCallResult::new(roc_std::RocResult::err(roc_std::RocStr::empty()));
                     unsafe { make_glue(&mut files, &roc_types) };
 
                     // Roc will free data passed into it. So forget that data.
                     std::mem::forget(roc_types);
 
                     let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> =
-                        files.into();
+                        match Result::from(files) {
+                            Err((msg, tag)) => match tag {
+                                CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+                                CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+                            },
+                            Ok(x) => x.into(),
+                        };
+
                     let files = files.unwrap_or_else(|err| {
                         eprintln!("Glue generation failed: {err}");
 
