@@ -34,73 +34,73 @@ procedure Bool.7 (Bool.19, Bool.20):
     let Bool.27 : Int1 = CallByName Bool.12 Bool.19 Bool.20;
     ret Bool.27;
 
-procedure Dict.1 (Dict.692):
-    let Dict.863 : List {U32, U32} = Array [];
-    let Dict.864 : List {Str, I64} = Array [];
-    let Dict.865 : U64 = 0i64;
-    let Dict.42 : Float32 = CallByName Dict.42;
-    let Dict.43 : U8 = CallByName Dict.43;
-    let Dict.862 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.863, Dict.864, Dict.865, Dict.42, Dict.43};
-    ret Dict.862;
+procedure Dict.1 (Dict.726):
+    let Dict.896 : List {U32, U32} = Array [];
+    let Dict.897 : List {Str, I64} = Array [];
+    let Dict.898 : U64 = 0i64;
+    let Dict.44 : Float32 = CallByName Dict.44;
+    let Dict.45 : U8 = CallByName Dict.45;
+    let Dict.895 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.896, Dict.897, Dict.898, Dict.44, Dict.45};
+    ret Dict.895;
 
-procedure Dict.10 (Dict.693, Dict.173, Dict.174):
-    let Dict.172 : List {Str, I64} = StructAtIndex 1 Dict.693;
-    let #Derived_gen.67 : List {U32, U32} = StructAtIndex 0 Dict.693;
-    dec #Derived_gen.67;
-    let Dict.1080 : {Str, Int1} = CallByName List.18 Dict.172 Dict.173 Dict.174;
-    ret Dict.1080;
-
-procedure Dict.113 (Dict.114, Dict.112):
-    let Dict.1077 : {} = Struct {};
-    let Dict.1078 : {} = Struct {};
-    let Dict.1079 : {} = Struct {};
-    let Dict.1076 : {{List {U32, U32}, List {Str, I64}, U64, Float32, U8}, {}, {}, {}} = CallByName Inspect.39 Dict.112 Dict.1077 Dict.1078 Dict.1079;
-    let Dict.1075 : Str = CallByName Inspect.31 Dict.1076 Dict.114;
-    ret Dict.1075;
-
-procedure Dict.12 (Dict.145):
-    let Dict.861 : {} = Struct {};
-    let Dict.700 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.1 Dict.861;
-    let Dict.701 : {} = Struct {};
-    let Dict.699 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName List.18 Dict.145 Dict.700 Dict.701;
-    ret Dict.699;
-
-procedure Dict.146 (Dict.147, Dict.702):
-    let Dict.148 : Str = StructAtIndex 0 Dict.702;
-    let Dict.149 : I64 = StructAtIndex 1 Dict.702;
-    let Dict.703 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.8 Dict.147 Dict.148 Dict.149;
-    ret Dict.703;
-
-procedure Dict.175 (Dict.176, Dict.1082, Dict.174):
-    let Dict.177 : Str = StructAtIndex 0 Dict.1082;
-    let Dict.178 : I64 = StructAtIndex 1 Dict.1082;
-    let Dict.1084 : {Str, Int1} = CallByName Inspect.192 Dict.176 Dict.177 Dict.178 Dict.174;
-    ret Dict.1084;
-
-procedure Dict.20 (Dict.689):
-    let Dict.142 : U64 = StructAtIndex 2 Dict.689;
-    let #Derived_gen.69 : List {U32, U32} = StructAtIndex 0 Dict.689;
-    dec #Derived_gen.69;
-    let #Derived_gen.68 : List {Str, I64} = StructAtIndex 1 Dict.689;
+procedure Dict.10 (Dict.727, Dict.180, Dict.181):
+    let Dict.179 : List {Str, I64} = StructAtIndex 1 Dict.727;
+    let #Derived_gen.68 : List {U32, U32} = StructAtIndex 0 Dict.727;
     dec #Derived_gen.68;
-    let Dict.859 : U64 = CallByName Num.137 Dict.142;
-    ret Dict.859;
+    let Dict.1113 : {Str, Int1} = CallByName List.18 Dict.179 Dict.180 Dict.181;
+    ret Dict.1113;
+
+procedure Dict.12 (Dict.152):
+    let Dict.894 : {} = Struct {};
+    let Dict.734 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.1 Dict.894;
+    let Dict.735 : {} = Struct {};
+    let Dict.733 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName List.18 Dict.152 Dict.734 Dict.735;
+    ret Dict.733;
+
+procedure Dict.120 (Dict.121, Dict.119):
+    let Dict.1110 : {} = Struct {};
+    let Dict.1111 : {} = Struct {};
+    let Dict.1112 : {} = Struct {};
+    let Dict.1109 : {{List {U32, U32}, List {Str, I64}, U64, Float32, U8}, {}, {}, {}} = CallByName Inspect.39 Dict.119 Dict.1110 Dict.1111 Dict.1112;
+    let Dict.1108 : Str = CallByName Inspect.31 Dict.1109 Dict.121;
+    ret Dict.1108;
+
+procedure Dict.153 (Dict.154, Dict.736):
+    let Dict.155 : Str = StructAtIndex 0 Dict.736;
+    let Dict.156 : I64 = StructAtIndex 1 Dict.736;
+    let Dict.737 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.8 Dict.154 Dict.155 Dict.156;
+    ret Dict.737;
+
+procedure Dict.182 (Dict.183, Dict.1115, Dict.181):
+    let Dict.184 : Str = StructAtIndex 0 Dict.1115;
+    let Dict.185 : I64 = StructAtIndex 1 Dict.1115;
+    let Dict.1117 : {Str, Int1} = CallByName Inspect.192 Dict.183 Dict.184 Dict.185 Dict.181;
+    ret Dict.1117;
+
+procedure Dict.20 (Dict.723):
+    let Dict.149 : U64 = StructAtIndex 2 Dict.723;
+    let #Derived_gen.70 : List {U32, U32} = StructAtIndex 0 Dict.723;
+    dec #Derived_gen.70;
+    let #Derived_gen.69 : List {Str, I64} = StructAtIndex 1 Dict.723;
+    dec #Derived_gen.69;
+    let Dict.892 : U64 = CallByName Num.137 Dict.149;
+    ret Dict.892;
 
 procedure Dict.22 (#Attr.2, #Attr.3):
-    let Dict.738 : {U32, U32} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret Dict.738;
+    let Dict.771 : {U32, U32} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret Dict.771;
 
 procedure Dict.22 (#Attr.2, #Attr.3):
-    let Dict.754 : {Str, I64} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret Dict.754;
+    let Dict.787 : {Str, I64} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret Dict.787;
 
 procedure Dict.22 (#Attr.2, #Attr.3):
-    let Dict.923 : U8 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret Dict.923;
+    let Dict.956 : U8 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret Dict.956;
 
 procedure Dict.23 (#Attr.2):
-    let Dict.792 : U64 = lowlevel DictPseudoSeed #Attr.2;
-    ret Dict.792;
+    let Dict.825 : U64 = lowlevel DictPseudoSeed #Attr.2;
+    ret Dict.825;
 
 procedure Dict.35 (Dict.112):
     let Dict.1072 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Inspect.30 Dict.112;
@@ -131,24 +131,24 @@ procedure Dict.37 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_g
                 let Dict.228 : U32 = CallByName Dict.46 Dict.218;
                 jump Dict.705 Dict.215 Dict.216 Dict.227 Dict.228 Dict.219 Dict.220 Dict.221 Dict.222 Dict.223;
         else
-            let Dict.743 : U32 = StructAtIndex 1 Dict.224;
-            let Dict.719 : Int1 = CallByName Num.24 Dict.218 Dict.743;
-            if Dict.719 then
-                let Dict.742 : {Str, I64} = Struct {Dict.219, Dict.220};
-                let Dict.229 : List {Str, I64} = CallByName List.4 Dict.216 Dict.742;
-                let Dict.740 : U64 = CallByName List.6 Dict.229;
-                let Dict.741 : U64 = 1i64;
-                let Dict.230 : U64 = CallByName Num.20 Dict.740 Dict.741;
-                let Dict.739 : U32 = CallByName Num.131 Dict.230;
-                let Dict.721 : {U32, U32} = Struct {Dict.739, Dict.218};
-                let Dict.231 : List {U32, U32} = CallByName Dict.63 Dict.215 Dict.721 Dict.217;
-                let Dict.720 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.231, Dict.229, Dict.221, Dict.222, Dict.223};
-                ret Dict.720;
+            let Dict.776 : U32 = StructAtIndex 1 Dict.231;
+            let Dict.753 : Int1 = CallByName Num.24 Dict.225 Dict.776;
+            if Dict.753 then
+                let Dict.775 : {Str, I64} = Struct {Dict.226, Dict.227};
+                let Dict.236 : List {Str, I64} = CallByName List.4 Dict.223 Dict.775;
+                let Dict.773 : U64 = CallByName List.6 Dict.236;
+                let Dict.774 : U64 = 1i64;
+                let Dict.237 : U64 = CallByName Num.20 Dict.773 Dict.774;
+                let Dict.772 : U32 = CallByName Num.131 Dict.237;
+                let Dict.755 : {U32, U32} = Struct {Dict.772, Dict.225};
+                let Dict.238 : List {U32, U32} = CallByName Dict.67 Dict.222 Dict.755 Dict.224;
+                let Dict.754 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.238, Dict.236, Dict.228, Dict.229, Dict.230};
+                ret Dict.754;
             else
-                let Dict.712 : U64 = CallByName List.6 Dict.215;
-                let Dict.232 : U64 = CallByName Dict.64 Dict.217 Dict.712;
-                let Dict.233 : U32 = CallByName Dict.46 Dict.218;
-                jump Dict.705 Dict.215 Dict.216 Dict.232 Dict.233 Dict.219 Dict.220 Dict.221 Dict.222 Dict.223;
+                let Dict.746 : U64 = CallByName List.6 Dict.222;
+                let Dict.239 : U64 = CallByName Dict.68 Dict.224 Dict.746;
+                let Dict.240 : U32 = CallByName Dict.48 Dict.225;
+                jump Dict.739 Dict.222 Dict.223 Dict.239 Dict.240 Dict.226 Dict.227 Dict.228 Dict.229 Dict.230;
     in
     jump Dict.705 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23 #Derived_gen.24;
 
@@ -169,116 +169,122 @@ procedure Dict.39 ():
     let Dict.836 : {U32, U32} = Struct {Dict.837, Dict.838};
     ret Dict.836;
 
-procedure Dict.4 (Dict.698):
-    let Dict.150 : List {Str, I64} = StructAtIndex 1 Dict.698;
-    let #Derived_gen.66 : List {U32, U32} = StructAtIndex 0 Dict.698;
+procedure Dict.4 (Dict.732):
+    let Dict.157 : List {Str, I64} = StructAtIndex 1 Dict.732;
+    let #Derived_gen.66 : List {U32, U32} = StructAtIndex 0 Dict.732;
     dec #Derived_gen.66;
-    let Dict.860 : U64 = CallByName List.6 Dict.150;
-    dec Dict.150;
-    ret Dict.860;
-
-procedure Dict.40 ():
-    let Dict.710 : U32 = 1i64;
-    let Dict.711 : U8 = 8i64;
-    let Dict.709 : U32 = CallByName Num.72 Dict.710 Dict.711;
-    ret Dict.709;
+    let Dict.893 : U64 = CallByName List.6 Dict.157;
+    dec Dict.157;
+    ret Dict.893;
 
 procedure Dict.41 ():
-    let Dict.766 : U32 = CallByName Dict.40;
-    let Dict.767 : U32 = 1i64;
-    let Dict.765 : U32 = CallByName Num.75 Dict.766 Dict.767;
-    ret Dict.765;
-
-procedure Dict.42 ():
-    let Dict.869 : Float32 = 0.8f64;
+    let Dict.870 : U32 = 0i64;
+    let Dict.871 : U32 = 0i64;
+    let Dict.869 : {U32, U32} = Struct {Dict.870, Dict.871};
     ret Dict.869;
 
+procedure Dict.42 ():
+    let Dict.744 : U32 = 1i64;
+    let Dict.745 : U8 = 8i64;
+    let Dict.743 : U32 = CallByName Num.72 Dict.744 Dict.745;
+    ret Dict.743;
+
 procedure Dict.43 ():
-    let Dict.867 : U8 = 64i64;
-    let Dict.868 : U8 = 3i64;
-    let Dict.866 : U8 = CallByName Num.20 Dict.867 Dict.868;
-    ret Dict.866;
+    let Dict.799 : U32 = CallByName Dict.42;
+    let Dict.800 : U32 = 1i64;
+    let Dict.798 : U32 = CallByName Num.75 Dict.799 Dict.800;
+    ret Dict.798;
 
 procedure Dict.44 ():
-    let Dict.809 : U64 = 1i64;
-    let Dict.810 : U8 = 32i64;
-    let Dict.808 : U64 = CallByName Num.72 Dict.809 Dict.810;
-    ret Dict.808;
+    let Dict.902 : Float32 = 0.8f64;
+    ret Dict.902;
 
 procedure Dict.45 ():
-    let Dict.807 : U64 = CallByName Dict.44;
-    ret Dict.807;
+    let Dict.900 : U8 = 64i64;
+    let Dict.901 : U8 = 3i64;
+    let Dict.899 : U8 = CallByName Num.20 Dict.900 Dict.901;
+    ret Dict.899;
 
-procedure Dict.46 (Dict.293):
-    let Dict.708 : U32 = CallByName Dict.40;
-    let Dict.707 : U32 = CallByName Num.19 Dict.293 Dict.708;
-    ret Dict.707;
+procedure Dict.46 ():
+    let Dict.842 : U64 = 1i64;
+    let Dict.843 : U8 = 32i64;
+    let Dict.841 : U64 = CallByName Num.72 Dict.842 Dict.843;
+    ret Dict.841;
 
-procedure Dict.55 (Dict.688):
-    let Dict.361 : List {Str, I64} = StructAtIndex 1 Dict.688;
-    let Dict.362 : U64 = StructAtIndex 2 Dict.688;
-    let Dict.363 : Float32 = StructAtIndex 3 Dict.688;
-    let Dict.364 : U8 = StructAtIndex 4 Dict.688;
-    let #Derived_gen.71 : List {U32, U32} = StructAtIndex 0 Dict.688;
-    dec #Derived_gen.71;
-    let Dict.855 : U64 = CallByName Dict.45;
-    let Dict.811 : Int1 = CallByName Bool.7 Dict.362 Dict.855;
-    if Dict.811 then
-        inc Dict.361;
-        let Dict.854 : U8 = 1i64;
-        let Dict.365 : U8 = CallByName Num.20 Dict.364 Dict.854;
-        let Dict.831 : {List {U32, U32}, U64} = CallByName Dict.56 Dict.365 Dict.363;
-        let Dict.366 : List {U32, U32} = StructAtIndex 0 Dict.831;
-        let Dict.367 : U64 = StructAtIndex 1 Dict.831;
-        let Dict.368 : List {U32, U32} = CallByName Dict.60 Dict.366 Dict.361 Dict.365;
-        let Dict.812 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.368, Dict.361, Dict.367, Dict.363, Dict.365};
-        ret Dict.812;
+procedure Dict.47 ():
+    let Dict.840 : U64 = CallByName Dict.46;
+    ret Dict.840;
+
+procedure Dict.48 (Dict.307):
+    let Dict.742 : U32 = CallByName Dict.42;
+    let Dict.741 : U32 = CallByName Num.19 Dict.307 Dict.742;
+    ret Dict.741;
+
+procedure Dict.59 (Dict.722):
+    let Dict.377 : List {Str, I64} = StructAtIndex 1 Dict.722;
+    let Dict.378 : U64 = StructAtIndex 2 Dict.722;
+    let Dict.379 : Float32 = StructAtIndex 3 Dict.722;
+    let Dict.380 : U8 = StructAtIndex 4 Dict.722;
+    let #Derived_gen.67 : List {U32, U32} = StructAtIndex 0 Dict.722;
+    dec #Derived_gen.67;
+    let Dict.888 : U64 = CallByName Dict.47;
+    let Dict.844 : Int1 = CallByName Bool.7 Dict.378 Dict.888;
+    if Dict.844 then
+        inc Dict.377;
+        let Dict.887 : U8 = 1i64;
+        let Dict.381 : U8 = CallByName Num.20 Dict.380 Dict.887;
+        let Dict.864 : {List {U32, U32}, U64} = CallByName Dict.60 Dict.381 Dict.379;
+        let Dict.382 : List {U32, U32} = StructAtIndex 0 Dict.864;
+        let Dict.383 : U64 = StructAtIndex 1 Dict.864;
+        let Dict.384 : List {U32, U32} = CallByName Dict.64 Dict.382 Dict.377 Dict.381;
+        let Dict.845 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = Struct {Dict.384, Dict.377, Dict.383, Dict.379, Dict.381};
+        ret Dict.845;
     else
-        dec Dict.361;
-        let Dict.802 : Str = "Dict hit limit of ";
-        let Dict.806 : U64 = CallByName Dict.45;
-        let Dict.804 : Str = CallByName Num.96 Dict.806;
-        let Dict.805 : Str = " elements. Unable to grow more.";
-        let Dict.803 : Str = CallByName Str.3 Dict.804 Dict.805;
-        dec Dict.805;
-        let Dict.801 : Str = CallByName Str.3 Dict.802 Dict.803;
-        dec Dict.803;
-        Crash Dict.801
+        dec Dict.377;
+        let Dict.835 : Str = "Dict hit limit of ";
+        let Dict.839 : U64 = CallByName Dict.47;
+        let Dict.837 : Str = CallByName Num.96 Dict.839;
+        let Dict.838 : Str = " elements. Unable to grow more.";
+        let Dict.836 : Str = CallByName Str.3 Dict.837 Dict.838;
+        dec Dict.838;
+        let Dict.834 : Str = CallByName Str.3 Dict.835 Dict.836;
+        dec Dict.836;
+        Crash Dict.834
 
-procedure Dict.56 (Dict.369, Dict.370):
-    let Dict.371 : U64 = CallByName Dict.59 Dict.369;
-    let Dict.847 : U64 = CallByName Dict.45;
-    let Dict.841 : Int1 = CallByName Bool.11 Dict.371 Dict.847;
-    if Dict.841 then
-        let Dict.844 : {U32, U32} = CallByName Dict.39;
-        let Dict.846 : U64 = CallByName Dict.45;
-        let Dict.845 : U64 = CallByName Num.137 Dict.846;
-        let Dict.843 : List {U32, U32} = CallByName List.11 Dict.844 Dict.845;
-        let Dict.45 : U64 = CallByName Dict.45;
-        let Dict.842 : {List {U32, U32}, U64} = Struct {Dict.843, Dict.45};
-        ret Dict.842;
+procedure Dict.60 (Dict.385, Dict.386):
+    let Dict.387 : U64 = CallByName Dict.63 Dict.385;
+    let Dict.880 : U64 = CallByName Dict.47;
+    let Dict.874 : Int1 = CallByName Bool.11 Dict.387 Dict.880;
+    if Dict.874 then
+        let Dict.877 : {U32, U32} = CallByName Dict.41;
+        let Dict.879 : U64 = CallByName Dict.47;
+        let Dict.878 : U64 = CallByName Num.137 Dict.879;
+        let Dict.876 : List {U32, U32} = CallByName List.11 Dict.877 Dict.878;
+        let Dict.47 : U64 = CallByName Dict.47;
+        let Dict.875 : {List {U32, U32}, U64} = Struct {Dict.876, Dict.47};
+        ret Dict.875;
     else
-        let Dict.840 : Float32 = CallByName Num.139 Dict.371;
-        let Dict.839 : Float32 = CallByName Num.21 Dict.840 Dict.370;
-        let Dict.372 : U64 = CallByName Num.50 Dict.839;
-        let Dict.834 : {U32, U32} = CallByName Dict.39;
-        let Dict.835 : U64 = CallByName Num.137 Dict.371;
-        let Dict.833 : List {U32, U32} = CallByName List.11 Dict.834 Dict.835;
-        let Dict.832 : {List {U32, U32}, U64} = Struct {Dict.833, Dict.372};
-        ret Dict.832;
+        let Dict.873 : Float32 = CallByName Num.139 Dict.387;
+        let Dict.872 : Float32 = CallByName Num.21 Dict.873 Dict.386;
+        let Dict.388 : U64 = CallByName Num.50 Dict.872;
+        let Dict.867 : {U32, U32} = CallByName Dict.41;
+        let Dict.868 : U64 = CallByName Num.137 Dict.387;
+        let Dict.866 : List {U32, U32} = CallByName List.11 Dict.867 Dict.868;
+        let Dict.865 : {List {U32, U32}, U64} = Struct {Dict.866, Dict.388};
+        ret Dict.865;
 
-procedure Dict.59 (Dict.379):
-    let Dict.851 : U64 = 1i64;
-    let Dict.853 : U8 = 64i64;
-    let Dict.852 : U8 = CallByName Num.20 Dict.853 Dict.379;
-    let Dict.849 : U64 = CallByName Num.72 Dict.851 Dict.852;
-    let Dict.850 : U64 = CallByName Dict.45;
-    let Dict.848 : U64 = CallByName Num.159 Dict.849 Dict.850;
-    ret Dict.848;
+procedure Dict.63 (Dict.395):
+    let Dict.884 : U64 = 1i64;
+    let Dict.886 : U8 = 64i64;
+    let Dict.885 : U8 = CallByName Num.20 Dict.886 Dict.395;
+    let Dict.882 : U64 = CallByName Num.72 Dict.884 Dict.885;
+    let Dict.883 : U64 = CallByName Dict.47;
+    let Dict.881 : U64 = CallByName Num.159 Dict.882 Dict.883;
+    ret Dict.881;
 
-procedure Dict.60 (Dict.380, Dict.381, Dict.382):
-    let Dict.813 : List {U32, U32} = CallByName List.83 Dict.381 Dict.380 Dict.382;
-    ret Dict.813;
+procedure Dict.64 (Dict.396, Dict.397, Dict.398):
+    let Dict.846 : List {U32, U32} = CallByName List.83 Dict.397 Dict.396 Dict.398;
+    ret Dict.846;
 
 procedure Dict.61 (Dict.389, Dict.390, Dict.391):
     let Dict.392 : U64 = CallByName Dict.65 Dict.390;
@@ -340,142 +346,166 @@ procedure Dict.64 (Dict.407, Dict.408):
         let Dict.715 : U64 = CallByName Num.51 Dict.407 Dict.716;
         ret Dict.715;
     else
-        let Dict.713 : U64 = 0i64;
-        ret Dict.713;
+        let Dict.747 : U64 = 0i64;
+        ret Dict.747;
 
-procedure Dict.65 (Dict.409):
-    let Dict.772 : [C , C U64] = TagId(0) ;
-    let Dict.771 : {U64, U64} = CallByName Dict.68 Dict.772;
-    let Dict.769 : {U64, U64} = CallByName Hash.19 Dict.771 Dict.409;
-    let Dict.768 : U64 = CallByName Dict.71 Dict.769;
-    ret Dict.768;
+procedure Dict.69 (Dict.422):
+    let Dict.805 : [C , C U64] = TagId(0) ;
+    let Dict.804 : {U64, U64} = CallByName Dict.73 Dict.805;
+    let Dict.802 : {U64, U64} = CallByName Hash.19 Dict.804 Dict.422;
+    let Dict.801 : U64 = CallByName Dict.76 Dict.802;
+    ret Dict.801;
 
-procedure Dict.66 (Dict.411):
-    let Dict.763 : U32 = CallByName Num.131 Dict.411;
-    let Dict.764 : U32 = CallByName Dict.41;
-    let Dict.761 : U32 = CallByName Num.69 Dict.763 Dict.764;
-    let Dict.762 : U32 = CallByName Dict.40;
-    let Dict.760 : U32 = CallByName Num.71 Dict.761 Dict.762;
-    ret Dict.760;
+procedure Dict.70 (Dict.424):
+    let Dict.796 : U32 = CallByName Num.131 Dict.424;
+    let Dict.797 : U32 = CallByName Dict.43;
+    let Dict.794 : U32 = CallByName Num.69 Dict.796 Dict.797;
+    let Dict.795 : U32 = CallByName Dict.42;
+    let Dict.793 : U32 = CallByName Num.71 Dict.794 Dict.795;
+    ret Dict.793;
 
-procedure Dict.67 (Dict.412, Dict.413):
-    let Dict.759 : U64 = CallByName Num.74 Dict.412 Dict.413;
-    let Dict.758 : U64 = CallByName Num.137 Dict.759;
-    ret Dict.758;
+procedure Dict.71 (Dict.425, Dict.426):
+    let Dict.792 : U64 = CallByName Num.74 Dict.425 Dict.426;
+    let Dict.791 : U64 = CallByName Num.137 Dict.792;
+    ret Dict.791;
 
-procedure Dict.68 (Dict.414):
-    joinpoint Dict.789 Dict.415:
-        let Dict.774 : U64 = CallByName Dict.70 Dict.415;
-        let Dict.773 : {U64, U64} = Struct {Dict.774, Dict.415};
-        ret Dict.773;
+procedure Dict.73 (Dict.428):
+    joinpoint Dict.822 Dict.429:
+        let Dict.807 : U64 = CallByName Dict.75 Dict.429;
+        let Dict.806 : {U64, U64} = Struct {Dict.807, Dict.429};
+        ret Dict.806;
     in
-    let Dict.794 : U8 = 0i64;
-    let Dict.795 : U8 = GetTagId Dict.414;
-    let Dict.796 : Int1 = lowlevel Eq Dict.794 Dict.795;
-    if Dict.796 then
-        let Dict.791 : {} = Struct {};
-        let Dict.790 : U64 = CallByName Dict.23 Dict.791;
-        jump Dict.789 Dict.790;
+    let Dict.827 : U8 = 0i64;
+    let Dict.828 : U8 = GetTagId Dict.428;
+    let Dict.829 : Int1 = lowlevel Eq Dict.827 Dict.828;
+    if Dict.829 then
+        let Dict.824 : {} = Struct {};
+        let Dict.823 : U64 = CallByName Dict.23 Dict.824;
+        jump Dict.822 Dict.823;
     else
-        let Dict.416 : U64 = UnionAtIndex (Id 1) (Index 0) Dict.414;
-        jump Dict.789 Dict.416;
+        let Dict.430 : U64 = UnionAtIndex (Id 1) (Index 0) Dict.428;
+        jump Dict.822 Dict.430;
 
-procedure Dict.69 (Dict.678, Dict.679):
-    let Dict.419 : U64 = StructAtIndex 0 Dict.679;
-    let Dict.420 : U64 = StructAtIndex 1 Dict.679;
-    let Dict.422 : U64 = StructAtIndex 2 Dict.679;
-    let Dict.421 : U64 = StructAtIndex 3 Dict.679;
-    let Dict.417 : U64 = StructAtIndex 0 Dict.678;
-    let Dict.418 : U64 = StructAtIndex 1 Dict.678;
-    let Dict.891 : U64 = CallByName Dict.81;
-    let Dict.889 : U64 = CallByName Num.70 Dict.419 Dict.891;
-    let Dict.890 : U64 = CallByName Num.70 Dict.420 Dict.421;
-    let Dict.423 : {U64, U64} = CallByName Dict.85 Dict.889 Dict.890;
-    let Dict.886 : U64 = StructAtIndex 0 Dict.423;
-    let Dict.887 : U64 = CallByName Dict.80;
-    let Dict.885 : U64 = CallByName Num.70 Dict.886 Dict.887;
-    let Dict.424 : U64 = CallByName Num.70 Dict.885 Dict.422;
-    let Dict.882 : U64 = StructAtIndex 1 Dict.423;
-    let Dict.883 : U64 = CallByName Dict.81;
-    let Dict.425 : U64 = CallByName Num.70 Dict.882 Dict.883;
-    let Dict.426 : U64 = CallByName Dict.84 Dict.424 Dict.425;
-    let Dict.874 : U64 = CallByName Dict.84 Dict.418 Dict.426;
-    let Dict.873 : {U64, U64} = Struct {Dict.417, Dict.874};
-    ret Dict.873;
+procedure Dict.74 (Dict.711, Dict.712):
+    let Dict.433 : U64 = StructAtIndex 0 Dict.712;
+    let Dict.434 : U64 = StructAtIndex 1 Dict.712;
+    let Dict.436 : U64 = StructAtIndex 2 Dict.712;
+    let Dict.435 : U64 = StructAtIndex 3 Dict.712;
+    let Dict.431 : U64 = StructAtIndex 0 Dict.711;
+    let Dict.432 : U64 = StructAtIndex 1 Dict.711;
+    let Dict.924 : U64 = CallByName Dict.86;
+    let Dict.922 : U64 = CallByName Num.70 Dict.433 Dict.924;
+    let Dict.923 : U64 = CallByName Num.70 Dict.434 Dict.435;
+    let Dict.437 : {U64, U64} = CallByName Dict.90 Dict.922 Dict.923;
+    let Dict.919 : U64 = StructAtIndex 0 Dict.437;
+    let Dict.920 : U64 = CallByName Dict.85;
+    let Dict.918 : U64 = CallByName Num.70 Dict.919 Dict.920;
+    let Dict.438 : U64 = CallByName Num.70 Dict.918 Dict.436;
+    let Dict.915 : U64 = StructAtIndex 1 Dict.437;
+    let Dict.916 : U64 = CallByName Dict.86;
+    let Dict.439 : U64 = CallByName Num.70 Dict.915 Dict.916;
+    let Dict.440 : U64 = CallByName Dict.89 Dict.438 Dict.439;
+    let Dict.907 : U64 = CallByName Dict.89 Dict.432 Dict.440;
+    let Dict.906 : {U64, U64} = Struct {Dict.431, Dict.907};
+    ret Dict.906;
 
-procedure Dict.70 (Dict.427):
-    let Dict.787 : U64 = CallByName Dict.80;
-    let Dict.777 : U64 = CallByName Num.70 Dict.427 Dict.787;
-    let Dict.778 : U64 = CallByName Dict.81;
-    let Dict.776 : U64 = CallByName Dict.84 Dict.777 Dict.778;
-    let Dict.775 : U64 = CallByName Num.70 Dict.776 Dict.427;
-    ret Dict.775;
+procedure Dict.75 (Dict.441):
+    let Dict.820 : U64 = CallByName Dict.85;
+    let Dict.810 : U64 = CallByName Num.70 Dict.441 Dict.820;
+    let Dict.811 : U64 = CallByName Dict.86;
+    let Dict.809 : U64 = CallByName Dict.89 Dict.810 Dict.811;
+    let Dict.808 : U64 = CallByName Num.70 Dict.809 Dict.441;
+    ret Dict.808;
 
-procedure Dict.71 (Dict.696):
-    let Dict.428 : U64 = StructAtIndex 1 Dict.696;
-    ret Dict.428;
+procedure Dict.76 (Dict.730):
+    let Dict.442 : U64 = StructAtIndex 1 Dict.730;
+    ret Dict.442;
 
-procedure Dict.77 (Dict.672, Dict.467):
-    let Dict.465 : U64 = StructAtIndex 0 Dict.672;
-    let Dict.466 : U64 = StructAtIndex 1 Dict.672;
-    let Dict.468 : U64 = CallByName List.6 Dict.467;
-    joinpoint Dict.897 Dict.469:
-        let Dict.871 : {U64, U64} = Struct {Dict.465, Dict.466};
-        let Dict.892 : U64 = StructAtIndex 0 Dict.469;
-        let Dict.893 : U64 = StructAtIndex 1 Dict.469;
-        let Dict.894 : U64 = CallByName Num.133 Dict.468;
-        let Dict.895 : U64 = StructAtIndex 2 Dict.469;
-        let Dict.872 : {U64, U64, U64, U64} = Struct {Dict.892, Dict.893, Dict.894, Dict.895};
-        let Dict.870 : {U64, U64} = CallByName Dict.69 Dict.871 Dict.872;
-        ret Dict.870;
+procedure Dict.8 (Dict.211, Dict.212, Dict.213):
+    joinpoint Dict.832 Dict.830:
+        let Dict.214 : List {U32, U32} = StructAtIndex 0 Dict.830;
+        let Dict.215 : List {Str, I64} = StructAtIndex 1 Dict.830;
+        let Dict.216 : U64 = StructAtIndex 2 Dict.830;
+        let Dict.217 : Float32 = StructAtIndex 3 Dict.830;
+        let Dict.218 : U8 = StructAtIndex 4 Dict.830;
+        inc Dict.212;
+        let Dict.219 : U64 = CallByName Dict.69 Dict.212;
+        let Dict.220 : U32 = CallByName Dict.70 Dict.219;
+        let Dict.221 : U64 = CallByName Dict.71 Dict.219 Dict.218;
+        let Dict.738 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.38 Dict.214 Dict.215 Dict.221 Dict.220 Dict.212 Dict.213 Dict.216 Dict.217 Dict.218;
+        ret Dict.738;
     in
-    let Dict.1071 : U64 = 16i64;
-    let Dict.1011 : Int1 = CallByName Num.23 Dict.468 Dict.1071;
-    if Dict.1011 then
-        joinpoint Dict.1013 Dict.896:
-            jump Dict.897 Dict.896;
+    inc 2 Dict.211;
+    let Dict.890 : U64 = CallByName Dict.4 Dict.211;
+    let Dict.891 : U64 = CallByName Dict.20 Dict.211;
+    let Dict.889 : Int1 = CallByName Num.22 Dict.890 Dict.891;
+    if Dict.889 then
+        jump Dict.832 Dict.211;
+    else
+        let Dict.831 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.59 Dict.211;
+        jump Dict.832 Dict.831;
+
+procedure Dict.82 (Dict.705, Dict.481):
+    let Dict.479 : U64 = StructAtIndex 0 Dict.705;
+    let Dict.480 : U64 = StructAtIndex 1 Dict.705;
+    let Dict.482 : U64 = CallByName List.6 Dict.481;
+    joinpoint Dict.930 Dict.483:
+        let Dict.904 : {U64, U64} = Struct {Dict.479, Dict.480};
+        let Dict.925 : U64 = StructAtIndex 0 Dict.483;
+        let Dict.926 : U64 = StructAtIndex 1 Dict.483;
+        let Dict.927 : U64 = CallByName Num.133 Dict.482;
+        let Dict.928 : U64 = StructAtIndex 2 Dict.483;
+        let Dict.905 : {U64, U64, U64, U64} = Struct {Dict.925, Dict.926, Dict.927, Dict.928};
+        let Dict.903 : {U64, U64} = CallByName Dict.74 Dict.904 Dict.905;
+        ret Dict.903;
+    in
+    let Dict.1104 : U64 = 16i64;
+    let Dict.1044 : Int1 = CallByName Num.23 Dict.482 Dict.1104;
+    if Dict.1044 then
+        joinpoint Dict.1046 Dict.929:
+            jump Dict.930 Dict.929;
         in
-        let Dict.1070 : U64 = 4i64;
-        let Dict.1035 : Int1 = CallByName Num.25 Dict.468 Dict.1070;
-        if Dict.1035 then
-            let Dict.1069 : U8 = 3i64;
-            let Dict.1067 : U64 = CallByName Num.74 Dict.468 Dict.1069;
-            let Dict.1068 : U8 = 2i64;
-            let Dict.470 : U64 = CallByName Num.72 Dict.1067 Dict.1068;
-            let Dict.1066 : U64 = 0i64;
-            inc 3 Dict.467;
-            let Dict.1064 : U64 = CallByName Dict.87 Dict.467 Dict.1066;
-            let Dict.1065 : U8 = 32i64;
-            let Dict.1062 : U64 = CallByName Num.72 Dict.1064 Dict.1065;
-            let Dict.1063 : U64 = CallByName Dict.87 Dict.467 Dict.470;
-            let Dict.471 : U64 = CallByName Num.71 Dict.1062 Dict.1063;
-            let Dict.1061 : U64 = 4i64;
-            let Dict.1060 : U64 = CallByName Num.75 Dict.468 Dict.1061;
-            let Dict.1058 : U64 = CallByName Dict.87 Dict.467 Dict.1060;
-            let Dict.1059 : U8 = 32i64;
-            let Dict.1036 : U64 = CallByName Num.72 Dict.1058 Dict.1059;
-            let Dict.1057 : U64 = 4i64;
-            let Dict.1056 : U64 = CallByName Num.75 Dict.468 Dict.1057;
-            let Dict.1038 : U64 = CallByName Num.75 Dict.1056 Dict.470;
-            let Dict.1037 : U64 = CallByName Dict.87 Dict.467 Dict.1038;
-            let Dict.472 : U64 = CallByName Num.71 Dict.1036 Dict.1037;
-            let Dict.1012 : {U64, U64, U64} = Struct {Dict.471, Dict.472, Dict.465};
-            jump Dict.1013 Dict.1012;
+        let Dict.1103 : U64 = 4i64;
+        let Dict.1068 : Int1 = CallByName Num.25 Dict.482 Dict.1103;
+        if Dict.1068 then
+            let Dict.1102 : U8 = 3i64;
+            let Dict.1100 : U64 = CallByName Num.74 Dict.482 Dict.1102;
+            let Dict.1101 : U8 = 2i64;
+            let Dict.484 : U64 = CallByName Num.72 Dict.1100 Dict.1101;
+            let Dict.1099 : U64 = 0i64;
+            inc 3 Dict.481;
+            let Dict.1097 : U64 = CallByName Dict.92 Dict.481 Dict.1099;
+            let Dict.1098 : U8 = 32i64;
+            let Dict.1095 : U64 = CallByName Num.72 Dict.1097 Dict.1098;
+            let Dict.1096 : U64 = CallByName Dict.92 Dict.481 Dict.484;
+            let Dict.485 : U64 = CallByName Num.71 Dict.1095 Dict.1096;
+            let Dict.1094 : U64 = 4i64;
+            let Dict.1093 : U64 = CallByName Num.75 Dict.482 Dict.1094;
+            let Dict.1091 : U64 = CallByName Dict.92 Dict.481 Dict.1093;
+            let Dict.1092 : U8 = 32i64;
+            let Dict.1069 : U64 = CallByName Num.72 Dict.1091 Dict.1092;
+            let Dict.1090 : U64 = 4i64;
+            let Dict.1089 : U64 = CallByName Num.75 Dict.482 Dict.1090;
+            let Dict.1071 : U64 = CallByName Num.75 Dict.1089 Dict.484;
+            let Dict.1070 : U64 = CallByName Dict.92 Dict.481 Dict.1071;
+            let Dict.486 : U64 = CallByName Num.71 Dict.1069 Dict.1070;
+            let Dict.1045 : {U64, U64, U64} = Struct {Dict.485, Dict.486, Dict.479};
+            jump Dict.1046 Dict.1045;
         else
-            let Dict.1034 : U64 = 0i64;
-            let Dict.1016 : Int1 = CallByName Num.24 Dict.468 Dict.1034;
-            if Dict.1016 then
-                let Dict.1019 : U64 = 0i64;
-                let Dict.1017 : U64 = CallByName Dict.88 Dict.467 Dict.1019 Dict.468;
-                let Dict.1018 : U64 = 0i64;
-                let Dict.1012 : {U64, U64, U64} = Struct {Dict.1017, Dict.1018, Dict.465};
-                jump Dict.1013 Dict.1012;
+            let Dict.1067 : U64 = 0i64;
+            let Dict.1049 : Int1 = CallByName Num.24 Dict.482 Dict.1067;
+            if Dict.1049 then
+                let Dict.1052 : U64 = 0i64;
+                let Dict.1050 : U64 = CallByName Dict.93 Dict.481 Dict.1052 Dict.482;
+                let Dict.1051 : U64 = 0i64;
+                let Dict.1045 : {U64, U64, U64} = Struct {Dict.1050, Dict.1051, Dict.479};
+                jump Dict.1046 Dict.1045;
             else
-                dec Dict.467;
-                let Dict.1014 : U64 = 0i64;
-                let Dict.1015 : U64 = 0i64;
-                let Dict.1012 : {U64, U64, U64} = Struct {Dict.1014, Dict.1015, Dict.465};
-                jump Dict.1013 Dict.1012;
+                dec Dict.481;
+                let Dict.1047 : U64 = 0i64;
+                let Dict.1048 : U64 = 0i64;
+                let Dict.1045 : {U64, U64, U64} = Struct {Dict.1047, Dict.1048, Dict.479};
+                jump Dict.1046 Dict.1045;
     else
         let Dict.1010 : U64 = 48i64;
         let Dict.1008 : Int1 = CallByName Num.23 Dict.468 Dict.1010;
@@ -536,19 +566,19 @@ procedure Dict.78 (#Derived_gen.47, #Derived_gen.48, #Derived_gen.49, #Derived_g
                 let Dict.951 : {U64, U64, U64} = CallByName Dict.79 Dict.484 Dict.476 Dict.483 Dict.482;
                 ret Dict.951;
             else
-                inc Dict.476;
-                let Dict.949 : U64 = CallByName Num.70 Dict.480 Dict.479;
-                let Dict.485 : U64 = CallByName Num.70 Dict.481 Dict.949;
-                let Dict.948 : U64 = 16i64;
-                let Dict.947 : U64 = CallByName Num.75 Dict.482 Dict.948;
-                let Dict.946 : U64 = CallByName Num.51 Dict.947 Dict.483;
-                let Dict.901 : U64 = CallByName Dict.86 Dict.476 Dict.946;
-                let Dict.945 : U64 = 8i64;
-                let Dict.944 : U64 = CallByName Num.75 Dict.482 Dict.945;
-                let Dict.903 : U64 = CallByName Num.51 Dict.944 Dict.483;
-                let Dict.902 : U64 = CallByName Dict.86 Dict.476 Dict.903;
-                let Dict.900 : {U64, U64, U64} = Struct {Dict.901, Dict.902, Dict.485};
-                ret Dict.900;
+                inc Dict.490;
+                let Dict.982 : U64 = CallByName Num.70 Dict.494 Dict.493;
+                let Dict.499 : U64 = CallByName Num.70 Dict.495 Dict.982;
+                let Dict.981 : U64 = 16i64;
+                let Dict.980 : U64 = CallByName Num.75 Dict.496 Dict.981;
+                let Dict.979 : U64 = CallByName Num.51 Dict.980 Dict.497;
+                let Dict.934 : U64 = CallByName Dict.91 Dict.490 Dict.979;
+                let Dict.978 : U64 = 8i64;
+                let Dict.977 : U64 = CallByName Num.75 Dict.496 Dict.978;
+                let Dict.936 : U64 = CallByName Num.51 Dict.977 Dict.497;
+                let Dict.935 : U64 = CallByName Dict.91 Dict.490 Dict.936;
+                let Dict.933 : {U64, U64, U64} = Struct {Dict.934, Dict.935, Dict.499};
+                ret Dict.933;
     in
     jump Dict.899 #Derived_gen.47 #Derived_gen.48 #Derived_gen.49 #Derived_gen.50 #Derived_gen.51 #Derived_gen.52;
 
@@ -614,143 +644,143 @@ procedure Dict.80 ():
     let Dict.888 : U64 = 11562461410679940143i64;
     ret Dict.888;
 
-procedure Dict.81 ():
-    let Dict.884 : U64 = 16646288086500911323i64;
-    ret Dict.884;
+procedure Dict.86 ():
+    let Dict.917 : U64 = 16646288086500911323i64;
+    ret Dict.917;
 
-procedure Dict.82 ():
-    let Dict.998 : U64 = 10285213230658275043i64;
-    ret Dict.998;
+procedure Dict.87 ():
+    let Dict.1031 : U64 = 10285213230658275043i64;
+    ret Dict.1031;
 
-procedure Dict.83 ():
-    let Dict.988 : U64 = 6384245875588680899i64;
-    ret Dict.988;
+procedure Dict.88 ():
+    let Dict.1021 : U64 = 6384245875588680899i64;
+    ret Dict.1021;
 
-procedure Dict.84 (Dict.493, Dict.494):
-    let Dict.876 : {U64, U64} = CallByName Dict.85 Dict.493 Dict.494;
-    let Dict.495 : U64 = StructAtIndex 0 Dict.876;
-    let Dict.496 : U64 = StructAtIndex 1 Dict.876;
-    let Dict.875 : U64 = CallByName Num.70 Dict.495 Dict.496;
-    ret Dict.875;
+procedure Dict.89 (Dict.507, Dict.508):
+    let Dict.909 : {U64, U64} = CallByName Dict.90 Dict.507 Dict.508;
+    let Dict.509 : U64 = StructAtIndex 0 Dict.909;
+    let Dict.510 : U64 = StructAtIndex 1 Dict.909;
+    let Dict.908 : U64 = CallByName Num.70 Dict.509 Dict.510;
+    ret Dict.908;
 
-procedure Dict.85 (Dict.497, Dict.498):
-    let Dict.880 : U128 = CallByName Num.135 Dict.497;
-    let Dict.881 : U128 = CallByName Num.135 Dict.498;
-    let Dict.499 : U128 = CallByName Num.21 Dict.880 Dict.881;
-    let Dict.500 : U64 = CallByName Num.133 Dict.499;
-    let Dict.879 : U8 = 64i64;
-    let Dict.878 : U128 = CallByName Num.74 Dict.499 Dict.879;
-    let Dict.501 : U64 = CallByName Num.133 Dict.878;
-    let Dict.877 : {U64, U64} = Struct {Dict.500, Dict.501};
-    ret Dict.877;
+procedure Dict.90 (Dict.511, Dict.512):
+    let Dict.913 : U128 = CallByName Num.135 Dict.511;
+    let Dict.914 : U128 = CallByName Num.135 Dict.512;
+    let Dict.513 : U128 = CallByName Num.21 Dict.913 Dict.914;
+    let Dict.514 : U64 = CallByName Num.133 Dict.513;
+    let Dict.912 : U8 = 64i64;
+    let Dict.911 : U128 = CallByName Num.74 Dict.513 Dict.912;
+    let Dict.515 : U64 = CallByName Num.133 Dict.911;
+    let Dict.910 : {U64, U64} = Struct {Dict.514, Dict.515};
+    ret Dict.910;
 
-procedure Dict.86 (Dict.502, Dict.503):
-    let Dict.943 : U8 = CallByName Dict.22 Dict.502 Dict.503;
-    let Dict.504 : U64 = CallByName Num.133 Dict.943;
-    let Dict.942 : U64 = 1i64;
-    let Dict.941 : U64 = CallByName Num.51 Dict.503 Dict.942;
-    let Dict.940 : U8 = CallByName Dict.22 Dict.502 Dict.941;
-    let Dict.505 : U64 = CallByName Num.133 Dict.940;
-    let Dict.939 : U64 = 2i64;
-    let Dict.938 : U64 = CallByName Num.51 Dict.503 Dict.939;
-    let Dict.937 : U8 = CallByName Dict.22 Dict.502 Dict.938;
-    let Dict.506 : U64 = CallByName Num.133 Dict.937;
-    let Dict.936 : U64 = 3i64;
-    let Dict.935 : U64 = CallByName Num.51 Dict.503 Dict.936;
-    let Dict.934 : U8 = CallByName Dict.22 Dict.502 Dict.935;
-    let Dict.507 : U64 = CallByName Num.133 Dict.934;
-    let Dict.933 : U64 = 4i64;
-    let Dict.932 : U64 = CallByName Num.51 Dict.503 Dict.933;
-    let Dict.931 : U8 = CallByName Dict.22 Dict.502 Dict.932;
-    let Dict.508 : U64 = CallByName Num.133 Dict.931;
-    let Dict.930 : U64 = 5i64;
-    let Dict.929 : U64 = CallByName Num.51 Dict.503 Dict.930;
-    let Dict.928 : U8 = CallByName Dict.22 Dict.502 Dict.929;
-    let Dict.509 : U64 = CallByName Num.133 Dict.928;
-    let Dict.927 : U64 = 6i64;
-    let Dict.926 : U64 = CallByName Num.51 Dict.503 Dict.927;
-    let Dict.925 : U8 = CallByName Dict.22 Dict.502 Dict.926;
-    let Dict.510 : U64 = CallByName Num.133 Dict.925;
-    let Dict.924 : U64 = 7i64;
-    let Dict.922 : U64 = CallByName Num.51 Dict.503 Dict.924;
-    let Dict.921 : U8 = CallByName Dict.22 Dict.502 Dict.922;
-    dec Dict.502;
-    let Dict.511 : U64 = CallByName Num.133 Dict.921;
-    let Dict.920 : U8 = 8i64;
-    let Dict.919 : U64 = CallByName Num.72 Dict.505 Dict.920;
-    let Dict.512 : U64 = CallByName Num.71 Dict.504 Dict.919;
-    let Dict.918 : U8 = 16i64;
-    let Dict.915 : U64 = CallByName Num.72 Dict.506 Dict.918;
-    let Dict.917 : U8 = 24i64;
-    let Dict.916 : U64 = CallByName Num.72 Dict.507 Dict.917;
-    let Dict.513 : U64 = CallByName Num.71 Dict.915 Dict.916;
-    let Dict.914 : U8 = 32i64;
-    let Dict.911 : U64 = CallByName Num.72 Dict.508 Dict.914;
-    let Dict.913 : U8 = 40i64;
-    let Dict.912 : U64 = CallByName Num.72 Dict.509 Dict.913;
-    let Dict.514 : U64 = CallByName Num.71 Dict.911 Dict.912;
-    let Dict.910 : U8 = 48i64;
-    let Dict.907 : U64 = CallByName Num.72 Dict.510 Dict.910;
-    let Dict.909 : U8 = 56i64;
-    let Dict.908 : U64 = CallByName Num.72 Dict.511 Dict.909;
-    let Dict.515 : U64 = CallByName Num.71 Dict.907 Dict.908;
-    let Dict.905 : U64 = CallByName Num.71 Dict.512 Dict.513;
-    let Dict.906 : U64 = CallByName Num.71 Dict.514 Dict.515;
-    let Dict.904 : U64 = CallByName Num.71 Dict.905 Dict.906;
-    ret Dict.904;
-
-procedure Dict.87 (Dict.516, Dict.517):
-    let Dict.1055 : U8 = CallByName Dict.22 Dict.516 Dict.517;
-    let Dict.518 : U64 = CallByName Num.133 Dict.1055;
-    let Dict.1054 : U64 = 1i64;
-    let Dict.1053 : U64 = CallByName Num.51 Dict.517 Dict.1054;
-    let Dict.1052 : U8 = CallByName Dict.22 Dict.516 Dict.1053;
-    let Dict.519 : U64 = CallByName Num.133 Dict.1052;
-    let Dict.1051 : U64 = 2i64;
-    let Dict.1050 : U64 = CallByName Num.51 Dict.517 Dict.1051;
-    let Dict.1049 : U8 = CallByName Dict.22 Dict.516 Dict.1050;
-    let Dict.520 : U64 = CallByName Num.133 Dict.1049;
-    let Dict.1048 : U64 = 3i64;
-    let Dict.1047 : U64 = CallByName Num.51 Dict.517 Dict.1048;
-    let Dict.1046 : U8 = CallByName Dict.22 Dict.516 Dict.1047;
+procedure Dict.91 (Dict.516, Dict.517):
+    let Dict.976 : U8 = CallByName Dict.22 Dict.516 Dict.517;
+    let Dict.518 : U64 = CallByName Num.133 Dict.976;
+    let Dict.975 : U64 = 1i64;
+    let Dict.974 : U64 = CallByName Num.51 Dict.517 Dict.975;
+    let Dict.973 : U8 = CallByName Dict.22 Dict.516 Dict.974;
+    let Dict.519 : U64 = CallByName Num.133 Dict.973;
+    let Dict.972 : U64 = 2i64;
+    let Dict.971 : U64 = CallByName Num.51 Dict.517 Dict.972;
+    let Dict.970 : U8 = CallByName Dict.22 Dict.516 Dict.971;
+    let Dict.520 : U64 = CallByName Num.133 Dict.970;
+    let Dict.969 : U64 = 3i64;
+    let Dict.968 : U64 = CallByName Num.51 Dict.517 Dict.969;
+    let Dict.967 : U8 = CallByName Dict.22 Dict.516 Dict.968;
+    let Dict.521 : U64 = CallByName Num.133 Dict.967;
+    let Dict.966 : U64 = 4i64;
+    let Dict.965 : U64 = CallByName Num.51 Dict.517 Dict.966;
+    let Dict.964 : U8 = CallByName Dict.22 Dict.516 Dict.965;
+    let Dict.522 : U64 = CallByName Num.133 Dict.964;
+    let Dict.963 : U64 = 5i64;
+    let Dict.962 : U64 = CallByName Num.51 Dict.517 Dict.963;
+    let Dict.961 : U8 = CallByName Dict.22 Dict.516 Dict.962;
+    let Dict.523 : U64 = CallByName Num.133 Dict.961;
+    let Dict.960 : U64 = 6i64;
+    let Dict.959 : U64 = CallByName Num.51 Dict.517 Dict.960;
+    let Dict.958 : U8 = CallByName Dict.22 Dict.516 Dict.959;
+    let Dict.524 : U64 = CallByName Num.133 Dict.958;
+    let Dict.957 : U64 = 7i64;
+    let Dict.955 : U64 = CallByName Num.51 Dict.517 Dict.957;
+    let Dict.954 : U8 = CallByName Dict.22 Dict.516 Dict.955;
     dec Dict.516;
-    let Dict.521 : U64 = CallByName Num.133 Dict.1046;
-    let Dict.1045 : U8 = 8i64;
-    let Dict.1044 : U64 = CallByName Num.72 Dict.519 Dict.1045;
-    let Dict.522 : U64 = CallByName Num.71 Dict.518 Dict.1044;
-    let Dict.1043 : U8 = 16i64;
-    let Dict.1040 : U64 = CallByName Num.72 Dict.520 Dict.1043;
-    let Dict.1042 : U8 = 24i64;
-    let Dict.1041 : U64 = CallByName Num.72 Dict.521 Dict.1042;
-    let Dict.523 : U64 = CallByName Num.71 Dict.1040 Dict.1041;
-    let Dict.1039 : U64 = CallByName Num.71 Dict.522 Dict.523;
-    ret Dict.1039;
+    let Dict.525 : U64 = CallByName Num.133 Dict.954;
+    let Dict.953 : U8 = 8i64;
+    let Dict.952 : U64 = CallByName Num.72 Dict.519 Dict.953;
+    let Dict.526 : U64 = CallByName Num.71 Dict.518 Dict.952;
+    let Dict.951 : U8 = 16i64;
+    let Dict.948 : U64 = CallByName Num.72 Dict.520 Dict.951;
+    let Dict.950 : U8 = 24i64;
+    let Dict.949 : U64 = CallByName Num.72 Dict.521 Dict.950;
+    let Dict.527 : U64 = CallByName Num.71 Dict.948 Dict.949;
+    let Dict.947 : U8 = 32i64;
+    let Dict.944 : U64 = CallByName Num.72 Dict.522 Dict.947;
+    let Dict.946 : U8 = 40i64;
+    let Dict.945 : U64 = CallByName Num.72 Dict.523 Dict.946;
+    let Dict.528 : U64 = CallByName Num.71 Dict.944 Dict.945;
+    let Dict.943 : U8 = 48i64;
+    let Dict.940 : U64 = CallByName Num.72 Dict.524 Dict.943;
+    let Dict.942 : U8 = 56i64;
+    let Dict.941 : U64 = CallByName Num.72 Dict.525 Dict.942;
+    let Dict.529 : U64 = CallByName Num.71 Dict.940 Dict.941;
+    let Dict.938 : U64 = CallByName Num.71 Dict.526 Dict.527;
+    let Dict.939 : U64 = CallByName Num.71 Dict.528 Dict.529;
+    let Dict.937 : U64 = CallByName Num.71 Dict.938 Dict.939;
+    ret Dict.937;
 
-procedure Dict.88 (Dict.524, Dict.525, Dict.526):
-    let Dict.1033 : U8 = CallByName Dict.22 Dict.524 Dict.525;
-    let Dict.527 : U64 = CallByName Num.133 Dict.1033;
-    let Dict.1032 : U8 = 1i64;
-    let Dict.1031 : U64 = CallByName Num.74 Dict.526 Dict.1032;
-    let Dict.1030 : U64 = CallByName Num.51 Dict.1031 Dict.525;
-    let Dict.1029 : U8 = CallByName Dict.22 Dict.524 Dict.1030;
-    let Dict.528 : U64 = CallByName Num.133 Dict.1029;
-    let Dict.1028 : U64 = 1i64;
-    let Dict.1027 : U64 = CallByName Num.75 Dict.526 Dict.1028;
-    let Dict.1026 : U64 = CallByName Num.51 Dict.1027 Dict.525;
-    let Dict.1025 : U8 = CallByName Dict.22 Dict.524 Dict.1026;
-    dec Dict.524;
-    let Dict.529 : U64 = CallByName Num.133 Dict.1025;
-    let Dict.1024 : U8 = 16i64;
-    let Dict.1021 : U64 = CallByName Num.72 Dict.527 Dict.1024;
-    let Dict.1023 : U8 = 8i64;
-    let Dict.1022 : U64 = CallByName Num.72 Dict.528 Dict.1023;
-    let Dict.530 : U64 = CallByName Num.71 Dict.1021 Dict.1022;
-    let Dict.1020 : U64 = CallByName Num.71 Dict.530 Dict.529;
-    ret Dict.1020;
+procedure Dict.92 (Dict.530, Dict.531):
+    let Dict.1088 : U8 = CallByName Dict.22 Dict.530 Dict.531;
+    let Dict.532 : U64 = CallByName Num.133 Dict.1088;
+    let Dict.1087 : U64 = 1i64;
+    let Dict.1086 : U64 = CallByName Num.51 Dict.531 Dict.1087;
+    let Dict.1085 : U8 = CallByName Dict.22 Dict.530 Dict.1086;
+    let Dict.533 : U64 = CallByName Num.133 Dict.1085;
+    let Dict.1084 : U64 = 2i64;
+    let Dict.1083 : U64 = CallByName Num.51 Dict.531 Dict.1084;
+    let Dict.1082 : U8 = CallByName Dict.22 Dict.530 Dict.1083;
+    let Dict.534 : U64 = CallByName Num.133 Dict.1082;
+    let Dict.1081 : U64 = 3i64;
+    let Dict.1080 : U64 = CallByName Num.51 Dict.531 Dict.1081;
+    let Dict.1079 : U8 = CallByName Dict.22 Dict.530 Dict.1080;
+    dec Dict.530;
+    let Dict.535 : U64 = CallByName Num.133 Dict.1079;
+    let Dict.1078 : U8 = 8i64;
+    let Dict.1077 : U64 = CallByName Num.72 Dict.533 Dict.1078;
+    let Dict.536 : U64 = CallByName Num.71 Dict.532 Dict.1077;
+    let Dict.1076 : U8 = 16i64;
+    let Dict.1073 : U64 = CallByName Num.72 Dict.534 Dict.1076;
+    let Dict.1075 : U8 = 24i64;
+    let Dict.1074 : U64 = CallByName Num.72 Dict.535 Dict.1075;
+    let Dict.537 : U64 = CallByName Num.71 Dict.1073 Dict.1074;
+    let Dict.1072 : U64 = CallByName Num.71 Dict.536 Dict.537;
+    ret Dict.1072;
+
+procedure Dict.93 (Dict.538, Dict.539, Dict.540):
+    let Dict.1066 : U8 = CallByName Dict.22 Dict.538 Dict.539;
+    let Dict.541 : U64 = CallByName Num.133 Dict.1066;
+    let Dict.1065 : U8 = 1i64;
+    let Dict.1064 : U64 = CallByName Num.74 Dict.540 Dict.1065;
+    let Dict.1063 : U64 = CallByName Num.51 Dict.1064 Dict.539;
+    let Dict.1062 : U8 = CallByName Dict.22 Dict.538 Dict.1063;
+    let Dict.542 : U64 = CallByName Num.133 Dict.1062;
+    let Dict.1061 : U64 = 1i64;
+    let Dict.1060 : U64 = CallByName Num.75 Dict.540 Dict.1061;
+    let Dict.1059 : U64 = CallByName Num.51 Dict.1060 Dict.539;
+    let Dict.1058 : U8 = CallByName Dict.22 Dict.538 Dict.1059;
+    dec Dict.538;
+    let Dict.543 : U64 = CallByName Num.133 Dict.1058;
+    let Dict.1057 : U8 = 16i64;
+    let Dict.1054 : U64 = CallByName Num.72 Dict.541 Dict.1057;
+    let Dict.1056 : U8 = 8i64;
+    let Dict.1055 : U64 = CallByName Num.72 Dict.542 Dict.1056;
+    let Dict.544 : U64 = CallByName Num.71 Dict.1054 Dict.1055;
+    let Dict.1053 : U64 = CallByName Num.71 Dict.544 Dict.543;
+    ret Dict.1053;
 
 procedure Hash.19 (Hash.39, Hash.40):
     let Hash.77 : List U8 = CallByName Str.12 Hash.40;
-    let Hash.76 : {U64, U64} = CallByName Dict.77 Hash.39 Hash.77;
+    let Hash.76 : {U64, U64} = CallByName Dict.82 Hash.39 Hash.77;
     ret Hash.76;
 
 procedure Inspect.188 (Inspect.189, #Attr.12):
@@ -874,10 +904,10 @@ procedure Inspect.44 (Inspect.250):
     ret Inspect.366;
 
 procedure Inspect.5 (Inspect.151):
-    let Inspect.316 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.35 Inspect.151;
+    let Inspect.316 : {List {U32, U32}, List {Str, I64}, U64, Float32, U8} = CallByName Dict.36 Inspect.151;
     let Inspect.313 : {} = Struct {};
     let Inspect.312 : Str = CallByName Inspect.36 Inspect.313;
-    let Inspect.311 : Str = CallByName Dict.113 Inspect.312 Inspect.316;
+    let Inspect.311 : Str = CallByName Dict.120 Inspect.312 Inspect.316;
     ret Inspect.311;
 
 procedure Inspect.54 (Inspect.278):
@@ -931,6 +961,13 @@ procedure List.6 (#Attr.2):
     let List.585 : U64 = lowlevel ListLen #Attr.2;
     ret List.585;
 
+<<<<<<< HEAD
+procedure List.18 (List.156, List.157, List.158):
+    let List.636 : U64 = 0i64;
+    let List.637 : U64 = CallByName List.6 List.156;
+    let List.635 : {Str, Int1} = CallByName List.89 List.156 List.157 List.158 List.636 List.637;
+    ret List.635;
+||||||| 95a4bb988
 procedure List.6 (#Attr.2):
     let List.634 : U64 = lowlevel ListLen #Attr.2;
     ret List.634;
@@ -1060,20 +1097,20 @@ procedure Num.131 (#Attr.2):
     ret Num.310;
 
 procedure Num.133 (#Attr.2):
+    let Num.365 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.365;
+
+procedure Num.133 (#Attr.2):
     let Num.366 : U64 = lowlevel NumIntCast #Attr.2;
     ret Num.366;
 
 procedure Num.133 (#Attr.2):
-    let Num.367 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.367;
-
-procedure Num.133 (#Attr.2):
-    let Num.382 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.382;
+    let Num.381 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.381;
 
 procedure Num.135 (#Attr.2):
-    let Num.388 : U128 = lowlevel NumIntCast #Attr.2;
-    ret Num.388;
+    let Num.387 : U128 = lowlevel NumIntCast #Attr.2;
+    ret Num.387;
 
 procedure Num.137 (#Attr.2):
     let Num.301 : U64 = lowlevel NumIntCast #Attr.2;
@@ -1111,88 +1148,88 @@ procedure Num.21 (#Attr.2, #Attr.3):
     ret Num.327;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.386 : U128 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.386;
+    let Num.385 : U128 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.385;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.331 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.331;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.461 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.461;
+    let Num.460 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.460;
 
 procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.454 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
-    ret Num.454;
+    let Num.453 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
+    ret Num.453;
 
 procedure Num.24 (#Attr.2, #Attr.3):
     let Num.315 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
     ret Num.315;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.457 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.457;
+    let Num.456 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.456;
 
 procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.458 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
-    ret Num.458;
+    let Num.457 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.457;
 
 procedure Num.50 (#Attr.2):
     let Num.333 : U64 = lowlevel NumFloor #Attr.2;
     ret Num.333;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.460 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.460;
+    let Num.459 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.459;
 
 procedure Num.69 (#Attr.2, #Attr.3):
     let Num.319 : U32 = lowlevel NumBitwiseAnd #Attr.2 #Attr.3;
     ret Num.319;
 
 procedure Num.70 (#Attr.2, #Attr.3):
-    let Num.364 : U64 = lowlevel NumBitwiseXor #Attr.2 #Attr.3;
-    ret Num.364;
+    let Num.363 : U64 = lowlevel NumBitwiseXor #Attr.2 #Attr.3;
+    ret Num.363;
 
 procedure Num.71 (#Attr.2, #Attr.3):
     let Num.318 : U32 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
     ret Num.318;
 
 procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.402 : U64 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
-    ret Num.402;
+    let Num.401 : U64 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.401;
 
 procedure Num.72 (#Attr.2, #Attr.3):
     let Num.292 : U32 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
     ret Num.292;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.417 : U64 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.417;
+    let Num.416 : U64 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.416;
 
 procedure Num.74 (#Attr.2, #Attr.3):
-    let Num.383 : U128 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
-    ret Num.383;
+    let Num.382 : U128 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
+    ret Num.382;
 
 procedure Num.74 (#Attr.2, #Attr.3):
-    let Num.385 : U64 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
-    ret Num.385;
+    let Num.384 : U64 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
+    ret Num.384;
 
 procedure Num.75 (#Attr.2, #Attr.3):
     let Num.320 : U32 = lowlevel NumSubWrap #Attr.2 #Attr.3;
     ret Num.320;
 
 procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.451 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.451;
+    let Num.450 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.450;
 
 procedure Num.96 (#Attr.2):
     let Num.330 : Str = lowlevel NumToStr #Attr.2;
     ret Num.330;
 
 procedure Num.96 (#Attr.2):
-    let Num.459 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.459;
+    let Num.458 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.458;
 
 procedure Str.12 (#Attr.2):
     let Str.294 : List U8 = lowlevel StrToUtf8 #Attr.2;
