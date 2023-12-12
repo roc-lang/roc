@@ -256,7 +256,7 @@ impl RocStr {
     pub fn try_slice_range(&self, range: Range<usize>) -> Option<Self> {
         if self.as_str().get(range.start..range.end).is_none() {
             None
-        } else if range.end - range.start <= SmallString::CAPACITY {
+        } else if range.end - range.start <= SmallString::CAPACITY && self.is_small_str() {
             let slice = &self.as_bytes()[range];
             let small_string =
                 unsafe { SmallString::try_from_utf8_bytes(slice).unwrap_unchecked() };
