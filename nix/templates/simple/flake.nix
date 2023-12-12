@@ -5,7 +5,7 @@
     roc.url = "github:roc-lang/roc";
   };
 
-  outputs = { self, nixpkgs, flake-utils, roc, roc2nix, ... }:
+  outputs = { self, nixpkgs, flake-utils, roc, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
