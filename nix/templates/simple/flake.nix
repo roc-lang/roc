@@ -25,6 +25,7 @@
                 rocFull # cli included in here
               ];
 
+            # ROC_LSP_PATH will be read by https://github.com/ivan-demchenko/roc-vscode-unofficial
             shellHook = ''
               export ROC_LSP_PATH=${rocFull}/bin/roc_ls
             '';
