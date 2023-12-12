@@ -1067,11 +1067,40 @@ pub fn module_from_builtins<'ctx>(
 
     // Also, must_keep is the functions we depend on that would normally be provide by libc.
     // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
-    let must_keep = ["_fltused", "floorf", "memcpy", "memset"];
+    let must_keep = [
+        "_fltused",
+        "floorf",
+        "memcpy",
+        "memset",
+        // I have no idea why this function is special.
+        // Without it, some tests hang on M1 mac outside of nix.
+        "__muloti4",
+        // Roc special functions
+        "__roc_force_longjmp",
+        "__roc_force_setjmp",
+        "set_shared_buffer",
+    ];
     for func in module.get_functions() {
         let has_definition = func.count_basic_blocks() > 0;
         let name = func.get_name().to_string_lossy();
-        if has_definition && !must_keep.contains(&name.as_ref()) {
+        if has_definition
+            && !name.starts_with("roc_builtins.")
+            && !must_keep.contains(&name.as_ref())
+        {
+            func.set_linkage(Linkage::Private);
+        }
+    }
+
+    // Note, running DCE here is faster then waiting until full app DCE.
+    let mpm = PassManager::create(());
+    mpm.add_global_dce_pass();
+    mpm.run_on(&module);
+
+    // Now that the unused compiler-rt functions have been removed,
+    // mark that the builtin functions are allowed to be DCE'd if they aren't used.
+    for func in module.get_functions() {
+        let name = func.get_name().to_string_lossy();
+        if name.starts_with("roc_builtins.") {
             func.set_linkage(Linkage::Private);
         }
     }
