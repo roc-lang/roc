@@ -1192,15 +1192,14 @@ expect
     |> get 7
     |> Bool.isEq (Ok "Testing")
 
-
 # All BadKey's hash to the same location.
 # This is needed to test some robinhood logic.
 BadKey := U64 implements [
-    Eq,
-    Hash {
-        hash: hashBadKey,
-    }
-]
+        Eq,
+        Hash {
+            hash: hashBadKey,
+        },
+    ]
 
 hashBadKey : hasher, BadKey -> hasher where hasher implements Hasher
 hashBadKey = \hasher, _ -> Hash.hash hasher 0
@@ -1228,7 +1227,6 @@ expect
             when val is
                 Present p -> Present (p + 1)
                 Missing -> Present 0
-
 
     allInsertedCorrectly =
         acc, k <- List.walk badKeys Bool.true
