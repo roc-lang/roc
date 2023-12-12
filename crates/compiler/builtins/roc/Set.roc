@@ -4,6 +4,7 @@ interface Set
         empty,
         withCapacity,
         reserve,
+        releaseExcessCapacity,
         single,
         walk,
         walkUntil,
@@ -83,10 +84,17 @@ withCapacity : Nat -> Set *
 withCapacity = \cap ->
     @Set (Dict.withCapacity cap)
 
-# Enlarge the set for at least capacity additional elements
+## Enlarge the set for at least capacity additional elements
 reserve : Set k, Nat -> Set k
 reserve = \@Set dict, requested ->
     @Set (Dict.reserve dict requested)
+
+## Shrink the memory footprint of a set such that capacity is as small as possible.
+## This function will require regenerating the metadata if the size changes.
+## There will still be some overhead due to dictionary metadata always being a power of 2.
+releaseExcessCapacity : Set k -> Set k
+releaseExcessCapacity = \@Set dict ->
+    @Set (Dict.releaseExcessCapacity dict)
 
 ## Creates a new `Set` with a single value.
 ## ```
