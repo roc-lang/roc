@@ -12,6 +12,7 @@ use core::{
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
 };
+use std::ops::Range;
 
 use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
 
@@ -208,7 +209,7 @@ impl<T> RocList<T> {
     }
 
     /// Useful for doing memcpy on the elements. Returns NULL if list is empty.
-    pub(crate) unsafe fn ptr_to_first_elem(&self) -> *const T {
+    pub(crate) fn ptr_to_first_elem(&self) -> *const T {
         unsafe { core::mem::transmute(self.elements) }
     }
 
@@ -222,12 +223,59 @@ impl<T> RocList<T> {
         }
     }
 
+    #[allow(unused)]
+    pub(crate) fn ptr_to_refcount(&self) -> *mut c_void {
+        if self.is_seamless_slice() {
+            ((self.capacity_or_ref_ptr << 1) - std::mem::size_of::<usize>()) as *mut _
+        } else {
+            unsafe { self.ptr_to_first_elem().cast::<usize>().sub(1) as *mut _ }
+        }
+    }
+
     unsafe fn elem_ptr_from_alloc_ptr(alloc_ptr: *mut c_void) -> *mut c_void {
         unsafe {
             alloc_ptr
                 .cast::<u8>()
                 .add(Self::alloc_alignment() as usize)
                 .cast()
+        }
+    }
+
+    pub fn append(&mut self, value: T) {
+        self.push(value)
+    }
+
+    pub fn push(&mut self, value: T) {
+        if self.capacity() <= self.len() {
+            // reserve space for (at least!) one more element
+            self.reserve(1);
+        }
+
+        let elements = self.elements.unwrap().as_ptr();
+        let append_ptr = unsafe { elements.add(self.len()) };
+
+        unsafe {
+            // Write the element into the slot, without dropping it.
+            ptr::write(append_ptr, ManuallyDrop::new(value));
+        }
+
+        // It's important that the length is increased one by one, to
+        // make sure that we don't drop uninitialized elements, even when
+        // a incrementing the reference count panics.
+        self.length += 1;
+    }
+
+    /// # Safety
+    ///
+    /// - `bytes` must be allocated for `cap` elements
+    /// - `bytes` must be initialized for `len` elements
+    /// - `bytes` must be preceded by a correctly-aligned refcount (usize)
+    /// - `cap` >= `len`
+    pub unsafe fn from_raw_parts(bytes: *mut T, len: usize, cap: usize) -> Self {
+        Self {
+            elements: NonNull::new(bytes.cast()),
+            length: len,
+            capacity_or_ref_ptr: cap,
         }
     }
 }
@@ -323,6 +371,38 @@ where
 }
 
 impl<T> RocList<T> {
+    #[track_caller]
+    pub fn slice_range(&self, range: Range<usize>) -> Self {
+        match self.try_slice_range(range) {
+            Some(x) => x,
+            None => panic!("slice index out of range"),
+        }
+    }
+
+    pub fn try_slice_range(&self, range: Range<usize>) -> Option<Self> {
+        if self.as_slice().get(range.start..range.end).is_none() {
+            None
+        } else {
+            // increment the refcount
+            std::mem::forget(self.clone());
+
+            let element_ptr = self.as_slice()[range.start..]
+                .as_ptr()
+                .cast::<ManuallyDrop<T>>();
+
+            let capacity_or_ref_ptr =
+                (self.ptr_to_first_elem() as usize) >> 1 | isize::MIN as usize;
+
+            let roc_list = RocList {
+                elements: NonNull::new(element_ptr as *mut ManuallyDrop<T>),
+                length: range.end - range.start,
+                capacity_or_ref_ptr,
+            };
+
+            Some(roc_list)
+        }
+    }
+
     /// Increase a RocList's capacity by at least the requested number of elements (possibly more).
     ///
     /// May return a new RocList, if the provided one was not unique.
@@ -333,7 +413,7 @@ impl<T> RocList<T> {
 
         match self.elements_and_storage() {
             Some((elements, storage)) => {
-                if storage.get().is_unique() {
+                if storage.get().is_unique() && !self.is_seamless_slice() {
                     unsafe {
                         let old_alloc = self.ptr_to_allocation();
 
