@@ -1,11 +1,10 @@
 # Roc installation guide for Nix
 
-If you want to quickly get started you can do
+To quickly try out roc, use `nix run`
 ```shell
 nix run roc-lang/roc -- <roc args>
 # example nix run roc-lang/roc -- repl
 ```
-to try out roc!
 
 <details>
 <summary>
@@ -25,14 +24,15 @@ nix flake init --template github:roc-lang/roc#simple --refresh
 ```nix
 {
     inputs = {
+        nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+        flake-utils.url = "github:numtide/flake-utils";
         roc.url = "github:roc-lang/roc";
     };
 
-    outputs = {roc,flake-utils, ...}:
+    outputs = {nixpkgs, roc, flake-utils, ...}:
         flake-utils.lib.eachDefaultSystem (system:
             let
             pkgs = import nixpkgs { inherit system; };
-
             rocPkgs = roc.packages.${system};
             in
             {
@@ -48,6 +48,5 @@ nix flake init --template github:roc-lang/roc#simple --refresh
         );
 }
 ```
-
 
 </details>
