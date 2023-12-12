@@ -992,6 +992,23 @@ fn list_walk_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_walk_with_index_until_sum() {
+    assert_evals_to!(
+        r#"
+        List.walkWithIndexUntil [5, 7, 2, 3] 0 (\state, elem, index ->
+            if elem % 2 == 0 then
+                Break state
+            else
+                Continue (elem + index + state)
+        )
+        "#,
+        13,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_implements_position() {
     assert_evals_to!(
         r#"
