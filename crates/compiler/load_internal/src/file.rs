@@ -684,6 +684,7 @@ impl MakeSpecializationsPass {
 struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
+    pub root_path: PathBuf,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
     pub opt_platform_shorthand: Option<&'a str>,
@@ -752,6 +753,7 @@ impl<'a> State<'a> {
 
     fn new(
         root_id: ModuleId,
+        root_path: PathBuf,
         opt_platform_shorthand: Option<&'a str>,
         target_info: TargetInfo,
         function_kind: FunctionKind,
@@ -770,6 +772,7 @@ impl<'a> State<'a> {
 
         Self {
             root_id,
+            root_path,
             root_subs: None,
             opt_platform_shorthand,
             cache_dir,
@@ -1077,8 +1080,9 @@ pub struct LoadStart<'a> {
     arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     root_id: ModuleId,
-    opt_platform_shorthand: Option<&'a str>,
+    root_path: PathBuf,
     root_msg: Msg<'a>,
+    opt_platform_shorthand: Option<&'a str>,
     src_dir: PathBuf,
 }
 
@@ -1101,7 +1105,7 @@ impl<'a> LoadStart<'a> {
 
             let res_loaded = load_filename(
                 arena,
-                filename,
+                filename.clone(),
                 true,
                 None,
                 None,
@@ -1136,6 +1140,7 @@ impl<'a> LoadStart<'a> {
             ident_ids_by_module,
             src_dir,
             root_id: header_output.module_id,
+            root_path: filename,
             root_msg: header_output.msg,
             opt_platform_shorthand: header_output.opt_platform_shorthand,
         })
@@ -1162,7 +1167,7 @@ impl<'a> LoadStart<'a> {
 
             let header_output = load_from_str(
                 arena,
-                filename,
+                filename.clone(),
                 src,
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
@@ -1178,6 +1183,7 @@ impl<'a> LoadStart<'a> {
             src_dir,
             ident_ids_by_module,
             root_id,
+            root_path: filename,
             root_msg,
             opt_platform_shorthand: opt_platform_id,
         })
@@ -1352,6 +1358,7 @@ pub fn load_single_threaded<'a>(
         arc_modules,
         ident_ids_by_module,
         root_id,
+        root_path,
         root_msg,
         src_dir,
         opt_platform_shorthand,
@@ -1367,6 +1374,7 @@ pub fn load_single_threaded<'a>(
     let number_of_workers = 1;
     let mut state = State::new(
         root_id,
+        root_path,
         opt_platform_shorthand,
         target_info,
         function_kind,
@@ -1503,7 +1511,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report_string(&filename, error);
+                    let buf = to_file_problem_report_string(filename, error);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1654,7 +1662,7 @@ pub fn report_loading_problem(
         }
         LoadingProblem::FormattedReport(report) => report,
         LoadingProblem::FileProblem { filename, error } => {
-            to_file_problem_report_string(&filename, error)
+            to_file_problem_report_string(filename, error)
         }
         err => todo!("Loading error: {:?}", err),
     }
@@ -1677,6 +1685,7 @@ fn load_multi_threaded<'a>(
         arc_modules,
         ident_ids_by_module,
         root_id,
+        root_path,
         root_msg,
         src_dir,
         opt_platform_shorthand,
@@ -1707,6 +1716,7 @@ fn load_multi_threaded<'a>(
 
     let mut state = State::new(
         root_id,
+        root_path,
         opt_platform_shorthand,
         target_info,
         function_kind,
@@ -2238,6 +2248,7 @@ fn update<'a>(
                                     let buf = to_https_problem_report_string(
                                         url,
                                         Problem::InvalidUrl(url_err),
+                                        header.module_path,
                                     );
                                     return Err(LoadingProblem::FormattedReport(buf));
                                 }
@@ -3159,7 +3170,7 @@ fn finish_specialization<'a>(
                     }
                     Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
                     other => {
-                        let buf = to_missing_platform_report(state.root_id, other);
+                        let buf = report_cannot_run(state.root_id, state.root_path, other);
                         return Err(LoadingProblem::FormattedReport(buf));
                     }
                 };
@@ -3513,9 +3524,7 @@ fn load_builtin_module_help<'a>(
 ) -> (HeaderInfo<'a>, roc_parse::state::State<'a>) {
     let is_root_module = false;
     let opt_shorthand = None;
-
     let filename = PathBuf::from(filename);
-
     let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
 
@@ -3968,6 +3977,7 @@ fn parse_header<'a>(
                 module_timing,
             )?;
 
+            let filename = resolved_header.module_path.clone();
             let mut messages = Vec::with_capacity(packages.len() + 1);
 
             // It's important that the app header is first in the list!
@@ -3982,6 +3992,7 @@ fn parse_header<'a>(
                 module_id,
                 module_ids,
                 ident_ids_by_module,
+                filename,
             );
 
             // Look at the app module's `to` keyword to determine which package was the platform.
@@ -4084,6 +4095,7 @@ fn load_packages<'a>(
     module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    filename: PathBuf,
 ) {
     // Load all the packages
     for Loc { value: entry, .. } in packages.iter() {
@@ -4121,7 +4133,7 @@ fn load_packages<'a>(
                         }
                     }
                     Err(problem) => {
-                        let buf = to_https_problem_report_string(src, problem);
+                        let buf = to_https_problem_report_string(src, problem, filename);
 
                         load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
                         return;
@@ -6581,7 +6593,11 @@ fn to_parse_problem_report<'a>(
     buf
 }
 
-fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> String {
+fn report_cannot_run(
+    module_id: ModuleId,
+    filename: PathBuf,
+    platform_path: &PlatformPath,
+) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
@@ -6591,20 +6607,20 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
     let alloc = RocDocAllocator::new(&[], module_id, &interns);
 
     let report = {
-        match other {
+        match platform_path {
             Valid(_) => unreachable!(),
             NotSpecified => {
                 let doc = alloc.stack([
                     alloc.reflow("I could not find a platform based on your input file."),
-                    alloc.reflow(r"Does the module header contain an entry that looks like this:"),
+                    alloc.reflow(r"Does the module header have an entry that looks like this?"),
                     alloc
-                        .parser_suggestion(" packages { pf: \"platform\" }")
+                        .parser_suggestion("packages { blah: \"…path or URL to platform…\" }")
                         .indent(4),
-                    alloc.reflow("See also TODO."),
+                    alloc.reflow("Tip: The following part of the tutorial has an example of specifying a platform:\n\n<https://www.roc-lang.org/tutorial#building-an-application>"),
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
@@ -6619,7 +6635,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
@@ -6634,7 +6650,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
@@ -6649,7 +6665,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
