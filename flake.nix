@@ -148,5 +148,12 @@
           cli = rocBuild.roc-cli;
           lang-server = rocBuild.roc-lang-server;
         };
+
+        apps = {
+          default = {
+            type = "app";
+            program = "${rocBuild.roc-cli}/bin/roc";
+          };
+        };
       });
 }

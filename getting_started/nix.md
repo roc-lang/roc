@@ -1,7 +1,11 @@
 # Roc installation guide for Nix
 
-
-## NixOS quick start
+If you want to quickly get started you can do
+```shell
+nix run roc-lang/roc -- <roc args>
+# example nix run roc-lang/roc -- repl
+```
+to try out roc!
 
 <details>
 <summary>
