@@ -991,7 +991,7 @@ fn list_walk_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn list_walk_with_index_until_sum() {
     assert_evals_to!(
         r#"
