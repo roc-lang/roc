@@ -1075,6 +1075,8 @@ pub fn module_from_builtins<'ctx>(
         // I have no idea why this function is special.
         // Without it, some tests hang on M1 mac outside of nix.
         "__muloti4",
+        // fixes `Undefined Symbol in relocation`
+        "__udivti3",
         // Roc special functions
         "__roc_force_longjmp",
         "__roc_force_setjmp",
