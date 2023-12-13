@@ -2076,8 +2076,8 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `a && b`                      |   `Bool.and a b`   |
 | <code>a \|\| b</code>         | `Bool.or a b`      |
 | `!a`                          |    `Bool.not a`    |
-| <code>a \|> b</code>          |       `b a`        |
-| <code>a b c \|> f x y</code>  | `f (a b c) x y`    |
+| <code>a \|> f</code>          |       `f a`        |
+| <code>f a b \|> g x y</code>  | `g (f a b) x y`    |
 
 
 </section>
