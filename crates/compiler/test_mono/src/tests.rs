@@ -234,7 +234,19 @@ fn verify_procedures<'a>(
 
     if !has_changes.stdout.is_empty() {
         println!("{}", std::str::from_utf8(&has_changes.stdout).unwrap());
-        panic!("Output changed: resolve conflicts and `git add` the file.");
+        panic!(indoc!(
+            r#"
+
+            Mono output has changed! This is normal when making changes to the builtins.
+            To fix it; run these commands locally:
+
+                cargo test -p test_mono -p uitest --no-fail-fast
+                git add -u
+                git commit -S -m "update mono tests"
+                git push origin YOUR_BRANCH_NAME
+                
+            "#
+        ));
     }
 }
 
