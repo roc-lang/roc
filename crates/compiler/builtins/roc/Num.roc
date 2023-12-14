@@ -560,8 +560,6 @@ tau = 2 * pi
 # ------- Functions
 ## Convert a number to a [Str].
 ##
-## This is the same as calling `Num.format {}` - so for more details on
-## exact formatting, see `Num.format`.
 ## ```
 ## Num.toStr 42
 ## ```
@@ -573,7 +571,6 @@ tau = 2 * pi
 ## When this function is given a non-[finite](Num.isFinite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
-## To get strings in hexadecimal, octal, or binary format, use `Num.format`.
 toStr : Num * -> Str
 intCast : Int a -> Int b
 

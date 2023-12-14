@@ -538,19 +538,38 @@ update = \@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }, key
         Err KeyNotFound ->
             when alter Missing is
                 Present newValue ->
-                    if maxBucketCapacity == 0 then
+                    if List.len data >= (Num.toNat maxBucketCapacity) then
                         # Need to reallocate let regular insert handle that.
                         insert (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) key newValue
                     else
                         # Can skip work by jumping staight to the found bucket.
                         # That will be the location we want to insert in.
                         hash = hashKey key
-                        distAndFingerprint = distAndFingerprintFromHash hash
+                        baseDistAndFingerprint = distAndFingerprintFromHash hash
+                        baseBucketIndex = bucketIndexFromHash hash shifts
 
-                        insertHelper buckets data bucketIndex distAndFingerprint key newValue maxBucketCapacity maxLoadFactor shifts
+                        # Due to the unrolling of loops in find along with loop optimizations,
+                        # The bucketIndex is not guaranteed to be correct here.
+                        # It is only correct if we have traversed past the number of find unrolls.
+                        dist = circularDist baseBucketIndex bucketIndex (List.len buckets)
+                        if dist <= findManualUnrolls then
+                            insertHelper buckets data baseBucketIndex baseDistAndFingerprint key newValue maxBucketCapacity maxLoadFactor shifts
+                        else
+                            distAndFingerprint = incrementDistN baseDistAndFingerprint (Num.toU32 dist)
+                            insertHelper buckets data bucketIndex distAndFingerprint key newValue maxBucketCapacity maxLoadFactor shifts
 
                 Missing ->
                     @Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }
+
+circularDist = \start, end, size ->
+    correction =
+        if start > end then
+            size
+        else
+            0
+    end
+    |> Num.subWrap start
+    |> Num.addWrap correction
 
 ## Returns the keys and values of a dictionary as a [List].
 ## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
@@ -709,21 +728,26 @@ maxBucketCount = maxSize
 incrementDist = \distAndFingerprint ->
     distAndFingerprint + distInc
 
+incrementDistN = \distAndFingerprint, n ->
+    distAndFingerprint + (n * distInc)
+
 decrementDist = \distAndFingerprint ->
     distAndFingerprint - distInc
 
 find : Dict k v, k -> { bucketIndex : Nat, result : Result v [KeyNotFound] }
 find = \@Dict { buckets, data, shifts }, key ->
-    if !(List.isEmpty data) then
-        hash = hashKey key
-        distAndFingerprint = distAndFingerprintFromHash hash
-        bucketIndex = bucketIndexFromHash hash shifts
+    hash = hashKey key
+    distAndFingerprint = distAndFingerprintFromHash hash
+    bucketIndex = bucketIndexFromHash hash shifts
 
+    if !(List.isEmpty data) then
         # TODO: this is true in the C++ code, confirm it in Roc as well.
         # unrolled loop. *Always* check a few directly, then enter the loop. This is faster.
         findFirstUnroll buckets bucketIndex distAndFingerprint data key
     else
-        { bucketIndex: 0, result: Err KeyNotFound }
+        { bucketIndex, result: Err KeyNotFound }
+
+findManualUnrolls = 2
 
 findFirstUnroll : List Bucket, Nat, U32, List (k, v), k -> { bucketIndex : Nat, result : Result v [KeyNotFound] } where k implements Eq
 findFirstUnroll = \buckets, bucketIndex, distAndFingerprint, data, key ->
@@ -890,16 +914,16 @@ nextWhileLessHelper = \buckets, bucketIndex, distAndFingerprint ->
     else
         (bucketIndex, distAndFingerprint)
 
-placeAndShiftUp = \buckets0, bucket0, bucketIndex ->
+placeAndShiftUp = \buckets0, bucket, bucketIndex ->
     loaded = listGetUnsafe buckets0 (Num.toNat bucketIndex)
     if loaded.distAndFingerprint != 0 then
-        { list: buckets1, value: bucket1 } = List.replace buckets0 (Num.toNat bucketIndex) bucket0
+        buckets1 = List.set buckets0 (Num.toNat bucketIndex) bucket
         placeAndShiftUp
             buckets1
-            { bucket1 & distAndFingerprint: incrementDist bucket1.distAndFingerprint }
+            { loaded & distAndFingerprint: incrementDist loaded.distAndFingerprint }
             (nextBucketIndex bucketIndex (List.len buckets1))
     else
-        List.set buckets0 (Num.toNat bucketIndex) bucket0
+        List.set buckets0 (Num.toNat bucketIndex) bucket
 
 nextBucketIndex = \bucketIndex, maxBuckets ->
     # I just ported this impl directly.
@@ -1167,6 +1191,48 @@ expect
     |> insert 7nat "Testing"
     |> get 7
     |> Bool.isEq (Ok "Testing")
+
+# All BadKey's hash to the same location.
+# This is needed to test some robinhood logic.
+BadKey := U64 implements [
+        Eq,
+        Hash {
+            hash: hashBadKey,
+        },
+    ]
+
+hashBadKey : hasher, BadKey -> hasher where hasher implements Hasher
+hashBadKey = \hasher, _ -> Hash.hash hasher 0
+
+expect
+    badKeys = [
+        @BadKey 0,
+        @BadKey 1,
+        @BadKey 2,
+        @BadKey 3,
+        @BadKey 4,
+        @BadKey 5,
+        @BadKey 6,
+        @BadKey 5,
+        @BadKey 4,
+        @BadKey 3,
+        @BadKey 3,
+        @BadKey 3,
+        @BadKey 10,
+    ]
+
+    dict =
+        acc, k <- List.walk badKeys (Dict.empty {})
+        Dict.update acc k \val ->
+            when val is
+                Present p -> Present (p + 1)
+                Missing -> Present 0
+
+    allInsertedCorrectly =
+        acc, k <- List.walk badKeys Bool.true
+        acc && Dict.contains dict k
+
+    allInsertedCorrectly
 
 # Note, there are a number of places we should probably use set and replace unsafe.
 # unsafe primitive that does not perform a bounds check

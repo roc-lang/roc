@@ -998,7 +998,7 @@ impl RocType {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -1016,7 +1016,7 @@ impl RocType {
                 debug_assert_eq!(self.discriminant(), discriminant_RocType::Function);
         let payload = &self.Function;
 
-        
+
         payload
     }
 
@@ -1196,7 +1196,7 @@ impl RocType {
         let payload = self.RocDict;
 
         (
-            payload.f0, 
+            payload.f0,
             payload.f1
         )
     }
@@ -1214,7 +1214,7 @@ impl RocType {
         let payload = &self.RocDict;
 
         (
-            &payload.f0, 
+            &payload.f0,
             &payload.f1
         )
     }
@@ -1297,7 +1297,7 @@ impl RocType {
         let payload = self.RocResult;
 
         (
-            payload.f0, 
+            payload.f0,
             payload.f1
         )
     }
@@ -1315,7 +1315,7 @@ impl RocType {
         let payload = &self.RocResult;
 
         (
-            &payload.f0, 
+            &payload.f0,
             &payload.f1
         )
     }
@@ -1450,7 +1450,7 @@ impl RocType {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -1468,7 +1468,7 @@ impl RocType {
                 debug_assert_eq!(self.discriminant(), discriminant_RocType::Struct);
         let payload = &self.Struct;
 
-        
+
         payload
     }
 
@@ -1580,7 +1580,7 @@ impl RocType {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -1598,7 +1598,7 @@ impl RocType {
                 debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnionPayload);
         let payload = &self.TagUnionPayload;
 
-        
+
         payload
     }
 
@@ -1810,7 +1810,7 @@ impl RocType {
         let payload = self.RocDict;
 
         (
-            payload.f0, 
+            payload.f0,
             payload.f1
         )
     }
@@ -1827,7 +1827,7 @@ impl RocType {
         let payload = &self.RocDict;
 
         (
-            &payload.f0, 
+            &payload.f0,
             &payload.f1
         )
     }
@@ -1905,7 +1905,7 @@ impl RocType {
         let payload = self.RocResult;
 
         (
-            payload.f0, 
+            payload.f0,
             payload.f1
         )
     }
@@ -1922,7 +1922,7 @@ impl RocType {
         let payload = &self.RocResult;
 
         (
-            &payload.f0, 
+            &payload.f0,
             &payload.f1
         )
     }
@@ -2398,7 +2398,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2416,7 +2416,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Enumeration);
         let payload = &self.Enumeration;
 
-        
+
         payload
     }
 
@@ -2464,7 +2464,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2482,7 +2482,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonNullableUnwrapped);
         let payload = &self.NonNullableUnwrapped;
 
-        
+
         payload
     }
 
@@ -2530,7 +2530,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2548,7 +2548,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonRecursive);
         let payload = &self.NonRecursive;
 
-        
+
         payload
     }
 
@@ -2596,7 +2596,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2614,7 +2614,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NullableUnwrapped);
         let payload = &self.NullableUnwrapped;
 
-        
+
         payload
     }
 
@@ -2662,7 +2662,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2680,7 +2680,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NullableWrapped);
         let payload = &self.NullableWrapped;
 
-        
+
         payload
     }
 
@@ -2728,7 +2728,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2746,7 +2746,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Recursive);
         let payload = &self.Recursive;
 
-        
+
         payload
     }
 
@@ -2794,7 +2794,7 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
+
         payload
     }
 
@@ -2812,7 +2812,7 @@ impl RocTagUnion {
                 debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::SingleTagStruct);
         let payload = &self.SingleTagStruct;
 
-        
+
         payload
     }
 

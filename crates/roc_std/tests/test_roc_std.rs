@@ -358,6 +358,79 @@ mod test_roc_std {
         let roc_list = RocList::<RocStr>::empty();
         assert!(roc_list.is_unique());
     }
+
+    #[test]
+    fn slicing_and_dicing_list() {
+        let example = RocList::from_slice(b"chaos is a ladder");
+
+        // basic slice from the start
+        assert_eq!(example.slice_range(0..5).as_slice(), b"chaos");
+
+        // slice in the middle
+        assert_eq!(example.slice_range(6..10).as_slice(), b"is a");
+
+        // slice of slice
+        let first = example.slice_range(0..5);
+        assert_eq!(first.slice_range(0..3).as_slice(), b"cha");
+    }
+
+    #[test]
+    fn slicing_and_dicing_str() {
+        let example = RocStr::from("chaos is a ladder");
+
+        // basic slice from the start
+        assert_eq!(example.slice_range(0..5).as_str(), "chaos");
+
+        // slice in the middle
+        assert_eq!(example.slice_range(6..10).as_str(), "is a");
+
+        // slice of slice
+        let first = example.slice_range(0..5);
+        assert_eq!(first.slice_range(0..3).as_str(), "cha");
+    }
+
+    #[test]
+    fn roc_list_push() {
+        let mut example = RocList::from_slice(&[1, 2, 3]);
+
+        // basic slice from the start
+        example.push(4);
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        // slice in the middle
+        let mut sliced = example.slice_range(0..3);
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+
+        // original did not change
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        drop(sliced);
+
+        let mut sliced = example.slice_range(0..3);
+        // make the slice unique
+        drop(example);
+
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn split_whitespace() {
+        let example = RocStr::from("chaos is a ladder");
+
+        let split: Vec<_> = example.split_whitespace().collect();
+
+        assert_eq!(
+            split,
+            vec![
+                RocStr::from("chaos"),
+                RocStr::from("is"),
+                RocStr::from("a"),
+                RocStr::from("ladder"),
+            ]
+        );
+    }
 }
 
 #[cfg(test)]
