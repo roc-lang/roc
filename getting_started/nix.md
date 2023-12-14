@@ -6,12 +6,8 @@ nix run roc-lang/roc -- <roc args>
 # example nix run roc-lang/roc -- repl
 ```
 
-<details>
-<summary>
-
 ## Install via Flakes
 
-</summary>
 
 ### Bootstrap a project with a template
 
