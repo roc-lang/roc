@@ -44,6 +44,7 @@ interface Num
         mul,
         min,
         max,
+        restrictToInterval,
         isLt,
         isLte,
         isGt,
@@ -866,6 +867,35 @@ max = \a, b ->
         a
     else
         b
+
+## Restricts a number to be between two other numbers.
+##
+## ```
+## restrictToInterval 5 3 8 == 5
+## restrictToInterval 1 3 8 == 3
+## restrictToInterval 10 3 8 == 8
+##
+## restrictToInterval 5 8 3 == 5
+## restrictToInterval 1 8 3 == 3
+## restrictToInterval 10 8 3 == 8
+## ```
+restrictToInterval : Num a, Num a, Num a -> Num a
+restrictToInterval = \x, min, max ->
+    if max > min then
+        restrictToInterval x max min
+    else if x < min then
+        min
+    else if x > max then
+        max
+    else
+        x
+
+expect restrictToInterval 5 3 8 == 5
+expect restrictToInterval 1 3 8 == 3
+expect restrictToInterval 10 3 8 == 8
+expect restrictToInterval 5 8 3 == 5
+expect restrictToInterval 1 8 3 == 3
+expect restrictToInterval 10 8 3 == 8
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
