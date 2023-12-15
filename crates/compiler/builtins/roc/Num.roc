@@ -880,13 +880,13 @@ max = \a, b ->
 ## restrictToInterval 10 8 3 == 8
 ## ```
 restrictToInterval : Num a, Num a, Num a -> Num a
-restrictToInterval = \x, min, max ->
-    if max > min then
-        restrictToInterval x max min
-    else if x < min then
-        min
-    else if x > max then
-        max
+restrictToInterval = \x, low, high ->
+    if high > low then
+        restrictToInterval x high low
+    else if x < low then
+        low
+    else if x > high then
+        high
     else
         x
 
