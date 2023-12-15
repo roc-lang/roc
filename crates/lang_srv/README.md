@@ -1,14 +1,11 @@
 # roc_ls
 
-This is a rudimentary language server for supporting basic editor usage in Roc.
+This is a basic language server for Roc.
 
 Support for the following LSP features are provided:
 
-
-
-
 - Inline diagnostics
-- Hover support to get types of values
+- Hover to view type of value
 - Go-to-definition
   - <details><summary>Example</summary>
 
@@ -29,26 +26,28 @@ Support for the following LSP features are provided:
 
     </details>
 
-Semantic highlighting will also be added soon. Additional features require
+[Semantic highlighting](https://github.com/microsoft/vscode/wiki/Semantic-Highlighting-Overview#what-is-the-difference-between-syntax-and-semantic-highlighting) will be added soon. Additional features require
 changes to the compiler infrastructure that are not yet available.
 
-Note that the language server is a bit naive:
-- If you make a change in a dependency, you'll need to also make a change in
-    the dependents' files for the changes to be picked up
-- The language server will only operate on changes that are also reflected on
-    disk (so save often)
+Note that the language server is a bit naïve:
+- If you make a change in a dependency, you'll also need to make a change in
+    the dependents' files for the changes to be picked up.
+- The language server will only operate on changes on save, auto-saving is recommended.
 
 ## Installing
 
-At this time, only from-source installations of the binary are supported.
+The roc_lang_server binary is included with the [nightly releases](https://github.com/roc-lang/roc/releases). We recommend using the same version of roc and roc_lang_server.
 
-Follow the [installation from source](https://github.com/roc-lang/roc/tree/main/getting_started#installation) instructions. Then run
+### Building from source
+
+Follow the [building from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md) instructions for roc. Then run:
 
 ```
+# do `nix develop` first if you're using nix!
 cargo build -p roc_lang_srv --release
 ```
 
-which will give you a language server binary at
+This will give you the language server binary at:
 
 ```
 target/release/roc_ls
