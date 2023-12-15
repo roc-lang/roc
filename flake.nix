@@ -27,11 +27,16 @@
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
-    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
-    in flake-utils.lib.eachSystem supportedSystems (system:
+    let
+      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+
+      templates = import ./nix/templates { };
+    in
+    { inherit templates; } //
+    flake-utils.lib.eachSystem supportedSystems (system:
       let
         overlays = [ (import rust-overlay) ]
-          ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
@@ -105,7 +110,7 @@
 
         devShell = pkgs.mkShell {
           buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
-            ++ (if system == "x86_64-linux" then
+          ++ (if system == "x86_64-linux" then
             [ pkgs.nixgl.nixVulkanIntel ]
           else
             [ ]);
@@ -121,7 +126,7 @@
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-                ++ linuxDevInputs);
+              ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
@@ -142,6 +147,13 @@
           # only the CLI crate = executable provided in nightly releases
           cli = rocBuild.roc-cli;
           lang-server = rocBuild.roc-lang-server;
+        };
+
+        apps = {
+          default = {
+            type = "app";
+            program = "${rocBuild.roc-cli}/bin/roc";
+          };
         };
       });
 }
