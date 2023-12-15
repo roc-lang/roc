@@ -1,4 +1,6 @@
 {
+  description = "Roc flake template";
+
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
@@ -10,6 +12,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
+        # see "packages =" in https://github.com/roc-lang/roc/blob/main/flake.nix
         rocPkgs = roc.packages.${system};
 
         rocFull = rocPkgs.full;
@@ -22,10 +25,10 @@
           default = pkgs.mkShell {
             buildInputs = with pkgs;
               [
-                rocFull # cli included in here
+                rocFull # includes CLI
               ];
 
-            # ROC_LSP_PATH will be read by https://github.com/ivan-demchenko/roc-vscode-unofficial
+            # For vscode plugin https://github.com/ivan-demchenko/roc-vscode-unofficial
             shellHook = ''
               export ROC_LSP_PATH=${rocFull}/bin/roc_ls
             '';

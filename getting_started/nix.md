@@ -1,15 +1,17 @@
-# Roc installation guide for Nix
+## Try out
 
-To quickly try out roc, use `nix run`
+To quickly try out roc without installing, use `nix run`:
 ```shell
 nix run roc-lang/roc -- <roc args>
-# example nix run roc-lang/roc -- repl
+# examples:
+# - nix run roc-lang/roc -- repl
+# - nix run roc-lang/roc -- dev main.roc
 ```
 
-## Install via Flakes
+## Use with Flakes
 
 
-### Bootstrap a project with a template
+### Start your project with our template
 
 ```shell
 # use the template in the current directory
@@ -28,8 +30,8 @@ nix flake init --template github:roc-lang/roc#simple --refresh
     outputs = {nixpkgs, roc, flake-utils, ...}:
         flake-utils.lib.eachDefaultSystem (system:
             let
-            pkgs = import nixpkgs { inherit system; };
-            rocPkgs = roc.packages.${system};
+                pkgs = import nixpkgs { inherit system; };
+                rocPkgs = roc.packages.${system};
             in
             {
                 devShells = {
@@ -44,5 +46,3 @@ nix flake init --template github:roc-lang/roc#simple --refresh
         );
 }
 ```
-
-</details>
