@@ -13,5 +13,5 @@ benchmarks/test-base64
 benchmarks/CFold
 benchmarks/Closure
 benchmarks/Deriv
-benchmarks/Issure2279
+benchmarks/Issue2279
 benchmarks/NQueens
