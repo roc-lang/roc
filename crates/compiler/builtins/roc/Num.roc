@@ -883,7 +883,7 @@ max = \a, b ->
 restrictToInterval : Num a, { startAt : Num a, endAt : Num a } -> Num a
 restrictToInterval = \x, { startAt, endAt } ->
     if endAt > startAt then
-        restrictToInterval x { startAt: endAt, endAt: startAt }
+        restrictToInterval x { endAt, startAt }
     else if x < startAt then
         startAt
     else if x > endAt then
