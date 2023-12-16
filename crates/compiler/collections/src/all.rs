@@ -222,3 +222,11 @@ macro_rules! mut_map {
         }
     };
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Either<First, Second> {
+    First(First),
+    Second(Second),
+}
+
+impl<F: Copy, S: Copy> Copy for Either<F, S> {}

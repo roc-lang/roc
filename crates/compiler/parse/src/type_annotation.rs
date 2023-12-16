@@ -300,7 +300,7 @@ where
 
 fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'a>>, ETypeRecord<'a>>
 {
-    use crate::parser::Either::*;
+    use roc_collections::all::Either::*;
     use AssignedField::*;
 
     (move |arena, state: State<'a>, min_indent: u32| {

@@ -4,14 +4,6 @@ use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
 use Progress::*;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Either<First, Second> {
-    First(First),
-    Second(Second),
-}
-
-impl<F: Copy, S: Copy> Copy for Either<F, S> {}
-
 pub type ParseResult<'a, Output, Error> = Result<(Progress, Output, State<'a>), (Progress, Error)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1766,12 +1758,12 @@ macro_rules! either {
             let original_state = state.clone();
             match $p1.parse(arena, state, min_indent) {
                 Ok((progress, output, state)) => {
-                    Ok((progress, $crate::parser::Either::First(output), state))
+                    Ok((progress, roc_collections::all::Either::First(output), state))
                 }
                 Err((NoProgress, _)) => {
                     match $p2.parse(arena, original_state.clone(), min_indent) {
                         Ok((progress, output, state)) => {
-                            Ok((progress, $crate::parser::Either::Second(output), state))
+                            Ok((progress, roc_collections::all::Either::Second(output), state))
                         }
                         Err((progress, fail)) => Err((progress, fail)),
                     }

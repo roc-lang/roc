@@ -13,7 +13,7 @@ use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
     sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, word1, word1_indent,
     word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
-    EType, EWhen, Either, ParseResult, Parser,
+    EType, EWhen, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
@@ -21,7 +21,7 @@ use crate::string_literal::StrLikeLiteral;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_collections::soa::Slice;
+use roc_collections::{all::Either, soa::Slice};
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};

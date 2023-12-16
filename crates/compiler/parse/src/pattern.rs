@@ -476,7 +476,7 @@ fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
 }
 
 fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
-    use crate::parser::Either::*;
+    use roc_collections::all::Either::*;
 
     move |arena, state: State<'a>, min_indent: u32| {
         // You must have a field name, e.g. "email"
