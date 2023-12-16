@@ -1,9 +1,5 @@
 # faq
 
-Click the ☰ button in the top left to see and search the table of contents.
-
-# Frequently Asked Questions
-
 ## Where did the name Roc come from?
 
 <img width="128" alt="The Roc logo, an origami bird" src="https://user-images.githubusercontent.com/1094080/92188927-e61ebd00-ee2b-11ea-97ef-2fc88e0094b0.png">
