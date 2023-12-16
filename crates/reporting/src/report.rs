@@ -1156,7 +1156,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "UNSUPPORTED ENCODING".to_string(),
+                title: "Unsupported encoding".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1191,7 +1191,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "MULTIPLE ENCODINGS".to_string(),
+                title: "Multiple encodings".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1226,7 +1226,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "INVALID CONTENT HASH".to_string(),
+                title: "Invalid content hash".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1237,13 +1237,13 @@ pub fn to_https_problem_report<'b>(
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
                     .indent(4),
-                alloc.concat([alloc.reflow(r"But the file was not found (404).")]),
+                alloc.concat([alloc.reflow(r"But the file was not found (404) on the server.")]),
                 alloc.concat([alloc.tip(), alloc.reflow(r"Is the URL correct?")]),
             ]);
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "NOTFOUND".to_string(),
+                title: "Invalid URL".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1270,7 +1270,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "IO ERROR".to_string(),
+                title: "I/O error".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1297,7 +1297,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "IO ERROR".to_string(),
+                title: "I/O error".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1326,7 +1326,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "HTTP ERROR".to_string(),
+                title: "HTTP error".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1367,7 +1367,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "INVALID EXTENSION SUFFIX".to_string(),
+                title: "Invalid extension suffix".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1400,7 +1400,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "INVALID EXTENSION".to_string(),
+                title: "Invalid extension".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1438,7 +1438,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "INVALID FRAGMENT".to_string(),
+                title: "Invalid fragment".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1476,7 +1476,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "MISSING PACKAGE HASH".to_string(),
+                title: "Missing package hash".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1502,7 +1502,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "HTTPS MANDATORY".to_string(),
+                title: "HTTPS required".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1545,7 +1545,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "MISLEADING CHARACTERS".to_string(),
+                title: "Misleading characters".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1575,7 +1575,7 @@ pub fn to_https_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "FILE TOO LARGE".to_string(),
+                title: "File too large".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1625,7 +1625,7 @@ pub fn to_file_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "FILE NOT FOUND".to_string(),
+                title: "File not found".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1643,7 +1643,7 @@ pub fn to_file_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "FILE PERMISSION DENIED".to_string(),
+                title: "File permission denied".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1660,7 +1660,7 @@ pub fn to_file_problem_report<'b>(
             Report {
                 filename: "UNKNOWN.roc".into(),
                 doc,
-                title: "FILE PROBLEM".to_string(),
+                title: "File problem".to_string(),
                 severity: Severity::Fatal,
             }
         }

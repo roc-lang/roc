@@ -152,7 +152,7 @@ impl<'a> Renderer<'a> {
         let doc = self.render_lookups(subs, line_col_region, symbols, variables, expressions);
 
         let report = Report {
-            title: "EXPECT FAILED".into(),
+            title: "Expect failed".into(),
             doc,
             filename: self.filename.clone(),
             severity: Severity::RuntimeError,

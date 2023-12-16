@@ -58,6 +58,7 @@ use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
+use roc_reporting::error::canonicalize::{NO_PLATFORM, IMPORT_CYCLE, INCORRECT_MODULE_NAME};
 #[cfg(not(target_family = "wasm"))]
 use roc_reporting::report::to_https_problem_report_string;
 use roc_reporting::report::{to_file_problem_report_string, Palette, RenderTarget};
@@ -6478,7 +6479,7 @@ fn to_import_cycle_report(
     let report = Report {
         filename,
         doc,
-        title: "IMPORT CYCLE".to_string(),
+        title: IMPORT_CYCLE.to_string(),
         severity: Severity::RuntimeError,
     };
 
@@ -6527,7 +6528,7 @@ fn to_incorrect_module_name_report<'a>(
     let report = Report {
         filename,
         doc,
-        title: "INCORRECT MODULE NAME".to_string(),
+        title: INCORRECT_MODULE_NAME.to_string(),
         severity: Severity::RuntimeError,
     };
 
@@ -6606,7 +6607,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 Report {
                     filename: "UNKNOWN.roc".into(),
                     doc,
-                    title: "NO PLATFORM".to_string(),
+                    title: NO_PLATFORM.to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -6621,7 +6622,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 Report {
                     filename: "UNKNOWN.roc".into(),
                     doc,
-                    title: "NO PLATFORM".to_string(),
+                    title: NO_PLATFORM.to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -6636,7 +6637,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 Report {
                     filename: "UNKNOWN.roc".into(),
                     doc,
-                    title: "NO PLATFORM".to_string(),
+                    title: NO_PLATFORM.to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -6651,7 +6652,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 Report {
                     filename: "UNKNOWN.roc".into(),
                     doc,
-                    title: "NO PLATFORM".to_string(),
+                    title: NO_PLATFORM.to_string(),
                     severity: Severity::RuntimeError,
                 }
             }

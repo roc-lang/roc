@@ -63,7 +63,7 @@ fn to_syntax_report<'a>(
     let report = |doc| Report {
         filename: filename.clone(),
         doc,
-        title: "PARSE PROBLEM".to_string(),
+        title: "Parse problem".to_string(),
         severity: Severity::RuntimeError,
     };
 
@@ -77,7 +77,7 @@ fn to_syntax_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "PARSE PROBLEM".to_string(),
+                title: "Parse problem".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -109,7 +109,7 @@ fn to_syntax_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "NOT END OF FILE".to_string(),
+                title: "Not end of file".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -122,7 +122,7 @@ fn to_syntax_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "PARSE PROBLEM".to_string(),
+                title: "Parse problem".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -132,7 +132,7 @@ fn to_syntax_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "PARSE PROBLEM".to_string(),
+                title: "Parse problem".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -213,7 +213,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ARGUMENTS BEFORE EQUALS".to_string(),
+                title: "Arguments before equals".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -327,7 +327,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNKNOWN OPERATOR".to_string(),
+                title: "Unknown operator".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -353,7 +353,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD IDENTIFIER".to_string(),
+                title: "Weird identifier".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -463,7 +463,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISSING FINAL EXPRESSION".to_string(),
+                title: "Missing final expression".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -494,7 +494,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "SYNTAX PROBLEM".to_string(),
+                title: "Syntax problem".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -517,7 +517,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ARGUMENTS BEFORE EQUALS".to_string(),
+                title: "Arguments before equals".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -535,7 +535,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD BACKPASSING ARROW".to_string(),
+                title: "Bad backpassing arrow".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -553,7 +553,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "RECORD PARSE PROBLEM".to_string(),
+                title: "Record parse problem".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -573,7 +573,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD RECORD BUILDER".to_string(),
+                title: "Bad record builder".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -593,7 +593,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD RECORD UPDATE".to_string(),
+                title: "Bad record update".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -659,7 +659,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INDENT ENDS AFTER EXPRESSION".to_string(),
+                title: "Indent ends after expression".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -683,7 +683,7 @@ fn to_expr_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "TRAILING OPERATOR".to_string(),
+                title: "Trailing operator".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -721,7 +721,7 @@ fn to_lambda_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "WEIRD ARROW".to_string(),
+                    title: "Weird arrow".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -743,7 +743,7 @@ fn to_lambda_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "MISSING ARROW".to_string(),
+                    title: "Missing arrow".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -768,7 +768,7 @@ fn to_lambda_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "WEIRD ARROW".to_string(),
+                    title: "Weird arrow".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -790,7 +790,7 @@ fn to_lambda_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "MISSING ARROW".to_string(),
+                    title: "Missing arrow".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -814,7 +814,7 @@ fn to_lambda_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED ARGUMENT LIST".to_string(),
+                    title: "Unfinished argument list".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -835,7 +835,7 @@ fn to_lambda_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "MISSING ARROW".to_string(),
+                    title: "Missing arrow".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -916,7 +916,7 @@ fn to_unfinished_lambda_report<'a>(
     Report {
         filename,
         doc,
-        title: "UNFINISHED FUNCTION".to_string(),
+        title: "Unfinished function".to_string(),
         severity: Severity::RuntimeError,
     }
 }
@@ -982,7 +982,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD ESCAPE".to_string(),
+                title: "Weird escape".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1008,7 +1008,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD CODE POINT".to_string(),
+                title: "Weird code point".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1029,7 +1029,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ENDLESS FORMAT".to_string(),
+                title: "Endless format".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1052,7 +1052,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ENDLESS SCALAR".to_string(),
+                title: "Endless scalar".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1118,7 +1118,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INVALID SCALAR".to_string(),
+                title: "Invalid scalar".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1141,7 +1141,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ENDLESS STRING".to_string(),
+                title: "Endless string".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1165,7 +1165,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "EXPECTED STRING".to_string(),
+                title: "Expected string".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1188,7 +1188,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ENDLESS STRING".to_string(),
+                title: "Endless string".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1209,7 +1209,7 @@ fn to_str_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INSUFFICIENT INDENT IN MULTI-LINE STRING".to_string(),
+                title: "Insufficient indent in multi-line string".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1251,7 +1251,7 @@ fn to_expr_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "EMPTY PARENTHESES".to_string(),
+                title: "Empty parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1275,7 +1275,7 @@ fn to_expr_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
+                title: "Unfinished parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1300,7 +1300,7 @@ fn to_expr_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
+                title: "Unfinished parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1350,7 +1350,7 @@ fn to_list_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED LIST".to_string(),
+                        title: "Unfinished list".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -1383,7 +1383,7 @@ fn to_list_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED LIST".to_string(),
+                        title: "Unfinished list".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -1530,7 +1530,7 @@ fn to_unfinished_if_report<'a>(
     Report {
         filename,
         doc,
-        title: "UNFINISHED IF".to_string(),
+        title: "Unfinished `if`".to_string(),
         severity: Severity::RuntimeError,
     }
 }
@@ -1563,7 +1563,7 @@ fn to_when_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "IF GUARD NO CONDITION".to_string(),
+                        title: "`if` guard without condition".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -1595,7 +1595,7 @@ fn to_when_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISSING ARROW".to_string(),
+                title: "Missing arrow".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1750,7 +1750,7 @@ fn to_unfinished_when_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED WHEN".to_string(),
+                title: "Unfinished `when`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1790,7 +1790,7 @@ fn to_unexpected_arrow_report<'a>(
     Report {
         filename,
         doc,
-        title: "UNEXPECTED ARROW".to_string(),
+        title: "Unexpected arrow".to_string(),
         severity: Severity::RuntimeError,
     }
 }
@@ -1866,7 +1866,7 @@ fn to_pattern_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED PATTERN".to_string(),
+                title: "Unfinished pattern".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -1910,7 +1910,7 @@ fn to_precord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                    title: "Unfinished record pattern".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -1927,7 +1927,7 @@ fn to_precord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                    title: "Unfinished record pattern".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -1952,7 +1952,7 @@ fn to_precord_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                        title: "Unfinished record pattern".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -1972,7 +1972,7 @@ fn to_precord_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED RECORD PATTERN".to_string(),
+                        title: "Unfinished record pattern".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -1997,7 +1997,7 @@ fn to_precord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED RECORD PATTERN".to_string(),
+                    title: "Unfinished record pattern".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2022,7 +2022,7 @@ fn to_precord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "PROBLEM IN RECORD PATTERN".to_string(),
+                    title: "Problem in record pattern".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2075,7 +2075,7 @@ fn to_plist_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED LIST PATTERN".to_string(),
+                title: "Unfinished list pattern".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2097,7 +2097,7 @@ fn to_plist_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED LIST PATTERN".to_string(),
+                title: "Unfinished list pattern".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2119,7 +2119,7 @@ fn to_plist_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INCORRECT REST PATTERN".to_string(),
+                title: "Incorrect rest pattern".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2162,7 +2162,7 @@ fn to_pattern_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
+                title: "Unfinished parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2183,7 +2183,7 @@ fn to_pattern_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "EMPTY PARENTHESES".to_string(),
+                title: "Empty parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2207,7 +2207,7 @@ fn to_pattern_in_parens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
+                title: "Unfinished parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2235,7 +2235,7 @@ fn to_malformed_number_literal_report<'a>(
     Report {
         filename,
         doc,
-        title: "INVALID NUMBER LITERAL".to_string(),
+        title: "Invalid number literal".to_string(),
         severity: Severity::RuntimeError,
     }
 }
@@ -2275,7 +2275,7 @@ fn to_type_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "DOUBLE COMMA".to_string(),
+                        title: "Double comma".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2302,7 +2302,7 @@ fn to_type_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED TYPE".to_string(),
+                title: "Unfinished type".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2320,7 +2320,7 @@ fn to_type_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED TYPE".to_string(),
+                title: "Unfinished type".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2338,7 +2338,7 @@ fn to_type_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED TYPE".to_string(),
+                title: "Unfinished type".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2356,7 +2356,7 @@ fn to_type_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED INLINE ALIAS".to_string(),
+                title: "Unfinished inline alias".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2373,7 +2373,7 @@ fn to_type_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD TYPE VARIABLE".to_string(),
+                title: "Bad type variable".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2410,7 +2410,7 @@ fn to_trecord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED RECORD TYPE".to_string(),
+                    title: "Unfinished record type".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2431,7 +2431,7 @@ fn to_trecord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED RECORD TYPE".to_string(),
+                    title: "Unfinished record type".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2456,7 +2456,7 @@ fn to_trecord_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED RECORD TYPE".to_string(),
+                        title: "Unfinished record type".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2476,7 +2476,7 @@ fn to_trecord_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED RECORD TYPE".to_string(),
+                        title: "Unfinished record type".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2501,7 +2501,7 @@ fn to_trecord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED RECORD TYPE".to_string(),
+                    title: "Unfinished record type".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2526,7 +2526,7 @@ fn to_trecord_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "PROBLEM IN RECORD TYPE".to_string(),
+                    title: "Problem in record type".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2559,7 +2559,7 @@ fn to_trecord_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED RECORD TYPE".to_string(),
+                title: "Unfinished record type".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2583,7 +2583,7 @@ fn to_trecord_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "NEED MORE INDENTATION".to_string(),
+                        title: "Need more indentation".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2608,7 +2608,7 @@ fn to_trecord_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED RECORD TYPE".to_string(),
+                        title: "Unfinished record type".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2655,7 +2655,7 @@ fn to_ttag_union_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED TAG UNION TYPE".to_string(),
+                    title: "Unfinished tag union type".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2677,7 +2677,7 @@ fn to_ttag_union_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "WEIRD TAG NAME".to_string(),
+                    title: "Weird tag name".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2698,7 +2698,7 @@ fn to_ttag_union_report<'a>(
                 Report {
                     filename,
                     doc,
-                    title: "UNFINISHED TAG UNION TYPE".to_string(),
+                    title: "Unfinished tag union type".to_string(),
                     severity: Severity::RuntimeError,
                 }
             }
@@ -2724,7 +2724,7 @@ fn to_ttag_union_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "WEIRD TAG NAME".to_string(),
+                        title: "Weird tag name".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2744,7 +2744,7 @@ fn to_ttag_union_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED TAG UNION TYPE".to_string(),
+                        title: "Unfinished tag union type".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2787,7 +2787,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
+                        title: "Unfinished parentheses".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2809,7 +2809,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "WEIRD TAG NAME".to_string(),
+                        title: "Weird tag name".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2832,7 +2832,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
+                        title: "Unfinished parentheses".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2855,7 +2855,7 @@ fn to_tinparens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "EMPTY PARENTHESES".to_string(),
+                title: "Empty parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2881,7 +2881,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "WEIRD TAG NAME".to_string(),
+                        title: "Weird tag name".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2901,7 +2901,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
+                        title: "Unfinished parentheses".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2929,7 +2929,7 @@ fn to_tinparens_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
+                title: "Unfinished parentheses".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -2953,7 +2953,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "NEED MORE INDENTATION".to_string(),
+                        title: "Need more indentation".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -2978,7 +2978,7 @@ fn to_tinparens_report<'a>(
                     Report {
                         filename,
                         doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
+                        title: "Unfinished parentheses".to_string(),
                         severity: Severity::RuntimeError,
                     }
                 }
@@ -3011,7 +3011,7 @@ fn to_tapply_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "DOUBLE DOT".to_string(),
+                title: "Double dot".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3033,7 +3033,7 @@ fn to_tapply_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "TRAILING DOT".to_string(),
+                title: "Trailing dot".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3055,7 +3055,7 @@ fn to_tapply_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD QUALIFIED NAME".to_string(),
+                title: "Weird qualified name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3077,7 +3077,7 @@ fn to_tapply_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD QUALIFIED NAME".to_string(),
+                title: "Weird qualified name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3095,7 +3095,7 @@ fn to_tapply_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "END OF FILE".to_string(),
+                title: "End of file".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3135,7 +3135,7 @@ fn to_talias_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "NOT AN INLINE ALIAS".to_string(),
+                title: "Not an inline alias".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3151,7 +3151,7 @@ fn to_talias_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "QUALIFIED ALIAS NAME".to_string(),
+                title: "Qualified alias name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3167,7 +3167,7 @@ fn to_talias_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "TYPE ARGUMENT NOT LOWERCASE".to_string(),
+                title: "Type argument not lowercase".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3213,7 +3213,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INCOMPLETE HEADER".to_string(),
+                title: "Incomplete header".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3251,7 +3251,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISSING HEADER".to_string(),
+                title: "Missing header".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3275,7 +3275,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD MODULE NAME".to_string(),
+                title: "Weird module name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3302,7 +3302,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD MODULE NAME".to_string(),
+                title: "Weird module name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3326,7 +3326,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD APP NAME".to_string(),
+                title: "Weird app name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3348,7 +3348,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INVALID PACKAGE NAME".to_string(),
+                title: "Invalid package name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3371,7 +3371,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "INVALID PLATFORM NAME".to_string(),
+                title: "Invalid platform name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3394,7 +3394,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD GENERATED TYPE NAME".to_string(),
+                title: "Weird generated type name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3434,7 +3434,7 @@ fn to_generates_with_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD GENERATES".to_string(),
+                title: "Weird `generates`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3459,7 +3459,7 @@ fn to_generates_with_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD GENERATES".to_string(),
+                title: "Weird `generates`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3500,7 +3500,7 @@ fn to_provides_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD PROVIDES".to_string(),
+                title: "Weird `provides`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3525,7 +3525,7 @@ fn to_provides_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD PROVIDES".to_string(),
+                title: "Weird `provides`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3552,7 +3552,7 @@ fn to_provides_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD PROVIDES".to_string(),
+                title: "Weird `provides`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3573,7 +3573,7 @@ fn to_provides_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD PROVIDES".to_string(),
+                title: "Weird `provides`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3611,7 +3611,7 @@ fn to_exposes_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD EXPOSES".to_string(),
+                title: "Weird `exposes`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3636,7 +3636,7 @@ fn to_exposes_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD EXPOSES".to_string(),
+                title: "Weird `exposes`".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3675,7 +3675,7 @@ fn to_imports_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD IMPORTS".to_string(),
+                title: "Weird imports".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3700,7 +3700,7 @@ fn to_imports_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD IMPORTS".to_string(),
+                title: "Weird imports".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3726,7 +3726,7 @@ fn to_imports_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD MODULE NAME".to_string(),
+                title: "Weird module name".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3745,7 +3745,7 @@ fn to_imports_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD IMPORTS".to_string(),
+                title: "Weird imports".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3784,7 +3784,7 @@ fn to_requires_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISSING REQUIRES".to_string(),
+                title: "Missing requires".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3811,7 +3811,7 @@ fn to_requires_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISSING REQUIRES".to_string(),
+                title: "Missing requires".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3840,7 +3840,7 @@ fn to_requires_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD REQUIRES RIGIDS".to_string(),
+                title: "Bad requires rigids".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3869,7 +3869,7 @@ fn to_requires_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "BAD REQUIRES".to_string(),
+                title: "Bad requires".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3906,7 +3906,7 @@ fn to_packages_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISSING PACKAGES".to_string(),
+                title: "Missing packages".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3939,7 +3939,7 @@ fn to_space_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "TAB CHARACTER".to_string(),
+                title: "Tab character".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3956,7 +3956,7 @@ fn to_space_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "ASCII CONTROL CHARACTER".to_string(),
+                title: "ASCII control character".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -3973,7 +3973,7 @@ fn to_space_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "MISPLACED CARRIAGE RETURN".to_string(),
+                title: "Misplaced carriage return".to_string(),
                 severity: Severity::RuntimeError,
             }
         }
@@ -4054,7 +4054,7 @@ fn to_unfinished_ability_report<'a>(
     Report {
         filename,
         doc,
-        title: "UNFINISHED ABILITY".to_string(),
+        title: "Unfinished ability".to_string(),
         severity: Severity::RuntimeError,
     }
 }

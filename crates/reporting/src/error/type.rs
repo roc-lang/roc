@@ -109,7 +109,7 @@ pub fn type_problem<'b>(
             ];
 
             let report = Report {
-                title: "TYPE MISMATCH".to_string(),
+                title: "Type mismatch".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -131,7 +131,7 @@ pub fn type_problem<'b>(
             ];
 
             let report = Report {
-                title: "TYPE MISMATCH".to_string(),
+                title: "Type mismatch".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -174,7 +174,7 @@ pub fn type_problem<'b>(
             ];
 
             Some(Report {
-                title: "ILLEGAL SPECIALIZATION".to_string(),
+                title: "Illegal specialization".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -203,7 +203,7 @@ pub fn type_problem<'b>(
             ];
 
             Some(Report {
-                title: "WRONG SPECIALIZATION TYPE".to_string(),
+                title: "Wrong specialization type".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -219,7 +219,7 @@ pub fn type_problem<'b>(
                 text!(alloc, "{}", utf8_err),
             ];
             Some(Report {
-                title: "INVALID UTF-8".to_string(),
+                title: "Invalid UTF-8".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -242,7 +242,7 @@ pub fn type_problem<'b>(
                 ]),
             ];
             Some(Report {
-                title: "INVALID TYPE FOR INGESTED FILE".to_string(),
+                title: "Invalid type for ingested file".to_string(),
                 filename,
                 doc: alloc.stack(stack),
                 severity,
@@ -559,7 +559,7 @@ fn report_mismatch<'b>(
     ];
 
     Report {
-        title: "TYPE MISMATCH".to_string(),
+        title: "Type mismatch".to_string(),
         filename,
         doc: alloc.stack(lines),
         severity,
@@ -602,7 +602,7 @@ fn report_bad_type<'b>(
     ];
 
     Report {
-        title: "TYPE MISMATCH".to_string(),
+        title: "Type mismatch".to_string(),
         filename,
         doc: alloc.stack(lines),
         severity,
@@ -686,7 +686,7 @@ fn to_expr_report<'b>(
 
             Report {
                 filename,
-                title: "TYPE MISMATCH".to_string(),
+                title: "Type mismatch".to_string(),
                 doc: alloc.stack([
                     alloc.text("This expression is used in an unexpected way:"),
                     alloc.region(lines.convert_region(expr_region)),
@@ -800,7 +800,7 @@ fn to_expr_report<'b>(
             };
 
             Report {
-                title: "TYPE MISMATCH".to_string(),
+                title: "Type mismatch".to_string(),
                 filename,
                 doc: alloc.stack([
                     alloc.text("Something is off with the ").append(thing),
@@ -1204,7 +1204,7 @@ fn to_expr_report<'b>(
 
                     Report {
                         filename,
-                        title: "TOO MANY ARGS".to_string(),
+                        title: "Too many args".to_string(),
                         doc,
                         severity,
                     }
@@ -1239,7 +1239,7 @@ fn to_expr_report<'b>(
 
                         Report {
                             filename,
-                            title: "TOO MANY ARGS".to_string(),
+                            title: "Too many args".to_string(),
                             doc: alloc.stack(lines),
                             severity,
                         }
@@ -1266,7 +1266,7 @@ fn to_expr_report<'b>(
 
                         Report {
                             filename,
-                            title: "TOO FEW ARGS".to_string(),
+                            title: "Too few args".to_string(),
                             doc: alloc.stack(lines),
                             severity,
                         }
@@ -1466,7 +1466,7 @@ fn to_expr_report<'b>(
                 ];
 
                 Report {
-                    title: "TYPE MISMATCH".to_string(),
+                    title: "Type mismatch".to_string(),
                     filename,
                     doc: alloc.stack(lines),
                     severity,
@@ -1504,7 +1504,7 @@ fn to_expr_report<'b>(
 
                 Report {
                     filename,
-                    title: "TYPE MISMATCH".to_string(),
+                    title: "Type mismatch".to_string(),
                     doc,
                     severity,
                 }
@@ -1540,7 +1540,7 @@ fn to_expr_report<'b>(
 
                 Report {
                     filename,
-                    title: "TYPE MISMATCH".to_string(),
+                    title: "Type mismatch".to_string(),
                     doc: alloc.stack(lines),
                     severity,
                 }
@@ -1953,7 +1953,7 @@ fn to_pattern_report<'b>(
 
             Report {
                 filename,
-                title: "TYPE MISMATCH".to_string(),
+                title: "Type mismatch".to_string(),
                 doc,
                 severity,
             }
@@ -1996,7 +1996,7 @@ fn to_pattern_report<'b>(
 
                 Report {
                     filename,
-                    title: "TYPE MISMATCH".to_string(),
+                    title: "Type mismatch".to_string(),
                     doc,
                     severity,
                 }
@@ -2076,7 +2076,7 @@ fn to_pattern_report<'b>(
                 };
                 Report {
                     filename,
-                    title: "TYPE MISMATCH".to_string(),
+                    title: "Type mismatch".to_string(),
                     doc,
                     severity,
                 }
@@ -2103,7 +2103,7 @@ fn to_pattern_report<'b>(
 
                 Report {
                     filename,
-                    title: "TYPE MISMATCH".to_string(),
+                    title: "Type mismatch".to_string(),
                     doc,
                     severity,
                 }
@@ -2187,7 +2187,7 @@ fn to_circular_report<'b>(
     overall_type: ErrorType,
 ) -> Report<'b> {
     Report {
-        title: "CIRCULAR TYPE".to_string(),
+        title: "Circular type".to_string(),
         filename,
         doc: {
             alloc.stack([
@@ -4878,7 +4878,7 @@ fn report_record_field_typo<'b>(
 
     Report {
         filename,
-        title: "TYPE MISMATCH".to_string(),
+        title: "Type mismatch".to_string(),
         doc,
         severity,
     }
@@ -4915,7 +4915,7 @@ fn exhaustive_problem<'a>(
 
                 Report {
                     filename,
-                    title: "UNSAFE PATTERN".to_string(),
+                    title: "Unsafe pattern".to_string(),
                     doc,
                     severity,
                 }
@@ -4939,7 +4939,7 @@ fn exhaustive_problem<'a>(
 
                 Report {
                     filename,
-                    title: "UNSAFE PATTERN".to_string(),
+                    title: "Unsafe pattern".to_string(),
                     doc,
                     severity,
                 }
@@ -4963,7 +4963,7 @@ fn exhaustive_problem<'a>(
 
                 Report {
                     filename,
-                    title: "UNSAFE PATTERN".to_string(),
+                    title: "Unsafe pattern".to_string(),
                     doc,
                     severity,
                 }
@@ -4992,7 +4992,7 @@ fn exhaustive_problem<'a>(
 
             Report {
                 filename,
-                title: "REDUNDANT PATTERN".to_string(),
+                title: "Redundant pattern".to_string(),
                 doc,
                 severity,
             }
@@ -5020,7 +5020,7 @@ fn exhaustive_problem<'a>(
 
             Report {
                 filename,
-                title: "UNMATCHABLE PATTERN".to_string(),
+                title: "Unmatchable pattern".to_string(),
                 doc,
                 severity,
             }

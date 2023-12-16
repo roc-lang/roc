@@ -59,6 +59,9 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "Ability implementation not 
 const DUPLICATE_IMPLEMENTATION: &str = "Duplicate implementation";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "Unnecessary implementations";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "Incomplete ability implementation";
+pub const NO_PLATFORM: &str = "No platform";
+pub const IMPORT_CYCLE: &str = "Import cycle";
+pub const INCORRECT_MODULE_NAME: &str = "Incorrect module name";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -1130,7 +1133,7 @@ fn to_invalid_optional_value_report<'b>(
     );
 
     Report {
-        title: "BAD OPTIONAL VALUE".to_string(),
+        title: "Bad optional value".to_string(),
         filename,
         doc,
         severity: Severity::RuntimeError,
