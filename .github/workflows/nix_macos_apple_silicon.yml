@@ -36,6 +36,12 @@ jobs:
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release -- --skip cli_run::inspect_gui --skip cli_run::hello_gui
 
+      - name: roc test all builtins
+        run: |
+          for file in crates/compiler/builtins/roc/*.roc; do 
+             nix develop -c cargo run --locked --release -- test "$file"
+          done
+
       - name: make a libapp.so for the next step
         run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
 
