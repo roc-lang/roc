@@ -1,6 +1,6 @@
 procedure Num.37 (#Attr.2, #Attr.3):
-    let Num.301 : Decimal = lowlevel NumDivFrac #Attr.2 #Attr.3;
-    ret Num.301;
+    let Num.306 : Decimal = lowlevel NumDivFrac #Attr.2 #Attr.3;
+    ret Num.306;
 
 procedure Test.0 ():
     let Test.2 : Decimal = 1dec;

@@ -1,11 +1,11 @@
 procedure Num.31 (Num.235):
-    let Num.302 : I64 = 2i64;
-    let Num.301 : Int1 = CallByName Num.86 Num.235 Num.302;
-    ret Num.301;
+    let Num.307 : I64 = 2i64;
+    let Num.306 : Int1 = CallByName Num.86 Num.235 Num.307;
+    ret Num.306;
 
 procedure Num.86 (#Attr.2, #Attr.3):
-    let Num.303 : Int1 = lowlevel NumIsMultipleOf #Attr.2 #Attr.3;
-    ret Num.303;
+    let Num.308 : Int1 = lowlevel NumIsMultipleOf #Attr.2 #Attr.3;
+    ret Num.308;
 
 procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
     let #Derived_gen.3 : [<rnu><null>, C I64 *self] = NullPointer;
