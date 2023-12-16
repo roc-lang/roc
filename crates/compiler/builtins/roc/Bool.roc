@@ -6,7 +6,7 @@ interface Bool
 ##
 ## Total equality means that all values of the type can be compared to each
 ## other, and two values `a`, `b` are identical if and only if `isEq a b` is
-## `Bool.true`.test
+## `Bool.true`.
 ##
 ## Not all types support total equality. For example, [`F32`](../Num#F32) and [`F64`](../Num#F64) can
 ## be a `NaN` ([Not a Number](https://en.wikipedia.org/wiki/NaN)), and the
