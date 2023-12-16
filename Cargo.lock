@@ -2318,6 +2318,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_can2"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "pretty_assertions",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_parse",
+]
+
+[[package]]
 name = "roc_checkmate"
 version = "0.0.1"
 dependencies = [
