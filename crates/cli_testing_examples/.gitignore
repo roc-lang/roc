@@ -10,3 +10,8 @@ benchmarks/rbtree-ck
 benchmarks/rbtree-insert
 benchmarks/test-astar
 benchmarks/test-base64
+benchmarks/CFold
+benchmarks/Closure
+benchmarks/Deriv
+benchmarks/Issure2279
+benchmarks/NQueens
