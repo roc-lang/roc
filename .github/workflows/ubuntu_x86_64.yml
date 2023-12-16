@@ -48,10 +48,7 @@ jobs:
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
 
       - name: roc test all builtins
-        run: |
-          for file in crates/compiler/builtins/roc/*.roc; do 
-              cargo run --locked --release -- test "$file"
-          done
+        run: nix develop -c ./roc_test_builtins.sh
 
       - name: wasm repl test
         run: crates/repl_test/test_wasm.sh && sccache --show-stats

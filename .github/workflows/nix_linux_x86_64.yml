@@ -21,10 +21,7 @@ jobs:
         run: nix develop -c cargo test --locked --release
 
       - name: roc test all builtins
-        run: |
-          for file in crates/compiler/builtins/roc/*.roc; do 
-             nix develop -c cargo run --locked --release -- test "$file"
-          done
+        run: nix develop -c ./roc_test_builtins.sh
 
       - name: test wasm32 cli_run
         run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"
