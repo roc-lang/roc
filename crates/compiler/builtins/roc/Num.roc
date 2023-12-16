@@ -879,6 +879,7 @@ max = \a, b ->
 ## restrictToInterval 1 8 3 == 3
 ## restrictToInterval 10 8 3 == 8
 ## ```
+## You may know this function as `clamp` in other languages.
 restrictToInterval : Num a, Num a, Num a -> Num a
 restrictToInterval = \x, low, high ->
     if high > low then
