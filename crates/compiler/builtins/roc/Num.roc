@@ -871,32 +871,37 @@ max = \a, b ->
 ## Restricts a number to be between two other numbers.
 ##
 ## ```
-## restrictToInterval 5 3 8 == 5
-## restrictToInterval 1 3 8 == 3
-## restrictToInterval 10 3 8 == 8
-##
-## restrictToInterval 5 8 3 == 5
-## restrictToInterval 1 8 3 == 3
-## restrictToInterval 10 8 3 == 8
+## restrictToInterval 5 { startAt: 3, endAt: 8 } == 5
+## restrictToInterval 1 { startAt: 3, endAt: 8 } == 3
+## restrictToInterval 10 { startAt: 3, endAt: 8 } == 8
+
+## restrictToInterval 5 { startAt: 8, endAt: 3 } == 5
+## restrictToInterval 1 { startAt: 8, endAt: 3 } == 3
+## restrictToInterval 10 { startAt: 8, endAt: 3 } == 8
 ## ```
 ## You may know this function as `clamp` in other languages.
-restrictToInterval : Num a, Num a, Num a -> Num a
-restrictToInterval = \x, low, high ->
-    if high > low then
-        restrictToInterval x high low
-    else if x < low then
-        low
-    else if x > high then
-        high
+restrictToInterval : Num a, { startAt : Num a, endAt : Num a } -> Num a
+restrictToInterval = \x, { startAt, endAt } ->
+    if endAt > startAt then
+        restrictToInterval x endAt startAt
+    else if x < startAt then
+        startAt
+    else if x > endAt then
+        endAt
     else
         x
 
-expect restrictToInterval 5 3 8 == 5
-expect restrictToInterval 1 3 8 == 3
-expect restrictToInterval 10 3 8 == 8
-expect restrictToInterval 5 8 3 == 5
-expect restrictToInterval 1 8 3 == 3
-expect restrictToInterval 10 8 3 == 8
+expect restrictToInterval 5 { startAt: 3, endAt: 8 } == 5
+expect restrictToInterval 1 { startAt: 3, endAt: 8 } == 3
+expect restrictToInterval 10 { startAt: 3, endAt: 8 } == 8
+expect restrictToInterval -5 { startAt: 3, endAt: 8 } == 3
+expect restrictToInterval -2 { startAt: -5, endAt: 5 } == -2
+expect restrictToInterval 7 { startAt: -5, endAt: 5 } == 5
+expect restrictToInterval 3 { startAt: -5, endAt: 5 } == 3
+
+expect restrictToInterval 5 { startAt: 8, endAt: 3 } == 5
+expect restrictToInterval 1 { startAt: 8, endAt: 3 } == 3
+expect restrictToInterval 10 { startAt: 8, endAt: 3 } == 8
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
