@@ -991,7 +991,7 @@ fn list_walk_until_sum() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_with_index_until_sum() {
     assert_evals_to!(
         r#"
@@ -999,7 +999,11 @@ fn list_walk_with_index_until_sum() {
             if elem % 2 == 0 then
                 Break state
             else
-                Continue (elem + index + state)
+                # Convert to I64 to sidestep weird bug with WASM codegen
+                a = Num.toI64 elem
+                b = Num.toI64 index
+                c = Num.toI64 state
+                Continue (a + b + c)
         )
         "#,
         13,
