@@ -53,9 +53,7 @@ build-nightly-release:
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc
-    # strip debug info
-    RUN strip ./target/release-with-lto/roc
+    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc --bin roc_ls
     RUN ./ci/package_release.sh $RELEASE_FOLDER_NAME
     RUN ls
     SAVE ARTIFACT ./$RELEASE_FOLDER_NAME.tar.gz AS LOCAL $RELEASE_FOLDER_NAME.tar.gz

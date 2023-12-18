@@ -1101,7 +1101,11 @@ where
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub fn to_https_problem_report_string(url: &str, https_problem: Problem) -> String {
+pub fn to_https_problem_report_string(
+    url: &str,
+    https_problem: Problem,
+    filename: PathBuf,
+) -> String {
     let src_lines: Vec<&str> = Vec::new();
 
     let mut module_ids = ModuleIds::default();
@@ -1115,7 +1119,7 @@ pub fn to_https_problem_report_string(url: &str, https_problem: Problem) -> Stri
 
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;
-    let report = to_https_problem_report(&alloc, url, https_problem);
+    let report = to_https_problem_report(&alloc, url, https_problem, filename);
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
@@ -1126,6 +1130,7 @@ pub fn to_https_problem_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     url: &'b str,
     https_problem: Problem,
+    filename: PathBuf,
 ) -> Report<'b> {
     match https_problem {
         Problem::UnsupportedEncoding(not_supported_encoding) => {
@@ -1154,7 +1159,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "UNSUPPORTED ENCODING".to_string(),
                 severity: Severity::Fatal,
@@ -1189,7 +1194,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "MULTIPLE ENCODINGS".to_string(),
                 severity: Severity::Fatal,
@@ -1224,7 +1229,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID CONTENT HASH".to_string(),
                 severity: Severity::Fatal,
@@ -1241,7 +1246,7 @@ pub fn to_https_problem_report<'b>(
                 alloc.concat([alloc.tip(), alloc.reflow(r"Is the URL correct?")]),
             ]);
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "NOTFOUND".to_string(),
                 severity: Severity::Fatal,
@@ -1268,7 +1273,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "IO ERROR".to_string(),
                 severity: Severity::Fatal,
@@ -1295,7 +1300,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "IO ERROR".to_string(),
                 severity: Severity::Fatal,
@@ -1324,7 +1329,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "HTTP ERROR".to_string(),
                 severity: Severity::Fatal,
@@ -1365,7 +1370,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID EXTENSION SUFFIX".to_string(),
                 severity: Severity::Fatal,
@@ -1398,7 +1403,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID EXTENSION".to_string(),
                 severity: Severity::Fatal,
@@ -1436,7 +1441,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID FRAGMENT".to_string(),
                 severity: Severity::Fatal,
@@ -1474,7 +1479,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "MISSING PACKAGE HASH".to_string(),
                 severity: Severity::Fatal,
@@ -1500,7 +1505,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "HTTPS MANDATORY".to_string(),
                 severity: Severity::Fatal,
@@ -1543,7 +1548,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "MISLEADING CHARACTERS".to_string(),
                 severity: Severity::Fatal,
@@ -1573,7 +1578,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE TOO LARGE".to_string(),
                 severity: Severity::Fatal,
@@ -1582,13 +1587,10 @@ pub fn to_https_problem_report<'b>(
     }
 }
 
-pub fn to_file_problem_report_string(filename: &Path, error: io::ErrorKind) -> String {
+pub fn to_file_problem_report_string(filename: PathBuf, error: io::ErrorKind) -> String {
     let src_lines: Vec<&str> = Vec::new();
-
     let mut module_ids = ModuleIds::default();
-
     let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
-
     let interns = Interns::default();
 
     // Report parsing and canonicalization problems
@@ -1604,16 +1606,16 @@ pub fn to_file_problem_report_string(filename: &Path, error: io::ErrorKind) -> S
 
 pub fn to_file_problem_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    filename: &Path,
+    filename: PathBuf,
     error: io::ErrorKind,
 ) -> Report<'b> {
-    let filename: String = filename.to_str().unwrap().to_string();
+    let filename_str: String = filename.to_str().unwrap().to_string();
     match error {
         io::ErrorKind::NotFound => {
             let doc = alloc.stack([
                 alloc.reflow(r"I am looking for this file, but it's not there:"),
                 alloc
-                    .string(filename)
+                    .string(filename_str)
                     .annotate(Annotation::ParserSuggestion)
                     .indent(4),
                 alloc.concat([
@@ -1623,7 +1625,7 @@ pub fn to_file_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE NOT FOUND".to_string(),
                 severity: Severity::Fatal,
@@ -1633,7 +1635,7 @@ pub fn to_file_problem_report<'b>(
             let doc = alloc.stack([
                 alloc.reflow(r"I don't have the required permissions to read this file:"),
                 alloc
-                    .string(filename)
+                    .string(filename_str)
                     .annotate(Annotation::ParserSuggestion)
                     .indent(4),
                 alloc
@@ -1641,7 +1643,7 @@ pub fn to_file_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE PERMISSION DENIED".to_string(),
                 severity: Severity::Fatal,
@@ -1652,13 +1654,16 @@ pub fn to_file_problem_report<'b>(
             let formatted = format!("{error}");
             let doc = alloc.stack([
                 alloc.reflow(r"I tried to read this file:"),
-                alloc.string(filename).annotate(Annotation::Error).indent(4),
+                alloc
+                    .string(filename_str)
+                    .annotate(Annotation::Error)
+                    .indent(4),
                 alloc.reflow(r"But ran into:"),
                 alloc.text(formatted).annotate(Annotation::Error).indent(4),
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE PROBLEM".to_string(),
                 severity: Severity::Fatal,

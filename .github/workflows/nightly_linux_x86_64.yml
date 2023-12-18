@@ -25,7 +25,7 @@ jobs:
         run: ./ci/write_version.sh
 
       - name: build release with lto
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc 
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc --bin roc_ls
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. This was also faster in our tests: https://roc.zulipchat.com/#narrow/stream/231635-compiler-development/topic/.2Ecargo.2Fconfig.2Etoml/near/325726299
 
       - name: get commit SHA

@@ -1,14 +1,16 @@
-Click the ☰ button in the top left to see and search the table of contents.
-
 # Frequently Asked Questions
 
 ## Where did the name Roc come from?
 
-<img width="128" alt="The Roc logo, an origami bird" src="https://user-images.githubusercontent.com/1094080/92188927-e61ebd00-ee2b-11ea-97ef-2fc88e0094b0.png">
-
 The Roc programming language is named after [a mythical bird](<https://en.wikipedia.org/wiki/Roc_(mythology)>).
 
-That’s why the logo is a bird. It’s specifically an [_origami_ bird](https://youtu.be/9gni1t1k1uY) as an homage
+<svg viewBox="0 0 52 53" xmlns="http://www.w3.org/2000/svg">
+  <!-- Make this icon look nicer in dark mode. (Only Firefox supports this; others ignore it.) -->
+  <style>@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}</style>
+  <polygon fill="#7d59dd" points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"/>
+</svg>
+
+That's why the logo is a bird. It’s specifically an [_origami_ bird](https://youtu.be/9gni1t1k1uY) as an homage
 to [Elm](https://elm-lang.org/)’s tangram logo.
 
 Roc is a direct descendant of Elm. The languages are similar, but not the same.
@@ -55,8 +57,10 @@ Both of these would make revising code riskier across the entire language, which
 Another option would be to define that function equality always returns `false`. So both of these would evaluate
 to `false`:
 
-- `(\x -> x + 1) == (\x -> 1 + x)`
-- `(\x -> x + 1) == (\x -> x + 1)`
+```roc
+(\x -> x + 1) == (\x -> 1 + x) #false
+(\x -> x + 1) == (\x -> x + 1) #false
+```
 
 This makes function equality effectively useless, while still technically allowing it. It has some other downsides:
 
@@ -252,11 +256,11 @@ the downsides.
 
 In Roc, both of these expressions evaluate to `"Hello, World!"`
 
-```elixir
+```roc
 Str.concat "Hello, " "World!"
 ```
 
-```elixir
+```roc
 "Hello, "
 |> Str.concat "World!"
 ```
@@ -273,12 +277,12 @@ In Roc, both expressions evaluate to the same thing because Roc's `|>` operator 
 
 This comes up in other situations besides string concatenation. For example, consider subtraction and division:
 
-```elixir
+```roc
 someNumber
 |> Num.div 2
 ```
 
-```elixir
+```roc
 someNumber
 |> Num.sub 1
 ```
@@ -292,7 +296,7 @@ experienced users.
 
 The way `|>` works in Roc has a second benefit when it comes to higher-order functions. Consider these two examples:
 
-```elixir
+```roc
 answer = List.map numbers \num ->
     someFunction
         "some argument"
@@ -300,7 +304,7 @@ answer = List.map numbers \num ->
         anotherArg
 ```
 
-```elixir
+```roc
 numbers
 |> List.map Num.abs
 ```
@@ -311,7 +315,7 @@ In a curried language, these two examples couldn't both be valid. In order for `
 
 This means the first example would have to change from this...
 
-```elixir
+```roc
 answer = List.map numbers \num ->
     someFunction
         "some argument"
@@ -321,7 +325,7 @@ answer = List.map numbers \num ->
 
 ...to this:
 
-```elixir
+```roc
 answer =
     List.map
         (\num ->
@@ -370,7 +374,7 @@ And however easy Roc would be to learn if it had currying, the language is certa
 a new function by composing together two existing functions without naming intermediate arguments.
 Here's an example:
 
-```elm
+```roc
 reverseSort : List elem -> List elem
 reverseSort = compose List.reverse List.sort
 
@@ -380,7 +384,7 @@ compose = \f, g, x -> f (g x)
 
 Here's a way to write it without pointfree function composition:
 
-```elm
+```roc
 reverseSort : List elem -> List elem
 reverseSort = \list -> List.reverse (List.sort list)
 ```
@@ -443,7 +447,3 @@ There were a few reasons for this rewrite.
 4. Zig has more tools for working in a memory-unsafe environment, such as reporting memory leaks in tests. These have been helpful in finding bugs that are out of scope for safe Rust.
 
 The split of Rust for the compiler and Zig for the standard library has worked well so far, and there are no plans to change it.
-
-## Why is the website so basic?
-
-We have a very basic website on purpose, it helps set expectations that roc is a work in progress and not ready yet for a first release.
