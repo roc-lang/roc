@@ -309,6 +309,8 @@ pub struct DocInfo {
     pub version: i32,
 }
 impl DocInfo {
+    #[cfg(debug_assertions)]
+    #[allow(unused)]
     fn debug_log_prefix(&self, offset: u32) {
         eprintln!("prefix source{:?}", self.source);
 

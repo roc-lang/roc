@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockWriteGuard};
 use tower_lsp::lsp_types::{
     CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
     TextEdit, Url,
@@ -10,51 +10,34 @@ use crate::analysis::{AnalyzedDocument, DocInfo};
 
 #[derive(Debug)]
 pub(crate) struct LatestDocument {
-    info: DocInfo,
-    //We can hold this mutex locked during updating while the latest and doc_info are out of sync
-    //the lock should be aquired and immediately freed by and task looking to get a copy of info
-    //At the top level we will need to store our lock
-    latest: tokio::sync::watch::Receiver<Option<Arc<AnalyzedDocument>>>,
-    latest_sender: tokio::sync::watch::Sender<Option<Arc<AnalyzedDocument>>>,
+    pub info: DocInfo,
+    analyzed: tokio::sync::RwLock<Option<Arc<AnalyzedDocument>>>,
 }
 impl LatestDocument {
     pub(crate) async fn get_latest(&self) -> Arc<AnalyzedDocument> {
-        let mut my_reciever = self.latest.clone();
-
-        let a = my_reciever.wait_for(|x| x.is_some()).await.unwrap();
-        match a.as_ref() {
-            Some(latest) => latest.clone(),
-            None => todo!(),
-        }
+        self.analyzed.read().await.as_ref().unwrap().clone()
     }
-    pub(crate) fn set_latest(&self, latest: Arc<AnalyzedDocument>) {
-        self.latest_sender.send(Some(latest)).unwrap()
-    }
-    pub(crate) fn waiting_for_doc(&self) -> bool {
-        self.latest.borrow().is_none()
+    pub(crate) fn get_lock(&self) -> RwLockWriteGuard<Option<Arc<AnalyzedDocument>>> {
+        self.analyzed.blocking_write()
     }
     pub(crate) fn new(doc_info: DocInfo) -> LatestDocument {
-        let chan = tokio::sync::watch::channel(None);
+        let val = RwLock::new(None);
         LatestDocument {
             info: doc_info,
-            latest_sender: chan.0,
-            latest: chan.1,
+            analyzed: val,
         }
     }
-    pub(crate) fn new_initialised(doc: Arc<AnalyzedDocument>) -> LatestDocument {
-        let info = doc.doc_info.clone();
-        let chan = tokio::sync::watch::channel(Some(doc));
+    pub(crate) fn new_initialised(analyzed: Arc<AnalyzedDocument>) -> LatestDocument {
         LatestDocument {
-            info,
-            latest_sender: chan.0,
-            latest: chan.1,
+            info: analyzed.doc_info.clone(),
+            analyzed: RwLock::new(Some(analyzed)),
         }
     }
 }
 
 #[derive(Debug)]
 pub(crate) struct DocumentPair {
-    latest_document: LatestDocument,
+    latest_document: Arc<LatestDocument>,
     last_good_document: Arc<AnalyzedDocument>,
 }
 
@@ -64,26 +47,28 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
+    pub async fn get_latest_version(&self, url: &Url) -> Option<i32> {
+        self.documents
+            .lock()
+            .await
+            .get(&url)
+            .map(|x| x.latest_document.info.version)
+    }
     fn update_document<'a>(
         documents: &mut MutexGuard<'a, HashMap<Url, DocumentPair>>,
         document: AnalyzedDocument,
     ) {
         let url = document.url().clone();
         let document = Arc::new(document);
-        let latest_doc = LatestDocument::new_initialised(document.clone());
+        let latest_doc = Arc::new(LatestDocument::new_initialised(document.clone()));
         match documents.get_mut(&url) {
             Some(old_doc) => {
-                //This is a special case where we know we should
-                if old_doc.latest_document.waiting_for_doc() {
-                    old_doc.latest_document.set_latest(document.clone());
-                }
                 if document.type_checked() {
                     *old_doc = DocumentPair {
                         latest_document: latest_doc,
                         last_good_document: document,
                     };
                 } else {
-                    //TODO this seems ugly but for now i'll let it slide. shoudl be immutable
                     *old_doc = DocumentPair {
                         latest_document: latest_doc,
                         last_good_document: old_doc.last_good_document.clone(),
@@ -102,7 +87,12 @@ impl Registry {
         }
     }
 
-    pub async fn apply_changes(&self, analysed_docs: Vec<AnalyzedDocument>) -> () {
+    pub async fn apply_changes<'a>(
+        &self,
+        analysed_docs: Vec<AnalyzedDocument>,
+        mut partial_writer: RwLockWriteGuard<'a, Option<Arc<AnalyzedDocument>>>,
+        updating_url: Url,
+    ) {
         let mut documents = self.documents.lock().await;
         eprintln!(
             "finised doc analysis updating docs {:?}",
@@ -111,13 +101,21 @@ impl Registry {
                 .map(|a| a.doc_info.url.to_string())
                 .collect::<Vec<_>>()
         );
+        let updates = analysed_docs.into_iter().filter_map(|a| {
+            if a.doc_info.url == updating_url {
+                *partial_writer = Some(Arc::new(a));
+                None
+            } else {
+                Some(a)
+            }
+        });
 
-        for document in analysed_docs {
+        for document in updates {
             Registry::update_document(&mut documents, document);
         }
     }
 
-    pub async fn apply_doc_info_changes(&self, url: Url, partial: DocInfo) {
+    pub async fn apply_doc_info_changes(&self, url: Url, partial: Arc<LatestDocument>) {
         let mut lock = self.documents.lock().await;
         let doc = lock.get_mut(&url);
         match doc {
@@ -125,10 +123,10 @@ impl Registry {
                 eprintln!(
                     "set the docInfo for {:?} to version:{:?}",
                     url.as_str(),
-                    partial.version
+                    partial.info.version
                 );
 
-                a.latest_document = LatestDocument::new(partial);
+                a.latest_document = partial;
             }
 
             None => (),
