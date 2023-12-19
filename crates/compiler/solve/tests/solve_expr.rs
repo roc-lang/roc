@@ -3769,6 +3769,14 @@ mod solve_expr {
     }
 
     #[test]
+    fn list_walk_with_index_until() {
+        infer_eq_without_problem(
+            indoc!(r#"List.walkWithIndexUntil"#),
+            "List elem, state, (state, elem, Nat -> [Break state, Continue state]) -> state",
+        );
+    }
+
+    #[test]
     fn list_drop_at() {
         infer_eq_without_problem(
             indoc!(

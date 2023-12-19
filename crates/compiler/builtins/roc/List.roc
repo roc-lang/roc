@@ -32,6 +32,7 @@ interface List
         product,
         walkWithIndex,
         walkUntil,
+        walkWithIndexUntil,
         walkFrom,
         walkFromUntil,
         range,
@@ -519,6 +520,25 @@ walkWithIndexHelp = \list, state, f, index, length ->
         walkWithIndexHelp list nextState f (Num.addWrap index 1) length
     else
         state
+
+## Like [walkUntil], but at each step the function also receives the index of the current element.
+walkWithIndexUntil : List elem, state, (state, elem, Nat -> [Continue state, Break state]) -> state
+walkWithIndexUntil = \list, state, f ->
+    when walkWithIndexUntilHelp list state f 0 (List.len list) is
+        Continue new -> new
+        Break new -> new
+
+## internal helper
+walkWithIndexUntilHelp : List elem, s, (s, elem, Nat -> [Continue s, Break b]), Nat, Nat -> [Continue s, Break b]
+walkWithIndexUntilHelp = \list, state, f, index, length ->
+    if index < length then
+        when f state (List.getUnsafe list index) index is
+            Continue nextState ->
+                walkWithIndexUntilHelp list nextState f (Num.addWrap index 1) length
+
+            Break b -> Break b
+    else
+        Continue state
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
