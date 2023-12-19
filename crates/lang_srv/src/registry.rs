@@ -1,4 +1,5 @@
-use std::{collections::HashMap, sync::Arc};
+use log::{debug, info};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockWriteGuard};
 use tower_lsp::lsp_types::{
@@ -13,12 +14,15 @@ pub(crate) struct LatestDocument {
     pub info: DocInfo,
     analyzed: tokio::sync::RwLock<Option<Arc<AnalyzedDocument>>>,
 }
+
 impl LatestDocument {
     pub(crate) async fn get_latest(&self) -> Arc<AnalyzedDocument> {
         self.analyzed.read().await.as_ref().unwrap().clone()
     }
-    pub(crate) fn get_lock(&self) -> RwLockWriteGuard<Option<Arc<AnalyzedDocument>>> {
-        self.analyzed.blocking_write()
+    pub(crate) fn get_lock(
+        &self,
+    ) -> impl Future<Output = RwLockWriteGuard<Option<Arc<AnalyzedDocument>>>> {
+        self.analyzed.write()
     }
     pub(crate) fn new(doc_info: DocInfo) -> LatestDocument {
         let val = RwLock::new(None);
@@ -56,10 +60,9 @@ impl Registry {
     }
     fn update_document<'a>(
         documents: &mut MutexGuard<'a, HashMap<Url, DocumentPair>>,
-        document: AnalyzedDocument,
+        document: Arc<AnalyzedDocument>,
     ) {
         let url = document.url().clone();
-        let document = Arc::new(document);
         let latest_doc = Arc::new(LatestDocument::new_initialised(document.clone()));
         match documents.get_mut(&url) {
             Some(old_doc) => {
@@ -94,42 +97,34 @@ impl Registry {
         updating_url: Url,
     ) {
         let mut documents = self.documents.lock().await;
-        eprintln!(
-            "finised doc analysis updating docs {:?}",
-            analysed_docs
-                .iter()
-                .map(|a| a.doc_info.url.to_string())
-                .collect::<Vec<_>>()
+        debug!(
+            "finised doc analysis for doc: {:?}",
+            updating_url.to_string()
         );
-        let updates = analysed_docs.into_iter().filter_map(|a| {
-            if a.doc_info.url == updating_url {
-                *partial_writer = Some(Arc::new(a));
-                None
-            } else {
-                Some(a)
-            }
-        });
 
-        for document in updates {
+        for document in analysed_docs {
+            let document = Arc::new(document);
+            //Write the newly analysed document into the partial document that any request requiring the latest document will be waiting on
+            if document.doc_info.url == updating_url {
+                *partial_writer = Some(document.clone());
+            }
             Registry::update_document(&mut documents, document);
         }
     }
 
     pub async fn apply_doc_info_changes(&self, url: Url, partial: Arc<LatestDocument>) {
-        let mut lock = self.documents.lock().await;
-        let doc = lock.get_mut(&url);
+        let mut documents_lock = self.documents.lock().await;
+        let doc = documents_lock.get_mut(&url);
         match doc {
             Some(a) => {
-                eprintln!(
+                debug!(
                     "set the docInfo for {:?} to version:{:?}",
                     url.as_str(),
                     partial.info.version
                 );
-
                 a.latest_document = partial;
             }
-
-            None => (),
+            None => debug!("no existing docinfo for {:?} ", url.as_str()),
         }
     }
 
@@ -139,6 +134,7 @@ impl Registry {
             .get(url)
             .map(|a| a.latest_document.info.clone())
     }
+
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
         match self.documents.lock().await.get(url) {
             Some(a) => Some(a.latest_document.get_latest().await),
@@ -149,6 +145,7 @@ impl Registry {
     pub async fn diagnostics(&self, url: &Url) -> Vec<Diagnostic> {
         let Some( document) = self.latest_document_by_url(url).await else {
             return vec![];
+
         };
         document.diagnostics()
     }
@@ -185,9 +182,11 @@ impl Registry {
     ) -> Option<CompletionResponse> {
         let lock = self.documents.lock().await;
         let pair = lock.get(url)?;
-        eprintln!("got document");
         let latest_doc_info = &pair.latest_document.info;
-        eprintln!("latest version:{:?} ", latest_doc_info.version);
+        info!(
+            "using document version:{:?} for completion ",
+            latest_doc_info.version
+        );
 
         let completions = pair
             .last_good_document

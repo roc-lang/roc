@@ -1,3 +1,4 @@
+use log::{debug, trace, warn};
 use roc_can::{
     def::Def,
     expr::{Declarations, Expr, WhenBranch},
@@ -25,7 +26,6 @@ impl Visitor for CompletionVisitor<'_> {
 
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region.contains_pos(self.position) {
-            // self.region_typ = Some((region, var));
             let mut res = self.expression_defs(expr);
             self.found_decls.append(&mut res);
 
@@ -40,8 +40,8 @@ impl Visitor for CompletionVisitor<'_> {
                 loc_body: loc_expr, ..
             }
             | DeclarationInfo::Destructure { loc_expr, .. } => {
-                let mut res = self.decl_to_completion_item(&decl);
-                self.found_decls.append(&mut res);
+                let res = self.decl_to_completion_item(&decl);
+                self.found_decls.extend(res);
                 if loc_expr.region.contains_pos(self.position) {
                     walk_decl(self, decl);
                 };
@@ -53,14 +53,14 @@ impl Visitor for CompletionVisitor<'_> {
     }
 
     fn visit_def(&mut self, def: &Def) {
-        let mut res = self.extract_defs(def);
-        self.found_decls.append(&mut res);
+        let res = self.extract_defs(def);
+        self.found_decls.extend(res);
         walk_def(self, def);
     }
 }
 impl CompletionVisitor<'_> {
     fn extract_defs(&mut self, def: &Def) -> Vec<(Symbol, Variable)> {
-        eprintln!("completion begin");
+        trace!("completion begin");
         def.pattern_vars
             .iter()
             .map(|(symbol, var)| (symbol.clone(), var.clone()))
@@ -70,37 +70,39 @@ impl CompletionVisitor<'_> {
         match expr {
             Expr::When {
                 expr_var, branches, ..
-            } => {
-                let out: Vec<_> = branches
-                    .iter()
-                    .flat_map(
-                        |WhenBranch {
-                             patterns, value, ..
-                         }| {
-                            if value.region.contains_pos(self.position) {
-                                patterns
-                                    .iter()
-                                    .flat_map(|pattern| {
-                                        //We use the expression var here because if the pattern is an identifier then it must have the type of the expession given to the when is block
-                                        self.patterns(&pattern.pattern.value, expr_var)
-                                    })
-                                    .collect()
-                            } else {
-                                vec![]
-                            }
-                        },
-                    )
-                    .collect();
-                out
-            }
+            } => self.when_is_expr(branches, expr_var),
             _ => vec![],
         }
     }
 
-    fn record_destructs(&self, destructs: &Vec<Loc<RecordDestruct>>) -> Vec<(Symbol, Variable)> {
+    ///Extract any variables made available by the branch of a when_is expression that contains `self.position`
+    fn when_is_expr(
+        &self,
+        branches: &Vec<WhenBranch>,
+        expr_var: &Variable,
+    ) -> Vec<(Symbol, Variable)> {
+        branches
+            .iter()
+            .flat_map(
+                |WhenBranch {
+                     patterns, value, ..
+                 }| {
+                    if value.region.contains_pos(self.position) {
+                        patterns
+                            .iter()
+                            .flat_map(|pattern| self.patterns(&pattern.pattern.value, expr_var))
+                            .collect()
+                    } else {
+                        vec![]
+                    }
+                },
+            )
+            .collect()
+    }
+
+    fn record_destructure(&self, destructs: &Vec<Loc<RecordDestruct>>) -> Vec<(Symbol, Variable)> {
         destructs
             .iter()
-            //TODO:I need to destructure value.typ here
             .flat_map(|a| match &a.value.typ {
                 roc_can::pattern::DestructType::Required
                 | roc_can::pattern::DestructType::Optional(_, _) => {
@@ -111,10 +113,9 @@ impl CompletionVisitor<'_> {
             .collect()
     }
 
-    fn tuple_destructs(&self, destructs: &Vec<Loc<TupleDestruct>>) -> Vec<(Symbol, Variable)> {
+    fn tuple_destructure(&self, destructs: &Vec<Loc<TupleDestruct>>) -> Vec<(Symbol, Variable)> {
         destructs
             .iter()
-            //TODO:I need to destructure value.typ here
             .flat_map(|a| {
                 let (var, pattern) = &a.value.typ;
                 self.patterns(&pattern.value, &var)
@@ -122,65 +123,62 @@ impl CompletionVisitor<'_> {
             .collect()
     }
 
-    fn list_destructure(
-        &self,
-        list_elems: &ListPatterns,
-        var: &Variable,
-    ) -> Vec<(Symbol, Variable)> {
+    fn list_pattern(&self, list_elems: &ListPatterns, var: &Variable) -> Vec<(Symbol, Variable)> {
         list_elems
             .patterns
             .iter()
-            //TODO:I need to destructure value.typ here
             .flat_map(|a| self.patterns(&a.value, var))
             .collect()
     }
-    fn tag_destructure(&self, arguments: &[(Variable, Loc<Pattern>)]) -> Vec<(Symbol, Variable)> {
+    fn tag_pattern(&self, arguments: &[(Variable, Loc<Pattern>)]) -> Vec<(Symbol, Variable)> {
         arguments
             .iter()
             .flat_map(|(var, pat)| self.patterns(&pat.value, var))
             .collect()
     }
 
-    fn as_pattern(&self, as_pat: &Pattern, as_symbol: Symbol) -> Option<(Symbol, Variable)> {
-        let var = match as_pat {
-            Pattern::AppliedTag { whole_var, .. } => whole_var,
-            Pattern::UnwrappedOpaque { whole_var, .. } => whole_var,
-            Pattern::RecordDestructure { whole_var, .. } => whole_var,
-            Pattern::TupleDestructure { whole_var, .. } => whole_var,
-            Pattern::List { list_var, .. } => list_var,
-            _ => return None,
-        };
-        Some((as_symbol, var.clone()))
+    fn as_pattern(
+        &self,
+        as_pat: &Pattern,
+        as_symbol: Symbol,
+        var: &Variable,
+    ) -> Vec<(Symbol, Variable)> {
+        //Get the variables introduced within the pattern
+        let mut patterns = self.patterns(as_pat, var);
+        //Add the "as" that wraps the whole pattern
+        patterns.push((as_symbol, var.clone()));
+        patterns
     }
+    ///Returns a list of symbols defined by this pattern.  
+    ///`pattern_var`: Variable type of the entire pattern. This will be returned if the pattern turns out to be an identifier
     fn patterns(
         &self,
         pattern: &roc_can::pattern::Pattern,
-        var: &Variable,
+        pattern_var: &Variable,
     ) -> Vec<(Symbol, Variable)> {
         match pattern {
             roc_can::pattern::Pattern::Identifier(symbol) => {
                 if self.is_match(symbol) {
-                    vec![(symbol.clone(), var.clone())]
+                    vec![(symbol.clone(), pattern_var.clone())]
                 } else {
                     vec![]
                 }
             }
-            Pattern::AppliedTag { arguments, .. } => self.tag_destructure(arguments),
+            Pattern::AppliedTag { arguments, .. } => self.tag_pattern(arguments),
             Pattern::UnwrappedOpaque { argument, .. } => {
                 self.patterns(&argument.1.value, &argument.0)
             }
             Pattern::List {
                 elem_var, patterns, ..
-            } => self.list_destructure(patterns, elem_var),
-            roc_can::pattern::Pattern::As(pat, symbol) => self
-                .as_pattern(&pat.value, symbol.clone())
-                .map(|a| vec![a])
-                .unwrap_or(vec![]),
+            } => self.list_pattern(patterns, elem_var),
+            roc_can::pattern::Pattern::As(pat, symbol) => {
+                self.as_pattern(&pat.value, symbol.clone(), pattern_var)
+            }
             roc_can::pattern::Pattern::RecordDestructure { destructs, .. } => {
-                self.record_destructs(destructs)
+                self.record_destructure(destructs)
             }
             roc_can::pattern::Pattern::TupleDestructure { destructs, .. } => {
-                self.tuple_destructs(destructs)
+                self.tuple_destructure(destructs)
             }
             _ => vec![],
         }
@@ -202,20 +200,20 @@ impl CompletionVisitor<'_> {
                 loc_body,
                 ..
             } => {
-                let mut out: Vec<_> = vec![];
-                //append the function declaration
-                out.append(&mut self.patterns(pattern, expr_var));
+                let mut out = vec![];
+                //Append the function declaration itself for recursive calls
+                out.extend(self.patterns(pattern, expr_var));
 
                 if loc_body.region.contains_pos(self.position) {
                     //also add the arguments if we are inside the function
-                    let mut args: Vec<_> = function
+                    let args: Vec<_> = function
                         .value
                         .arguments
                         .iter()
-                        .flat_map(|(var, _1, pat)| self.patterns(&pat.value, var))
+                        .flat_map(|(var, _, pat)| self.patterns(&pat.value, var))
                         //We add in the pattern for the function declaration
                         .collect();
-                    out.append(&mut args);
+                    out.extend(args);
                 }
                 out
             }
@@ -262,7 +260,7 @@ fn make_completion_item(
             _ => CompletionItemKind::VARIABLE,
         },
         a => {
-            eprintln!(
+            debug!(
                 "No specific completionKind for variable type :{:?} defaulting to 'Variable'",
                 a
             );
@@ -290,29 +288,17 @@ pub fn get_completion_items(
     interns: &Interns,
 ) -> Vec<CompletionItem> {
     let completions = get_completions(position, decls, prefix, interns);
-    make_completion_items(subs, module_id, interns, completions)
+    make_completion_items(
+        subs,
+        module_id,
+        interns,
+        completions
+            .into_iter()
+            .map(|(symb, var)| (symb.as_str(interns).to_string(), var))
+            .collect(),
+    )
 }
-pub fn make_completion_items(
-    subs: &mut Subs,
-    module_id: &ModuleId,
-    interns: &Interns,
-    completions: Vec<(Symbol, Variable)>,
-) -> Vec<CompletionItem> {
-    completions
-        .into_iter()
-        .map(|(symbol, var)| {
-            make_completion_item(
-                subs,
-                module_id,
-                interns,
-                symbol.as_str(interns).to_string(),
-                var,
-            )
-        })
-        .collect()
-}
-
-fn make_completion_items_string(
+fn make_completion_items(
     subs: &mut Subs,
     module_id: &ModuleId,
     interns: &Interns,
@@ -324,43 +310,31 @@ fn make_completion_items_string(
         .collect()
 }
 
-///Gets completion items for a record field
-///Uses
+///Finds the types of and names of all the fields of a record
+///`var` should be a `Variable` that you know is a record's type or else it will return an empty list
 fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)> {
     let content = subs.get(var);
     match content.content {
         roc_types::subs::Content::Structure(typ) => match typ {
             roc_types::subs::FlatType::Record(fields, ext) => {
                 let field_types = fields.unsorted_iterator(subs, ext);
-                let fields: Vec<_> = match field_types {
+
+                match field_types {
                     Ok(field) => field
-                        .map(|a| {
-                            let var = match a.1 {
-                                roc_types::types::RecordField::Demanded(var)
-                                | roc_types::types::RecordField::Required(var)
-                                | roc_types::types::RecordField::Optional(var)
-                                | roc_types::types::RecordField::RigidRequired(var)
-                                | roc_types::types::RecordField::RigidOptional(var) => var,
-                            };
-                            (a.0.clone().into(), var)
-                        })
-                        .collect(),
+                        .map(|a| (a.0.clone().into(), a.1.into_inner()))
+                        .collect::<Vec<_>>(),
                     Err(err) => {
-                        eprintln!(
-                            "WARN:Error getting record field types for completion{:?}",
-                            err
-                        );
+                        warn!("Error getting record field types for completion{:?}", err);
                         vec![]
                     }
-                };
-                fields
+                }
             }
             roc_types::subs::FlatType::Tuple(elems, ext) => {
                 let elems = elems.unsorted_iterator(subs, ext);
-                let elems: Vec<_> = match elems {
+                let elems = match elems {
                     Ok(elem) => elem.map(|(num, var)| (num.to_string(), var)).collect(),
                     Err(err) => {
-                        eprintln!("WARN:Error getting tuple elems for completion{:?}", err);
+                        warn!("Error getting tuple elems for completion{:?}", err);
                         vec![]
                     }
                 };
@@ -368,36 +342,48 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
             }
 
             _ => {
-                eprintln!(
-                    "WARN: Trying to get field completion for a type that is not a record   ",
-                );
+                warn!("Trying to get field completion for a type that is not a record ",);
                 vec![]
             }
         },
         roc_types::subs::Content::Error => {
             //This is caused by typechecking our partially typed variable name causing the typechecking to be confused as the type of the parent variable
             //TODO! ideally i could recover using some previous typecheck result that isn't broken
-            eprintln!("ERROR: variable type of record was of type error cannot access field",);
+            warn!("Variable type of record was of type 'error', cannot access field",);
             vec![]
         }
-        a => {
-            eprintln!("variable before field was unsuported type:{:?}", a);
+        _ => {
+            warn!(
+                "Variable before field was unsuported type:{:?}",
+                subs.dbg(var)
+            );
             vec![]
         }
     }
 }
-///Splits a completion prefix for a field into it's components
-//eg a.b.c.d->("a",["b","c"],"d")
-fn get_field_completion_parts(symbol_prefix: &String) -> Option<(String, Vec<String>, String)> {
-    let parts: Vec<_> = symbol_prefix.split('.').collect();
-    let (variable, fields) = parts.split_first()?;
 
-    let (field, middle) = match fields.split_last() {
-        Some(a) => (a.0.to_string(), a.1.iter().map(|x| x.to_string()).collect()),
-
+struct FieldCompletion {
+    var: String,
+    field: String,
+    remaining_chain: Vec<String>,
+}
+///Splits a completion prefix for a field into its components
+///E.g. a.b.c.d->("a",["b","c"],"d")
+fn get_field_completion_parts(symbol_prefix: &str) -> Option<FieldCompletion> {
+    let mut parts = symbol_prefix.split('.');
+    let variable = parts.next()?;
+    let field = parts.next();
+    let remaining = parts;
+    let (field, remaining_chain) = match field {
+        Some(f) => (f.to_string(), remaining.map(ToString::to_string).collect()),
         None => ("".to_string(), vec![]),
     };
-    Some((variable.to_string(), middle, field))
+
+    Some(FieldCompletion {
+        var: variable.to_string(),
+        field,
+        remaining_chain,
+    })
 }
 pub fn field_completion(
     position: Position,
@@ -407,27 +393,30 @@ pub fn field_completion(
     subs: &mut Subs,
     module_id: &ModuleId,
 ) -> Option<Vec<CompletionItem>> {
-    eprintln!("getting record field completions: ");
-    let (variable, middle, field) = get_field_completion_parts(&symbol_prefix)?;
+    let FieldCompletion {
+        var,
+        field,
+        remaining_chain,
+    } = get_field_completion_parts(&symbol_prefix)?;
 
-    eprintln!(
+    debug!(
         "getting record field completions: variable:{:?} field{:?} middle{:?} ",
-        variable, field, middle
+        var, field, remaining_chain
     );
     //get the variable from within the region
     //TODO: this is kind of just a hack. We are gettting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
-    let completion = get_completions(position, declarations, variable.to_string(), interns)
+    let completion = get_completions(position, declarations, var.to_string(), interns)
         .into_iter()
         .map(|a| (a.0.as_str(&interns).to_string(), a.1))
         .next()?;
 
     //We iterate through all the intermediate chunks eg var.field1.field2.field3 this iterates through fields until we get to field2, becuase it's second last
-    let second_last = middle.iter().fold(completion, |state, a| {
+    let second_last = remaining_chain.iter().fold(completion, |state, a| {
         let fields_vars = find_record_fields(state.1, subs);
-        match fields_vars.into_iter().find(|field| a == &field.0) {
-            None => state,
-            Some(a) => a,
-        }
+        fields_vars
+            .into_iter()
+            .find(|field| a == &field.0)
+            .unwrap_or(state)
     });
 
     let field_completions: Vec<_> = find_record_fields(second_last.1, subs)
@@ -435,7 +424,6 @@ pub fn field_completion(
         .filter(|(str, _)| str.starts_with(&field.to_string()))
         .collect();
 
-    let field_completions =
-        make_completion_items_string(subs, module_id, interns, field_completions);
+    let field_completions = make_completion_items(subs, module_id, interns, field_completions);
     Some(field_completions)
 }

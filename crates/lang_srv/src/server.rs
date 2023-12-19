@@ -1,4 +1,5 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
+use log::debug;
 use registry::Registry;
 use std::future::Future;
 use tokio::sync::RwLock;
@@ -18,10 +19,10 @@ mod registry;
 #[derive(Debug)]
 struct RocLs {
     pub inner: Arc<Inner>,
+    client: Client,
 }
 #[derive(Debug)]
 struct Inner {
-    client: Client,
     registry: RwLock<Registry>,
 }
 
@@ -30,10 +31,8 @@ impl std::panic::RefUnwindSafe for RocLs {}
 impl RocLs {
     pub fn new(client: Client) -> Self {
         Self {
-            inner: Arc::new(Inner {
-                client,
-                registry: RwLock::new(Registry::default()),
-            }),
+            inner: Arc::new(Inner::new()),
+            client,
         }
     }
     ///Wait for all the semaphores associated with an in-progress document_info update to be released
@@ -91,13 +90,52 @@ impl RocLs {
 
     /// Records a document content change.
     async fn change(&self, fi: Url, text: String, version: i32) {
-        eprintln!("starting change");
-        let registry_write_lock = self.inner.registry.write().await;
+        let updating_result = self.inner.change(&fi, text, version).await;
 
-        eprintln!("finished checking for cancellation");
+        //The analysis task can be cancelled by another change coming in which will update the watched variable
+        if let Err(e) = updating_result {
+            debug!("cancelled change. Reason:{:?}", e);
+            return;
+        }
+        debug!("applied_change getting and returning diagnostics");
+
+        let diagnostics = self.inner.registry().await.diagnostics(&fi).await;
+
+        self.client
+            .publish_diagnostics(fi, diagnostics, Some(version))
+            .await;
+    }
+}
+
+impl Inner {
+    pub fn new() -> Inner {
+        Self {
+            registry: RwLock::new(Registry::default()),
+        }
+    }
+
+    fn registry(&self) -> impl Future<Output = tokio::sync::RwLockReadGuard<Registry>> {
+        self.registry.read()
+    }
+
+    async fn close(&self, _fi: Url) {
+        ()
+    }
+
+    pub async fn change(
+        &self,
+        fi: &Url,
+        text: String,
+        version: i32,
+    ) -> std::result::Result<(), String> {
+        debug!("starting change");
+        let registry_write_lock = self.registry.write().await;
+
+        debug!("change aquired registry lock");
         let (results, partial) = global_analysis(fi.clone(), text, version);
         let partial_document = Arc::new(LatestDocument::new(partial.clone()));
-        let partial_doc_write_lock = partial_document.get_lock();
+        //TODO check if allowing context switching here is an issue
+        let partial_doc_write_lock = partial_document.get_lock().await;
 
         registry_write_lock
             .apply_doc_info_changes(fi.clone(), partial_document.clone())
@@ -105,29 +143,27 @@ impl RocLs {
         //Now that we've got our new partial document written and we hold the exclusive write_handle to its analysis we can allow other tasks to access the registry and the doc_info inside this partial document
         drop(registry_write_lock);
 
-        eprintln!("finished updating docinfo, starting analysis ",);
+        debug!("finished updating docinfo, starting analysis ",);
 
-        let inner_ref = self.inner.clone();
+        let inner_ref = self.clone();
         let updating_result = async {
             let results = match tokio::task::spawn_blocking(results).await {
-                Err(e) => return Err(format!("document analysis failed. reason:{:?}", e)),
+                Err(e) => return Err(format!("Document analysis failed. reason:{:?}", e)),
                 Ok(a) => a,
             };
-            let latest_version = inner_ref
-                .registry
-                .read()
-                .await
-                .get_latest_version(&fi)
-                .await;
+            let latest_version = inner_ref.registry.read().await.get_latest_version(fi).await;
 
             //if this version is not the latest another change must have come in and this analysis is useless
             //if there is no older version we can just proceed with the update
             if let Some(latest_version) = latest_version {
-                return Err(format!(
-                    "version {0} doesn't match latest: {1} discarding analysis  ",
-                    version, latest_version
-                ));
+                if latest_version != version {
+                    return Err(format!(
+                        "version {0} doesn't match latest: {1} discarding analysis  ",
+                        version, latest_version
+                    ));
+                }
             }
+            debug!("finished updating documents returning ",);
 
             inner_ref
                 .registry
@@ -138,30 +174,8 @@ impl RocLs {
             Ok(())
         }
         .await;
-
-        //The analysis task can be cancelled by another change coming in which will update the watched variable
-        if let Err(e) = updating_result {
-            eprintln!("cancelled change. Reason:{:?}", e);
-            return;
-        }
-        eprintln!("applied_change getting and returning diagnostics");
-
-        let diagnostics = self.inner.registry().await.diagnostics(&fi).await;
-
-        self.inner
-            .client
-            .publish_diagnostics(fi, diagnostics, Some(version))
-            .await;
-    }
-}
-
-impl Inner {
-    fn registry(&self) -> impl Future<Output = tokio::sync::RwLockReadGuard<Registry>> {
-        self.registry.read()
-    }
-
-    async fn close(&self, _fi: Url) {
-        ()
+        debug!("finished updating documents returning ",);
+        updating_result
     }
 }
 
@@ -175,8 +189,7 @@ impl LanguageServer for RocLs {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        self.inner
-            .client
+        self.client
             .log_message(MessageType::INFO, "Roc language server initialized.")
             .await;
     }
@@ -283,11 +296,6 @@ impl LanguageServer for RocLs {
     }
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
-        eprintln!("starting completion");
-
-        //We need to wait untill any changes that were in progress when we requested completion have applied
-        eprintln!("waited for doc update to get sorted ");
-
         let res = panic_wrapper_async(|| async {
             self.inner
                 .registry()
@@ -296,8 +304,6 @@ impl LanguageServer for RocLs {
                 .await
         })
         .await;
-
-        eprintln!("finished completion");
         res
     }
 }
@@ -316,9 +322,152 @@ where
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
     let (service, socket) = LspService::new(RocLs::new);
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{Once, OnceLock},
+        time::Duration,
+    };
+
+    use insta::assert_debug_snapshot;
+    use tokio::{join, spawn};
+
+    use super::*;
+    const DOC_LIT: &str = r#"
+app "fizz-buzz"
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+    imports [pf.Stdout,pf.Task.{ Task, await },]
+    provides [main] to pf
+"#;
+    static INIT: Once = Once::new();
+    async fn test_setup(doc: String) -> (Inner, Url) {
+        INIT.call_once(|| {
+            env_logger::builder()
+                .is_test(true)
+                .filter_level(log::LevelFilter::Trace)
+                .init();
+        });
+        // static INNER_CELL: OnceLock<Inner> = OnceLock::new();
+        // INNER_CELL.set(Inner::new()).unwrap();
+        // static URL_CELL: OnceLock<Url> = OnceLock::new();
+        // URL_CELL.set().unwrap()).unwrap();
+
+        // let inner = INNER_CELL.get().unwrap();
+        let url = Url::parse("file:/test.roc").unwrap();
+
+        let inner = Inner::new();
+        //setup the file
+        inner.change(&url, doc, 0).await.unwrap();
+        (inner, url)
+    }
+
+    #[tokio::test]
+    async fn test_inner_change() {
+        let doc = DOC_LIT.to_string()
+            + r#"rec=\a,b->{one:{potato:\d->d,leak:59},two:b}
+rectest= 
+  value= rec 1 2
+  va"#;
+        let (inner, url) = test_setup(doc.clone()).await;
+        static INNER_CELL: OnceLock<Inner> = OnceLock::new();
+        INNER_CELL.set(inner).unwrap();
+        static URL_CELL: OnceLock<Url> = OnceLock::new();
+        URL_CELL.set(url).unwrap();
+
+        let inner = INNER_CELL.get().unwrap();
+        let url = URL_CELL.get().unwrap();
+        let position = Position::new(8, 8);
+        //setup the file
+        inner.change(&url, doc.clone(), 1).await.unwrap();
+
+        //apply a sequence of changes back to back
+        let a1 = spawn(inner.change(&url, doc.clone() + "l", 2));
+        let a2 = spawn(inner.change(&url, doc.clone() + "lu", 3));
+        let a3 = spawn(inner.change(&url, doc.clone() + "lue", 4));
+        let a4 = spawn(inner.change(&url, doc.clone() + "lue.", 5));
+        //start a completion that would only work if all changes have been applied
+        let comp = spawn(async move {
+            let url2 = url.clone();
+            let reg = inner.registry().await;
+            reg.completion_items(&url2, position).await
+        });
+        // Simulate two changes coming in with a slight delay
+        let a = spawn(inner.change(&url, doc.clone() + "lue.o", 6));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let rest = spawn(inner.change(&url, doc.clone() + "lue.on", 7));
+
+        let done = join!(a1, a2, a3, a4, comp, a, rest);
+
+        assert_debug_snapshot!(done)
+    }
+    #[tokio::test]
+    async fn test_as_identifier() {
+        let suffix = DOC_LIT.to_string()
+            + r#"
+main =
+  when a is
+    inn as outer -> "#;
+        let (inner, url) = test_setup(suffix.clone()).await;
+        //test compltion for outer
+        let position = Position::new(8, 21);
+
+        let change = suffix.clone() + "o";
+        inner.change(&url, change, 1).await.unwrap();
+        let comp1 = inner
+            .registry()
+            .await
+            .completion_items(&url, position)
+            .await;
+
+        let c = suffix.clone() + "i";
+        inner.change(&url, c, 2).await.unwrap();
+        let comp2 = inner
+            .registry()
+            .await
+            .completion_items(&url, position)
+            .await;
+
+        let actual = [comp1, comp2];
+        assert_debug_snapshot!(actual)
+    }
+
+    #[tokio::test]
+    async fn test_as_record() {
+        let doc = DOC_LIT.to_string()
+            + r#"
+main =
+  when a is
+    {one,two} as outer -> "#;
+        let (inner, url) = test_setup(doc.clone()).await;
+        //test compltion for outer
+        let position = Position::new(8, 27);
+
+        let change = doc.clone() + "o";
+        inner.change(&url, change, 1).await.unwrap();
+        let comp1 = inner
+            .registry()
+            .await
+            .completion_items(&url, position)
+            .await;
+
+        let c = doc.clone() + "t";
+        inner.change(&url, c, 2).await.unwrap();
+        let comp2 = inner
+            .registry()
+            .await
+            .completion_items(&url, position)
+            .await;
+
+        let actual = [comp1, comp2];
+        assert_debug_snapshot!(actual);
+    }
 }

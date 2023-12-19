@@ -1,3 +1,4 @@
+use log::debug;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -53,6 +54,9 @@ fn format_var_type(
     subs.rollback_to(snapshot);
     type_str
 }
+fn is_roc_identifier_char(char: &char) -> bool {
+    matches!(char,'a'..='z'|'A'..='Z'|'0'..='9'|'.')
+}
 ///Returns a closure that will run the global analysis and the docinfo for the provided source
 ///This means that you can get positions within the source code before the analysis completes
 pub(crate) fn global_analysis(
@@ -72,7 +76,7 @@ pub(crate) fn global_analysis(
     };
     //We will return this before the analysis has completed to enable completion
     let doc_info_return = doc_info.clone();
-    let documents_future = move || {
+    let perform_analysis = move || {
         let arena = Bump::new();
         let loaded = roc_load::load_and_typecheck_str(
             &arena,
@@ -141,7 +145,7 @@ pub(crate) fn global_analysis(
 
         documents
     };
-    (documents_future, doc_info_return)
+    (perform_analysis, doc_info_return)
 }
 
 fn find_src_dir(path: &Path) -> &Path {
@@ -311,22 +315,19 @@ pub struct DocInfo {
 impl DocInfo {
     #[cfg(debug_assertions)]
     #[allow(unused)]
-    fn debug_log_prefix(&self, offset: u32) {
-        eprintln!("prefix source{:?}", self.source);
+    fn debug_log_prefix(&self, offset: usize) {
+        debug!("prefix source{:?}", self.source);
 
-        let last_few = self
-            .source
-            .split_at((offset - 5) as usize)
-            .1
-            .split_at((offset + 5) as usize)
-            .0;
-        let splitter = last_few.split_at(5);
+        let last_few = self.source.get(offset - 5..offset + 5).unwrap();
 
-        eprintln!(
+        let (before, after) = last_few.split_at(5);
+
+        debug!(
             "starting to get completion items at offset:{:?} content:: '{:?}|{:?}'",
-            offset, splitter.0, splitter.1
+            offset, before, after
         );
     }
+
     fn whole_document_range(&self) -> Range {
         let start = Position::new(0, 0);
         let end = Position::new(self.line_info.num_lines(), 0);
@@ -334,18 +335,16 @@ impl DocInfo {
     }
     pub fn get_prefix_at_position(&self, position: Position) -> String {
         let position = position.to_roc_position(&self.line_info);
-        let offset = position.offset;
-        let source = self.source.as_bytes().split_at(offset as usize).0;
-        let mut symbol = source
+        let offset = position.offset as usize;
+        let source = &self.source.as_bytes()[..offset];
+        let symbol_len = source
             .iter()
             .rev()
-            //TODO proper regex here
-            .take_while(|&&a| matches!(a as char,'a'..='z'|'A'..='Z'|'0'..='9'|'_'|'.'))
-            .map(|&a| a)
-            .collect::<Vec<u8>>();
-        symbol.reverse();
+            .take_while(|&a| is_roc_identifier_char(&(*a as char)))
+            .count();
+        let symbol = &self.source[offset - symbol_len..offset];
 
-        String::from_utf8(symbol).unwrap()
+        String::from(symbol)
     }
     pub fn format(&self) -> Option<Vec<TextEdit>> {
         let source = &self.source;
@@ -473,7 +472,7 @@ impl AnalyzedDocument {
         latest_doc: &DocInfo,
     ) -> Option<Vec<CompletionItem>> {
         let symbol_prefix = latest_doc.get_prefix_at_position(position);
-        eprintln!(
+        debug!(
             "starting to get completion items for prefix: {:?} docVersion:{:?}",
             symbol_prefix, latest_doc.version
         );
@@ -483,7 +482,7 @@ impl AnalyzedDocument {
         //TODO: this is kind of a hack and should be removed once we can do some minimal parsing without full type checking
         let mut position = position.to_roc_position(&latest_doc.line_info);
         position.offset = (position.offset as i32 - len_diff - 1) as u32;
-        eprintln!("completion offset: {:?}", position.offset);
+        debug!("completion offset: {:?}", position.offset);
 
         let AnalyzedModule {
             module_id,
@@ -512,7 +511,6 @@ impl AnalyzedDocument {
                 module_id,
                 interns,
             );
-            eprintln!("got completions: ");
             Some(completions)
         }
     }

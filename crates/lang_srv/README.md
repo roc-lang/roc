@@ -78,3 +78,7 @@ If you're using coc.nvim and want to use the configuration above, be sure to als
 
 If you want to debug the server, use [debug_server.sh](./debug_server.sh)
 instead of the direct binary.
+
+If you would like to enable debug logging set the `RUST_LOG` environment variable to `debug` or `trace` for even more logs. 
+eg: `RUST_LOG=debug`  
+
