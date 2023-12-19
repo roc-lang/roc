@@ -2297,6 +2297,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_cache"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "pretty_assertions",
+]
+
+[[package]]
 name = "roc_can"
 version = "0.0.1"
 dependencies = [

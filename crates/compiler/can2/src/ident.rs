@@ -1,7 +1,5 @@
 use core::fmt;
-
-#[cfg(not(debug_assertions))]
-use core::marker::PhantomData;
+use bumpalo::{collections::Vec, Bump};
 
 /// The index within a module of a particular identifier.
 /// In release builds, this is a single u32. This means that
@@ -42,24 +40,22 @@ impl<'a> fmt::Debug for Ident<'a> {
 }
 
 pub struct ModuleIdents<'a> {
-    next: usize,
+    /// Each Ident gets its own entry in this Vec, and
+    depends_on: Vec<'a, Vec<'a, Ident<'a>>>,
 
     #[cfg(debug_assertions)]
     module_name: &'a str,
-
-    #[cfg(not(debug_assertions))]
-    _phantom: PhantomData<'a>,
 }
 
 impl<'a> ModuleIdents<'a> {
     #[cfg(debug_assertions)]
-    pub fn new(module_name: &'a str) -> Self {
-        Self { next: 0, module_name, }
+    pub fn with_capacity(arena: &'a Bump, cap: usize, module_name: &'a str) -> Self {
+        Self { depends_on: Vec::with_capacity_in(cap, arena), module_name }
     }
 
     #[cfg(not(debug_assertions))]
-    pub fn new() -> Self {
-        Self { next: 0, _phantom: PhantomData::default() }
+    pub fn with_capacity(arena: &'a Bump, cap: usize) -> Self {
+        Self { depends_on: Vec::with_capacity_in(cap, arena), _phantom: PhantomData::default() }
     }
 
     #[cfg(debug_assertions)]

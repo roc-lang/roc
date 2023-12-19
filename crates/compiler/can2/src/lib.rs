@@ -1,3 +1,5 @@
 pub mod defs;
 pub mod ir;
-pub mod ident_index;
+pub mod ident;
+pub mod module;
+pub mod interns;
