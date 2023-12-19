@@ -55,6 +55,7 @@ pub const FLAG_PROFILING: &str = "profiling";
 pub const FLAG_BUNDLE: &str = "bundle";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
+pub const FLAG_WATCH: &str = "watch";
 pub const FLAG_MAX_THREADS: &str = "max-threads";
 pub const FLAG_OPT_SIZE: &str = "opt-size";
 pub const FLAG_LIB: &str = "lib";
@@ -83,6 +84,12 @@ pub fn build_app() -> Command {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
         .help("Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
+    let flag_watch = Arg::new(FLAG_WATCH)
+        .long(FLAG_WATCH)
+        .help("Watch the filesystem and re-run whenever relevant files change.")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -225,6 +232,7 @@ pub fn build_app() -> Command {
         .subcommand(Command::new(CMD_TEST)
             .about("Run all top-level `expect`s in a main module and any modules it imports")
             .arg(flag_optimize.clone())
+            .arg(flag_watch.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
@@ -249,6 +257,7 @@ pub fn build_app() -> Command {
         .subcommand(Command::new(CMD_RUN)
             .about("Run a .roc file even if it has build errors")
             .arg(flag_optimize.clone())
+            .arg(flag_watch.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
@@ -264,6 +273,7 @@ pub fn build_app() -> Command {
         .subcommand(Command::new(CMD_DEV)
             .about("`check` a .roc file, and then run it if there were no errors")
             .arg(flag_optimize.clone())
+            .arg(flag_watch.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
@@ -313,6 +323,7 @@ pub fn build_app() -> Command {
             .about("Check the code for problems, but don’t build or run it")
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
+            .arg(flag_watch)
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
@@ -436,7 +447,7 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 }
 
 #[cfg(not(windows))]
-pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+pub fn test(matches: &ArgMatches, triple: Triple, watch: bool) -> io::Result<i32> {
     use roc_build::program::report_problems_monomorphized;
     use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
@@ -455,7 +466,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
 
-    // Spawn the root task
     if !path.exists() {
         let current_dir = env::current_dir().unwrap();
         let expected_file_path = current_dir.join(path);
@@ -595,6 +605,7 @@ pub fn build(
     matches: &ArgMatches,
     subcommands: &[String],
     config: BuildConfig,
+    watch: bool,
     triple: Triple,
     out_path: Option<&Path>,
     roc_cache_dir: RocCacheDir<'_>,

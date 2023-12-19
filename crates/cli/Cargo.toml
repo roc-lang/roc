@@ -61,6 +61,8 @@ roc_wasm_interp = { path = "../wasm_interp", optional = true }
 
 ven_pretty = { path = "../vendor/pretty" }
 
+notify = "6.1.1"
+
 bumpalo.workspace = true
 clap.workspace = true
 const_format.workspace = true

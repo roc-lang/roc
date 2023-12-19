@@ -6,8 +6,8 @@ use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
     CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
-    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
-    GLUE_SPEC, ROC_FILE,
+    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, FLAG_WATCH,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -49,6 +49,7 @@ fn main() -> io::Result<()> {
                     &matches,
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
+                    false,
                     Triple::host(),
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -64,6 +65,7 @@ fn main() -> io::Result<()> {
                     matches,
                     &subcommands,
                     BuildConfig::BuildAndRun,
+                    matches.get_flag(FLAG_WATCH),
                     Triple::host(),
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -77,7 +79,7 @@ fn main() -> io::Result<()> {
         }
         Some((CMD_TEST, matches)) => {
             if matches.contains_id(ROC_FILE) {
-                test(matches, Triple::host())
+                test(matches, Triple::host(), matches.get_flag(FLAG_WATCH))
             } else {
                 eprintln!("What .roc file do you want to test? Specify it at the end of the `roc test` command.");
 
@@ -90,6 +92,7 @@ fn main() -> io::Result<()> {
                     matches,
                     &subcommands,
                     BuildConfig::BuildAndRunIfNoErrors,
+                    matches.get_flag(FLAG_WATCH),
                     Triple::host(),
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -184,6 +187,7 @@ fn main() -> io::Result<()> {
                 matches,
                 &subcommands,
                 BuildConfig::BuildOnly,
+                matches.get_flag(FLAG_WATCH),
                 target.to_triple(),
                 out_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
@@ -208,6 +212,7 @@ fn main() -> io::Result<()> {
                 emit_timings,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 threading,
+                matches.get_flag(FLAG_WATCH),
             ) {
                 Ok((problems, total_time)) => {
                     println!(

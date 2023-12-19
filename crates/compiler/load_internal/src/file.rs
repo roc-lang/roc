@@ -8,7 +8,7 @@ use crate::module::{
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
-use crossbeam::channel::{bounded, Sender};
+use crossbeam::channel::{bounded, Sender, Receiver};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
@@ -631,6 +631,7 @@ enum Msg<'a> {
 
     FailedToLoad(LoadingProblem<'a>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
+    Abort,
 }
 
 #[derive(Debug)]
@@ -957,6 +958,7 @@ pub enum LoadingProblem<'a> {
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
     ChannelProblem(ChannelProblem),
+    Aborted,
 }
 
 #[derive(Debug)]
@@ -1541,6 +1543,12 @@ fn state_thread_step<'a>(
                     );
                     Err(LoadingProblem::FormattedReport(buf))
                 }
+                Msg::Abort => {
+                    // This happens when a `--watch` is in progress, and a
+                    // filesystem change triggered a new build. Before that
+                    // can happen, we must gracefully abort the in-progress build.
+                    Err(LoadingProblem::Aborted)
+                }
                 msg => {
                     // This is where most of the main thread's work gets done.
                     // Everything up to this point has been setting up the threading
@@ -1680,6 +1688,8 @@ fn load_multi_threaded<'a>(
     available_threads: usize,
     exec_mode: ExecutionMode,
     roc_cache_dir: RocCacheDir<'_>,
+    msg_tx: Sender<Msg<'a>>,
+    msg_rx: Receiver<Msg<'a>>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1692,7 +1702,6 @@ fn load_multi_threaded<'a>(
         ..
     } = load_start;
 
-    let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
         .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
