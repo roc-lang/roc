@@ -365,24 +365,21 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
 struct FieldCompletion {
     var: String,
     field: String,
-    remaining_chain: Vec<String>,
+    middle_fields: Vec<String>,
 }
 ///Splits a completion prefix for a field into its components
 ///E.g. a.b.c.d->("a",["b","c"],"d")
 fn get_field_completion_parts(symbol_prefix: &str) -> Option<FieldCompletion> {
-    let mut parts = symbol_prefix.split('.');
-    let variable = parts.next()?;
-    let field = parts.next();
-    let remaining = parts;
-    let (field, remaining_chain) = match field {
-        Some(f) => (f.to_string(), remaining.map(ToString::to_string).collect()),
-        None => ("".to_string(), vec![]),
-    };
+    let mut parts = symbol_prefix.split('.').collect::<Vec<_>>();
+    let field = parts.pop().unwrap_or("").to_string();
+    let var = parts.remove(0);
+    //Now that we have the head and tail removed  this is all the intermediate fields
+    let middle_fields = parts.into_iter().map(ToString::to_string).collect();
 
     Some(FieldCompletion {
-        var: variable.to_string(),
+        var: var.to_string(),
         field,
-        remaining_chain,
+        middle_fields,
     })
 }
 pub fn field_completion(
@@ -396,12 +393,12 @@ pub fn field_completion(
     let FieldCompletion {
         var,
         field,
-        remaining_chain,
+        middle_fields,
     } = get_field_completion_parts(&symbol_prefix)?;
 
     debug!(
         "getting record field completions: variable:{:?} field{:?} middle{:?} ",
-        var, field, remaining_chain
+        var, field, middle_fields
     );
     //get the variable from within the region
     //TODO: this is kind of just a hack. We are gettting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
@@ -411,11 +408,11 @@ pub fn field_completion(
         .next()?;
 
     //We iterate through all the intermediate chunks eg var.field1.field2.field3 this iterates through fields until we get to field2, becuase it's second last
-    let second_last = remaining_chain.iter().fold(completion, |state, a| {
+    let second_last = middle_fields.iter().fold(completion, |state, chain_field| {
         let fields_vars = find_record_fields(state.1, subs);
         fields_vars
             .into_iter()
-            .find(|field| a == &field.0)
+            .find(|type_field| chain_field == &type_field.0)
             .unwrap_or(state)
     });
 

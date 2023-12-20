@@ -16,9 +16,9 @@ use roc_solve_problem::TypeError;
 use roc_types::subs::{Subs, Variable};
 
 use tower_lsp::lsp_types::{
-    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, Location,
-    MarkedString, Position, Range, SemanticTokenType, SemanticTokens, SemanticTokensResult,
-    TextEdit, Url,
+    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
+    Location, MarkedString, Position, Range, SemanticTokenType, SemanticTokens,
+    SemanticTokensResult, TextEdit, Url,
 };
 
 mod completion;
@@ -447,7 +447,10 @@ impl AnalyzedDocument {
         let range = region.to_range(self.line_info());
 
         Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::String(type_str)),
+            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
+                language: "roc".to_string(),
+                value: type_str,
+            })),
             range: Some(range),
         })
     }
