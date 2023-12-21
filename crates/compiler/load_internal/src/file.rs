@@ -8,7 +8,7 @@ use crate::module::{
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
-use crossbeam::channel::{bounded, Sender, Receiver};
+use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
@@ -110,6 +110,7 @@ pub struct LoadConfig {
     pub threading: Threading,
     pub exec_mode: ExecutionMode,
     pub function_kind: FunctionKind,
+    pub watch: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -958,7 +959,6 @@ pub enum LoadingProblem<'a> {
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
     ChannelProblem(ChannelProblem),
-    Aborted,
 }
 
 #[derive(Debug)]
@@ -1057,6 +1057,7 @@ pub fn load_and_typecheck_str<'a>(
         threading,
         exec_mode: ExecutionMode::Check,
         function_kind,
+        watch: false,
     };
 
     match load(
@@ -1326,6 +1327,7 @@ pub fn load<'a>(
             load_config.palette,
             load_config.exec_mode,
             roc_cache_dir,
+            load_config.watch,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
@@ -1339,6 +1341,7 @@ pub fn load<'a>(
             threads,
             load_config.exec_mode,
             roc_cache_dir,
+            load_config.watch,
         ),
     }
 }
@@ -1355,6 +1358,7 @@ pub fn load_single_threaded<'a>(
     palette: Palette,
     exec_mode: ExecutionMode,
     roc_cache_dir: RocCacheDir<'_>,
+    watch: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1547,7 +1551,7 @@ fn state_thread_step<'a>(
                     // This happens when a `--watch` is in progress, and a
                     // filesystem change triggered a new build. Before that
                     // can happen, we must gracefully abort the in-progress build.
-                    Err(LoadingProblem::Aborted)
+                    todo!("shutdown workers, reset the state.");
                 }
                 msg => {
                     // This is where most of the main thread's work gets done.
@@ -1688,8 +1692,7 @@ fn load_multi_threaded<'a>(
     available_threads: usize,
     exec_mode: ExecutionMode,
     roc_cache_dir: RocCacheDir<'_>,
-    msg_tx: Sender<Msg<'a>>,
-    msg_rx: Receiver<Msg<'a>>,
+    watch: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1702,6 +1705,7 @@ fn load_multi_threaded<'a>(
         ..
     } = load_start;
 
+    let (msg_tx, msg_rx) = bounded(1024);
     msg_tx
         .send(root_msg)
         .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
@@ -3121,6 +3125,9 @@ fn update<'a>(
         Msg::FailedToLoad(problem) => {
             // TODO report the error and continue instead of erroring out
             Err(problem)
+        }
+        Msg::Abort => {
+            todo!("shutdown workers, reset the state.");
         }
         Msg::FinishedAllTypeChecking { .. } => {
             unreachable!();

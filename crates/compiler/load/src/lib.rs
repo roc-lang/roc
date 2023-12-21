@@ -57,6 +57,7 @@ pub fn load_single_threaded<'a>(
     palette: Palette,
     roc_cache_dir: RocCacheDir<'_>,
     exec_mode: ExecutionMode,
+    watch: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_types();
     let exposed_types = ExposedByModule::default();
@@ -72,6 +73,7 @@ pub fn load_single_threaded<'a>(
         palette,
         exec_mode,
         roc_cache_dir,
+        watch,
     )
 }
 
@@ -177,6 +179,7 @@ pub fn load_and_typecheck_str<'a>(
     render: RenderTarget,
     roc_cache_dir: RocCacheDir<'_>,
     palette: Palette,
+    watch: bool,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -194,6 +197,7 @@ pub fn load_and_typecheck_str<'a>(
         palette,
         roc_cache_dir,
         ExecutionMode::Check,
+        watch,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

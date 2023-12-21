@@ -84,6 +84,7 @@ pub fn run_load_and_infer<'a>(
             roc_reporting::report::RenderTarget::Generic,
             RocCacheDir::Disallowed,
             roc_reporting::report::DEFAULT_PALETTE,
+            false,
         );
 
         dir.close()?;

@@ -441,6 +441,7 @@ pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::AllAvailable,
         exec_mode: ExecutionMode::Check,
+        watch: false,
     };
     match roc_load::load_and_typecheck(
         &arena,
