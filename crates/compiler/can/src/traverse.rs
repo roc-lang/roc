@@ -1,11 +1,6 @@
 //! Traversals over the can ast.
 
-use std::process;
-
-use roc_module::{
-    ident::Lowercase,
-    symbol::{Interns, Symbol},
-};
+use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_region::all::{Loc, Position, Region};
 use roc_types::{subs::Variable, types::MemberImpl};
 

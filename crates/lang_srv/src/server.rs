@@ -1,16 +1,14 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
-use log::debug;
+use log::{debug, trace};
 use registry::Registry;
 use std::future::Future;
-use tokio::sync::RwLock;
 
-use std::sync::Arc;
+use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::analysis::global_analysis;
-use crate::registry::LatestDocument;
 
 mod analysis;
 mod convert;
@@ -18,12 +16,14 @@ mod registry;
 
 #[derive(Debug)]
 struct RocLs {
-    pub inner: Arc<Inner>,
+    pub inner: Inner,
     client: Client,
 }
+
+///This exists so we can test most of RocLs without anything LSP related
 #[derive(Debug)]
 struct Inner {
-    registry: RwLock<Registry>,
+    registry: Registry,
 }
 
 impl std::panic::RefUnwindSafe for RocLs {}
@@ -31,7 +31,7 @@ impl std::panic::RefUnwindSafe for RocLs {}
 impl RocLs {
     pub fn new(client: Client) -> Self {
         Self {
-            inner: Arc::new(Inner::new()),
+            inner: Inner::new(),
             client,
         }
     }
@@ -69,7 +69,7 @@ impl RocLs {
                 full: Some(SemanticTokensFullOptions::Bool(true)),
             });
         let completion_provider = CompletionOptions {
-            resolve_provider: Some(true),
+            resolve_provider: Some(false),
             trigger_characters: Some(vec![".".to_string()]),
             //TODO: what is this?
             all_commit_characters: None,
@@ -99,7 +99,7 @@ impl RocLs {
         }
         debug!("applied_change getting and returning diagnostics");
 
-        let diagnostics = self.inner.registry().await.diagnostics(&fi).await;
+        let diagnostics = self.inner.registry.diagnostics(&fi).await;
 
         self.client
             .publish_diagnostics(fi, diagnostics, Some(version))
@@ -110,12 +110,12 @@ impl RocLs {
 impl Inner {
     pub fn new() -> Inner {
         Self {
-            registry: RwLock::new(Registry::default()),
+            registry: Registry::default(),
         }
     }
 
-    fn registry(&self) -> impl Future<Output = tokio::sync::RwLockReadGuard<Registry>> {
-        self.registry.read()
+    async fn registry(&self) -> &Registry {
+        &self.registry
     }
 
     async fn close(&self, _fi: Url) {
@@ -128,30 +128,41 @@ impl Inner {
         text: String,
         version: i32,
     ) -> std::result::Result<(), String> {
-        debug!("starting change");
-        let registry_write_lock = self.registry.write().await;
+        debug!("V{:?}:starting change", version);
+        //was write lock
 
-        debug!("change aquired registry lock");
+        debug!("V{:?}:change aquired registry lock", version);
         let (results, partial) = global_analysis(fi.clone(), text, version);
-        let partial_document = Arc::new(LatestDocument::new(partial.clone()));
-        //TODO check if allowing context switching here is an issue
-        let partial_doc_write_lock = partial_document.get_lock().await;
 
-        registry_write_lock
-            .apply_doc_info_changes(fi.clone(), partial_document.clone())
+        self.registry
+            .apply_doc_info_changes(fi.clone(), partial.clone())
             .await;
         //Now that we've got our new partial document written and we hold the exclusive write_handle to its analysis we can allow other tasks to access the registry and the doc_info inside this partial document
-        drop(registry_write_lock);
 
-        debug!("finished updating docinfo, starting analysis ",);
+        debug!(
+            "V{:?}:finished updating docinfo, starting analysis ",
+            version
+        );
 
-        let inner_ref = self.clone();
+        let inner_ref = self;
         let updating_result = async {
+            //This reduces wasted computation by waiting to see if a new change comes in, but does delay the final analysis. Ideally this would be replaced with cancelling the analysis when a new one comes in.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let is_latest = inner_ref
+                .registry
+                .get_latest_version(fi)
+                .await
+                .map(|latest| latest == version)
+                .unwrap_or(true);
+            if !is_latest {
+                return Err("Not latest version skipping analysis".to_string());
+            }
+
             let results = match tokio::task::spawn_blocking(results).await {
                 Err(e) => return Err(format!("Document analysis failed. reason:{:?}", e)),
                 Ok(a) => a,
             };
-            let latest_version = inner_ref.registry.read().await.get_latest_version(fi).await;
+            let latest_version = inner_ref.registry.get_latest_version(fi).await;
 
             //if this version is not the latest another change must have come in and this analysis is useless
             //if there is no older version we can just proceed with the update
@@ -163,18 +174,16 @@ impl Inner {
                     ));
                 }
             }
-            debug!("finished updating documents returning ",);
+            debug!(
+                "V{:?}:finished document analysis applying changes ",
+                version
+            );
 
-            inner_ref
-                .registry
-                .write()
-                .await
-                .apply_changes(results, partial_doc_write_lock, fi.clone())
-                .await;
+            inner_ref.registry.apply_changes(results, fi.clone()).await;
             Ok(())
         }
         .await;
-        debug!("finished updating documents returning ",);
+        debug!("V{:?}:finished document change process", version);
         updating_result
     }
 }
@@ -209,6 +218,7 @@ impl LanguageServer for RocLs {
         let TextDocumentContentChangeEvent { text, .. } =
             params.content_changes.into_iter().next().unwrap();
 
+        trace!("got did_change");
         self.change(uri, text, version).await;
     }
 
@@ -233,8 +243,7 @@ impl LanguageServer for RocLs {
 
         panic_wrapper_async(|| async {
             self.inner
-                .registry()
-                .await
+                .registry
                 .hover(&text_document.uri, position)
                 .await
         })
@@ -272,8 +281,14 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        panic_wrapper_async(|| async { self.inner.registry().await.formatting(&text_document.uri) })
-            .await
+        panic_wrapper_async(|| async {
+            self.inner
+                .registry()
+                .await
+                .formatting(&text_document.uri)
+                .await
+        })
+        .await
     }
 
     async fn semantic_tokens_full(
@@ -291,15 +306,16 @@ impl LanguageServer for RocLs {
                 .registry()
                 .await
                 .semantic_tokens(&text_document.uri)
+                .await
         })
         .await
     }
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
+        trace!("got completion request");
         let res = panic_wrapper_async(|| async {
             self.inner
-                .registry()
-                .await
+                .registry
                 .completion_items(&doc.text_document.uri, doc.position)
                 .await
         })
@@ -320,7 +336,7 @@ where
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     env_logger::init();
 

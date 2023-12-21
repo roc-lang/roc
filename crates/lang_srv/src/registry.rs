@@ -1,7 +1,12 @@
-use log::{debug, info};
-use std::{collections::HashMap, future::Future, sync::Arc};
+use log::{debug, info, trace, warn};
 
-use tokio::sync::{Mutex, MutexGuard, RwLock, RwLockWriteGuard};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
+
+use tokio::sync::{Mutex, MutexGuard};
+
 use tower_lsp::lsp_types::{
     CompletionResponse, Diagnostic, GotoDefinitionResponse, Hover, Position, SemanticTokensResult,
     TextEdit, Url,
@@ -10,39 +15,23 @@ use tower_lsp::lsp_types::{
 use crate::analysis::{AnalyzedDocument, DocInfo};
 
 #[derive(Debug)]
-pub(crate) struct LatestDocument {
-    pub info: DocInfo,
-    analyzed: tokio::sync::RwLock<Option<Arc<AnalyzedDocument>>>,
-}
-
-impl LatestDocument {
-    pub(crate) async fn get_latest(&self) -> Arc<AnalyzedDocument> {
-        self.analyzed.read().await.as_ref().unwrap().clone()
-    }
-    pub(crate) fn get_lock(
-        &self,
-    ) -> impl Future<Output = RwLockWriteGuard<Option<Arc<AnalyzedDocument>>>> {
-        self.analyzed.write()
-    }
-    pub(crate) fn new(doc_info: DocInfo) -> LatestDocument {
-        let val = RwLock::new(None);
-        LatestDocument {
-            info: doc_info,
-            analyzed: val,
-        }
-    }
-    pub(crate) fn new_initialised(analyzed: Arc<AnalyzedDocument>) -> LatestDocument {
-        LatestDocument {
-            info: analyzed.doc_info.clone(),
-            analyzed: RwLock::new(Some(analyzed)),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub(crate) struct DocumentPair {
-    latest_document: Arc<LatestDocument>,
+    info: DocInfo,
+    latest_document: OnceLock<Arc<AnalyzedDocument>>,
     last_good_document: Arc<AnalyzedDocument>,
+}
+
+impl DocumentPair {
+    pub(crate) fn new(
+        latest_doc: Arc<AnalyzedDocument>,
+        last_good_document: Arc<AnalyzedDocument>,
+    ) -> Self {
+        Self {
+            info: latest_doc.doc_info.clone(),
+            latest_document: OnceLock::from(latest_doc),
+            last_good_document,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -56,46 +45,33 @@ impl Registry {
             .lock()
             .await
             .get(&url)
-            .map(|x| x.latest_document.info.version)
+            .map(|x| x.info.version)
     }
+
     fn update_document<'a>(
         documents: &mut MutexGuard<'a, HashMap<Url, DocumentPair>>,
         document: Arc<AnalyzedDocument>,
     ) {
         let url = document.url().clone();
-        let latest_doc = Arc::new(LatestDocument::new_initialised(document.clone()));
         match documents.get_mut(&url) {
             Some(old_doc) => {
                 if document.type_checked() {
-                    *old_doc = DocumentPair {
-                        latest_document: latest_doc,
-                        last_good_document: document,
-                    };
+                    *old_doc = DocumentPair::new(document.clone(), document);
                 } else {
-                    *old_doc = DocumentPair {
-                        latest_document: latest_doc,
-                        last_good_document: old_doc.last_good_document.clone(),
-                    };
+                    debug!(
+                        "Document typechecking failed at version {:?}, not updating last_good_document",
+                        &document.doc_info.version
+                    );
+                    *old_doc = DocumentPair::new(document, old_doc.last_good_document.clone());
                 }
             }
             None => {
-                documents.insert(
-                    url.clone(),
-                    DocumentPair {
-                        latest_document: latest_doc,
-                        last_good_document: document,
-                    },
-                );
+                documents.insert(url.clone(), DocumentPair::new(document.clone(), document));
             }
         }
     }
 
-    pub async fn apply_changes<'a>(
-        &self,
-        analysed_docs: Vec<AnalyzedDocument>,
-        mut partial_writer: RwLockWriteGuard<'a, Option<Arc<AnalyzedDocument>>>,
-        updating_url: Url,
-    ) {
+    pub async fn apply_changes<'a>(&self, analysed_docs: Vec<AnalyzedDocument>, updating_url: Url) {
         let mut documents = self.documents.lock().await;
         debug!(
             "finised doc analysis for doc: {:?}",
@@ -106,13 +82,15 @@ impl Registry {
             let document = Arc::new(document);
             //Write the newly analysed document into the partial document that any request requiring the latest document will be waiting on
             if document.doc_info.url == updating_url {
-                *partial_writer = Some(document.clone());
+                documents
+                    .get_mut(&updating_url)
+                    .map(|a| a.latest_document.set(document.clone()).unwrap());
             }
             Registry::update_document(&mut documents, document);
         }
     }
 
-    pub async fn apply_doc_info_changes(&self, url: Url, partial: Arc<LatestDocument>) {
+    pub async fn apply_doc_info_changes(&self, url: Url, info: DocInfo) {
         let mut documents_lock = self.documents.lock().await;
         let doc = documents_lock.get_mut(&url);
         match doc {
@@ -120,26 +98,40 @@ impl Registry {
                 debug!(
                     "set the docInfo for {:?} to version:{:?}",
                     url.as_str(),
-                    partial.info.version
+                    info.version
                 );
-                a.latest_document = partial;
+                *a = DocumentPair {
+                    info,
+                    last_good_document: a.last_good_document.clone(),
+                    latest_document: OnceLock::new(),
+                };
             }
             None => debug!("no existing docinfo for {:?} ", url.as_str()),
         }
     }
 
-    fn document_info_by_url(&self, url: &Url) -> Option<DocInfo> {
-        self.documents
-            .blocking_lock()
-            .get(url)
-            .map(|a| a.latest_document.info.clone())
+    async fn document_info_by_url(&self, url: &Url) -> Option<DocInfo> {
+        self.documents.lock().await.get(url).map(|a| a.info.clone())
     }
 
+    ///Tries to get the latest document from analysis.
+    ///Gives up and returns none after 5 seconds.
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
-        match self.documents.lock().await.get(url) {
-            Some(a) => Some(a.latest_document.get_latest().await),
-            None => None,
+        let start = std::time::Instant::now();
+        let duration = std::time::Duration::from_secs(5);
+
+        while start.elapsed() < duration {
+            match self.documents.lock().await.get(url) {
+                Some(a) => match a.latest_document.get() {
+                    Some(a) => return Some(a.clone()),
+                    None => (),
+                },
+
+                None => return None,
+            }
         }
+        warn!("Timed out tring to get latest document");
+        None
     }
 
     pub async fn diagnostics(&self, url: &Url) -> Vec<Diagnostic> {
@@ -166,13 +158,13 @@ impl Registry {
         def_document.definition(symbol)
     }
 
-    pub fn formatting(&self, url: &Url) -> Option<Vec<TextEdit>> {
-        let document = self.document_info_by_url(url)?;
+    pub async fn formatting(&self, url: &Url) -> Option<Vec<TextEdit>> {
+        let document = self.document_info_by_url(url).await?;
         document.format()
     }
 
-    pub fn semantic_tokens(&self, url: &Url) -> Option<SemanticTokensResult> {
-        let document = self.document_info_by_url(url)?;
+    pub async fn semantic_tokens(&self, url: &Url) -> Option<SemanticTokensResult> {
+        let document = self.document_info_by_url(url).await?;
         document.semantic_tokens()
     }
     pub async fn completion_items(
@@ -180,9 +172,11 @@ impl Registry {
         url: &Url,
         position: Position,
     ) -> Option<CompletionResponse> {
+        trace!("starting completion ");
         let lock = self.documents.lock().await;
         let pair = lock.get(url)?;
-        let latest_doc_info = &pair.latest_document.info;
+
+        let latest_doc_info = &pair.info;
         info!(
             "using document version:{:?} for completion ",
             latest_doc_info.version
