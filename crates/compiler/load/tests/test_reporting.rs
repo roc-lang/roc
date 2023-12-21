@@ -10221,6 +10221,28 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
+        issue_6279,
+        indoc!(
+            r#"
+            when A "" is
+                A x | B x | C -> x
+            "#
+        ),
+        @r###"
+        ── NAME NOT BOUND IN ALL PATTERNS in /code/proj/Main.roc ───────────────────────
+
+        `x` is not bound in all patterns of this `when` branch
+
+        5│          A x | B x | C -> x
+                      ^
+
+        Identifiers introduced in a `when` branch must be bound in all patterns
+        of the branch. Otherwise, the program would crash when it tries to use
+        an identifier that wasn't bound!
+        "###
+    );
+
+    test_report!(
         flip_flop_catch_all_branches_not_exhaustive,
         indoc!(
             r#"
