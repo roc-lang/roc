@@ -453,8 +453,8 @@ pub fn test(matches: &ArgMatches, triple: Triple, watch: bool) -> io::Result<i32
     use roc_packaging::cache;
     use roc_target::TargetInfo;
 
-    let mut start_time = Instant::now();
-    let mut arena = Bump::new();
+    let start_time = Instant::now();
+    let arena = Bump::new();
     let opt_level = opt_level_from_flags(matches);
 
     let threading = match matches.get_one::<usize>(FLAG_MAX_THREADS) {
@@ -486,143 +486,108 @@ pub fn test(matches: &ArgMatches, triple: Triple, watch: bool) -> io::Result<i32
         process::exit(1);
     }
 
-    let arena = &mut arena;
+    let arena = &arena;
     let target = &triple;
     let target_info = TargetInfo::from(target);
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;
 
-    if watch {
-        // We listen to file changes by giving Notify
-        // a function that will get called when events happen
-        let mut watcher =
-            // To make sure that the config lives as long as the function
-            // we need to move the ownership of the config inside the function
-            // To learn more about move please read [Using move Closures with Threads](https://doc.rust-lang.org/book/ch16-01-threads.html?highlight=move#using-move-closures-with-threads)
-            RecommendedWatcher::new(move |result: Result<Event, Error>| {
-                let event = result.unwrap();
+    // Step 1: compile the app and generate the .o file
+    let load_config = LoadConfig {
+        target_info,
+        function_kind,
+        // TODO: expose this from CLI?
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
+        threading,
+        exec_mode: ExecutionMode::Test,
+    };
+    let load_result = roc_load::load_and_monomorphize(
+        arena,
+        path.to_path_buf(),
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        load_config,
+    );
 
-                if event.kind.is_modify() {
-                    todo!("Immediately interrupt the current build/test/etc, and also reset (and start if necessary) the debounce timer. Once the debounce timer completes, then we kick off a new build.");
+    let mut loaded = match load_result {
+        Ok(loaded) => loaded,
+        Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
+            return handle_loading_problem(problem);
+        }
+        Err(LoadMonomorphizedError::ErrorModule(module)) => {
+            return handle_error_module(module, start_time.elapsed(), path.as_os_str(), false);
+        }
+    };
+    let problems = report_problems_monomorphized(&mut loaded);
 
-                    arena.reset();
-                    start_time = Instant::now();
+    let mut expectations = std::mem::take(&mut loaded.expectations);
 
-                    call_fn();
-                }
-            },notify::Config::default())?;
+    let interns = loaded.interns.clone();
 
-        watcher.watch(Path::new(CONFIG_PATH), RecursiveMode::Recursive)?;
+    let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
+        arena,
+        target.clone(),
+        loaded,
+        opt_level,
+        LlvmBackendMode::CliTest,
+    )
+    .unwrap();
 
-        // Once the debouncer gets dropped, it stops watching. Loop forever to prevent that!
-        loop {}
-    } else {
-        call_fn()
+    // Print warnings before running tests.
+    {
+        debug_assert_eq!(
+            problems.errors, 0,
+            "if there were errors, we would have already exited."
+        );
+        if problems.warnings > 0 {
+            problems.print_to_stdout(start_time.elapsed());
+            println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
+        }
     }
 
+    // Run the tests.
+    let arena = &bumpalo::Bump::new();
+    let interns = arena.alloc(interns);
 
-    ////////////// TODO move everything after here to call_fn (and rename it)
+    let mut writer = std::io::stdout();
 
+    let (failed, passed) = roc_repl_expect::run::run_toplevel_expects(
+        &mut writer,
+        roc_reporting::report::RenderTarget::ColorTerminal,
+        arena,
+        interns,
+        &layout_interner.into_global(),
+        &lib,
+        &mut expectations,
+        expects,
+    )
+    .unwrap();
 
+    let total_time = start_time.elapsed();
 
-        // Step 1: compile the app and generate the .o file
-        let load_config = LoadConfig {
-            target_info,
-            function_kind,
-            // TODO: expose this from CLI?
-            render: roc_reporting::report::RenderTarget::ColorTerminal,
-            palette: roc_reporting::report::DEFAULT_PALETTE,
-            threading,
-            exec_mode: ExecutionMode::Test,
+    if failed == 0 && passed == 0 {
+        // TODO print this in a more nicely formatted way!
+        println!("No expectations were found.");
+
+        // If no tests ran, treat that as an error. This is perhaps
+        // briefly annoying at the very beginning of a project when
+        // you actually have zero tests, but it can save you from
+        // having a change to your CI script accidentally stop
+        // running tests altogether!
+        Ok(2)
+    } else {
+        let failed_color = if failed == 0 {
+            32 // green
+        } else {
+            31 // red
         };
-        let load_result = roc_load::load_and_monomorphize(
-            arena,
-            path.to_path_buf(),
-            RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-            load_config,
+
+        println!(
+            "\n\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
+            total_time.as_millis(),
         );
 
-        let mut loaded = match load_result {
-            Ok(loaded) => loaded,
-            Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
-                return handle_loading_problem(problem);
-            }
-            Err(LoadMonomorphizedError::ErrorModule(module)) => {
-                return handle_error_module(module, start_time.elapsed(), path.as_os_str(), false);
-            }
-        };
-        let problems = report_problems_monomorphized(&mut loaded);
-
-        let mut expectations = std::mem::take(&mut loaded.expectations);
-
-        let interns = loaded.interns.clone();
-
-        let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
-            arena,
-            target.clone(),
-            loaded,
-            opt_level,
-            LlvmBackendMode::CliTest,
-        )
-        .unwrap();
-
-        // Print warnings before running tests.
-        {
-            debug_assert_eq!(
-                problems.errors, 0,
-                "if there were errors, we would have already exited."
-            );
-            if problems.warnings > 0 {
-                problems.print_to_stdout(start_time.elapsed());
-                println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
-            }
-        }
-
-        // Run the tests.
-        arena.reset();
-
-        let interns = arena.alloc(interns);
-
-        let mut writer = std::io::stdout();
-
-        let (failed, passed) = roc_repl_expect::run::run_toplevel_expects(
-            &mut writer,
-            roc_reporting::report::RenderTarget::ColorTerminal,
-            arena,
-            interns,
-            &layout_interner.into_global(),
-            &lib,
-            &mut expectations,
-            expects,
-        )
-        .unwrap();
-
-        let total_time = start_time.elapsed();
-
-        if failed == 0 && passed == 0 {
-            // TODO print this in a more nicely formatted way!
-            println!("No expectations were found.");
-
-            // If no tests ran, treat that as an error. This is perhaps
-            // briefly annoying at the very beginning of a project when
-            // you actually have zero tests, but it can save you from
-            // having a change to your CI script accidentally stop
-            // running tests altogether!
-            Ok(2)
-        } else {
-            let failed_color = if failed == 0 {
-                32 // green
-            } else {
-                31 // red
-            };
-
-            println!(
-                "\n\x1B[{failed_color}m{failed}\x1B[39m failed and \x1B[32m{passed}\x1B[39m passed in {} ms.\n",
-                total_time.as_millis(),
-            );
-
-            Ok((failed > 0) as i32)
-        }
+        Ok((failed > 0) as i32)
     }
 }
 

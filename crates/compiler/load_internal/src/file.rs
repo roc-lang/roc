@@ -8,7 +8,7 @@ use crate::module::{
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
-use crossbeam::channel::{Receiver, Sender};
+use crossbeam::channel::{bounded, Sender, Receiver};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
@@ -551,16 +551,6 @@ pub struct ExpectMetadata<'a> {
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
 type LocDbgs = VecMap<Symbol, DbgLookup>;
-
-/// This is just a wrapper type around Msg so we can expose a way for callers to abort
-/// the process (but not do anything else).
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct Abortable<'a>(Msg<'a>);
-
-pub fn abort<'a>() -> Abortable<'a> {
-    Abortable(Msg::Abort)
-}
 
 /// A message sent out _from_ a worker thread,
 /// representing a result of work done, or a request for further work
@@ -1324,8 +1314,6 @@ pub fn load<'a>(
         }
     };
 
-    let (msg_tx, msg_rx) = crossbeam::channel::bounded(1024);
-
     match threads {
         Threads::Single => load_single_threaded(
             arena,
@@ -1338,8 +1326,6 @@ pub fn load<'a>(
             load_config.palette,
             load_config.exec_mode,
             roc_cache_dir,
-            msg_tx,
-            msg_rx,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
@@ -1353,8 +1339,6 @@ pub fn load<'a>(
             threads,
             load_config.exec_mode,
             roc_cache_dir,
-            msg_tx,
-            msg_rx,
         ),
     }
 }
@@ -1371,8 +1355,6 @@ pub fn load_single_threaded<'a>(
     palette: Palette,
     exec_mode: ExecutionMode,
     roc_cache_dir: RocCacheDir<'_>,
-    msg_tx: Sender<Abortable<'a>>,
-    msg_rx: Receiver<Abortable<'a>>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1384,6 +1366,8 @@ pub fn load_single_threaded<'a>(
         opt_platform_shorthand,
         ..
     } = load_start;
+
+    let (msg_tx, msg_rx) = bounded(1024);
 
     msg_tx
         .send(root_msg)
@@ -1409,7 +1393,7 @@ pub fn load_single_threaded<'a>(
     // We'll add tasks to this, and then worker threads will take tasks from it.
     let injector = Injector::new();
 
-    let (worker_msg_tx, worker_msg_rx) = crossbeam::channel::bounded(1024);
+    let (worker_msg_tx, worker_msg_rx) = bounded(1024);
     let worker_listener = worker_msg_tx;
     let worker_listeners = arena.alloc([worker_listener]);
 
@@ -1795,7 +1779,7 @@ fn load_multi_threaded<'a>(
                 let msg_tx = msg_tx.clone();
                 let worker = worker_queues.pop().unwrap();
 
-                let (worker_msg_tx, worker_msg_rx) = crossbeam::channel::bounded(1024);
+                let (worker_msg_tx, worker_msg_rx) = bounded(1024);
                 worker_listeners.push(worker_msg_tx);
 
                 // We only want to move a *reference* to the main task queue's
@@ -3137,9 +3121,6 @@ fn update<'a>(
         Msg::FailedToLoad(problem) => {
             // TODO report the error and continue instead of erroring out
             Err(problem)
-        }
-        Msg::Abort => {
-            Err(LoadingProblem::Aborted)
         }
         Msg::FinishedAllTypeChecking { .. } => {
             unreachable!();
