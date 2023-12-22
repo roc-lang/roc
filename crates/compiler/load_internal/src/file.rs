@@ -8,7 +8,7 @@ use crate::module::{
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
-use crossbeam::channel::{bounded, Sender};
+use crossbeam::channel::{bounded, Select, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
@@ -1298,13 +1298,13 @@ pub fn load<'a>(
 
     let threads = {
         if cfg!(target_family = "wasm") {
-            // When compiling to wasm, we cannot spawn extra threads
+            // When compiling the roc compiler to wasm, we cannot spawn extra threads,
             // so we have a single-threaded implementation
             Threads::Single
         } else {
             match std::thread::available_parallelism().map(|v| v.get()) {
                 Err(_) => Threads::Single,
-                Ok(0) => unreachable!("NonZeroUsize"),
+                Ok(0) => unreachable!(), // This is a NonZeroUsize, so 0 would be impossible
                 Ok(1) => Threads::Single,
                 Ok(reported) => match load_config.threading {
                     Threading::Single => Threads::Single,
@@ -1372,6 +1372,16 @@ pub fn load_single_threaded<'a>(
     } = load_start;
 
     let (msg_tx, msg_rx) = bounded(1024);
+    let (abort_tx, abort_rx) = bounded(64);
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        // --watch is not supported on wasm; there is no filesystem to watch!
+        if watch {
+            let todo = ();
+            // TODO set up watch
+        }
+    }
 
     msg_tx
         .send(root_msg)
@@ -1415,6 +1425,7 @@ pub fn load_single_threaded<'a>(
             &injector,
             &msg_tx,
             &msg_rx,
+            &abort_rx,
         ) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
@@ -1454,188 +1465,216 @@ fn state_thread_step<'a>(
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
+    abort_rx: &crossbeam::channel::Receiver<()>,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
-    match msg_rx.try_recv() {
-        Ok(msg) => {
-            match msg {
-                Msg::FinishedAllTypeChecking {
-                    solved_subs,
-                    exposed_vars_by_symbol,
-                    exposed_aliases_by_symbol,
-                    exposed_types_storage,
-                    resolved_implementations,
-                    dep_idents,
-                    documentation,
-                    abilities_store,
+    let mut sel = Select::new();
 
-                    #[cfg(debug_assertions)]
-                    checkmate,
-                } => {
-                    // We're done! There should be no more messages pending.
-                    debug_assert!(msg_rx.is_empty());
+    let oper_msg = sel.recv(msg_rx);
+    let oper_abort = sel.recv(abort_rx);
 
-                    let exposed_aliases_by_symbol = exposed_aliases_by_symbol
-                        .into_iter()
-                        .map(|(k, (_, v))| (k, v))
-                        .collect();
+    match sel.try_select() {
+        Ok(oper) => match oper.index() {
+            i if i == oper_msg => match oper.recv(msg_rx) {
+                Ok(msg) => process_msg(
+                    arena,
+                    state,
+                    src_dir,
+                    worker_listeners,
+                    injector,
+                    msg,
+                    msg_rx,
+                    msg_tx,
+                ),
+                Err(err) => Err(LoadingProblem::ChannelProblem(
+                    ChannelProblem::ChannelDisconnected,
+                )),
+            },
+            i if i == oper_abort => todo!(),
+            _ => unreachable!(), // there are only two `oper` alternatives to choose from!
+        },
+        Err(err) => Ok(ControlFlow::Continue(state)),
+    }
+}
 
-                    let typechecked = finish(
-                        state,
-                        solved_subs,
-                        exposed_aliases_by_symbol,
-                        exposed_vars_by_symbol,
-                        exposed_types_storage,
-                        resolved_implementations,
-                        dep_idents,
-                        documentation,
-                        abilities_store,
-                        //
-                        #[cfg(debug_assertions)]
-                        checkmate,
-                    );
+fn process_msg<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    src_dir: &Path,
+    worker_listeners: &'a [Sender<WorkerMsg>],
+    injector: &Injector<BuildTask<'a>>,
+    msg: Msg<'a>,
+    msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
+    msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
+) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
+    match msg {
+        Msg::FinishedAllTypeChecking {
+            solved_subs,
+            exposed_vars_by_symbol,
+            exposed_aliases_by_symbol,
+            exposed_types_storage,
+            resolved_implementations,
+            dep_idents,
+            documentation,
+            abilities_store,
 
-                    Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
-                }
-                Msg::FinishedAllSpecialization {
-                    subs,
-                    layout_interner,
-                    exposed_to_host,
-                    module_expectations,
-                } => {
-                    // We're done! There should be no more messages pending.
-                    debug_assert!(msg_rx.is_empty());
+            #[cfg(debug_assertions)]
+            checkmate,
+        } => {
+            // We're done! There should be no more messages pending.
+            debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized = finish_specialization(
-                        arena,
-                        state,
-                        subs,
-                        layout_interner,
-                        exposed_to_host,
-                        module_expectations,
-                    )?;
+            let exposed_aliases_by_symbol = exposed_aliases_by_symbol
+                .into_iter()
+                .map(|(k, (_, v))| (k, v))
+                .collect();
 
-                    Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
-                }
-                Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report_string(filename, error);
-                    Err(LoadingProblem::FormattedReport(buf))
-                }
+            let typechecked = finish(
+                state,
+                solved_subs,
+                exposed_aliases_by_symbol,
+                exposed_vars_by_symbol,
+                exposed_types_storage,
+                resolved_implementations,
+                dep_idents,
+                documentation,
+                abilities_store,
+                #[cfg(debug_assertions)]
+                checkmate,
+            );
 
-                Msg::FailedToParse(problem) => {
-                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+            Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
+        }
+        Msg::FinishedAllSpecialization {
+            subs,
+            layout_interner,
+            exposed_to_host,
+            module_expectations,
+        } => {
+            // We're done! There should be no more messages pending.
+            debug_assert!(msg_rx.is_empty());
+
+            let monomorphized = finish_specialization(
+                arena,
+                state,
+                subs,
+                layout_interner,
+                exposed_to_host,
+                module_expectations,
+            )?;
+
+            Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
+        }
+        Msg::FailedToReadFile { filename, error } => {
+            let buf = to_file_problem_report_string(filename, error);
+            Err(LoadingProblem::FormattedReport(buf))
+        }
+
+        Msg::FailedToParse(problem) => {
+            let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+            let buf = to_parse_problem_report(
+                problem,
+                module_ids,
+                state.constrained_ident_ids,
+                state.render,
+                state.palette,
+            );
+            Err(LoadingProblem::FormattedReport(buf))
+        }
+        Msg::IncorrectModuleName(FileError {
+            problem: SourceError { problem, bytes },
+            filename,
+        }) => {
+            let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+            let buf = to_incorrect_module_name_report(
+                module_ids,
+                state.constrained_ident_ids,
+                problem,
+                filename,
+                bytes,
+                state.render,
+            );
+            Err(LoadingProblem::FormattedReport(buf))
+        }
+        Msg::Abort => {
+            // This happens when a `--watch` is in progress, and a
+            // filesystem change triggered a new build. Before that
+            // can happen, we must gracefully abort the in-progress build.
+            let todo = ();
+            todo!("shutdown workers, reset the state.");
+        }
+        msg => {
+            // This is where most of the main thread's work gets done.
+            // Everything up to this point has been setting up the threading
+            // system which lets this logic work efficiently.
+            let arc_modules = state.arc_modules.clone();
+
+            let render = state.render;
+            let palette = state.palette;
+
+            let res_state = update(
+                state,
+                src_dir,
+                msg,
+                msg_tx.clone(),
+                injector,
+                worker_listeners,
+                arena,
+            );
+
+            match res_state {
+                Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
+                Err(LoadingProblem::ParsingFailed(problem)) => {
+                    let module_ids = Arc::try_unwrap(arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!(r"There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .into_module_ids();
+
+                    // if parsing failed, this module did not add anything to IdentIds
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
                     let buf = to_parse_problem_report(
                         problem,
                         module_ids,
-                        state.constrained_ident_ids,
-                        state.render,
-                        state.palette,
+                        root_exposed_ident_ids,
+                        render,
+                        palette,
                     );
                     Err(LoadingProblem::FormattedReport(buf))
                 }
-                Msg::IncorrectModuleName(FileError {
+                Err(LoadingProblem::ImportCycle(filename, cycle)) => {
+                    let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                    let buf = to_import_cycle_report(
+                        module_ids,
+                        root_exposed_ident_ids,
+                        cycle,
+                        filename,
+                        render,
+                    );
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                Err(LoadingProblem::IncorrectModuleName(FileError {
                     problem: SourceError { problem, bytes },
                     filename,
-                }) => {
-                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+                })) => {
+                    let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
                     let buf = to_incorrect_module_name_report(
                         module_ids,
-                        state.constrained_ident_ids,
+                        root_exposed_ident_ids,
                         problem,
                         filename,
                         bytes,
-                        state.render,
+                        render,
                     );
-                    Err(LoadingProblem::FormattedReport(buf))
+                    return Err(LoadingProblem::FormattedReport(buf));
                 }
-                Msg::Abort => {
-                    // This happens when a `--watch` is in progress, and a
-                    // filesystem change triggered a new build. Before that
-                    // can happen, we must gracefully abort the in-progress build.
-                    todo!("shutdown workers, reset the state.");
-                }
-                msg => {
-                    // This is where most of the main thread's work gets done.
-                    // Everything up to this point has been setting up the threading
-                    // system which lets this logic work efficiently.
-                    let arc_modules = state.arc_modules.clone();
-
-                    let render = state.render;
-                    let palette = state.palette;
-
-                    let res_state = update(
-                        state,
-                        src_dir,
-                        msg,
-                        msg_tx.clone(),
-                        injector,
-                        worker_listeners,
-                        arena,
-                    );
-
-                    match res_state {
-                        Ok(new_state) => Ok(ControlFlow::Continue(new_state)),
-                        Err(LoadingProblem::ParsingFailed(problem)) => {
-                            let module_ids = Arc::try_unwrap(arc_modules)
-                                .unwrap_or_else(|_| {
-                                    panic!(
-                                        r"There were still outstanding Arc references to module_ids"
-                                    )
-                                })
-                                .into_inner()
-                                .into_module_ids();
-
-                            // if parsing failed, this module did not add anything to IdentIds
-                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                            let buf = to_parse_problem_report(
-                                problem,
-                                module_ids,
-                                root_exposed_ident_ids,
-                                render,
-                                palette,
-                            );
-                            Err(LoadingProblem::FormattedReport(buf))
-                        }
-                        Err(LoadingProblem::ImportCycle(filename, cycle)) => {
-                            let module_ids = arc_modules.lock().clone().into_module_ids();
-
-                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                            let buf = to_import_cycle_report(
-                                module_ids,
-                                root_exposed_ident_ids,
-                                cycle,
-                                filename,
-                                render,
-                            );
-                            return Err(LoadingProblem::FormattedReport(buf));
-                        }
-                        Err(LoadingProblem::IncorrectModuleName(FileError {
-                            problem: SourceError { problem, bytes },
-                            filename,
-                        })) => {
-                            let module_ids = arc_modules.lock().clone().into_module_ids();
-
-                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                            let buf = to_incorrect_module_name_report(
-                                module_ids,
-                                root_exposed_ident_ids,
-                                problem,
-                                filename,
-                                bytes,
-                                render,
-                            );
-                            return Err(LoadingProblem::FormattedReport(buf));
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
+                Err(e) => Err(e),
             }
         }
-        Err(err) => match err {
-            crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
-            crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::ChannelProblem(
-                ChannelProblem::ChannelDisconnected,
-            )),
-        },
     }
 }
 
@@ -1706,6 +1745,25 @@ fn load_multi_threaded<'a>(
     } = load_start;
 
     let (msg_tx, msg_rx) = bounded(1024);
+    let (abort_tx, abort_rx) = bounded(64);
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        // --watch is not supported on wasm; there is no filesystem to watch!
+        if watch {
+            match init_watcher(abort_tx) {
+                Ok(()) => {
+                    // No problem; watch was set up successfully.
+                }
+                Err(_) => {
+                    let todo = ();
+
+                    // TODO report loading problem based on what happened when trying to init the watcher.
+                }
+            }
+        }
+    }
+
     msg_tx
         .send(root_msg)
         .map_err(|_| LoadingProblem::ChannelProblem(ChannelProblem::FailedToSendRootMsg))?;
@@ -1851,6 +1909,7 @@ fn load_multi_threaded<'a>(
                     &injector,
                     &msg_tx,
                     &msg_rx,
+                    &abort_rx,
                 ) {
                     Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads!();
@@ -1925,6 +1984,24 @@ fn load_multi_threaded<'a>(
             ))
         })
     }
+}
+
+// Watching is not supported on wasm; there is no filesystem to watch!
+#[cfg(not(target_family = "wasm"))]
+fn init_watcher<'a>(msg_tx: Sender<()>) -> notify::Result<()> {
+    use notify::{RecursiveMode, Watcher};
+
+    let mut watcher = notify::recommended_watcher(move |res| match res {
+        Ok(event) => {
+            msg_tx.send(());
+        }
+        Err(e) => println!("watch error: {:?}", e),
+    })?;
+
+    // We watch the entire directory, but we only
+    watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
+
+    Ok(())
 }
 
 fn worker_task_step<'a>(
@@ -3127,6 +3204,7 @@ fn update<'a>(
             Err(problem)
         }
         Msg::Abort => {
+            let todo = ();
             todo!("shutdown workers, reset the state.");
         }
         Msg::FinishedAllTypeChecking { .. } => {

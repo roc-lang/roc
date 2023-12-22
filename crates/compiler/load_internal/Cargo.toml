@@ -32,6 +32,9 @@ roc_tracing = { path = "../../tracing" }
 roc_types = { path = "../types" }
 roc_unify = { path = "../unify" }
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+notify = "6.1.1"
+
 ven_pretty = { path = "../../vendor/pretty" }
 
 bumpalo.workspace = true

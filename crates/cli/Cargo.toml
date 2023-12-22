@@ -30,7 +30,13 @@ target-wasm32 = ["roc_build/target-wasm32"]
 target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 
-target-all = ["target-aarch64", "target-arm", "target-x86", "target-x86_64", "target-wasm32"]
+target-all = [
+    "target-aarch64",
+    "target-arm",
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32",
+]
 
 sanitizers = ["roc_build/sanitizers"]
 
@@ -60,8 +66,6 @@ roc_tracing = { path = "../tracing" }
 roc_wasm_interp = { path = "../wasm_interp", optional = true }
 
 ven_pretty = { path = "../vendor/pretty" }
-
-notify = "6.1.1"
 
 bumpalo.workspace = true
 clap.workspace = true
