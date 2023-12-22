@@ -3447,3 +3447,19 @@ fn inspect_derived_dict() {
         "#
     )
 }
+
+#[mono_test]
+fn issue_6196() {
+    indoc!(
+        r#"
+        nth : List a, Nat -> Result a [OutOfBounds]
+        nth = \l, i ->
+            when (l, i) is
+                ([], _) -> Err OutOfBounds
+                ([e, ..], 0) -> Ok e
+                ([_, .. as rest], _) -> nth rest (i - 1)
+
+        nth ["a"] 0
+        "#
+    )
+}
