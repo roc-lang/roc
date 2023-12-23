@@ -23,6 +23,7 @@ jobs:
 
       - name: check if provided RELEASE_TAG is fresh
         run: |
+          git fetch --tags
           TAG_DATE=$(git log -1 --format=%ai ${{ env.RELEASE_TAG }})
           CURRENT_DATE=$(date +%Y-%m-%d)
           TAG_AGE=$(( ($(date -d $CURRENT_DATE +%s) - $(date -d "$TAG_DATE" +%s) )/(60*60*24) ))
