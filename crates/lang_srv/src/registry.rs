@@ -130,7 +130,7 @@ impl Registry {
                 None => return None,
             }
         }
-        warn!("Timed out tring to get latest document");
+        warn!("Timed out trying to get latest document");
         None
     }
 

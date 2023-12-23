@@ -131,7 +131,7 @@ impl Inner {
         debug!("V{:?}:starting change", version);
         //was write lock
 
-        debug!("V{:?}:change aquired registry lock", version);
+        debug!("V{:?}:change acquired registry lock", version);
         let (results, partial) = global_analysis(fi.clone(), text, version);
 
         self.registry

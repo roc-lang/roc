@@ -277,7 +277,7 @@ fn make_completion_item(
     }
 }
 ///Gets completion items using the visitor pattern,
-///This will walk through declarations that would be accessable from the provided position adding them to a list of completion items untill all accessable declarations have been fully explored
+///This will walk through declarations that would be accessible from the provided position adding them to a list of completion items until all accessible declarations have been fully explored
 
 pub fn get_completion_items(
     position: Position,
@@ -354,7 +354,7 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
         }
         _ => {
             warn!(
-                "Variable before field was unsuported type:{:?}",
+                "Variable before field was unsupported type:{:?}",
                 subs.dbg(var)
             );
             vec![]
@@ -401,7 +401,7 @@ pub fn field_completion(
         var, field, middle_fields
     );
     //get the variable from within the region
-    //TODO: this is kind of just a hack. We are gettting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
+    //TODO: this is kind of just a hack. We are getting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
     let completion = get_completions(position, declarations, var.to_string(), interns)
         .into_iter()
         .map(|a| (a.0.as_str(&interns).to_string(), a.1))

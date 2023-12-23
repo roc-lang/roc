@@ -100,7 +100,7 @@ pub(crate) fn global_analysis(
 
                 let analyzed_document = AnalyzedDocument {
                     doc_info,
-                    analysys_result: AnalysisResult {
+                    analysis_result: AnalysisResult {
                         module: None,
                         diagnostics: all_problems,
                     },
@@ -240,7 +240,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
                 source: source.into(),
                 version,
             },
-            analysys_result: AnalysisResult {
+            analysis_result: AnalysisResult {
                 module: Some(analyzed_module),
                 diagnostics,
             },
@@ -303,7 +303,7 @@ struct AnalyzedModule {
 
 pub struct AnalyzedDocument {
     pub doc_info: DocInfo,
-    pub analysys_result: AnalysisResult,
+    pub analysis_result: AnalysisResult,
 }
 #[derive(Debug, Clone)]
 pub struct DocInfo {
@@ -393,7 +393,7 @@ impl AnalyzedDocument {
     }
 
     fn module(&self) -> Option<&AnalyzedModule> {
-        self.analysys_result.module.as_ref()
+        self.analysis_result.module.as_ref()
     }
 
     fn location(&self, range: Range) -> Location {
@@ -404,11 +404,11 @@ impl AnalyzedDocument {
     }
 
     pub fn type_checked(&self) -> bool {
-        self.analysys_result.module.is_some()
+        self.analysis_result.module.is_some()
     }
 
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        self.analysys_result.diagnostics.clone()
+        self.analysis_result.diagnostics.clone()
     }
 
     pub fn symbol_at(&self, position: Position) -> Option<Symbol> {
@@ -481,7 +481,7 @@ impl AnalyzedDocument {
         );
         let len_diff = latest_doc.source.len() as i32 - self.doc_info.source.len() as i32;
 
-        //We offset the position because we need the position to be in the correct scope in the most recently parsed version of the source. The quick and dirty method is to just remove the difference in lenght between the source files from the offset. This could cause issues, but is very easy
+        //We offset the position because we need the position to be in the correct scope in the most recently parsed version of the source. The quick and dirty method is to just remove the difference in length between the source files from the offset. This could cause issues, but is very easy
         //TODO: this is kind of a hack and should be removed once we can do some minimal parsing without full type checking
         let mut position = position.to_roc_position(&latest_doc.line_info);
         position.offset = (position.offset as i32 - len_diff - 1) as u32;
