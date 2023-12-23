@@ -874,7 +874,7 @@ mod cli_run {
                 This roc file can print it's own source code. The source is:
 
                 app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
+                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
                     imports [
                         pf.Stdout,
                         "ingested-file.roc" as ownCode : Str,
@@ -901,7 +901,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "30461\n",
+            "162088\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
