@@ -111,7 +111,7 @@ rm -rf ./downloaded-basic-cli
 
 git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
-cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+cargo run --bin roc-docs downloaded-basic-cli/platform/main.roc
 
 rm -rf ./downloaded-basic-cli
 
