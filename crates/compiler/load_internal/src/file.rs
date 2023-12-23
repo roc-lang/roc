@@ -8,7 +8,7 @@ use crate::module::{
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
-use crossbeam::channel::{bounded, Select, Sender};
+use crossbeam::channel::{bounded, RecvError, Select, Sender, TrySelectError};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
@@ -632,7 +632,6 @@ enum Msg<'a> {
 
     FailedToLoad(LoadingProblem<'a>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
-    Abort,
 }
 
 #[derive(Debug)]
@@ -1426,6 +1425,7 @@ pub fn load_single_threaded<'a>(
             &msg_tx,
             &msg_rx,
             &abort_rx,
+            watch,
         ) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
@@ -1466,6 +1466,7 @@ fn state_thread_step<'a>(
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
     abort_rx: &crossbeam::channel::Receiver<()>,
+    watch: bool,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
     let mut sel = Select::new();
 
@@ -1484,15 +1485,29 @@ fn state_thread_step<'a>(
                     msg,
                     msg_rx,
                     msg_tx,
+                    watch,
                 ),
-                Err(err) => Err(LoadingProblem::ChannelProblem(
+                Err(RecvError) => Err(LoadingProblem::ChannelProblem(
                     ChannelProblem::ChannelDisconnected,
                 )),
             },
-            i if i == oper_abort => todo!(),
+            i if i == oper_abort => match oper.recv(abort_rx) {
+                Ok(_) => {
+                    shut_down_worker_threads(worker_listeners);
+
+                    // TODO debounce sending a "recompile" message
+
+                    Ok(ControlFlow::Continue(state))
+                }
+                // The abort channel is usually empty and disconnected,
+                // so it's not a concern when this happens.
+                Err(RecvError) => Err(LoadingProblem::ChannelProblem(
+                    ChannelProblem::ChannelDisconnected,
+                )),
+            },
             _ => unreachable!(), // there are only two `oper` alternatives to choose from!
         },
-        Err(err) => Ok(ControlFlow::Continue(state)),
+        Err(TrySelectError) => Ok(ControlFlow::Continue(state)),
     }
 }
 
@@ -1505,6 +1520,7 @@ fn process_msg<'a>(
     msg: Msg<'a>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
+    watch: bool,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
     match msg {
         Msg::FinishedAllTypeChecking {
@@ -1528,21 +1544,25 @@ fn process_msg<'a>(
                 .map(|(k, (_, v))| (k, v))
                 .collect();
 
-            let typechecked = finish(
-                state,
-                solved_subs,
-                exposed_aliases_by_symbol,
-                exposed_vars_by_symbol,
-                exposed_types_storage,
-                resolved_implementations,
-                dep_idents,
-                documentation,
-                abilities_store,
-                #[cfg(debug_assertions)]
-                checkmate,
-            );
+            if watch {
+                Ok(ControlFlow::Continue(state))
+            } else {
+                let typechecked = finish(
+                    state,
+                    solved_subs,
+                    exposed_aliases_by_symbol,
+                    exposed_vars_by_symbol,
+                    exposed_types_storage,
+                    resolved_implementations,
+                    dep_idents,
+                    documentation,
+                    abilities_store,
+                    #[cfg(debug_assertions)]
+                    checkmate,
+                );
 
-            Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
+                Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
+            }
         }
         Msg::FinishedAllSpecialization {
             subs,
@@ -1594,13 +1614,6 @@ fn process_msg<'a>(
                 state.render,
             );
             Err(LoadingProblem::FormattedReport(buf))
-        }
-        Msg::Abort => {
-            // This happens when a `--watch` is in progress, and a
-            // filesystem change triggered a new build. Before that
-            // can happen, we must gracefully abort the in-progress build.
-            let todo = ();
-            todo!("shutdown workers, reset the state.");
         }
         msg => {
             // This is where most of the main thread's work gets done.
@@ -1747,21 +1760,30 @@ fn load_multi_threaded<'a>(
     let (msg_tx, msg_rx) = bounded(1024);
     let (abort_tx, abort_rx) = bounded(64);
 
+    // We need to explicitly extend the lifetime of this to the end of the function.
+    #[cfg(not(target_family = "wasm"))]
+    let opt_watcher;
+
+    // --watch is not supported on wasm; there is no filesystem to watch!
     #[cfg(not(target_family = "wasm"))]
     {
-        // --watch is not supported on wasm; there is no filesystem to watch!
-        if watch {
-            match init_watcher(abort_tx) {
-                Ok(()) => {
-                    // No problem; watch was set up successfully.
+        // We need to keep opt_watcher in scope
+        opt_watcher = if watch {
+            match init_watcher(abort_tx.clone()) {
+                Ok(watcher) => {
+                    Some(watcher)
                 }
                 Err(_) => {
                     let todo = ();
+                    todo!();
 
+                    None
                     // TODO report loading problem based on what happened when trying to init the watcher.
                 }
             }
-        }
+        } else {
+            None
+        };
     }
 
     msg_tx
@@ -1832,7 +1854,7 @@ fn load_multi_threaded<'a>(
     let mut sources_recorded = MutMap::default();
     let mut interns_recorded = Interns::default();
 
-    {
+    let answer = {
         let thread_result = thread::scope(|thread_scope| {
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
@@ -1884,20 +1906,6 @@ fn load_multi_threaded<'a>(
             let worker_listeners = worker_listeners.into_bump_slice();
             let msg_tx = msg_tx.clone();
 
-            macro_rules! shut_down_worker_threads {
-                () => {
-                    for listener in worker_listeners {
-                        // We intentionally don't propagate this Result, because even if
-                        // shutting down a worker failed (which can happen if a a panic
-                        // occurred on that thread), we want to continue shutting down
-                        // the others regardless.
-                        if listener.send(WorkerMsg::Shutdown).is_err() {
-                            log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
-                        }
-                    }
-                };
-            }
-
             // The root module will have already queued up messages to process,
             // and processing those messages will in turn queue up more messages.
             loop {
@@ -1910,9 +1918,10 @@ fn load_multi_threaded<'a>(
                     &msg_tx,
                     &msg_rx,
                     &abort_rx,
+                    watch,
                 ) {
                     Ok(ControlFlow::Break(load_result)) => {
-                        shut_down_worker_threads!();
+                        shut_down_worker_threads(worker_listeners);
 
                         return Ok(load_result);
                     }
@@ -1936,7 +1945,7 @@ fn load_multi_threaded<'a>(
                         sources_recorded = sources;
                         interns_recorded = interns;
 
-                        shut_down_worker_threads!();
+                        shut_down_worker_threads(worker_listeners);
 
                         return Err(LoadingProblem::ChannelProblem(
                             ChannelProblem::FailedToEnqueueTask(Box::new(PanicReportInfo {
@@ -1951,7 +1960,7 @@ fn load_multi_threaded<'a>(
                         ));
                     }
                     Err(e) => {
-                        shut_down_worker_threads!();
+                        shut_down_worker_threads(worker_listeners);
 
                         return Err(e);
                     }
@@ -1983,25 +1992,59 @@ fn load_multi_threaded<'a>(
                 .to_string(),
             ))
         })
+    };
+
+    // Artificially extend the lifetime of abort_tx so it doesn't get dropped and disconnected.
+    let _ = abort_tx;
+
+    // Artificially extend the lifetime of the watcher so it doesn't stop watching prematurely.
+    #[cfg(not(target_family = "wasm"))]
+    let _ = opt_watcher;
+
+    answer
+}
+
+fn shut_down_worker_threads<'a>(worker_listeners: impl IntoIterator<Item = &'a Sender<WorkerMsg>>) {
+    for listener in worker_listeners {
+        // We intentionally don't propagate this Result, because even if
+        // shutting down a worker failed (which can happen if a a panic
+        // occurred on that thread), we want to continue shutting down
+        // the others regardless.
+        if listener.send(WorkerMsg::Shutdown).is_err() {
+            log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
+        }
     }
 }
 
 // Watching is not supported on wasm; there is no filesystem to watch!
 #[cfg(not(target_family = "wasm"))]
-fn init_watcher<'a>(msg_tx: Sender<()>) -> notify::Result<()> {
+fn init_watcher<'a>(abort_tx: Sender<()>) -> notify::Result<notify::RecommendedWatcher> {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
     use notify::{RecursiveMode, Watcher};
 
-    let mut watcher = notify::recommended_watcher(move |res| match res {
-        Ok(event) => {
-            msg_tx.send(());
-        }
-        Err(e) => println!("watch error: {:?}", e),
-    })?;
+    let mut watcher =
+        notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+            Ok(event) => {
+                if event
+                    .paths
+                    .iter()
+                    .any(|path| path.extension() == Some(&OsStr::from_bytes(b"roc")))
+                {
 
-    // We watch the entire directory, but we only
+                    dbg!(event);
+                    abort_tx.send(()).unwrap();
+                }
+            }
+            Err(err) => eprintln!("Error watching filesystem for changes: {:?}", err),
+        })?;
+
+    // Watch the directory the root module is in, plus all of its descendant directories.
+    // TODO: the way `notify` does this is much less efficient than what we want. We should
+    // replace it with something that gives us OS events, which we can filter ourselves.
     watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
 
-    Ok(())
+    Ok(watcher)
 }
 
 fn worker_task_step<'a>(
@@ -3202,10 +3245,6 @@ fn update<'a>(
         Msg::FailedToLoad(problem) => {
             // TODO report the error and continue instead of erroring out
             Err(problem)
-        }
-        Msg::Abort => {
-            let todo = ();
-            todo!("shutdown workers, reset the state.");
         }
         Msg::FinishedAllTypeChecking { .. } => {
             unreachable!();
