@@ -387,7 +387,7 @@ app "fizz-buzz"
     }
 
     #[tokio::test]
-    async fn test_inner_change() {
+    async fn test_completion_with_changes() {
         let doc = DOC_LIT.to_string()
             + r#"rec=\a,b->{one:{potato:\d->d,leak:59},two:b}
 rectest= 
@@ -426,7 +426,7 @@ rectest=
         assert_debug_snapshot!(done)
     }
     #[tokio::test]
-    async fn test_as_identifier() {
+    async fn test_completion_as_identifier() {
         let suffix = DOC_LIT.to_string()
             + r#"
 main =
@@ -457,7 +457,7 @@ main =
     }
 
     #[tokio::test]
-    async fn test_as_record() {
+    async fn test_completion_as_record() {
         let doc = DOC_LIT.to_string()
             + r#"
 main =

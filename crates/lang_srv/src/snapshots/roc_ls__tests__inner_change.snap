@@ -5,22 +5,22 @@ expression: done
 (
     Ok(
         Err(
-            "version 2 doesn't match latest: 7 discarding analysis  ",
+            "Not latest version skipping analysis",
         ),
     ),
     Ok(
         Err(
-            "version 3 doesn't match latest: 7 discarding analysis  ",
+            "Not latest version skipping analysis",
         ),
     ),
     Ok(
         Err(
-            "version 4 doesn't match latest: 7 discarding analysis  ",
+            "Not latest version skipping analysis",
         ),
     ),
     Ok(
         Err(
-            "version 5 doesn't match latest: 7 discarding analysis  ",
+            "Not latest version skipping analysis",
         ),
     ),
     Ok(
@@ -79,7 +79,7 @@ expression: done
     ),
     Ok(
         Err(
-            "version 6 doesn't match latest: 7 discarding analysis  ",
+            "Not latest version skipping analysis",
         ),
     ),
     Ok(
