@@ -901,7 +901,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "30461\n",
+            "162088\n",
             UseValgrind::No,
             TestCliCommands::Run,
         )
