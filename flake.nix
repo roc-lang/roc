@@ -84,6 +84,7 @@
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
           rocBuild.rust-shell
+          perl # ./ci/update_basic_cli_url.sh
         ]);
 
         sharedDevInputs = (with pkgs; [
