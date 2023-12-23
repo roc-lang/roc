@@ -68,6 +68,7 @@ fn load_and_typecheck(
         Default::default(), // these tests will re-compile the builtins
         RocCacheDir::Disallowed,
         load_config,
+        None,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

@@ -151,6 +151,9 @@ pub(crate) mod diag {
                         roc_packaging::cache::roc_cache_dir().display()
                     )
                 }
+                LoadingProblem::InitWatchFailed(err_msg) => {
+                    format!("Initializing filesystem watching failed: {err_msg}")
+                }
             };
 
             Some(Diagnostic {

@@ -68,7 +68,6 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
             palette,
             threading: Threading::Single,
             exec_mode: ExecutionMode::Executable,
-            watch: false,
         },
     );
 

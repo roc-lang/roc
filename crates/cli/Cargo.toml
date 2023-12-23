@@ -65,6 +65,11 @@ roc_target = { path = "../compiler/roc_target" }
 roc_tracing = { path = "../tracing" }
 roc_wasm_interp = { path = "../wasm_interp", optional = true }
 
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+notify = "6.1.1"
+
+crossbeam.workspace = true
+
 ven_pretty = { path = "../vendor/pretty" }
 
 bumpalo.workspace = true

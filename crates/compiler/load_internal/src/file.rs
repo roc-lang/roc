@@ -8,7 +8,7 @@ use crate::module::{
 };
 use crate::module_cache::ModuleCache;
 use bumpalo::{collections::CollectIn, Bump};
-use crossbeam::channel::{bounded, RecvError, Select, Sender};
+use crossbeam::channel::{bounded, Receiver, RecvError, Select, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
@@ -110,7 +110,6 @@ pub struct LoadConfig {
     pub threading: Threading,
     pub exec_mode: ExecutionMode,
     pub function_kind: FunctionKind,
-    pub watch: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -958,7 +957,7 @@ pub enum LoadingProblem<'a> {
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
     CouldNotFindCacheDir,
     ChannelProblem(ChannelProblem),
-    InitWatchFailed(notify::Error),
+    InitWatchFailed(String),
 }
 
 #[derive(Debug)]
@@ -1057,7 +1056,6 @@ pub fn load_and_typecheck_str<'a>(
         threading,
         exec_mode: ExecutionMode::Check,
         function_kind,
-        watch: false,
     };
 
     match load(
@@ -1067,6 +1065,7 @@ pub fn load_and_typecheck_str<'a>(
         cached_subs,
         roc_cache_dir,
         load_config,
+        None,
     )? {
         Monomorphized(_) => unreachable!(),
         TypeChecked(module) => Ok(module),
@@ -1290,6 +1289,7 @@ pub fn load<'a>(
     cached_types: MutMap<ModuleId, TypeState>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
+    opt_watch_rx: Option<&Receiver<()>>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
         Single,
@@ -1327,7 +1327,6 @@ pub fn load<'a>(
             load_config.palette,
             load_config.exec_mode,
             roc_cache_dir,
-            load_config.watch,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
@@ -1341,7 +1340,7 @@ pub fn load<'a>(
             threads,
             load_config.exec_mode,
             roc_cache_dir,
-            load_config.watch,
+            opt_watch_rx,
         ),
     }
 }
@@ -1358,7 +1357,6 @@ pub fn load_single_threaded<'a>(
     palette: Palette,
     exec_mode: ExecutionMode,
     roc_cache_dir: RocCacheDir<'_>,
-    watch: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1372,17 +1370,6 @@ pub fn load_single_threaded<'a>(
     } = load_start;
 
     let (msg_tx, msg_rx) = bounded(1024);
-    let (watch_tx, watch_rx) = bounded(64);
-
-    #[cfg(not(target_family = "wasm"))]
-    {
-        // --watch is not supported on wasm; there is no filesystem to watch!
-        if watch {
-            let todo = ();
-            todo!("init single-threaded watch");
-            // TODO set up watch
-        }
-    }
 
     msg_tx
         .send(root_msg)
@@ -1426,8 +1413,7 @@ pub fn load_single_threaded<'a>(
             &injector,
             &msg_tx,
             &msg_rx,
-            &watch_rx,
-            watch,
+            None,
         ) {
             Ok(ControlFlow::Break(done)) => return Ok(done),
             Ok(ControlFlow::Continue(new_state)) => {
@@ -1467,17 +1453,48 @@ fn state_thread_step<'a>(
     injector: &Injector<BuildTask<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
-    watch_rx: &crossbeam::channel::Receiver<()>,
-    watch: bool,
+    opt_watch_rx: Option<&crossbeam::channel::Receiver<()>>,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
-    let mut sel = Select::new();
+    match opt_watch_rx {
+        Some(watch_rx) => {
+            let mut sel = Select::new();
 
-    let oper_msg = sel.recv(msg_rx);
-    let oper_abort = sel.recv(watch_rx);
-    let oper = sel.select();
+            let oper_msg = sel.recv(msg_rx);
+            let oper_abort = sel.recv(watch_rx);
+            let oper = sel.select();
 
-    match oper.index() {
-        i if i == oper_msg => match oper.recv(msg_rx) {
+            match oper.index() {
+                i if i == oper_msg => match oper.recv(msg_rx) {
+                    Ok(msg) => process_msg(
+                        arena,
+                        state,
+                        src_dir,
+                        worker_listeners,
+                        injector,
+                        msg,
+                        msg_rx,
+                        msg_tx,
+                    ),
+                    Err(RecvError) => Err(LoadingProblem::ChannelProblem(
+                        ChannelProblem::ChannelDisconnected,
+                    )),
+                },
+                i if i == oper_abort => match oper.recv(watch_rx) {
+                    Ok(_) => {
+                        shut_down_worker_threads(worker_listeners);
+
+                        Ok(ControlFlow::Continue(state))
+                    }
+                    // The abort channel is usually empty and disconnected,
+                    // so it's not a concern when this happens.
+                    Err(RecvError) => Err(LoadingProblem::ChannelProblem(
+                        ChannelProblem::ChannelDisconnected,
+                    )),
+                },
+                _ => unreachable!(), // there are only two `oper` alternatives to choose from!
+            }
+        }
+        None => match msg_rx.recv() {
             Ok(msg) => process_msg(
                 arena,
                 state,
@@ -1487,27 +1504,11 @@ fn state_thread_step<'a>(
                 msg,
                 msg_rx,
                 msg_tx,
-                watch,
             ),
             Err(RecvError) => Err(LoadingProblem::ChannelProblem(
                 ChannelProblem::ChannelDisconnected,
             )),
         },
-        i if i == oper_abort => match oper.recv(watch_rx) {
-            Ok(_) => {
-                shut_down_worker_threads(worker_listeners);
-
-                // TODO debounce sending a "recompile" message
-
-                Ok(ControlFlow::Continue(state))
-            }
-            // The abort channel is usually empty and disconnected,
-            // so it's not a concern when this happens.
-            Err(RecvError) => Err(LoadingProblem::ChannelProblem(
-                ChannelProblem::ChannelDisconnected,
-            )),
-        },
-        _ => unreachable!(), // there are only two `oper` alternatives to choose from!
     }
 }
 
@@ -1520,7 +1521,6 @@ fn process_msg<'a>(
     msg: Msg<'a>,
     msg_rx: &crossbeam::channel::Receiver<Msg<'a>>,
     msg_tx: &crossbeam::channel::Sender<Msg<'a>>,
-    watch: bool,
 ) -> Result<ControlFlow<LoadResult<'a>, State<'a>>, LoadingProblem<'a>> {
     match msg {
         Msg::FinishedAllTypeChecking {
@@ -1544,25 +1544,21 @@ fn process_msg<'a>(
                 .map(|(k, (_, v))| (k, v))
                 .collect();
 
-            if watch {
-                Ok(ControlFlow::Continue(state))
-            } else {
-                let typechecked = finish(
-                    state,
-                    solved_subs,
-                    exposed_aliases_by_symbol,
-                    exposed_vars_by_symbol,
-                    exposed_types_storage,
-                    resolved_implementations,
-                    dep_idents,
-                    documentation,
-                    abilities_store,
-                    #[cfg(debug_assertions)]
-                    checkmate,
-                );
+            let typechecked = finish(
+                state,
+                solved_subs,
+                exposed_aliases_by_symbol,
+                exposed_vars_by_symbol,
+                exposed_types_storage,
+                resolved_implementations,
+                dep_idents,
+                documentation,
+                abilities_store,
+                #[cfg(debug_assertions)]
+                checkmate,
+            );
 
-                Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
-            }
+            Ok(ControlFlow::Break(LoadResult::TypeChecked(typechecked)))
         }
         Msg::FinishedAllSpecialization {
             subs,
@@ -1744,7 +1740,7 @@ fn load_multi_threaded<'a>(
     available_threads: usize,
     exec_mode: ExecutionMode,
     roc_cache_dir: RocCacheDir<'_>,
-    watch: bool,
+    opt_watch_rx: Option<&Receiver<()>>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1758,27 +1754,6 @@ fn load_multi_threaded<'a>(
     } = load_start;
 
     let (msg_tx, msg_rx) = bounded(1024);
-    let (watch_tx, watch_rx) = bounded(64);
-
-    // We explicitly extend the lifetime of the watcher to the end of the function.
-    // Otherwise, it gets dropped too soon and stops watching the filesystem!
-    #[cfg(not(target_family = "wasm"))]
-    let opt_watcher;
-
-    // --watch is not supported on wasm; there is no filesystem to watch!
-    #[cfg(not(target_family = "wasm"))]
-    {
-        opt_watcher = if watch {
-            match init_watcher(watch_tx.clone()) {
-                Ok(watcher) => Some(watcher),
-                Err(err) => {
-                    return Err(LoadingProblem::InitWatchFailed(err));
-                }
-            }
-        } else {
-            None
-        };
-    }
 
     msg_tx
         .send(root_msg)
@@ -1848,7 +1823,7 @@ fn load_multi_threaded<'a>(
     let mut sources_recorded = MutMap::default();
     let mut interns_recorded = Interns::default();
 
-    let answer = {
+    {
         let thread_result = thread::scope(|thread_scope| {
             let mut worker_listeners =
                 bumpalo::collections::Vec::with_capacity_in(num_workers, arena);
@@ -1911,8 +1886,7 @@ fn load_multi_threaded<'a>(
                     &injector,
                     &msg_tx,
                     &msg_rx,
-                    &watch_rx,
-                    watch,
+                    opt_watch_rx,
                 ) {
                     Ok(ControlFlow::Break(load_result)) => {
                         shut_down_worker_threads(worker_listeners);
@@ -1986,16 +1960,7 @@ fn load_multi_threaded<'a>(
                 .to_string(),
             ))
         })
-    };
-
-    // Artificially extend the lifetime of watch_tx so it doesn't get dropped and disconnected.
-    let _ = watch_tx;
-
-    // Artificially extend the lifetime of the watcher so it doesn't stop watching prematurely.
-    #[cfg(not(target_family = "wasm"))]
-    let _ = opt_watcher;
-
-    answer
+    }
 }
 
 fn shut_down_worker_threads<'a>(worker_listeners: impl IntoIterator<Item = &'a Sender<WorkerMsg>>) {
@@ -2008,39 +1973,6 @@ fn shut_down_worker_threads<'a>(worker_listeners: impl IntoIterator<Item = &'a S
             log!("There was an error trying to shutdown a worker thread. One reason this can happen is if the thread panicked.");
         }
     }
-}
-
-// Watching is not supported on wasm; there is no filesystem to watch!
-#[cfg(not(target_family = "wasm"))]
-fn init_watcher<'a>(watch_tx: Sender<()>) -> notify::Result<notify::RecommendedWatcher> {
-    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
-
-    use notify::{RecursiveMode, Watcher};
-
-    let mut watcher =
-        notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
-            Ok(event) => {
-                // We only care about changes to .roc files
-                if event
-                    .paths
-                    .iter()
-                    .any(|path| path.extension() == Some(&OsStr::from_bytes(b"roc")))
-                {
-                    // Since a .roc file changed, we need to abort the current build
-                    // and rebuild.
-                    watch_tx.send(()).unwrap();
-                }
-            }
-            Err(err) => eprintln!("Error watching filesystem for changes: {:?}", err),
-        })?;
-
-    // Watch the directory the root module is in, plus all of its descendant directories.
-    // TODO: instead of watching "." we should watch the path to the root module.
-    // TODO: the way `notify` does this is much less efficient than what we want. We should
-    // replace it with something that gives us OS events, which we can filter ourselves.
-    watcher.watch(Path::new("."), RecursiveMode::Recursive)?;
-
-    Ok(watcher)
 }
 
 fn worker_task_step<'a>(

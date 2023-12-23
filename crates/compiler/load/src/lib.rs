@@ -1,6 +1,7 @@
 //! Used to load a .roc file and coordinate the compiler pipeline, including
 //! parsing, type checking, and [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)).
 use bumpalo::Bump;
+use crossbeam::channel::Receiver;
 use roc_can::module::{ExposedByModule, TypeState};
 use roc_collections::all::MutMap;
 use roc_module::symbol::ModuleId;
@@ -18,8 +19,8 @@ const SKIP_SUBS_CACHE: bool = {
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
-    ExecutionMode, ExpectMetadata, LoadConfig, LoadResult, LoadStart, LoadingProblem, Phase,
-    Threading,
+    ChannelProblem, ExecutionMode, ExpectMetadata, LoadConfig, LoadResult, LoadStart,
+    LoadingProblem, Phase, Threading,
 };
 pub use roc_load_internal::module::{
     CheckedModule, EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
@@ -33,6 +34,7 @@ fn load<'a>(
     exposed_types: ExposedByModule,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
+    opt_watch_rx: Option<&Receiver<()>>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_types = read_cached_types();
 
@@ -43,6 +45,7 @@ fn load<'a>(
         cached_types,
         roc_cache_dir,
         load_config,
+        opt_watch_rx,
     )
 }
 
@@ -57,7 +60,6 @@ pub fn load_single_threaded<'a>(
     palette: Palette,
     roc_cache_dir: RocCacheDir<'_>,
     exec_mode: ExecutionMode,
-    watch: bool,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_types();
     let exposed_types = ExposedByModule::default();
@@ -73,7 +75,6 @@ pub fn load_single_threaded<'a>(
         palette,
         exec_mode,
         roc_cache_dir,
-        watch,
     )
 }
 
@@ -114,7 +115,14 @@ pub fn load_and_monomorphize_from_str<'a>(
     let load_start = LoadStart::from_str(arena, filename, src, roc_cache_dir, src_dir)?;
     let exposed_types = ExposedByModule::default();
 
-    match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
+    match load(
+        arena,
+        load_start,
+        exposed_types,
+        roc_cache_dir,
+        load_config,
+        None,
+    )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(module) => Err(LoadMonomorphizedError::ErrorModule(module)),
     }
@@ -138,7 +146,14 @@ pub fn load_and_monomorphize<'a>(
 
     let exposed_types = ExposedByModule::default();
 
-    match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
+    match load(
+        arena,
+        load_start,
+        exposed_types,
+        roc_cache_dir,
+        load_config,
+        None,
+    )? {
         Monomorphized(module) => Ok(module),
         TypeChecked(module) => Err(LoadMonomorphizedError::ErrorModule(module)),
     }
@@ -162,7 +177,14 @@ pub fn load_and_typecheck<'a>(
 
     let exposed_types = ExposedByModule::default();
 
-    match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
+    match load(
+        arena,
+        load_start,
+        exposed_types,
+        roc_cache_dir,
+        load_config,
+        None,
+    )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
@@ -179,7 +201,6 @@ pub fn load_and_typecheck_str<'a>(
     render: RenderTarget,
     roc_cache_dir: RocCacheDir<'_>,
     palette: Palette,
-    watch: bool,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -197,7 +218,6 @@ pub fn load_and_typecheck_str<'a>(
         palette,
         roc_cache_dir,
         ExecutionMode::Check,
-        watch,
     )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),

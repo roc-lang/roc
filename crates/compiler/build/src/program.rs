@@ -685,7 +685,6 @@ pub fn standard_load_config(
     target: &Triple,
     order: BuildOrdering,
     threading: Threading,
-    watch: bool,
 ) -> LoadConfig {
     let target_info = TargetInfo::from(target);
 
@@ -712,7 +711,6 @@ pub fn standard_load_config(
         palette: DEFAULT_PALETTE,
         threading,
         exec_mode,
-        watch,
     }
 }
 
@@ -1212,7 +1210,6 @@ pub fn check_file<'a>(
     emit_timings: bool,
     roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
-    watch: bool,
 ) -> Result<(Problems, Duration), LoadingProblem<'a>> {
     let compilation_start = Instant::now();
 
@@ -1231,7 +1228,6 @@ pub fn check_file<'a>(
         palette: DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Check,
-        watch,
     };
     let mut loaded =
         roc_load::load_and_typecheck(arena, roc_file_path, roc_cache_dir, load_config)?;
@@ -1306,7 +1302,7 @@ pub fn build_str_test<'a>(
     let build_ordering = BuildOrdering::AlwaysBuild;
     let threading = Threading::AtMost(2);
 
-    let load_config = standard_load_config(&triple, build_ordering, threading, false);
+    let load_config = standard_load_config(&triple, build_ordering, threading);
 
     let compilation_start = std::time::Instant::now();
 

@@ -2479,6 +2479,7 @@ dependencies = [
  "cli_utils",
  "const_format",
  "criterion",
+ "crossbeam",
  "distance",
  "errno",
  "indoc",
@@ -2486,6 +2487,7 @@ dependencies = [
  "libc",
  "libloading",
  "mimalloc",
+ "notify",
  "parking_lot",
  "pretty_assertions",
  "roc_build",
@@ -2839,6 +2841,7 @@ name = "roc_load"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "crossbeam",
  "indoc",
  "insta",
  "pretty_assertions",
@@ -2871,7 +2874,6 @@ dependencies = [
  "crossbeam",
  "indoc",
  "maplit",
- "notify",
  "parking_lot",
  "pretty_assertions",
  "roc_builtins",

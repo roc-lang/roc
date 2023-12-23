@@ -108,7 +108,6 @@ pub fn generate_stub_lib(
             palette: DEFAULT_PALETTE,
             threading: Threading::AllAvailable,
             exec_mode: ExecutionMode::Executable,
-            watch: false,
         },
     )
     .unwrap_or_else(|problem| todo!("{:?}", problem));

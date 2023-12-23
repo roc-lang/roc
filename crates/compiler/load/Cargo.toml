@@ -19,6 +19,7 @@ roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
 
 bumpalo.workspace = true
+crossbeam.workspace = true
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }

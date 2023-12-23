@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use target_lexicon::Triple;
 
+mod watch;
+
 #[macro_use]
 extern crate const_format;
 
@@ -206,54 +208,103 @@ fn main() -> io::Result<()> {
                 Some(n) => Threading::AtMost(*n),
             };
 
-            match check_file(
-                &arena,
-                roc_file_path.to_owned(),
-                emit_timings,
-                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-                threading,
-                matches.get_flag(FLAG_WATCH),
-            ) {
-                Ok((problems, total_time)) => {
-                    println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
-                        if problems.errors == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.errors,
-                        if problems.errors == 1 {
-                            "error"
-                        } else {
-                            "errors"
-                        },
-                        if problems.warnings == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.warnings,
-                        if problems.warnings == 1 {
-                            "warning"
-                        } else {
-                            "warnings"
-                        },
-                        total_time.as_millis(),
-                    );
+            // TODO remove duplication between these branches
+            let exit_code = if matches.get_flag(FLAG_WATCH) {
+                watch::with_watch(|watch_tx| {
+                    match check_file(
+                        &arena,
+                        roc_file_path.to_owned(),
+                        emit_timings,
+                        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                        threading,
+                    ) {
+                        Ok((problems, total_time)) => {
+                            println!(
+                                "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
+                                if problems.errors == 0 {
+                                    32 // green
+                                } else {
+                                    33 // yellow
+                                },
+                                problems.errors,
+                                if problems.errors == 1 {
+                                    "error"
+                                } else {
+                                    "errors"
+                                },
+                                if problems.warnings == 0 {
+                                    32 // green
+                                } else {
+                                    33 // yellow
+                                },
+                                problems.warnings,
+                                if problems.warnings == 1 {
+                                    "warning"
+                                } else {
+                                    "warnings"
+                                },
+                                total_time.as_millis(),
+                            );
 
-                    Ok(problems.exit_code())
-                }
+                            Ok(())
+                        }
+                        Err(prob) => Err(prob),
+                    }
+                })
+                .map(|()| unreachable!()) // `watch` never terminates successfully!
+            } else {
+                match check_file(
+                    &arena,
+                    roc_file_path.to_owned(),
+                    emit_timings,
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                    threading,
+                ) {
+                    Ok((problems, total_time)) => {
+                        println!(
+                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",
+                            if problems.errors == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.errors,
+                            if problems.errors == 1 {
+                                "error"
+                            } else {
+                                "errors"
+                            },
+                            if problems.warnings == 0 {
+                                32 // green
+                            } else {
+                                33 // yellow
+                            },
+                            problems.warnings,
+                            if problems.warnings == 1 {
+                                "warning"
+                            } else {
+                                "warnings"
+                            },
+                            total_time.as_millis(),
+                        );
 
-                Err(LoadingProblem::FormattedReport(report)) => {
-                    print!("{report}");
-
-                    Ok(1)
-                }
-                Err(other) => {
-                    panic!("build_file failed with error:\n{other:?}");
+                        Ok(problems.exit_code())
+                    }
+                    Err(prob) => Err(prob),
                 }
             }
+            .unwrap_or_else(|loading_problem| match loading_problem {
+                LoadingProblem::FormattedReport(report) => {
+                    print!("{report}");
+
+                    1
+                }
+                other => {
+                    panic!("build_file failed with error:\n{other:?}");
+                }
+            });
+
+            Ok(exit_code)
         }
         Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
         Some((CMD_DOCS, matches)) => {
