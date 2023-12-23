@@ -1,4 +1,4 @@
-# Frequently Asked Questions
+# FAQ
 
 ## Where did the name Roc come from?
 
