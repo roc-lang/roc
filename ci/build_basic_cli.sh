@@ -4,6 +4,9 @@
 set -euxo pipefail
 
 git clone https://github.com/roc-lang/basic-cli.git
+cd basic-cli
+git checkout $RELEASE_TAG
+cd ..
 
 if [ "$(uname -s)" == "Linux" ]; then
 

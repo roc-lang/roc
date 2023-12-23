@@ -1,5 +1,5 @@
 on:
-#  pull_request:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -9,15 +9,30 @@ concurrency:
   
 env:
   # use .tar.gz for quick testing
-  ARCHIVE_FORMAT: .tar.gz
-  BASIC_CLI_BRANCH: main
+  ARCHIVE_FORMAT: .tar.br
+  # !! Make a new basic-cli git tag and set it here before starting this workflow
+  RELEASE_TAG: 0.7.0
 
 jobs:
-  fetch-releases:
+  prepare:
     runs-on: [ubuntu-20.04]
     steps:
       - uses: actions/checkout@v3
+        with:
+          repository: roc-lang/basic-cli
 
+      - name: check if provided RELEASE_TAG is fresh
+        run: |
+          TAG_DATE=$(git log -1 --format=%ai ${{ env.RELEASE_TAG }})
+          CURRENT_DATE=$(date +%Y-%m-%d)
+          TAG_AGE=$(( ($(date -d $CURRENT_DATE +%s) - $(date -d "$TAG_DATE" +%s) )/(60*60*24) ))
+
+          if [ $TAG_AGE -gt 4 ]; then
+            echo "The provided RELEASE_TAG (${{ env.RELEASE_TAG }}) seems stale, it is $TAG_AGE days old. Did you set it correctly at the top of this workflow?"
+            exit 1
+          fi
+
+      # get latest nightly releases
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
@@ -30,7 +45,7 @@ jobs:
 
   build-linux-x86_64-files:
     runs-on: [ubuntu-20.04]
-    needs: [fetch-releases]
+    needs: [prepare]
     steps:
       - uses: actions/checkout@v3
 
@@ -47,14 +62,14 @@ jobs:
         with:
           name: linux-x86_64-files
           path: |
-            basic-cli/src/metadata_linux-x64.rm
-            basic-cli/src/linux-x64.rh
-            basic-cli/src/linux-x64.o
+            basic-cli/platform/metadata_linux-x64.rm
+            basic-cli/platform/linux-x64.rh
+            basic-cli/platform/linux-x64.o
 
 
   build-linux-arm64-files:
     runs-on: [self-hosted, Linux, ARM64]
-    needs: [fetch-releases]
+    needs: [prepare]
     steps:
       - uses: actions/checkout@v3
 
@@ -74,11 +89,11 @@ jobs:
         with:
           name: linux-arm64-files
           path: |
-            basic-cli/src/linux-arm64.o
+            basic-cli/platform/linux-arm64.o
 
   build-macos-x86_64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12 and up
-    needs: [fetch-releases]
+    needs: [prepare]
     steps:
       - uses: actions/checkout@v3
 
@@ -92,12 +107,12 @@ jobs:
         with:
           name: macos-x86_64-files
           path: |
-            basic-cli/src/macos-x64.o
+            basic-cli/platform/macos-x64.o
 
   build-macos-apple-silicon-files:
     name: build apple silicon .o file
     runs-on: [self-hosted, macOS, ARM64]
-    needs: [fetch-releases]
+    needs: [prepare]
     steps:
       - uses: actions/checkout@v3
 
@@ -111,7 +126,7 @@ jobs:
         with:
           name: macos-apple-silicon-files
           path: |
-            basic-cli/src/macos-arm64.o
+            basic-cli/platform/macos-arm64.o
 
   create-release-archive:
     needs: [build-linux-x86_64-files, build-linux-arm64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
@@ -140,17 +155,25 @@ jobs:
 
       - run: git clone https://github.com/roc-lang/basic-cli.git
 
-      - run: cp macos-apple-silicon-files/* ./basic-cli/src
+      - run: cp macos-apple-silicon-files/* ./basic-cli/platform
       
-      - run: cp linux-x86_64-files/* ./basic-cli/src
+      - run: cp linux-x86_64-files/* ./basic-cli/platform
 
-      - run: cp linux-arm64-files/* ./basic-cli/src
+      - run: cp linux-arm64-files/* ./basic-cli/platform
 
-      - run: cp macos-x86_64-files/* ./basic-cli/src
+      - run: cp macos-x86_64-files/* ./basic-cli/platform
 
-      - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
+      - name: bundle basic-cli release archive
+        run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/platform/main.roc
 
-      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
+      - name: build basic-cli docs
+        env:
+          ROC_DOCS_URL_ROOT: /packages/basic-cli/${{ env.RELEASE_TAG }}
+        run: |
+          ./roc_nightly/roc docs ./basic-cli/platform/main.roc
+          tar -czvf docs.tar.gz generated-docs/
+
+      - run: echo "TAR_FILENAME=$(ls -d basic-cli/platform/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v3
@@ -158,6 +181,13 @@ jobs:
           name: basic-cli-platform
           path: |
             ${{ env.TAR_FILENAME }}
+
+      - name: Upload docs archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-assets-docs
+          path: |
+            docs.tar.gz
 
   test-release-ubuntu:
     needs: [create-release-archive]
@@ -194,18 +224,19 @@ jobs:
       - name: Install ncat for tests if we dont have it yet
         run: if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
 
-      - name: prep testing
+      - name: prepare testing
         run: |
           mv roc_nightly basic-cli-platform/.
           cd basic-cli-platform
-          mkdir src
-          find . -maxdepth 1 -type f -exec mv {} src/ \;
+          mkdir platform
+          # move all files to platform dir
+          find . -maxdepth 1 -type f -exec mv {} platform/ \;
           
           mkdir temp-basic-cli
           cd temp-basic-cli
           git clone https://github.com/roc-lang/basic-cli.git
           cd basic-cli
-          git checkout ${{ env.BASIC_CLI_BRANCH }}
+          git checkout ${{ env.RELEASE_TAG }}
           cp -r examples ../..
           cp -r ci ../..
           cp -r LICENSE ../..
