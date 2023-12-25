@@ -110,17 +110,25 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
 
 // returns Vec with names of regressed benchmarks
 fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
-    let mut cmd_child = Command::new(format!(
-        "./bench-folder-{}/target/release/deps/time_bench",
-        branch_name
-    ))
-    .args(&["--bench", "--noplot"])
-    .stdout(Stdio::piped())
-    .stderr(Stdio::inherit())
-    .spawn()
-    .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
+    let mut bench_cmd = 
+        Command::new(format!(
+            "./bench-folder-{}/target/release/deps/time_bench",
+            branch_name
+        ));
 
-    let stdout = cmd_child.stdout.as_mut().unwrap();
+    let bench_cmd_w_args =
+        bench_cmd.args(&["--bench", "--noplot"]);
+
+    let bench_cmd_as_str = format!("{bench_cmd_w_args:?}");
+
+    let mut bench_cmd_child = 
+        bench_cmd_w_args
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
+
+    let stdout = bench_cmd_child.stdout.as_mut().unwrap();
     let stdout_reader = BufReader::new(stdout);
     let stdout_lines = stdout_reader.lines();
 
@@ -145,6 +153,18 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
         last_three_lines_queue.push_front(line_str.clone());
 
         println!(">>bench {:?}: {:?}", branch_name, line_str);
+    }
+
+    let exit_status = bench_cmd_child.wait().expect("Failed to wait on cmd_child");
+
+    if !exit_status.success() {
+        panic!(
+            "Error: time-bench execution failed with exit code {}.\n\
+            See output above for error info.\n\
+            Command was:\n\t{}",
+            exit_status, 
+            bench_cmd_as_str
+        );
     }
 
     regressed_benches
