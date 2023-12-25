@@ -631,10 +631,14 @@ fn specialize_drops_stmt<'a, 'i>(
             ),
         }),
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
         } => arena.alloc(Stmt::Dbg {
+            source_location,
+            source,
             symbol: *symbol,
             variable: *variable,
             remainder: specialize_drops_stmt(
@@ -1536,7 +1540,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         StrGetUnsafe | ListGetUnsafe => RC::NoRc,
         ListConcat => RC::Rc,
         StrConcat => RC::Rc,
-        StrSubstringUnsafe => RC::NoRc,
+        StrSubstringUnsafe => RC::Rc,
         StrReserve => RC::Rc,
         StrAppendScalar => RC::Rc,
         StrGetScalarUnsafe => RC::NoRc,

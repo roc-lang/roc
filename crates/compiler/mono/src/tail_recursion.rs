@@ -330,6 +330,8 @@ fn insert_jumps<'a>(
         }
 
         Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -342,6 +344,8 @@ fn insert_jumps<'a>(
             needle_result,
         ) {
             Some(cont) => Some(arena.alloc(Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: cont,
@@ -1020,10 +1024,14 @@ impl<'a> TrmcEnv<'a> {
                 remainder: arena.alloc(self.walk_stmt(env, remainder)),
             },
             Stmt::Dbg {
+                source_location,
+                source,
                 symbol,
                 variable,
                 remainder,
             } => Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: arena.alloc(self.walk_stmt(env, remainder)),

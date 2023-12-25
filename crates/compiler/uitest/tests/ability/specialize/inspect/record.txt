@@ -1,4 +1,4 @@
 app "test" provides [main] to "./platform"
 
-main = Inspect.toInspector { a: "" } |> Inspect.apply (Inspect.init {}) |> Inspect.toDbgStr
-#      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): { a : Str } -[[#Derived.toInspector_{a}(0)]]-> Inspector DbgFormatter
+main = Inspect.toInspector { a: "" } |> Inspect.apply (Inspect.init {})
+#      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): { a : Str } -[[#Derived.toInspector_{a}(0)]]-> Inspector f where f implements InspectFormatter

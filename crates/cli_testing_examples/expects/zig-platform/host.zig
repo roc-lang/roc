@@ -52,10 +52,10 @@ export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
     std.process.exit(1);
 }
 
-export fn roc_dbg(loc: *RocStr, msg: *RocStr) callconv(.C) void {
+export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
     // This platform uses stdout for testing purposes instead of the normal stderr.
     const stdout = std.io.getStdOut().writer();
-    stdout.print("[{s}] {s}\n", .{ loc.asSlice(), msg.asSlice() }) catch unreachable;
+    stdout.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {

@@ -387,6 +387,8 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::Dbg {
             variable,
+            source: _,
+            source_location: _,
             loc_message,
             loc_continuation,
             symbol: _,

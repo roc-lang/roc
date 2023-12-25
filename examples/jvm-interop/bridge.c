@@ -275,10 +275,11 @@ __attribute__((noreturn)) void roc_panic(struct RocStr *msg, unsigned int tag_id
     longjmp(exception_buffer, 1);
 }
 
-void roc_dbg(struct RocStr *loc, struct RocStr *msg) {
+void roc_dbg(struct RocStr *loc, struct RocStr *msg, struct RocStr *src) {
     char* loc_bytes = is_small_str(*loc) ? (char*)loc : (char*)loc->bytes;
+    char* src_bytes = is_small_str(*src) ? (char*)src : (char*)src->bytes;
     char* msg_bytes = is_small_str(*msg) ? (char*)msg : (char*)msg->bytes;
-    fprintf(stderr, "[%s] %s\n", loc_bytes, msg_bytes);
+    fprintf(stderr, "[%s] %s = %s\n", loc_bytes, src_bytes, msg_bytes);
 }
 
 extern void roc__programForHost_1__InterpolateString_caller(struct RocStr *name, char *closure_data, struct RocStr *ret);

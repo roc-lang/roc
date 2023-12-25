@@ -689,6 +689,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             })
         }
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -703,6 +705,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             );
 
             arena.alloc(Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: newer_remainder,
@@ -1288,7 +1292,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrSubstringUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
+        StrSubstringUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
         StrAppendScalar => arena.alloc_slice_copy(&[owned, irrelevant]),
         StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),

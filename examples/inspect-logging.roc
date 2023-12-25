@@ -2,7 +2,7 @@
 # Shows how Roc values can be logged
 #
 app "inspect-logging"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.0/bkGby8jb0tmZYsy2hg1E_B2QrCgcSTxdUlHtETwm5m4.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
     imports [
         pf.Stdout,
         Community,
@@ -34,6 +34,5 @@ main =
     }
     |> Community.addFriend 0 2
     |> Community.addFriend 1 2
-    |> Inspect.inspect
-    |> Inspect.toDbgStr
+    |> Inspect.toStr
     |> Stdout.line

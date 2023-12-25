@@ -144,7 +144,6 @@ pub(crate) struct FoundSpecializationsModule<'a> {
     pub(crate) procs_base: ProcsBase<'a>,
     pub(crate) subs: Subs,
     pub(crate) module_timing: ModuleTiming,
-    pub(crate) abilities_store: AbilitiesStore,
     pub(crate) expectations: Option<Expectations>,
 }
 

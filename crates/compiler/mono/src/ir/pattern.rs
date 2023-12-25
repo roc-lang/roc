@@ -1544,7 +1544,13 @@ fn store_list_pattern<'a>(
         }
     }
 
-    stmt = store_list_rest(env, list_sym, list_arity, list_layout, opt_rest, stmt);
+    stmt = match store_list_rest(env, list_sym, list_arity, list_layout, opt_rest, stmt) {
+        StorePattern::Productive(new) => {
+            is_productive = true;
+            new
+        }
+        StorePattern::NotProductive(new) => new,
+    };
 
     if is_productive {
         StorePattern::Productive(stmt)
@@ -1560,8 +1566,12 @@ fn store_list_rest<'a>(
     list_layout: InLayout<'a>,
     opt_rest: &Option<(usize, Option<Symbol>)>,
     mut stmt: Stmt<'a>,
-) -> Stmt<'a> {
+) -> StorePattern<'a> {
+    let mut is_productive = false;
+
     if let Some((index, Some(rest_sym))) = opt_rest {
+        is_productive = true;
+
         let usize_layout = Layout::usize(env.target_info);
 
         let total_dropped = list_arity.min_len();
@@ -1608,7 +1618,12 @@ fn store_list_rest<'a>(
             stmt = Stmt::Let(sym, expr, lay, env.arena.alloc(stmt));
         }
     }
-    stmt
+
+    if is_productive {
+        StorePattern::Productive(stmt)
+    } else {
+        StorePattern::NotProductive(stmt)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

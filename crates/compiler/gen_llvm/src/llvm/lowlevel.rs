@@ -1100,13 +1100,22 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumBytesToU128 => {
             arguments!(list, position);
 
-            call_list_bitcode_fn(
+            let ret = call_list_bitcode_fn(
                 env,
                 &[list.into_struct_value()],
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U128,
-            )
+            );
+
+            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+                // On windows the return type is not a i128, likely due to alignment
+                env.builder
+                    .build_bitcast(ret, env.context.i128_type(), "empty_string")
+                    .unwrap()
+            } else {
+                ret
+            }
         }
         NumCompare => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1535,7 +1544,7 @@ fn build_int_binop<'ctx>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer addition overflowed!")
+            throw_on_overflow(env, parent, result, "Integer addition overflowed!")
         }
         NumAddWrap => bd.new_build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => {
@@ -1566,7 +1575,7 @@ fn build_int_binop<'ctx>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
+            throw_on_overflow(env, parent, result, "Integer subtraction overflowed!")
         }
         NumSubWrap => bd.new_build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => {
@@ -1597,7 +1606,7 @@ fn build_int_binop<'ctx>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
+            throw_on_overflow(env, parent, result, "Integer multiplication overflowed!")
         }
         NumMulWrap => bd.new_build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulSaturated => call_bitcode_fn(
@@ -2350,7 +2359,7 @@ fn build_dec_binop<'a, 'ctx>(
             bitcode::DEC_ADD_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal addition overflowed",
+            "Decimal addition overflowed",
         ),
         NumSub => build_dec_binop_throw_on_overflow(
             env,
@@ -2358,7 +2367,7 @@ fn build_dec_binop<'a, 'ctx>(
             bitcode::DEC_SUB_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal subtraction overflowed",
+            "Decimal subtraction overflowed",
         ),
         NumMul => build_dec_binop_throw_on_overflow(
             env,
@@ -2366,7 +2375,7 @@ fn build_dec_binop<'a, 'ctx>(
             bitcode::DEC_MUL_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal multiplication overflowed",
+            "Decimal multiplication overflowed",
         ),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
 
@@ -2596,7 +2605,16 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                         }
                     }
                     PtrWidth::Bytes8 => {
-                        if target_int_width.stack_size() as usize > env.target_info.ptr_size() {
+                        let return_by_pointer = {
+                            if env.target_info.operating_system
+                                == roc_target::OperatingSystem::Windows
+                            {
+                                target_int_width.stack_size() as usize >= env.target_info.ptr_size()
+                            } else {
+                                target_int_width.stack_size() as usize > env.target_info.ptr_size()
+                            }
+                        };
+                        if return_by_pointer {
                             let bitcode_return_type =
                                 zig_to_int_checked_result_type(env, target_int_width.type_name());
 
@@ -2659,7 +2677,7 @@ fn int_neg_raise_on_overflow<'ctx>(
     throw_internal_exception(
         env,
         parent,
-        "integer negation overflowed because its argument is the minimum value",
+        "Integer negation overflowed because its argument is the minimum value",
     );
 
     builder.position_at_end(else_block);
@@ -2690,7 +2708,7 @@ fn int_abs_raise_on_overflow<'ctx>(
     throw_internal_exception(
         env,
         parent,
-        "integer absolute overflowed because its argument is the minimum value",
+        "Integer absolute overflowed because its argument is the minimum value",
     );
 
     builder.position_at_end(else_block);

@@ -5,9 +5,9 @@ use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{
-    incrementing_elem_loop, list_capacity_or_ref_ptr, list_refcount_ptr, load_list,
+    incrementing_elem_loop, list_allocation_ptr, list_capacity_or_ref_ptr, load_list,
 };
-use crate::llvm::build_str::str_refcount_ptr;
+use crate::llvm::build_str::str_allocation_ptr;
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use crate::llvm::struct_::RocStruct;
 use bumpalo::collections::Vec;
@@ -155,6 +155,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
                 let subprogram = env.new_subprogram(fn_name);
                 function_value.set_subprogram(subprogram);
+
+                debug_info_init!(env, function_value);
 
                 Self::build_decrement_function_body(env, function_value, alignment);
 
@@ -864,7 +866,7 @@ fn modify_refcount_list_help<'a, 'ctx>(
     }
 
     let refcount_ptr =
-        PointerToRefcount::from_ptr_to_data(env, list_refcount_ptr(env, original_wrapper));
+        PointerToRefcount::from_ptr_to_data(env, list_allocation_ptr(env, original_wrapper));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(call_mode, layout, env, layout_interner);
 
@@ -971,7 +973,7 @@ fn modify_refcount_str_help<'a, 'ctx>(
     builder.new_build_conditional_branch(is_big_and_non_empty, modification_block, cont_block);
     builder.position_at_end(modification_block);
 
-    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, str_refcount_ptr(env, arg_val));
+    let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, str_allocation_ptr(env, arg_val));
     let call_mode = mode_to_call_mode(fn_val, mode);
     refcount_ptr.modify(
         call_mode,
@@ -1048,6 +1050,8 @@ pub fn build_header_help<'ctx>(
 
     let subprogram = env.new_subprogram(fn_name);
     fn_val.set_subprogram(subprogram);
+
+    debug_info_init!(env, fn_val);
 
     env.dibuilder.finalize();
 

@@ -15,4 +15,4 @@ cp -r build dist/
 cp -r public/* dist/
 roc run main.roc -- content/ dist/
 
-npx http-server dist/ -p 8080 -c-1 --cors
+simple-http-server -p 8080 --nocache --cors --index -- dist/

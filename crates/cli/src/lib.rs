@@ -50,7 +50,8 @@ pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
 
-pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_EMIT_LLVM_IR: &str = "emit-llvm-ir";
+pub const FLAG_PROFILING: &str = "profiling";
 pub const FLAG_BUNDLE: &str = "bundle";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
@@ -102,9 +103,15 @@ pub fn build_app() -> Command {
         .action(ArgAction::SetTrue)
         .required(false);
 
-    let flag_debug = Arg::new(FLAG_DEBUG)
-        .long(FLAG_DEBUG)
-        .help("Store LLVM debug information in the generated program")
+    let flag_emit_llvm_ir = Arg::new(FLAG_EMIT_LLVM_IR)
+        .long(FLAG_EMIT_LLVM_IR)
+        .help("Emit a `.ll` file containing the LLVM IR of the program")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
+    let flag_profiling = Arg::new(FLAG_PROFILING)
+        .long(FLAG_PROFILING)
+        .help("Keep debug info in the final generated program even in optmized builds")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -163,7 +170,8 @@ pub fn build_app() -> Command {
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
-            .arg(flag_debug.clone())
+            .arg(flag_emit_llvm_ir.clone())
+            .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
@@ -212,7 +220,8 @@ pub fn build_app() -> Command {
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
-            .arg(flag_debug.clone())
+            .arg(flag_emit_llvm_ir.clone())
+            .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
@@ -234,7 +243,8 @@ pub fn build_app() -> Command {
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
-            .arg(flag_debug.clone())
+            .arg(flag_emit_llvm_ir.clone())
+            .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
@@ -247,7 +257,8 @@ pub fn build_app() -> Command {
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
             .arg(flag_dev.clone())
-            .arg(flag_debug.clone())
+            .arg(flag_emit_llvm_ir.clone())
+            .arg(flag_profiling.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
@@ -376,7 +387,8 @@ pub fn build_app() -> Command {
         .arg(flag_max_threads)
         .arg(flag_opt_size)
         .arg(flag_dev)
-        .arg(flag_debug)
+        .arg(flag_emit_llvm_ir)
+        .arg(flag_profiling)
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_prebuilt)
@@ -695,7 +707,13 @@ pub fn build(
         CodeGenBackend::Llvm(backend_mode)
     };
 
-    let emit_debug_info = matches.get_flag(FLAG_DEBUG);
+    let emit_llvm_ir = matches.get_flag(FLAG_EMIT_LLVM_IR);
+    if emit_llvm_ir && !matches!(code_gen_backend, CodeGenBackend::Llvm(_)) {
+        user_error!("Cannot emit llvm ir while using a dev backend.");
+    }
+
+    let emit_debug_info = matches.get_flag(FLAG_PROFILING)
+        || matches!(opt_level, OptLevel::Development | OptLevel::Normal);
     let emit_timings = matches.get_flag(FLAG_TIME);
 
     let threading = match matches.get_one::<usize>(FLAG_MAX_THREADS) {
@@ -744,6 +762,7 @@ pub fn build(
         backend: code_gen_backend,
         opt_level,
         emit_debug_info,
+        emit_llvm_ir,
     };
 
     let load_config = standard_load_config(&triple, build_ordering, threading);

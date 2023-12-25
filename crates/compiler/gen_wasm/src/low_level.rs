@@ -1382,7 +1382,7 @@ impl<'a> LowLevelCall<'a> {
             }
             NumAbs => {
                 const PANIC_MSG: &str =
-                    "integer absolute overflowed because its argument is the minimum value";
+                    "Integer absolute overflowed because its argument is the minimum value";
 
                 self.load_args(backend);
 
@@ -1446,7 +1446,7 @@ impl<'a> LowLevelCall<'a> {
             }
             NumNeg => {
                 const PANIC_MSG: &str =
-                    "integer negation overflowed because its argument is the minimum value";
+                    "Integer negation overflowed because its argument is the minimum value";
 
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {

@@ -575,7 +575,7 @@ fn various_sized_abs() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
-    expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
+    expected = r#"Roc failed with message: "Integer absolute overflowed because its argument is the minimum value"#
 )]
 fn abs_min_int_overflow() {
     assert_evals_to!(
@@ -796,6 +796,26 @@ fn gen_div_checked_by_zero_dec() {
         ),
         RocDec::from_str_to_i128_unsafe("-1"),
         i128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Decimal division by 0!"#)]
+fn gen_div_dec_by_zero() {
+    assert_evals_to!("1dec / 0", RocDec::from_str_to_i128_unsafe("-1"), i128);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[should_panic(expected = r#"Roc failed with message: "Integer division by 0!"#)]
+fn gen_div_ceil_by_zero() {
+    assert_evals_to!(
+        r#"
+            Num.divCeil 5 0 == 0
+        "#,
+        false,
+        bool
     );
 }
 
@@ -1581,7 +1601,7 @@ fn int_negate() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
-    expected = r#"Roc failed with message: "integer negation overflowed because its argument is the minimum value"#
+    expected = r#"Roc failed with message: "Integer negation overflowed because its argument is the minimum value"#
 )]
 fn neg_min_int_overflow() {
     assert_evals_to!(
@@ -1793,6 +1813,7 @@ fn ceiling() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn floor() {
     assert_evals_to!("Num.floor 1.9f64", 1, i64);
+    assert_evals_to!("Num.floor -1.9f64", -2, i64);
 }
 
 #[test]
@@ -1809,7 +1830,7 @@ fn atan() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer addition overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer addition overflowed!"#)]
 fn int_add_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1884,7 +1905,7 @@ fn float_add_overflow() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn int_sub_overflow() {
     assert_evals_to!("-9_223_372_036_854_775_808 - 1", 0, i64);
 }
@@ -1969,7 +1990,7 @@ fn float_sub_checked() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer multiplication overflowed!"#)]
 fn int_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -1984,7 +2005,7 @@ fn int_positive_mul_overflow() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer multiplication overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer multiplication overflowed!"#)]
 fn int_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(
@@ -3849,30 +3870,30 @@ fn condition_polymorphic_num_becomes_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_leading_zero_bits() {
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u8"#, 2, usize);
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u16"#, 10, usize);
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u32"#, 26, usize);
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u64"#, 58, usize);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u8"#, 2, u8);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u16"#, 10, u8);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u32"#, 26, u8);
+    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u64"#, 58, u8);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_trailing_zero_bits() {
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1000u8"#, 3, usize);
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_0000u16"#, 5, usize);
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0u32"#, 32, usize);
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1111u64"#, 0, usize);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1000u8"#, 3, u8);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_0000u16"#, 5, u8);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0u32"#, 32, u8);
+    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1111u64"#, 0, u8);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_one_bits() {
-    assert_evals_to!(r#"Num.countOneBits 0b0010_1000u8"#, 2, usize);
-    assert_evals_to!(r#"Num.countOneBits 0b0010_0000u16"#, 1, usize);
-    assert_evals_to!(r#"Num.countOneBits 0u32"#, 0, usize);
-    assert_evals_to!(r#"Num.countOneBits 0b0010_1111u64"#, 5, usize);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_1000u8"#, 2, u8);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_0000u16"#, 1, u8);
+    assert_evals_to!(r#"Num.countOneBits 0u32"#, 0, u8);
+    assert_evals_to!(r#"Num.countOneBits 0b0010_1111u64"#, 5, u8);
 }
 
 #[test]
@@ -3907,21 +3928,21 @@ fn num_abs_diff_float() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_max_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.maxI64 -1"#, 0, i64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_int_min_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.minI64 0"#, 0, i64);
 }
 
 #[test]
 #[cfg(feature = "gen-llvm")]
-#[should_panic(expected = r#"Roc failed with message: "integer subtraction overflowed!"#)]
+#[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_large_bits_min_overflow() {
     assert_evals_to!(r#"Num.absDiff Num.minI128 0"#, 0, i128);
 }

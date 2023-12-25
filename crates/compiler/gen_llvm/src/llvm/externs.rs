@@ -1,3 +1,4 @@
+use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, BuilderExt, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
@@ -160,8 +161,39 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             }
         }
 
-        // TODO: generate a valid impl of dbg here.
-        unreachable_function(env, "roc_dbg");
+        // roc_dbg
+        {
+            // The type of this function (but not the implementation) should have
+            // already been defined by the builtins, which rely on it.
+            let fn_val = module.get_function("roc_dbg").unwrap();
+            let mut params = fn_val.get_param_iter();
+            let loc_arg = params.next().unwrap();
+            let msg_arg = params.next().unwrap();
+            let src_arg = params.next().unwrap();
+
+            debug_assert!(params.next().is_none());
+
+            // Add a basic block for the entry point
+            let entry = ctx.append_basic_block(fn_val, "entry");
+
+            builder.position_at_end(entry);
+
+            // Call utils.dbg_impl()
+            let dbg_impl = module.get_function(bitcode::UTILS_DBG_IMPL).unwrap();
+            let call = builder.new_build_call(
+                dbg_impl,
+                &[loc_arg.into(), msg_arg.into(), src_arg.into()],
+                "call_utils_dbg_impl",
+            );
+
+            call.set_call_convention(C_CALL_CONV);
+
+            builder.new_build_return(None);
+
+            if cfg!(debug_assertions) {
+                crate::llvm::build::verify_fn(fn_val);
+            }
+        }
 
         match env.target_info.operating_system {
             roc_target::OperatingSystem::Windows => {
@@ -222,6 +254,8 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         let subprogram = env.new_subprogram("roc_panic");
         fn_val.set_subprogram(subprogram);
+
+        debug_info_init!(env, fn_val);
 
         env.dibuilder.finalize();
 

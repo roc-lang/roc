@@ -234,7 +234,19 @@ fn verify_procedures<'a>(
 
     if !has_changes.stdout.is_empty() {
         println!("{}", std::str::from_utf8(&has_changes.stdout).unwrap());
-        panic!("Output changed: resolve conflicts and `git add` the file.");
+        panic!(indoc!(
+            r#"
+
+            Mono output has changed! This is normal when making changes to the builtins.
+            To fix it; run these commands locally:
+
+                cargo test -p test_mono -p uitest --no-fail-fast
+                git add -u
+                git commit -S -m "update mono tests"
+                git push origin YOUR_BRANCH_NAME
+                
+            "#
+        ));
     }
 }
 
@@ -3320,7 +3332,7 @@ fn inspect_derived_string() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.inspect "abc" |> Inspect.toDbgStr
+        main = Inspect.toStr "abc"
         "#
     )
 }
@@ -3333,7 +3345,7 @@ fn inspect_derived_record() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.inspect {a: 7, b: 3dec} |> Inspect.toDbgStr
+        main = Inspect.toStr {a: 7, b: 3dec}
         "#
     )
 }
@@ -3345,7 +3357,7 @@ fn inspect_derived_record_one_field_string() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.inspect {a: "foo"} |> Inspect.toDbgStr
+        main = Inspect.toStr {a: "foo"}
         "#
     )
 }
@@ -3358,7 +3370,7 @@ fn inspect_derived_record_two_field_strings() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.inspect {a: "foo", b: "bar"} |> Inspect.toDbgStr
+        main = Inspect.toStr {a: "foo", b: "bar"}
         "#
     )
 }
@@ -3371,7 +3383,7 @@ fn inspect_derived_nested_record_string() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.inspect {a: {b: "bar"}} |> Inspect.toDbgStr
+        main = Inspect.toStr {a: {b: "bar"}}
         "#
     )
 }
@@ -3387,7 +3399,7 @@ fn inspect_derived_tag_one_field_string() {
         main =
             x : [A Str]
             x = A "foo"
-            Inspect.inspect x |> Inspect.toDbgStr
+            Inspect.toStr x
         "#
     )
 }
@@ -3403,7 +3415,7 @@ fn inspect_derived_tag_two_payloads_string() {
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            Inspect.inspect x |> Inspect.toDbgStr
+            Inspect.toStr x
         "#
     )
 }
@@ -3416,7 +3428,7 @@ fn inspect_derived_list() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.inspect [1, 2, 3] |> Inspect.toDbgStr
+        main = Inspect.toStr [1, 2, 3]
         "#
     )
 }
@@ -3431,8 +3443,23 @@ fn inspect_derived_dict() {
 
         main =
             Dict.fromList [("a", 1), ("b", 2)]
-            |> Inspect.inspect
-            |> Inspect.toDbgStr
+            |> Inspect.toStr
+        "#
+    )
+}
+
+#[mono_test]
+fn issue_6196() {
+    indoc!(
+        r#"
+        nth : List a, Nat -> Result a [OutOfBounds]
+        nth = \l, i ->
+            when (l, i) is
+                ([], _) -> Err OutOfBounds
+                ([e, ..], 0) -> Ok e
+                ([_, .. as rest], _) -> nth rest (i - 1)
+
+        nth ["a"] 0
         "#
     )
 }

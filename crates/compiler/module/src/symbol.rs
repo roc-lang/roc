@@ -1439,6 +1439,7 @@ define_builtins! {
         83 LIST_WALK_WITH_INDEX: "walkWithIndex"
         84 LIST_APPEND_IF_OK: "appendIfOk"
         85 LIST_PREPEND_IF_OK: "prependIfOk"
+        86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1484,6 +1485,10 @@ define_builtins! {
         24 DICT_IS_EMPTY: "isEmpty"
         25 DICT_MAP: "map"
         26 DICT_JOINMAP: "joinMap"
+        27 DICT_KEEP_IF: "keepIf"
+        28 DICT_DROP_IF: "dropIf"
+        29 DICT_RESERVE: "reserve"
+        30 DICT_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1506,6 +1511,11 @@ define_builtins! {
         17 SET_IS_EMPTY: "isEmpty"
         18 SET_MAP: "map"
         19 SET_JOIN_MAP: "joinMap"
+        20 SET_KEEP_IF: "keepIf"
+        21 SET_DROP_IF: "dropIf"
+        22 SET_WITH_CAPACITY: "withCapacity"
+        23 SET_RESERVE: "reserve"
+        24 SET_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
@@ -1631,8 +1641,7 @@ define_builtins! {
         31 INSPECT_APPLY: "apply"
         32 INSPECT_TO_INSPECTOR: "toInspector"
         33 INSPECT_NAT: "nat"
-        34 INSPECT_DBG_FORMATTER: "DbgFormatter" exposed_type=true
-        35 INSPECT_TO_DBG_STR: "toDbgStr"
+        34 INSPECT_TO_STR: "toStr"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"

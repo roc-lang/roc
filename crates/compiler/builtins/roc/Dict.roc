@@ -6,6 +6,8 @@ interface Dict
         single,
         clear,
         capacity,
+        reserve,
+        releaseExcessCapacity,
         len,
         isEmpty,
         get,
@@ -15,6 +17,8 @@ interface Dict
         update,
         walk,
         walkUntil,
+        keepIf,
+        dropIf,
         toList,
         fromList,
         keys,
@@ -30,7 +34,7 @@ interface Dict
         Result.{ Result },
         List,
         Str,
-        Num.{ Nat, U64, U8, I8 },
+        Num.{ Nat, U64, F32, U32, U8, I8 },
         Hash.{ Hasher, Hash },
         Inspect.{ Inspect, Inspector, InspectFormatter },
     ]
@@ -87,20 +91,15 @@ interface Dict
 ## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
 ##
 ## Dict is inspired by [IndexMap](https://docs.rs/indexmap/latest/indexmap/map/struct.IndexMap.html).
-## The internal implementation of a dictionary is similar to [absl::flat_hash_map](https://abseil.io/docs/cpp/guides/container).
+## The internal implementation of a dictionary is almost identical to [ankerl::unordered_dense](https://github.com/martinus/unordered_dense).
 ## It has a list of keys value pairs that is ordered based on insertion.
 ## It uses a list of indices into the data as the backing of a hash map.
 Dict k v := {
-    # TODO: Add hashflooding ordered map fall back.
-    # TODO: Add Groups and SIMD h1 key comparison (initial tests where slower, but with proper SIMD should be fast).
-    # TODO: As an optimization, we can make all of these lists in one allocation
-    # TODO: Grow data with the rest of the hashmap. This will require creating a list of garbage data.
-    # TODO: Change remove to use tombstones. Store the tombstones in a bitmap.
-    # TODO: define Eq and Hash that are unordered. Only if value implements hash/eq?
-    metadata : List I8,
-    dataIndices : List Nat,
+    buckets : List Bucket,
     data : List (k, v),
-    size : Nat,
+    maxBucketCapacity : U64,
+    maxLoadFactor : F32,
+    shifts : U8,
 } where k implements Hash & Eq
     implements [
         Eq {
@@ -114,7 +113,7 @@ Dict k v := {
         },
     ]
 
-isEq : Dict k v, Dict k v -> Bool where k implements Hash & Eq, v implements Eq
+isEq : Dict k v, Dict k v -> Bool where v implements Eq
 isEq = \xs, ys ->
     if len xs != len ys then
         Bool.false
@@ -127,7 +126,7 @@ isEq = \xs, ys ->
                 _ ->
                     Break Bool.false
 
-hashDict : hasher, Dict k v -> hasher where k implements Hash & Eq, v implements Hash, hasher implements Hasher
+hashDict : hasher, Dict k v -> hasher where v implements Hash, hasher implements Hasher
 hashDict = \hasher, dict -> Hash.hashUnordered hasher (toList dict) List.walk
 
 toInspectorDict : Dict k v -> Inspector f where k implements Inspect & Hash & Eq, v implements Inspect, f implements InspectFormatter
@@ -142,11 +141,64 @@ toInspectorDict = \dict ->
 empty : {} -> Dict * *
 empty = \{} ->
     @Dict {
-        metadata: List.repeat emptySlot 8,
-        dataIndices: List.repeat 0 8,
+        buckets: [],
         data: [],
-        size: 0,
+        maxBucketCapacity: 0,
+        maxLoadFactor: defaultMaxLoadFactor,
+        shifts: initialShifts,
     }
+
+## Return a dictionary with space allocated for a number of entries. This
+## may provide a performance optimization if you know how many entries will be
+## inserted.
+withCapacity : Nat -> Dict * *
+withCapacity = \requested ->
+    empty {}
+    |> reserve requested
+
+## Enlarge the dictionary for at least capacity additional elements
+reserve : Dict k v, Nat -> Dict k v
+reserve = \@Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }, requested ->
+    currentSize = List.len data
+    requestedSize = currentSize + requested
+    size = Num.min (Num.toU64 requestedSize) maxSize
+
+    requestedShifts = calcShiftsForSize size maxLoadFactor
+    if (List.isEmpty buckets) || requestedShifts > shifts then
+        (buckets0, maxBucketCapacity) = allocBucketsFromShift requestedShifts maxLoadFactor
+        buckets1 = fillBucketsFromData buckets0 data requestedShifts
+        sizeNat = Num.toNat size
+        @Dict {
+            buckets: buckets1,
+            data: List.reserve data (Num.subSaturated sizeNat currentSize),
+            maxBucketCapacity,
+            maxLoadFactor,
+            shifts: requestedShifts,
+        }
+    else
+        @Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }
+
+## Shrink the memory footprint of a dictionary such that capacity is as small as possible.
+## This function will require regenerating the metadata if the size changes.
+## There will still be some overhead due to dictionary metadata always being a power of 2.
+releaseExcessCapacity : Dict k v -> Dict k v
+releaseExcessCapacity = \@Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts } ->
+    size = List.len data
+
+    # NOTE: If we want, we technically could increase the load factor here to potentially minimize size more.
+    minShifts = calcShiftsForSize (Num.toU64 size) maxLoadFactor
+    if minShifts < shifts then
+        (buckets0, maxBucketCapacity) = allocBucketsFromShift minShifts maxLoadFactor
+        buckets1 = fillBucketsFromData buckets0 data minShifts
+        @Dict {
+            buckets: buckets1,
+            data: List.releaseExcessCapacity data,
+            maxBucketCapacity,
+            maxLoadFactor,
+            shifts: minShifts,
+        }
+    else
+        @Dict { buckets, data, maxBucketCapacity: originalMaxBucketCapacity, maxLoadFactor, shifts }
 
 ## Returns the max number of elements the dictionary can hold before requiring a rehash.
 ## ```
@@ -157,18 +209,8 @@ empty = \{} ->
 ## capacityOfDict = Dict.capacity foodDict
 ## ```
 capacity : Dict * * -> Nat
-capacity = \@Dict { dataIndices } ->
-    cap = List.len dataIndices
-
-    Num.subWrap cap (Num.shiftRightZfBy cap 3)
-
-## Return a dictionary with space allocated for a number of entries. This
-## may provide a performance optimization if you know how many entries will be
-## inserted.
-withCapacity : Nat -> Dict * *
-withCapacity = \_ ->
-    # TODO: power of 2 * 8 and actual implementation
-    empty {}
+capacity = \@Dict { maxBucketCapacity } ->
+    Num.toNat maxBucketCapacity
 
 ## Returns a dictionary containing the key and value provided as input.
 ## ```
@@ -176,7 +218,7 @@ withCapacity = \_ ->
 ##     Dict.single "A" "B"
 ##     |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
 ## ```
-single : k, v -> Dict k v where k implements Hash & Eq
+single : k, v -> Dict k v
 single = \k, v ->
     insert (empty {}) k v
 
@@ -189,9 +231,14 @@ single = \k, v ->
 ##     |> Dict.insert 4 "Four"
 ##     |> Bool.isEq (Dict.fromList [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
-fromList : List (k, v) -> Dict k v where k implements Hash & Eq
+##
+## ## Performance Details
+##
+## This will build up from an empty dictionary to minimize totally memory use.
+## If the list has few duplicate keys, it would be faster to allocate a dictionary
+## with the same capacity of the list and walk it calling [Dict.insert]
+fromList : List (k, v) -> Dict k v
 fromList = \data ->
-    # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
     List.walk data (empty {}) (\dict, (k, v) -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
@@ -205,18 +252,18 @@ fromList = \data ->
 ##     |> Bool.isEq 3
 ## ```
 len : Dict * * -> Nat
-len = \@Dict { size } ->
-    size
+len = \@Dict { data } ->
+    List.len data
 
-## Check if the dictinoary is empty.
+## Check if the dictionary is empty.
 ## ```
 ## Dict.isEmpty (Dict.empty {} |> Dict.insert "key" 42)
 ##
 ## Dict.isEmpty (Dict.empty {})
 ## ```
 isEmpty : Dict * * -> Bool
-isEmpty = \@Dict { size } ->
-    size == 0
+isEmpty = \@Dict { data } ->
+    List.isEmpty data
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
 ## ```
@@ -230,27 +277,21 @@ isEmpty = \@Dict { size } ->
 ##
 ## expect Dict.len clearSongs == 0
 ## ```
-clear : Dict k v -> Dict k v where k implements Hash & Eq
-clear = \@Dict { metadata, dataIndices, data } ->
-    cap = List.len dataIndices
-
-    # Only clear large allocations.
-    if cap > 128 * 8 then
-        empty {}
-    else
-        @Dict {
-            metadata: List.map metadata (\_ -> emptySlot),
-            # just leave data indicies as garbage, no need to clear.
-            dataIndices,
-            # use takeFirst to keep around the capacity.
-            data: List.takeFirst data 0,
-            size: 0,
-        }
+clear : Dict k v -> Dict k v
+clear = \@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts } ->
+    @Dict {
+        buckets: List.map buckets \_ -> emptyBucket,
+        # use takeFirst to keep around the capacity
+        data: List.takeFirst data 0,
+        maxBucketCapacity,
+        maxLoadFactor,
+        shifts,
+    }
 
 ## Convert each value in the dictionary to something new, by calling a conversion
 ## function on each of them which receives both the key and the old value. Then return a
 ## new dictionary containing the same keys and the converted values.
-map : Dict k a, (k, a -> b) -> Dict k b where k implements Hash & Eq, b implements Hash & Eq
+map : Dict k a, (k, a -> b) -> Dict k b
 map = \dict, transform ->
     init = withCapacity (capacity dict)
 
@@ -262,7 +303,7 @@ map = \dict, transform ->
 ## (using [Dict.insertAll]) into one dictionary.
 ##
 ## You may know a similar function named `concatMap` in other languages.
-joinMap : Dict a b, (a, b -> Dict x y) -> Dict x y where a implements Hash & Eq, x implements Hash & Eq
+joinMap : Dict a b, (a, b -> Dict x y) -> Dict x y
 joinMap = \dict, transform ->
     init = withCapacity (capacity dict) # Might be a pessimization
 
@@ -280,7 +321,7 @@ joinMap = \dict, transform ->
 ##     |> Dict.walk 0 (\count, _, qty -> count + qty)
 ##     |> Bool.isEq 36
 ## ```
-walk : Dict k v, state, (state, k, v -> state) -> state where k implements Hash & Eq
+walk : Dict k v, state, (state, k, v -> state) -> state
 walk = \@Dict { data }, initialState, transform ->
     List.walk data initialState (\state, (k, v) -> transform state k v)
 
@@ -312,9 +353,50 @@ walk = \@Dict { data }, initialState, transform ->
 ##
 ## expect someoneIsAnAdult == Bool.true
 ## ```
-walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state where k implements Hash & Eq
+walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state
 walkUntil = \@Dict { data }, initialState, transform ->
     List.walkUntil data initialState (\state, (k, v) -> transform state k v)
+
+## Run the given function on each key-value pair of a dictionary, and return
+## a dictionary with just the pairs for which the function returned `Bool.true`.
+## ```
+## expect Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
+##     |> Dict.keepIf \(_k, v) -> v >= 18
+##     |> Dict.len
+##     |> Bool.isEq 2
+## ```
+keepIf : Dict k v, ((k, v) -> Bool) -> Dict k v
+keepIf = \dict, predicate ->
+    keepIfHelp dict predicate 0 (Dict.len dict)
+
+keepIfHelp : Dict k v, ((k, v) -> Bool), Nat, Nat -> Dict k v
+keepIfHelp = \@Dict dict, predicate, index, length ->
+    if index < length then
+        (key, value) = listGetUnsafe dict.data index
+        if predicate (key, value) then
+            keepIfHelp (@Dict dict) predicate (index + 1) length
+        else
+            keepIfHelp (Dict.remove (@Dict dict) key) predicate index (length - 1)
+    else
+        @Dict dict
+
+## Run the given function on each key-value pair of a dictionary, and return
+## a dictionary with just the pairs for which the function returned `Bool.false`.
+## ```
+## expect Dict.empty {}
+##     |> Dict.insert "Alice" 17
+##     |> Dict.insert "Bob" 18
+##     |> Dict.insert "Charlie" 19
+##     |> Dict.dropIf \(_k, v) -> v >= 18
+##     |> Dict.len
+##     |> Bool.isEq 1
+## ```
+dropIf : Dict k v, ((k, v) -> Bool) -> Dict k v
+dropIf = \dict, predicate ->
+    Dict.keepIf dict (\e -> Bool.not (predicate e))
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
@@ -327,25 +409,10 @@ walkUntil = \@Dict { data }, initialState, transform ->
 ## expect Dict.get dictionary 1 == Ok "Apple"
 ## expect Dict.get dictionary 2000 == Err KeyNotFound
 ## ```
-get : Dict k v, k -> Result v [KeyNotFound] where k implements Hash & Eq
-get = \@Dict { metadata, dataIndices, data }, key ->
-    hashKey =
-        createLowLevelHasher PseudoRandSeed
-        |> Hash.hash key
-        |> complete
-    h1Key = h1 hashKey
-    h2Key = h2 hashKey
-    probe = newProbe h1Key (div8 (List.len metadata))
-
-    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
-        Ok index ->
-            dataIndex = listGetUnsafe dataIndices index
-            (_, v) = listGetUnsafe data dataIndex
-
-            Ok v
-
-        Err NotFound ->
-            Err KeyNotFound
+get : Dict k v, k -> Result v [KeyNotFound]
+get = \dict, key ->
+    find dict key
+    |> .result
 
 ## Check if the dictionary has a value for a specified key.
 ## ```
@@ -355,22 +422,11 @@ get = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Dict.contains 1234
 ##     |> Bool.isEq Bool.true
 ## ```
-contains : Dict k v, k -> Bool where k implements Hash & Eq
-contains = \@Dict { metadata, dataIndices, data }, key ->
-    hashKey =
-        createLowLevelHasher PseudoRandSeed
-        |> Hash.hash key
-        |> complete
-    h1Key = h1 hashKey
-    h2Key = h2 hashKey
-    probe = newProbe h1Key (div8 (List.len metadata))
-
-    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
-        Ok _ ->
-            Bool.true
-
-        Err NotFound ->
-            Bool.false
+contains : Dict k v, k -> Bool
+contains = \dict, key ->
+    find dict key
+    |> .result
+    |> Result.isOk
 
 ## Insert a value into the dictionary at a specified key.
 ## ```
@@ -380,42 +436,41 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 ##     |> Dict.get "Apples"
 ##     |> Bool.isEq (Ok 12)
 ## ```
-insert : Dict k v, k, v -> Dict k v where k implements Hash & Eq
-insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
-    hashKey =
-        createLowLevelHasher PseudoRandSeed
-        |> Hash.hash key
-        |> complete
-    h1Key = h1 hashKey
-    h2Key = h2 hashKey
-    probe = newProbe h1Key (div8 (List.len metadata))
+insert : Dict k v, k, v -> Dict k v
+insert = \dict, key, value ->
+    (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) =
+        if len dict < capacity dict then
+            dict
+        else
+            increaseSize dict
 
-    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
-        Ok index ->
-            dataIndex = listGetUnsafe dataIndices index
+    hash = hashKey key
+    distAndFingerprint = distAndFingerprintFromHash hash
+    bucketIndex = bucketIndexFromHash hash shifts
 
-            @Dict {
-                metadata,
-                dataIndices,
-                data: List.set data dataIndex (key, value),
-                size,
-            }
+    insertHelper buckets data bucketIndex distAndFingerprint key value maxBucketCapacity maxLoadFactor shifts
 
-        Err NotFound ->
-            # The dictionary has grown, it might need to rehash.
-            rehashedDict =
-                maybeRehash
-                    (
-                        @Dict {
-                            metadata,
-                            dataIndices,
-                            data,
-                            size: Num.addWrap size 1,
-                        }
-                    )
-
-            # Need to rescan searching for the first empty or deleted cell.
-            insertNotFoundHelper rehashedDict key value h1Key h2Key
+insertHelper : List Bucket, List (k, v), Nat, U32, k, v, U64, F32, U8 -> Dict k v
+insertHelper = \buckets0, data0, bucketIndex0, distAndFingerprint0, key, value, maxBucketCapacity, maxLoadFactor, shifts ->
+    loaded = listGetUnsafe buckets0 (Num.toNat bucketIndex0)
+    if distAndFingerprint0 == loaded.distAndFingerprint then
+        (foundKey, _) = listGetUnsafe data0 (Num.toNat loaded.dataIndex)
+        if foundKey == key then
+            data1 = List.set data0 (Num.toNat loaded.dataIndex) (key, value)
+            @Dict { buckets: buckets0, data: data1, maxBucketCapacity, maxLoadFactor, shifts }
+        else
+            bucketIndex1 = nextBucketIndex bucketIndex0 (List.len buckets0)
+            distAndFingerprint1 = incrementDist distAndFingerprint0
+            insertHelper buckets0 data0 bucketIndex1 distAndFingerprint1 key value maxBucketCapacity maxLoadFactor shifts
+    else if distAndFingerprint0 > loaded.distAndFingerprint then
+        data1 = List.append data0 (key, value)
+        dataIndex = (List.len data1) - 1
+        buckets1 = placeAndShiftUp buckets0 { distAndFingerprint: distAndFingerprint0, dataIndex: Num.toU32 dataIndex } bucketIndex0
+        @Dict { buckets: buckets1, data: data1, maxBucketCapacity, maxLoadFactor, shifts }
+    else
+        bucketIndex1 = nextBucketIndex bucketIndex0 (List.len buckets0)
+        distAndFingerprint1 = incrementDist distAndFingerprint0
+        insertHelper buckets0 data0 bucketIndex1 distAndFingerprint1 key value maxBucketCapacity maxLoadFactor shifts
 
 ## Remove a value from the dictionary for a specified key.
 ## ```
@@ -426,34 +481,30 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
 ##     |> Dict.len
 ##     |> Bool.isEq 0
 ## ```
-remove : Dict k v, k -> Dict k v where k implements Hash & Eq
-remove = \@Dict { metadata, dataIndices, data, size }, key ->
-    # TODO: change this from swap remove to tombstone and test is performance is still good.
-    hashKey =
-        createLowLevelHasher PseudoRandSeed
-        |> Hash.hash key
-        |> complete
-    h1Key = h1 hashKey
-    h2Key = h2 hashKey
-    probe = newProbe h1Key (div8 (List.len metadata))
+remove : Dict k v, k -> Dict k v
+remove = \@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }, key ->
+    if !(List.isEmpty data) then
+        (bucketIndex0, distAndFingerprint0) = nextWhileLess buckets key shifts
+        (bucketIndex1, distAndFingerprint1) = removeHelper buckets bucketIndex0 distAndFingerprint0 data key
 
-    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
-        Ok index ->
-            last = Num.subWrap (List.len data) 1
-            dataIndex = listGetUnsafe dataIndices index
+        bucket = listGetUnsafe buckets (Num.toNat bucketIndex1)
+        if distAndFingerprint1 != bucket.distAndFingerprint then
+            @Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }
+        else
+            removeBucket (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) bucketIndex1
+    else
+        @Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }
 
-            if dataIndex == last then
-                @Dict {
-                    metadata: List.set metadata index deletedSlot,
-                    dataIndices,
-                    data: List.dropLast data 1,
-                    size: Num.subWrap size 1,
-                }
-            else
-                swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data, size }) index last
-
-        Err NotFound ->
-            @Dict { metadata, dataIndices, data, size }
+removeHelper = \buckets, bucketIndex, distAndFingerprint, data, key ->
+    bucket = listGetUnsafe buckets (Num.toNat bucketIndex)
+    if distAndFingerprint == bucket.distAndFingerprint then
+        (foundKey, _) = listGetUnsafe data (Num.toNat bucket.dataIndex)
+        if foundKey == key then
+            (bucketIndex, distAndFingerprint)
+        else
+            removeHelper buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
+    else
+        (bucketIndex, distAndFingerprint)
 
 ## Insert or remove a value for a specified key. This function enables a
 ## performance optimization for the use case of providing a default when a value
@@ -470,17 +521,55 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 ## expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
 ## expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
 ## ```
-update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v where k implements Hash & Eq
-update = \dict, key, alter ->
-    # TODO: look into optimizing by merging substeps and reducing lookups.
-    possibleValue =
-        get dict key
-        |> Result.map Present
-        |> Result.withDefault Missing
+update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v
+update = \@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }, key, alter ->
+    { bucketIndex, result } = find (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) key
+    when result is
+        Ok value ->
+            when alter (Present value) is
+                Present newValue ->
+                    bucket = listGetUnsafe buckets bucketIndex
+                    newData = List.set data (Num.toNat bucket.dataIndex) (key, newValue)
+                    @Dict { buckets, data: newData, maxBucketCapacity, maxLoadFactor, shifts }
 
-    when alter possibleValue is
-        Present value -> insert dict key value
-        Missing -> remove dict key
+                Missing ->
+                    removeBucket (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) bucketIndex
+
+        Err KeyNotFound ->
+            when alter Missing is
+                Present newValue ->
+                    if List.len data >= (Num.toNat maxBucketCapacity) then
+                        # Need to reallocate let regular insert handle that.
+                        insert (@Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }) key newValue
+                    else
+                        # Can skip work by jumping staight to the found bucket.
+                        # That will be the location we want to insert in.
+                        hash = hashKey key
+                        baseDistAndFingerprint = distAndFingerprintFromHash hash
+                        baseBucketIndex = bucketIndexFromHash hash shifts
+
+                        # Due to the unrolling of loops in find along with loop optimizations,
+                        # The bucketIndex is not guaranteed to be correct here.
+                        # It is only correct if we have traversed past the number of find unrolls.
+                        dist = circularDist baseBucketIndex bucketIndex (List.len buckets)
+                        if dist <= findManualUnrolls then
+                            insertHelper buckets data baseBucketIndex baseDistAndFingerprint key newValue maxBucketCapacity maxLoadFactor shifts
+                        else
+                            distAndFingerprint = incrementDistN baseDistAndFingerprint (Num.toU32 dist)
+                            insertHelper buckets data bucketIndex distAndFingerprint key newValue maxBucketCapacity maxLoadFactor shifts
+
+                Missing ->
+                    @Dict { buckets, data, maxBucketCapacity, maxLoadFactor, shifts }
+
+circularDist = \start, end, size ->
+    correction =
+        if start > end then
+            size
+        else
+            0
+    end
+    |> Num.subWrap start
+    |> Num.addWrap correction
 
 ## Returns the keys and values of a dictionary as a [List].
 ## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
@@ -493,7 +582,7 @@ update = \dict, key, alter ->
 ##     |> Dict.toList
 ##     |> Bool.isEq [(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")]
 ## ```
-toList : Dict k v -> List (k, v) where k implements Hash & Eq
+toList : Dict k v -> List (k, v)
 toList = \@Dict { data } ->
     data
 
@@ -508,7 +597,7 @@ toList = \@Dict { data } ->
 ##     |> Dict.keys
 ##     |> Bool.isEq [1,2,3,4]
 ## ```
-keys : Dict k v -> List k where k implements Hash & Eq
+keys : Dict k v -> List k
 keys = \@Dict { data } ->
     List.map data (\(k, _) -> k)
 
@@ -523,7 +612,7 @@ keys = \@Dict { data } ->
 ##     |> Dict.values
 ##     |> Bool.isEq ["One","Two","Three","Four"]
 ## ```
-values : Dict k v -> List v where k implements Hash & Eq
+values : Dict k v -> List v
 values = \@Dict { data } ->
     List.map data (\(_, v) -> v)
 
@@ -551,38 +640,51 @@ values = \@Dict { data } ->
 ## expect
 ##     Dict.insertAll first second == expected
 ## ```
-insertAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
+insertAll : Dict k v, Dict k v -> Dict k v
 insertAll = \xs, ys ->
-    walk ys xs insert
+    if len ys > len xs then
+        insertAll ys xs
+    else
+        walk ys xs insert
 
 ## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the key-value pairs. This means that we keep only those pairs
-## that are in both dictionaries. Note that where there are pairs with
-## the same key, the value contained in the first input will be retained,
-## and the value in the second input will be removed.
+## that are in both dictionaries. Both the key and value must match to be kept.
 ## ```
 ## first =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
+##     |> Dict.insert 3 "Not this one"
 ##
 ## second =
 ##     Dict.single 1 "Keep Me"
 ##     |> Dict.insert 2 "And Me"
-##     |> Dict.insert 3 "But Not Me"
+##     |> Dict.insert 3 "This has a different value"
 ##     |> Dict.insert 4 "Or Me"
 ##
-## expect Dict.keepShared first second == first
+## expected =
+##     Dict.single 1 "Keep Me"
+##     |> Dict.insert 2 "And Me"
+##
+## expect Dict.keepShared first second == expected
 ## ```
-keepShared : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
-keepShared = \xs, ys ->
+keepShared : Dict k v, Dict k v -> Dict k v where v implements Eq
+keepShared = \xs0, ys0 ->
+    (xs1, ys1) =
+        if len ys0 < len xs0 then
+            (ys0, xs0)
+        else
+            (xs0, ys0)
     walk
-        xs
-        (empty {})
+        xs1
+        (withCapacity (len xs1))
         (\state, k, v ->
-            if contains ys k then
-                insert state k v
-            else
-                state
+            when get ys1 k is
+                Ok yv if v == yv ->
+                    insert state k v
+
+                _ ->
+                    state
         )
 
 ## Remove the key-value pairs in the first input that are also in the second
@@ -605,205 +707,251 @@ keepShared = \xs, ys ->
 ##
 ## expect Dict.removeAll first second == expected
 ## ```
-removeAll : Dict k v, Dict k v -> Dict k v where k implements Hash & Eq
+removeAll : Dict k v, Dict k v -> Dict k v
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
-swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v where k implements Hash & Eq
-swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
-    (key, _) = listGetUnsafe data lastIndex
-    hashKey =
-        createLowLevelHasher PseudoRandSeed
-        |> Hash.hash key
-        |> complete
-    h1Key = h1 hashKey
-    h2Key = h2 hashKey
-    probe = newProbe h1Key (div8 (List.len metadata))
+# Below here is a list of generic helpers and internal data types for Dict
+Bucket : {
+    distAndFingerprint : U32, # upper 3 byte: distance to original bucket. lower byte: fingerprint from hash
+    dataIndex : U32, # index into the data list.
+}
 
-    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
-        Ok index ->
-            dataIndex = listGetUnsafe dataIndices removedIndex
-            # Swap and remove data.
-            nextData =
-                data
-                |> List.swap dataIndex lastIndex
-                |> List.dropLast 1
+emptyBucket = { distAndFingerprint: 0, dataIndex: 0 }
+distInc = Num.shiftLeftBy 1u32 8 # skip 1 byte fingerprint
+fingerprintMask = Num.subWrap distInc 1 # mask for 1 byte of fingerprint
+defaultMaxLoadFactor = 0.8
+initialShifts = 64 - 3 # 2^(64-shifts) number of buckets
+maxSize = Num.shiftLeftBy 1u64 32
+maxBucketCount = maxSize
 
-            @Dict {
-                # Set old metadata as deleted.
-                metadata: List.set metadata removedIndex deletedSlot,
-                # Update index of swaped element.
-                dataIndices: List.set dataIndices index dataIndex,
-                data: nextData,
-                size: Num.subWrap size 1,
-            }
+incrementDist = \distAndFingerprint ->
+    distAndFingerprint + distInc
 
-        Err NotFound ->
-            # This should be impossible.
-            crash "unreachable state in dict swapAndUpdateDataIndex hit. Definitely a standard library bug."
+incrementDistN = \distAndFingerprint, n ->
+    distAndFingerprint + (n * distInc)
 
-insertNotFoundHelper : Dict k v, k, v, U64, I8 -> Dict k v
-insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value, h1Key, h2Key ->
-    probe = newProbe h1Key (div8 (List.len metadata))
-    index = nextEmptyOrDeletedHelper metadata probe 0
-    dataIndex = List.len data
-    nextData = List.append data (key, value)
+decrementDist = \distAndFingerprint ->
+    distAndFingerprint - distInc
 
-    @Dict {
-        metadata: List.set metadata index h2Key,
-        dataIndices: List.set dataIndices index dataIndex,
-        data: nextData,
-        size,
-    }
+find : Dict k v, k -> { bucketIndex : Nat, result : Result v [KeyNotFound] }
+find = \@Dict { buckets, data, shifts }, key ->
+    hash = hashKey key
+    distAndFingerprint = distAndFingerprintFromHash hash
+    bucketIndex = bucketIndexFromHash hash shifts
 
-nextEmptyOrDeletedHelper : List I8, Probe, Nat -> Nat
-nextEmptyOrDeletedHelper = \metadata, probe, offset ->
-    # For inserting, we can use deleted indices.
-    index = Num.addWrap (mul8 probe.slotIndex) offset
-
-    md = listGetUnsafe metadata index
-
-    if md < 0 then
-        # Empty or deleted slot, no possibility of the element.
-        index
-    else if offset == 7 then
-        nextEmptyOrDeletedHelper metadata (nextProbe probe) 0
+    if !(List.isEmpty data) then
+        # TODO: this is true in the C++ code, confirm it in Roc as well.
+        # unrolled loop. *Always* check a few directly, then enter the loop. This is faster.
+        findFirstUnroll buckets bucketIndex distAndFingerprint data key
     else
-        nextEmptyOrDeletedHelper metadata probe (Num.addWrap offset 1)
+        { bucketIndex, result: Err KeyNotFound }
 
-# TODO: investigate if this needs to be split into more specific helper functions.
-# There is a chance that returning specific sub-info like the value would be faster.
-findIndexHelper : List I8, List Nat, List (k, v), I8, k, Probe, Nat -> Result Nat [NotFound] where k implements Hash & Eq
-findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
-    # For finding a value, we must search past all deleted element tombstones.
-    index = Num.addWrap (mul8 probe.slotIndex) offset
+findManualUnrolls = 2
 
-    md = listGetUnsafe metadata index
-
-    if md == emptySlot then
-        # Empty slot, no possibility of the element.
-        Err NotFound
-    else if md == h2Key then
-        # Potentially matching slot, check if the key is a match.
-        dataIndex = listGetUnsafe dataIndices index
-        (k, _) = listGetUnsafe data dataIndex
-
-        if k == key then
-            # We have a match, return its index.
-            Ok index
-        else if offset == 7 then
-            # No match, keep checking.
-            findIndexHelper metadata dataIndices data h2Key key (nextProbe probe) 0
+findFirstUnroll : List Bucket, Nat, U32, List (k, v), k -> { bucketIndex : Nat, result : Result v [KeyNotFound] } where k implements Eq
+findFirstUnroll = \buckets, bucketIndex, distAndFingerprint, data, key ->
+    # TODO: once we have short circuit evaluation, use it here and other similar locations in this file.
+    # Avoid the nested if with else block inconvenience.
+    bucket = listGetUnsafe buckets bucketIndex
+    if distAndFingerprint == bucket.distAndFingerprint then
+        (foundKey, value) = listGetUnsafe data (Num.toNat bucket.dataIndex)
+        if foundKey == key then
+            { bucketIndex, result: Ok value }
         else
-            findIndexHelper metadata dataIndices data h2Key key probe (Num.addWrap offset 1)
-    else if offset == 7 then
-        # Used slot, check next slot.
-        findIndexHelper metadata dataIndices data h2Key key (nextProbe probe) 0
+            findSecondUnroll buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
     else
-        findIndexHelper metadata dataIndices data h2Key key probe (Num.addWrap offset 1)
+        findSecondUnroll buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
 
-# This is how we grow the container.
-# If we aren't to the load factor yet, just ignore this.
-# The container must have an updated size including any elements about to be inserted.
-maybeRehash : Dict k v -> Dict k v where k implements Hash & Eq
-maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
-    cap = List.len dataIndices
-    maxLoadCap =
-        # This is 7/8 * capacity, which is the max load factor.
-        Num.subWrap cap (Num.shiftRightZfBy cap 3)
-
-    if size > maxLoadCap then
-        rehash (@Dict { metadata, dataIndices, data, size })
+findSecondUnroll : List Bucket, Nat, U32, List (k, v), k -> { bucketIndex : Nat, result : Result v [KeyNotFound] } where k implements Eq
+findSecondUnroll = \buckets, bucketIndex, distAndFingerprint, data, key ->
+    bucket = listGetUnsafe buckets bucketIndex
+    if distAndFingerprint == bucket.distAndFingerprint then
+        (foundKey, value) = listGetUnsafe data (Num.toNat bucket.dataIndex)
+        if foundKey == key then
+            { bucketIndex, result: Ok value }
+        else
+            findHelper buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
     else
-        @Dict { metadata, dataIndices, data, size }
+        findHelper buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
 
-# TODO: switch rehash to iterate data and eventually clear out tombstones as well.
-rehash : Dict k v -> Dict k v where k implements Hash & Eq
-rehash = \@Dict { metadata, dataIndices, data, size } ->
-    newLen = 2 * List.len dataIndices
-    newDict =
+findHelper : List Bucket, Nat, U32, List (k, v), k -> { bucketIndex : Nat, result : Result v [KeyNotFound] } where k implements Eq
+findHelper = \buckets, bucketIndex, distAndFingerprint, data, key ->
+    bucket = listGetUnsafe buckets bucketIndex
+    if distAndFingerprint == bucket.distAndFingerprint then
+        (foundKey, value) = listGetUnsafe data (Num.toNat bucket.dataIndex)
+        if foundKey == key then
+            { bucketIndex, result: Ok value }
+        else
+            findHelper buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
+    else if distAndFingerprint > bucket.distAndFingerprint then
+        { bucketIndex, result: Err KeyNotFound }
+    else
+        findHelper buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint) data key
+
+removeBucket : Dict k v, Nat -> Dict k v
+removeBucket = \@Dict { buckets: buckets0, data: data0, maxBucketCapacity, maxLoadFactor, shifts }, bucketIndex0 ->
+    { dataIndex: dataIndexToRemove } = listGetUnsafe buckets0 bucketIndex0
+
+    (buckets1, bucketIndex1) = removeBucketHelper buckets0 bucketIndex0
+    buckets2 = List.set buckets1 bucketIndex1 emptyBucket
+
+    lastDataIndex = List.len data0 - 1
+    if (Num.toNat dataIndexToRemove) != lastDataIndex then
+        # Swap removed item to the end
+        data1 = List.swap data0 (Num.toNat dataIndexToRemove) lastDataIndex
+        (key, _) = listGetUnsafe data1 (Num.toNat dataIndexToRemove)
+
+        # Update the data index of the new value.
+        hash = hashKey key
+        bucketIndex2 = bucketIndexFromHash hash shifts
+
+        bucketIndex3 = scanForIndex buckets2 bucketIndex2 (Num.toU32 lastDataIndex)
+        swapBucket = listGetUnsafe buckets2 bucketIndex3
         @Dict {
-            metadata: List.repeat emptySlot newLen,
-            dataIndices: List.repeat 0 newLen,
-            data,
-            size,
+            buckets: List.set buckets2 bucketIndex3 { swapBucket & dataIndex: dataIndexToRemove },
+            data: List.dropLast data1 1,
+            maxBucketCapacity,
+            maxLoadFactor,
+            shifts,
+        }
+    else
+        @Dict {
+            buckets: buckets2,
+            data: List.dropLast data0 1,
+            maxBucketCapacity,
+            maxLoadFactor,
+            shifts,
         }
 
-    rehashHelper newDict metadata dataIndices data 0
+scanForIndex : List Bucket, Nat, U32 -> Nat
+scanForIndex = \buckets, bucketIndex, dataIndex ->
+    bucket = listGetUnsafe buckets bucketIndex
+    if bucket.dataIndex != dataIndex then
+        scanForIndex buckets (nextBucketIndex bucketIndex (List.len buckets)) dataIndex
+    else
+        bucketIndex
 
-rehashHelper : Dict k v, List I8, List Nat, List (k, v), Nat -> Dict k v where k implements Hash & Eq
-rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
-    when List.get oldMetadata index is
-        Ok md ->
-            nextDict =
-                if md >= 0 then
-                    # We have an actual element here
-                    dataIndex = listGetUnsafe oldDataIndices index
-                    (k, _) = listGetUnsafe oldData dataIndex
+removeBucketHelper : List Bucket, Nat -> (List Bucket, Nat)
+removeBucketHelper = \buckets, bucketIndex ->
+    nextIndex = nextBucketIndex bucketIndex (List.len buckets)
+    nextBucket = listGetUnsafe buckets nextIndex
+    # shift down until either empty or an element with correct spot is found
+    if nextBucket.distAndFingerprint >= distInc * 2 then
+        List.set buckets bucketIndex { nextBucket & distAndFingerprint: decrementDist nextBucket.distAndFingerprint }
+        |> removeBucketHelper nextIndex
+    else
+        (buckets, bucketIndex)
 
-                    insertForRehash dict k dataIndex
-                else
-                    # Empty or deleted data
-                    dict
+increaseSize : Dict k v -> Dict k v
+increaseSize = \@Dict { data, maxBucketCapacity, maxLoadFactor, shifts } ->
+    if maxBucketCapacity != maxBucketCount then
+        newShifts = shifts - 1
+        (buckets0, newMaxBucketCapacity) = allocBucketsFromShift newShifts maxLoadFactor
+        buckets1 = fillBucketsFromData buckets0 data newShifts
+        @Dict {
+            buckets: buckets1,
+            data,
+            maxBucketCapacity: newMaxBucketCapacity,
+            maxLoadFactor,
+            shifts: newShifts,
+        }
+    else
+        crash "Dict hit limit of \(Num.toStr maxBucketCount) elements. Unable to grow more."
 
-            rehashHelper nextDict oldMetadata oldDataIndices oldData (Num.addWrap index 1)
+allocBucketsFromShift : U8, F32 -> (List Bucket, U64)
+allocBucketsFromShift = \shifts, maxLoadFactor ->
+    bucketCount = calcNumBuckets shifts
+    if bucketCount == maxBucketCount then
+        # reached the maximum, make sure we can use each bucket
+        (List.repeat emptyBucket (Num.toNat maxBucketCount), maxBucketCount)
+    else
+        maxBucketCapacity =
+            bucketCount
+            |> Num.toF32
+            |> Num.mul maxLoadFactor
+            |> Num.floor
+        (List.repeat emptyBucket (Num.toNat bucketCount), maxBucketCapacity)
 
-        Err OutOfBounds ->
-            # Walked entire list, complete now.
-            dict
+calcShiftsForSize : U64, F32 -> U8
+calcShiftsForSize = \size, maxLoadFactor ->
+    calcShiftsForSizeHelper initialShifts size maxLoadFactor
 
-insertForRehash : Dict k v, k, Nat -> Dict k v where k implements Hash & Eq
-insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
-    hashKey =
-        createLowLevelHasher PseudoRandSeed
-        |> Hash.hash key
-        |> complete
-    h1Key = h1 hashKey
-    h2Key = h2 hashKey
-    probe = newProbe h1Key (div8 (List.len metadata))
-    index = nextEmptyOrDeletedHelper metadata probe 0
+calcShiftsForSizeHelper = \shifts, size, maxLoadFactor ->
+    maxBucketCapacity =
+        shifts
+        |> calcNumBuckets
+        |> Num.toF32
+        |> Num.mul maxLoadFactor
+        |> Num.floor
+    if shifts > 0 && maxBucketCapacity < size then
+        calcShiftsForSizeHelper (shifts - 1) size maxLoadFactor
+    else
+        shifts
 
-    @Dict {
-        metadata: List.set metadata index h2Key,
-        dataIndices: List.set dataIndices index dataIndex,
-        data,
-        size,
-    }
+calcNumBuckets = \shifts ->
+    Num.min
+        (Num.shiftLeftBy 1 (64 - shifts))
+        maxBucketCount
 
-emptySlot : I8
-emptySlot = -128
-deletedSlot : I8
-deletedSlot = -2
+fillBucketsFromData = \buckets0, data, shifts ->
+    buckets1, (key, _), dataIndex <- List.walkWithIndex data buckets0
+    (bucketIndex, distAndFingerprint) = nextWhileLess buckets1 key shifts
+    placeAndShiftUp buckets1 { distAndFingerprint, dataIndex: Num.toU32 dataIndex } bucketIndex
 
-# Capacity must be a power of 2.
-# We still will use slots of 8 even though this version has no true slots.
-# We just move an element at a time.
-# Thus, the true index is slotIndex * 8 + offset.
-Probe : { slotIndex : Nat, probeI : Nat, mask : Nat }
+nextWhileLess : List Bucket, k, U8 -> (Nat, U32) where k implements Hash & Eq
+nextWhileLess = \buckets, key, shifts ->
+    hash = hashKey key
+    distAndFingerprint = distAndFingerprintFromHash hash
+    bucketIndex = bucketIndexFromHash hash shifts
 
-newProbe : U64, Nat -> Probe
-newProbe = \h1Key, slots ->
-    mask = Num.subSaturated slots 1
-    slotIndex = Num.bitwiseAnd (Num.toNat h1Key) mask
+    nextWhileLessHelper buckets bucketIndex distAndFingerprint
 
-    { slotIndex, probeI: 1, mask }
+nextWhileLessHelper = \buckets, bucketIndex, distAndFingerprint ->
+    loaded = listGetUnsafe buckets (Num.toNat bucketIndex)
+    if distAndFingerprint < loaded.distAndFingerprint then
+        nextWhileLessHelper buckets (nextBucketIndex bucketIndex (List.len buckets)) (incrementDist distAndFingerprint)
+    else
+        (bucketIndex, distAndFingerprint)
 
-nextProbe : Probe -> Probe
-nextProbe = \{ slotIndex, probeI, mask } ->
-    nextSlotIndex = Num.bitwiseAnd (Num.addWrap slotIndex probeI) mask
+placeAndShiftUp = \buckets0, bucket, bucketIndex ->
+    loaded = listGetUnsafe buckets0 (Num.toNat bucketIndex)
+    if loaded.distAndFingerprint != 0 then
+        buckets1 = List.set buckets0 (Num.toNat bucketIndex) bucket
+        placeAndShiftUp
+            buckets1
+            { loaded & distAndFingerprint: incrementDist loaded.distAndFingerprint }
+            (nextBucketIndex bucketIndex (List.len buckets1))
+    else
+        List.set buckets0 (Num.toNat bucketIndex) bucket
 
-    { slotIndex: nextSlotIndex, probeI: Num.addWrap probeI 1, mask }
+nextBucketIndex = \bucketIndex, maxBuckets ->
+    # I just ported this impl directly.
+    # I am a bit confused why it is using an if over a mask.
+    # Maybe compilers are smart enough to optimize this well.
+    # Maybe the unlikely annotation is super important
+    if Num.addWrap bucketIndex 1 != maxBuckets then
+        Num.addWrap bucketIndex 1
+    else
+        0
 
-mul8 = \val -> Num.shiftLeftBy val 3
-div8 = \val -> Num.shiftRightZfBy val 3
+hashKey = \key ->
+    createLowLevelHasher PseudoRandSeed
+    |> Hash.hash key
+    |> complete
 
-h1 : U64 -> U64
-h1 = \hashKey ->
-    Num.shiftRightZfBy hashKey 7
+distAndFingerprintFromHash : U64 -> U32
+distAndFingerprintFromHash = \hash ->
+    hash
+    |> Num.toU32
+    |> Num.bitwiseAnd fingerprintMask
+    |> Num.bitwiseOr distInc
 
-h2 : U64 -> I8
-h2 = \hashKey ->
-    Num.toI8 (Num.bitwiseAnd hashKey 0b0111_1111)
+bucketIndexFromHash : U64, U8 -> Nat
+bucketIndexFromHash = \hash, shifts ->
+    hash
+    |> Num.shiftRightZfBy shifts
+    |> Num.toNat
 
 expect
     val =
@@ -938,10 +1086,16 @@ expect
         |> insert "e" 4
         |> insert "f" 5
         |> insert "g" 6
+        |> insert "h" 7
+        |> insert "i" 8
+        |> insert "j" 9
+        |> insert "k" 10
+        |> insert "l" 11
         |> capacity
 
-    val == 7
+    val == 12
 
+# Reach capacity, all elements still exist
 expect
     dict =
         empty {}
@@ -952,6 +1106,11 @@ expect
         |> insert "e" 4
         |> insert "f" 5
         |> insert "g" 6
+        |> insert "h" 7
+        |> insert "i" 8
+        |> insert "j" 9
+        |> insert "k" 10
+        |> insert "l" 11
 
     (get dict "a" == Ok 0)
     && (get dict "b" == Ok 1)
@@ -960,6 +1119,11 @@ expect
     && (get dict "e" == Ok 4)
     && (get dict "f" == Ok 5)
     && (get dict "g" == Ok 6)
+    && (get dict "h" == Ok 7)
+    && (get dict "i" == Ok 8)
+    && (get dict "j" == Ok 9)
+    && (get dict "k" == Ok 10)
+    && (get dict "l" == Ok 11)
 
 # Force rehash.
 expect
@@ -973,10 +1137,16 @@ expect
         |> insert "f" 5
         |> insert "g" 6
         |> insert "h" 7
+        |> insert "i" 8
+        |> insert "j" 9
+        |> insert "k" 10
+        |> insert "l" 11
+        |> insert "m" 12
         |> capacity
 
-    val == 14
+    val == 25
 
+# Force rehash, all elements still exist
 expect
     dict =
         empty {}
@@ -988,6 +1158,11 @@ expect
         |> insert "f" 5
         |> insert "g" 6
         |> insert "h" 7
+        |> insert "i" 8
+        |> insert "j" 9
+        |> insert "k" 10
+        |> insert "l" 11
+        |> insert "m" 12
 
     (get dict "a" == Ok 0)
     && (get dict "b" == Ok 1)
@@ -997,6 +1172,11 @@ expect
     && (get dict "f" == Ok 5)
     && (get dict "g" == Ok 6)
     && (get dict "h" == Ok 7)
+    && (get dict "i" == Ok 8)
+    && (get dict "j" == Ok 9)
+    && (get dict "k" == Ok 10)
+    && (get dict "l" == Ok 11)
+    && (get dict "m" == Ok 12)
 
 expect
     empty {}
@@ -1011,6 +1191,52 @@ expect
     |> insert 7nat "Testing"
     |> get 7
     |> Bool.isEq (Ok "Testing")
+
+# All BadKey's hash to the same location.
+# This is needed to test some robinhood logic.
+BadKey := U64 implements [
+        Eq,
+        Hash {
+            hash: hashBadKey,
+        },
+    ]
+
+hashBadKey : hasher, BadKey -> hasher where hasher implements Hasher
+hashBadKey = \hasher, _ -> Hash.hash hasher 0
+
+expect
+    badKeys = [
+        @BadKey 0,
+        @BadKey 1,
+        @BadKey 2,
+        @BadKey 3,
+        @BadKey 4,
+        @BadKey 5,
+        @BadKey 6,
+        @BadKey 5,
+        @BadKey 4,
+        @BadKey 3,
+        @BadKey 3,
+        @BadKey 3,
+        @BadKey 10,
+    ]
+
+    dict =
+        acc, k <- List.walk badKeys (Dict.empty {})
+        Dict.update acc k \val ->
+            when val is
+                Present p -> Present (p + 1)
+                Missing -> Present 0
+
+    allInsertedCorrectly =
+        acc, k <- List.walk badKeys Bool.true
+        acc && Dict.contains dict k
+
+    allInsertedCorrectly
+
+# Note, there are a number of places we should probably use set and replace unsafe.
+# unsafe primitive that does not perform a bounds check
+listGetUnsafe : List a, Nat -> a
 
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
@@ -1030,10 +1256,6 @@ LowLevelHasher := { initializedSeed : U64, state : U64 } implements [
             complete,
         },
     ]
-
-# unsafe primitive that does not perform a bounds check
-# TODO hide behind an InternalList.roc module
-listGetUnsafe : List a, Nat -> a
 
 # Returns a application specific pseudo random seed for Dict.
 # This avoids trivial DOS attacks.
@@ -1446,3 +1668,71 @@ expect
     |> Dict.insert "Charlie" 19
     |> Dict.walkUntil Bool.false (\_, _, age -> if age >= 18 then Break Bool.true else Continue Bool.false)
     |> Bool.isEq Bool.true
+
+expect
+    d1 =
+        Dict.empty {}
+        |> Dict.insert "Alice" 17
+        |> Dict.insert "Bob" 18
+        |> Dict.insert "Charlie" 19
+        |> Dict.keepIf \(_k, v) -> v >= 18
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert "Bob" 18
+        |> Dict.insert "Charlie" 19
+
+    d1 == d2
+
+expect
+    d1 =
+        Dict.empty {}
+        |> Dict.insert "Alice" 17
+        |> Dict.insert "Bob" 18
+        |> Dict.insert "Charlie" 19
+        |> Dict.keepIf \(k, _v) -> Str.endsWith k "e"
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert "Alice" 17
+        |> Dict.insert "Charlie" 19
+
+    d1 == d2
+
+expect
+    keysToDelete = [1, 2]
+    d1 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 2 2
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+        |> Dict.keepIf (\(k, _v) -> List.contains keysToDelete k |> Bool.not)
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+
+    d1 == d2
+
+expect
+    keysToDelete = [2, 4]
+    d1 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 2 2
+        |> Dict.insert 3 3
+        |> Dict.insert 4 4
+        |> Dict.keepIf (\(k, _v) -> List.contains keysToDelete k |> Bool.not)
+
+    d2 =
+        Dict.empty {}
+        |> Dict.insert 0 0
+        |> Dict.insert 1 1
+        |> Dict.insert 3 3
+
+    d1 == d2

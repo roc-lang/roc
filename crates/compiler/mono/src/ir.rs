@@ -1531,6 +1531,10 @@ pub enum Stmt<'a> {
         remainder: &'a Stmt<'a>,
     },
     Dbg {
+        /// The location this dbg is in source as a printable string.
+        source_location: &'a str,
+        /// The source code of the expression being debugged.
+        source: &'a str,
         /// The expression we're displaying
         symbol: Symbol,
         /// The specialized variable of the expression
@@ -4606,6 +4610,8 @@ pub fn with_hole<'a>(
         Expect { .. } => unreachable!("I think this is unreachable"),
         ExpectFx { .. } => unreachable!("I think this is unreachable"),
         Dbg {
+            source_location,
+            source,
             loc_message,
             loc_continuation,
             variable: cond_variable,
@@ -4625,6 +4631,8 @@ pub fn with_hole<'a>(
                 env,
                 procs,
                 layout_cache,
+                &*arena.alloc(source_location),
+                &*arena.alloc(source),
                 dbg_symbol,
                 *loc_message,
                 cond_variable,
@@ -5896,8 +5904,10 @@ fn compile_dbg<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
+    source_location: &'a str,
+    source: &'a str,
     dbg_symbol: Symbol,
-    loc_condition: Loc<roc_can::expr::Expr>,
+    loc_message: Loc<roc_can::expr::Expr>,
     variable: Variable,
     continuation: Stmt<'a>,
 ) -> Stmt<'a> {
@@ -5908,6 +5918,8 @@ fn compile_dbg<'a>(
         .fresh_unnamed_flex_var();
 
     let dbg_stmt = Stmt::Dbg {
+        source_location,
+        source,
         symbol: dbg_symbol,
         variable: spec_var,
         remainder: env.arena.alloc(continuation),
@@ -5918,17 +5930,17 @@ fn compile_dbg<'a>(
     store_specialized_expectation_lookups(env, [variable], &[spec_var]);
 
     let symbol_is_reused = matches!(
-        can_reuse_symbol(env, layout_cache, procs, &loc_condition.value, variable),
+        can_reuse_symbol(env, layout_cache, procs, &loc_message.value, variable),
         ReuseSymbol::Value(_)
     );
 
-    // skip evaluating the condition if it's just a symbol
+    // skip evaluating the message if it's just a symbol
     if symbol_is_reused {
         dbg_stmt
     } else {
         with_hole(
             env,
-            loc_condition.value,
+            loc_message.value,
             variable,
             procs,
             layout_cache,
@@ -7141,6 +7153,8 @@ pub fn from_can<'a>(
         }
 
         Dbg {
+            source_location,
+            source,
             loc_message,
             loc_continuation,
             variable: cond_variable,
@@ -7152,6 +7166,8 @@ pub fn from_can<'a>(
                 env,
                 procs,
                 layout_cache,
+                &*env.arena.alloc(source_location),
+                &*env.arena.alloc(source),
                 dbg_symbol,
                 *loc_message,
                 cond_variable,
@@ -7625,6 +7641,8 @@ fn substitute_in_stmt_help<'a>(
         }
 
         Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -7633,6 +7651,8 @@ fn substitute_in_stmt_help<'a>(
                 substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
 
             let expect = Dbg {
+                source_location,
+                source,
                 symbol: substitute(subs, *symbol).unwrap_or(*symbol),
                 variable: *variable,
                 remainder: new_remainder,

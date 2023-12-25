@@ -80,10 +80,6 @@ pub(crate) fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     let i32_type = ctx.i32_type();
     let void_type = ctx.void_type();
 
-    if let Some(func) = module.get_function("__muloti4") {
-        func.set_linkage(Linkage::WeakAny);
-    }
-
     add_intrinsic(
         ctx,
         module,

@@ -240,6 +240,7 @@ pub enum Problem {
     InvalidUrl(UrlProblem),
     /// The Content-Length header of the response exceeded max_download_bytes
     DownloadTooBig(u64),
+    NotFound,
 }
 
 pub fn download_and_hash(
@@ -254,6 +255,10 @@ pub fn download_and_hash(
         .get(url)
         .send()
         .map_err(Problem::HttpErr)?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(Problem::NotFound);
+    }
 
     // Some servers don't return Content-Length - e.g. Netlify seems to only sometimes return it.
     // If they do, and if it says the file is going to be too big, don't bother downloading it!
