@@ -37,7 +37,7 @@ macro_rules! tokens {
         }
 
         impl Token {
-            pub const LEGEND: &[SemanticTokenType] = &[
+            pub const LEGEND: &'static [SemanticTokenType] = &[
                 $(SemanticTokenType::new($lsp_token)),*
             ];
         }

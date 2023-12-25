@@ -1047,8 +1047,8 @@ fn insert_refcount_operations_binding<'a>(
 
                     closure_env_layout: _,
 
-                    /// update mode of the higher order lowlevel itself
-                        update_mode: _,
+                    // update mode of the higher order lowlevel itself
+                    update_mode: _,
 
                     passed_function,
                 }) => {

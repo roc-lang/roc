@@ -388,7 +388,6 @@ impl RocStr {
                         // The backing list was not unique, so we can't mutate it in-place.
                         // ask for `len + 1` to store the original string and the terminator
                         with_stack_bytes(len + 1, |alloc_ptr: *mut u8| {
-                            let alloc_ptr = alloc_ptr as *mut u8;
                             let elem_ptr = big_string.ptr_to_first_elem() as *mut u8;
 
                             // memcpy the bytes into the stack allocation
@@ -406,7 +405,7 @@ impl RocStr {
 
                 // Even if the small string is at capacity, there will be room to write
                 // a terminator in the byte that's used to store the length.
-                terminate(bytes.as_mut_ptr() as *mut u8, small_str.len())
+                terminate(bytes.as_mut_ptr(), small_str.len())
             }
         }
     }
@@ -716,7 +715,7 @@ impl Eq for RocStr {}
 
 impl PartialOrd for RocStr {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        self.as_str().partial_cmp(other.as_str())
+        Some(self.cmp(other))
     }
 }
 

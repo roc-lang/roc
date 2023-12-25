@@ -465,7 +465,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let arena = &arena;
     let target = &triple;
-    let opt_level = opt_level;
     let target_info = TargetInfo::from(target);
     // TODO may need to determine this dynamically based on dev builds.
     let function_kind = FunctionKind::LambdaSet;

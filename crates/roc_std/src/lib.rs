@@ -495,7 +495,7 @@ impl PartialEq for I128 {
 
 impl PartialOrd for I128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        i128::from(*self).partial_cmp(&i128::from(*other))
+        Some(self.cmp(other))
     }
 }
 
@@ -547,7 +547,7 @@ impl PartialEq for U128 {
 
 impl PartialOrd for U128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        u128::from(*self).partial_cmp(&u128::from(*other))
+        Some(self.cmp(other))
     }
 }
 

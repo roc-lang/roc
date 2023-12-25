@@ -1112,7 +1112,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 }
                 for uls_index in unspecialized {
                     let Uls(var, _, _) = env.source()[uls_index];
-                    descend_var!(var);
+                    let _ignored = descend_var!(var);
                 }
                 let new_ambient_function = descend_var!(ambient_function);
 

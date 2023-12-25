@@ -334,7 +334,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     let (proc_data, offset) = backend.build_wrapped_jmp();
     let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
 
-    let name = wraps.as_str().as_bytes();
+    let name = wraps.as_bytes();
     // If the symbol is an undefined zig builtin, we need to add it here.
     let symbol = Symbol {
         name: name.to_vec(),
