@@ -386,7 +386,7 @@ fn record_type<'a>(
 
 fn applied_type<'a>(stop_at_surface_has: bool) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
     map!(
-        and!(
+        indented_seq!(
             specialize(EType::TApply, concrete_type()),
             // Optionally parse space-separated arguments for the constructor,
             // e.g. `Str Float` in `Map Str Float`

@@ -1384,7 +1384,7 @@ macro_rules! record {
 /// Similar to `and`, but we modify the min_indent of the second parser to be
 /// 1 greater than the line_indent() at the start of the first parser.
 #[macro_export]
-macro_rules! indented_seq {
+macro_rules! indented_seq_skip_first {
     ($p1:expr, $p2:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
             let start_indent = state.line_indent();
@@ -1401,6 +1401,34 @@ macro_rules! indented_seq {
             match $p1.parse(arena, state, p1_indent) {
                 Ok((p1, (), state)) => match $p2.parse(arena, state, p2_indent) {
                     Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+                    Err((p2, fail)) => Err((p1.or(p2), fail)),
+                },
+                Err((progress, fail)) => Err((progress, fail)),
+            }
+        }
+    };
+}
+
+/// Similar to `and`, but we modify the min_indent of the second parser to be
+/// 1 greater than the line_indent() at the start of the first parser.
+#[macro_export]
+macro_rules! indented_seq {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
+            let start_indent = state.line_indent();
+
+            // TODO: we should account for min_indent here, but this doesn't currently work
+            // because min_indent is sometimes larger than it really should be, which is in turn
+            // due to uses of `increment_indent`.
+            //
+            // let p1_indent = std::cmp::max(start_indent, min_indent);
+
+            let p1_indent = start_indent;
+            let p2_indent = p1_indent + 1;
+
+            match $p1.parse(arena, state, p1_indent) {
+                Ok((p1, out1, state)) => match $p2.parse(arena, state, p2_indent) {
+                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
                     Err((p2, fail)) => Err((p1.or(p2), fail)),
                 },
                 Err((progress, fail)) => Err((progress, fail)),

@@ -306,6 +306,7 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
         loc!(specialize(EExpr::When, when::expr_help(options))),
         loc!(specialize(EExpr::Expect, expect_help(options))),
         loc!(specialize(EExpr::Dbg, dbg_help(options))),
+        loc!(import_help(options)),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(expr_operator_chain(options)),
         fail_expr_start_e()
@@ -2181,7 +2182,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
     // closure_help_help(options)
     map_with_arena!(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq!(
+        indented_seq_skip_first!(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             word1_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
@@ -2225,7 +2226,7 @@ mod when {
     pub fn expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {
         map_with_arena!(
             and!(
-                indented_seq!(
+                indented_seq_skip_first!(
                     parser::keyword_e(keyword::WHEN, EWhen::When),
                     space0_around_e_no_after_indent_check(
                         specialize_ref(EWhen::Condition, expr_start(options)),
@@ -2236,7 +2237,7 @@ mod when {
                 // ambiguity. The formatter will fix it up.
                 //
                 // We require that branches are indented relative to the line containing the `is`.
-                indented_seq!(
+                indented_seq_skip_first!(
                     parser::keyword_e(keyword::IS, EWhen::Is),
                     branches(options)
                 )
@@ -2525,6 +2526,18 @@ fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<
         let expr = Expr::Dbg(arena.alloc(condition), arena.alloc(loc_cont));
 
         Ok((MadeProgress, expr, state))
+    }
+}
+
+fn import_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, import_def, state) =
+            loc!(specialize(EExpr::Import, import())).parse(arena, state, min_indent)?;
+
+        let mut defs = Defs::default();
+        defs.push_value_def(import_def.value, import_def.region, &[], &[]);
+
+        parse_defs_expr(options, min_indent, defs, arena, state)
     }
 }
 
