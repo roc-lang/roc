@@ -125,13 +125,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "arena-pool"
-version = "0.0.1"
-dependencies = [
- "roc_error_macros",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
