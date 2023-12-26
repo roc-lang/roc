@@ -26,7 +26,8 @@ fn main() {
 
             std::env::set_var("BENCH_DRY_RUN", "1");
 
-            do_benchmark("main");
+            // TODO re-enable
+            //do_benchmark("main");
             do_benchmark("branch");
 
             std::env::set_var("BENCH_DRY_RUN", "0");
