@@ -128,7 +128,7 @@
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
             ${aliases}
-            '' + lib.optionalString (system == "aarch64-darwin") ''
+            '' + pkgs.lib.optionalString (system == "aarch64-darwin") ''
               export RUSTFLAGS="-C link-arg=-lc++abi"
             ''; # lc++abi as workaround for github.com/NixOS/nixpkgs/issues/166205, see also github.com/roc-lang/roc/issues/6303
         };
