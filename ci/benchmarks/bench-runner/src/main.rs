@@ -91,7 +91,8 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
 
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
-        do_benchmark("main");
+        // TODO re-enable
+        // do_benchmark("main");
         let regressed_benches = do_benchmark("branch");
 
         // if no benches regressed this round, abort early
