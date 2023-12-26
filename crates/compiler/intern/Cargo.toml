@@ -1,0 +1,11 @@
+[package]
+name = "roc_intern"
+description = "Interning strings"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+bumpalo.workspace = true
