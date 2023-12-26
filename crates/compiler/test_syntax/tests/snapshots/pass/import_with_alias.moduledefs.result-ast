@@ -20,45 +20,49 @@ Defs {
     ],
     type_defs: [],
     value_defs: [
-        ModuleImport {
-            before_name: [],
-            name: @7-17 ImportedModuleName {
-                package: None,
-                name: "JsonEncode",
-            },
-            alias: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [],
-                        item: ImportAsKeyword,
-                        after: [],
-                    },
-                    item: @21-23 ImportAlias(
-                        "JE",
-                    ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @7-17 ImportedModuleName {
+                    package: None,
+                    name: "JsonEncode",
                 },
-            ),
-            exposed: None,
-        },
-        ModuleImport {
-            before_name: [],
-            name: @31-42 ImportedModuleName {
-                package: None,
-                name: "BytesDecode",
-            },
-            alias: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [],
-                        item: ImportAsKeyword,
-                        after: [],
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @21-23 ImportAlias(
+                            "JE",
+                        ),
                     },
-                    item: @47-49 ImportAlias(
-                        "BD",
-                    ),
+                ),
+                exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @31-42 ImportedModuleName {
+                    package: None,
+                    name: "BytesDecode",
                 },
-            ),
-            exposed: None,
-        },
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @47-49 ImportAlias(
+                            "BD",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
     ],
 }

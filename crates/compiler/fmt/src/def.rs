@@ -6,7 +6,8 @@ use crate::spaces::{fmt_default_newline, fmt_default_spaces, fmt_spaces, INDENT}
 use crate::Buf;
 use roc_parse::ast::{
     AbilityMember, Defs, Expr, ExtractSpaces, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    ImportedModuleName, IngestedFileImport, ModuleImport, Pattern, Spaces, StrLiteral,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use roc_parse::header::Keyword;
 use roc_region::all::Loc;
@@ -186,6 +187,103 @@ impl<'a> Formattable for TypeHeader<'a> {
     }
 }
 
+impl<'a> Formattable for ModuleImport<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_name,
+            name,
+            alias,
+            exposed,
+        } = self;
+
+        !before_name.is_empty()
+            || name.is_multiline()
+            || alias.map_or(false, |a| a.is_multiline())
+            || exposed.map_or(false, |a| {
+                a.keyword.is_multiline() || is_collection_multiline(&a.item)
+            })
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_name,
+            name,
+            alias,
+            exposed,
+        } = self;
+
+        buf.indent(indent);
+        buf.push_str("import");
+
+        let indent = indent + INDENT;
+
+        fmt_default_spaces(buf, before_name, indent);
+
+        buf.indent(indent);
+        name.format(buf, indent);
+
+        if let Some(alias) = alias {
+            alias.format(buf, indent);
+        }
+
+        if let Some(exposed) = exposed {
+            exposed.keyword.format(buf, indent);
+
+            let list_indent = if !before_name.is_empty()
+                || alias.is_multiline()
+                || exposed.keyword.is_multiline()
+            {
+                indent
+            } else {
+                // Align list with import keyword
+                indent - INDENT
+            };
+
+            fmt_collection(buf, list_indent, Braces::Square, exposed.item, Newlines::No);
+        }
+    }
+}
+
+impl<'a> Formattable for IngestedFileImport<'a> {
+    fn is_multiline(&self) -> bool {
+        let Self {
+            before_path,
+            path: _,
+            name,
+        } = self;
+        !before_path.is_empty() || name.is_multiline()
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let Self {
+            before_path,
+            path,
+            name,
+        } = self;
+
+        buf.indent(indent);
+        buf.push_str("import");
+
+        let indent = indent + INDENT;
+
+        fmt_default_spaces(buf, before_path, indent);
+        fmt_str_literal(buf, path.value, indent);
+        name.format(buf, indent);
+    }
+}
+
 impl<'a> Formattable for ImportedModuleName<'a> {
     fn is_multiline(&self) -> bool {
         // No newlines in module name itself.
@@ -275,24 +373,8 @@ impl<'a> Formattable for ValueDef<'a> {
             Expect { condition, .. } => condition.is_multiline(),
             ExpectFx { condition, .. } => condition.is_multiline(),
             Dbg { condition, .. } => condition.is_multiline(),
-            ModuleImport {
-                before_name,
-                name,
-                alias,
-                exposed,
-            } => {
-                !before_name.is_empty()
-                    || name.is_multiline()
-                    || alias.map_or(false, |a| a.is_multiline())
-                    || exposed.map_or(false, |a| {
-                        a.keyword.is_multiline() || is_collection_multiline(&a.item)
-                    })
-            }
-            IngestedFileImport {
-                before_path,
-                path: _,
-                name,
-            } => !before_path.is_empty() || name.is_multiline(),
+            ModuleImport(module_import) => module_import.is_multiline(),
+            IngestedFileImport(ingested_file_import) => ingested_file_import.is_multiline(),
         }
     }
 
@@ -335,56 +417,8 @@ impl<'a> Formattable for ValueDef<'a> {
                 buf.newline();
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
-            ModuleImport {
-                before_name,
-                name,
-                alias,
-                exposed,
-            } => {
-                buf.indent(indent);
-                buf.push_str("import");
-
-                let indent = indent + INDENT;
-
-                fmt_default_spaces(buf, before_name, indent);
-
-                buf.indent(indent);
-                name.format(buf, indent);
-
-                if let Some(alias) = alias {
-                    alias.format(buf, indent);
-                }
-
-                if let Some(exposed) = exposed {
-                    exposed.keyword.format(buf, indent);
-
-                    let list_indent = if !before_name.is_empty()
-                        || alias.is_multiline()
-                        || exposed.keyword.is_multiline()
-                    {
-                        indent
-                    } else {
-                        // Align list with import keyword
-                        indent - INDENT
-                    };
-
-                    fmt_collection(buf, list_indent, Braces::Square, exposed.item, Newlines::No);
-                }
-            }
-            IngestedFileImport {
-                before_path,
-                path,
-                name,
-            } => {
-                buf.indent(indent);
-                buf.push_str("import");
-
-                let indent = indent + INDENT;
-
-                fmt_default_spaces(buf, before_path, indent);
-                fmt_str_literal(buf, path.value, indent);
-                name.format(buf, indent);
-            }
+            ModuleImport(module_import) => module_import.format(buf, indent),
+            IngestedFileImport(ingested_file_import) => ingested_file_import.format(buf, indent),
         }
     }
 }

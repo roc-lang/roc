@@ -459,25 +459,31 @@ pub enum ValueDef<'a> {
     },
 
     /// e.g. `import InternalHttp as Http exposing [Req]`.
-    ModuleImport {
-        before_name: &'a [CommentOrNewline<'a>],
-        name: Loc<ImportedModuleName<'a>>,
-        alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
-        exposed: Option<
-            header::KeywordItem<
-                'a,
-                ImportExposingKeyword,
-                Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
-            >,
-        >,
-    },
+    ModuleImport(ModuleImport<'a>),
 
     /// e.g. `import "path/to/my/file.txt" as myFile : Str`
-    IngestedFileImport {
-        before_path: &'a [CommentOrNewline<'a>],
-        path: Loc<StrLiteral<'a>>,
-        name: header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
-    },
+    IngestedFileImport(IngestedFileImport<'a>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImport<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
+    pub name: Loc<ImportedModuleName<'a>>,
+    pub alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
+    pub exposed: Option<
+        header::KeywordItem<
+            'a,
+            ImportExposingKeyword,
+            Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        >,
+    >,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileImport<'a> {
+    pub before_path: &'a [CommentOrNewline<'a>],
+    pub path: Loc<StrLiteral<'a>>,
+    pub name: header::KeywordItem<'a, ImportAsKeyword, Loc<Spaced<'a, header::TypedIdent<'a>>>>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -1848,17 +1854,17 @@ impl<'a> Malformed for ValueDef<'a> {
                 condition,
                 preceding_comment: _,
             } => condition.is_malformed(),
-            ValueDef::ModuleImport {
+            ValueDef::ModuleImport(ModuleImport {
                 before_name: _,
                 name: _,
                 alias: _,
                 exposed: _,
-            } => false,
-            ValueDef::IngestedFileImport {
+            }) => false,
+            ValueDef::IngestedFileImport(IngestedFileImport {
                 before_path: _,
                 path,
                 name: _,
-            } => path.is_malformed(),
+            }) => path.is_malformed(),
         }
     }
 }

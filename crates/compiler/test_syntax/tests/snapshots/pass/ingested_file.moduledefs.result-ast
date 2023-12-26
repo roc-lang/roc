@@ -20,55 +20,59 @@ Defs {
     ],
     type_defs: [],
     value_defs: [
-        IngestedFileImport {
-            before_path: [],
-            path: @7-25 PlainLine(
-                "path/to/file.txt",
-            ),
-            name: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ImportAsKeyword,
-                    after: [],
-                },
-                item: @29-39 TypedIdent {
-                    ident: @29-33 "file",
-                    spaces_before_colon: [],
-                    ann: @36-39 Apply(
-                        "",
-                        "Str",
-                        [],
-                    ),
-                },
-            },
-        },
-        IngestedFileImport {
-            before_path: [],
-            path: @47-65 PlainLine(
-                "path/to/file.txt",
-            ),
-            name: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ImportAsKeyword,
-                    after: [],
-                },
-                item: @70-85 TypedIdent {
-                    ident: @70-74 "file",
-                    spaces_before_colon: [],
-                    ann: @78-85 Apply(
-                        "",
-                        "List",
-                        [
-                            @83-85 Apply(
-                                "",
-                                "U8",
-                                [],
-                            ),
-                        ],
-                    ),
+        IngestedFileImport(
+            IngestedFileImport {
+                before_path: [],
+                path: @7-25 PlainLine(
+                    "path/to/file.txt",
+                ),
+                name: KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @29-39 TypedIdent {
+                        ident: @29-33 "file",
+                        spaces_before_colon: [],
+                        ann: @36-39 Apply(
+                            "",
+                            "Str",
+                            [],
+                        ),
+                    },
                 },
             },
-        },
+        ),
+        IngestedFileImport(
+            IngestedFileImport {
+                before_path: [],
+                path: @47-65 PlainLine(
+                    "path/to/file.txt",
+                ),
+                name: KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @70-85 TypedIdent {
+                        ident: @70-74 "file",
+                        spaces_before_colon: [],
+                        ann: @78-85 Apply(
+                            "",
+                            "List",
+                            [
+                                @83-85 Apply(
+                                    "",
+                                    "U8",
+                                    [],
+                                ),
+                            ],
+                        ),
+                    },
+                },
+            },
+        ),
     ],
 }

@@ -5,9 +5,9 @@ use roc_parse::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
         Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias,
-        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, Module, Pattern, PatternAs,
-        RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag, TypeAnnotation, TypeDef,
-        TypeHeader, ValueDef, WhenBranch,
+        ImportAsKeyword, ImportExposingKeyword, ImportedModuleName, IngestedFileImport, Module,
+        ModuleImport, Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral,
+        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -566,26 +566,31 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 condition: arena.alloc(condition.remove_spaces(arena)),
                 preceding_comment: Region::zero(),
             },
-            ModuleImport {
-                before_name: _,
-                name,
-                alias,
-                exposed,
-            } => ModuleImport {
-                before_name: &[],
-                name: name.remove_spaces(arena),
-                alias: alias.remove_spaces(arena),
-                exposed: exposed.remove_spaces(arena),
-            },
-            IngestedFileImport {
-                before_path: _,
-                path,
-                name,
-            } => IngestedFileImport {
-                before_path: &[],
-                path: path.remove_spaces(arena),
-                name: name.remove_spaces(arena),
-            },
+            ModuleImport(module_import) => ModuleImport(module_import.remove_spaces(arena)),
+            IngestedFileImport(ingested_file_import) => {
+                IngestedFileImport(ingested_file_import.remove_spaces(arena))
+            }
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ModuleImport<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ModuleImport {
+            before_name: &[],
+            name: self.name.remove_spaces(arena),
+            alias: self.alias.remove_spaces(arena),
+            exposed: self.exposed.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for IngestedFileImport<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        IngestedFileImport {
+            before_path: &[],
+            path: self.path.remove_spaces(arena),
+            name: self.name.remove_spaces(arena),
         }
     }
 }

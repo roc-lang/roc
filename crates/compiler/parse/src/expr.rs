@@ -1,8 +1,8 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
     ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
-    Pattern, RecordBuilderField, Spaceable, Spaced, Spaces, TypeAnnotation, TypeDef, TypeHeader,
-    ValueDef,
+    IngestedFileImport, ModuleImport, Pattern, RecordBuilderField, Spaceable, Spaced, Spaces,
+    TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -848,12 +848,15 @@ fn import<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
 }
 
 fn import_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    record!(ValueDef::ModuleImport {
-        before_name: space0_e(EImport::IndentStart),
-        name: loc!(imported_module_name()),
-        alias: optional(backtrackable(import_as())),
-        exposed: optional(backtrackable(import_exposing()))
-    })
+    map!(
+        record!(ModuleImport {
+            before_name: space0_e(EImport::IndentStart),
+            name: loc!(imported_module_name()),
+            alias: optional(backtrackable(import_as())),
+            exposed: optional(backtrackable(import_exposing()))
+        }),
+        ValueDef::ModuleImport
+    )
 }
 
 #[inline(always)]
@@ -922,14 +925,17 @@ fn import_exposed_name<'a>(
 
 #[inline(always)]
 fn import_ingested_file_body<'a>() -> impl Parser<'a, ValueDef<'a>, EImport<'a>> {
-    record!(ValueDef::IngestedFileImport {
-        before_path: space0_e(EImport::IndentStart),
-        path: loc!(specialize(
-            |_, pos| EImport::IngestedPath(pos),
-            string_literal::parse_str_literal()
-        )),
-        name: import_ingested_file_as(),
-    })
+    map!(
+        record!(IngestedFileImport {
+            before_path: space0_e(EImport::IndentStart),
+            path: loc!(specialize(
+                |_, pos| EImport::IngestedPath(pos),
+                string_literal::parse_str_literal()
+            )),
+            name: import_ingested_file_as(),
+        }),
+        ValueDef::IngestedFileImport
+    )
 }
 
 #[inline(always)]
