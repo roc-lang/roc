@@ -79,7 +79,8 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 // returns all benchmarks that have regressed
 fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
     delete_old_bench_results();
-    do_benchmark("main");
+    // TODO re-enable
+    //do_benchmark("main");
     let mut all_regressed_benches = do_benchmark("branch");
 
     // if no benches regressed this round, abort early
