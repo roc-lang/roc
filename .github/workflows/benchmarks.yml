@@ -16,9 +16,9 @@ jobs:
       FORCE_COLOR: 1
     steps:
       - uses: actions/checkout@v3
-        with:
-          ref: "main"
-          clean: "true"
+        #with:
+        #  ref: "main"
+        #  clean: "true"
 
       - name: on main; prepare a self-contained benchmark folder
         run: nix develop -c ./ci/benchmarks/prep_folder.sh main

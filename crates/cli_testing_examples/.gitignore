@@ -10,3 +10,8 @@ benchmarks/rbtree-ck
 benchmarks/rbtree-insert
 benchmarks/test-astar
 benchmarks/test-base64
+benchmarks/NQueens
+benchmarks/cFold
+benchmarks/nQueens
+benchmarks/quicksortApp
+benchmarks/rBTreeCk

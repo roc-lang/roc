@@ -976,13 +976,13 @@ mod cli_run {
 
             // TODO fix QuicksortApp and then remove this!
             match roc_filename {
-                "QuicksortApp.roc" => {
+                "quicksortApp.roc" => {
                     eprintln!(
                     "WARNING: skipping testing benchmark {roc_filename} because the test is broken right now!"
                 );
                     return;
                 }
-                "TestAStar.roc" => {
+                "testAStar.roc" => {
                     if cfg!(feature = "wasm32-cli-run") {
                         eprintln!(
                         "WARNING: skipping testing benchmark {roc_filename} because it currently does not work on wasm32 due to dictionaries."
@@ -1137,20 +1137,20 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("NQueens.roc", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("CFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
             test_benchmark(
-                "Deriv.roc",
+                "deriv.roc",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
@@ -1160,14 +1160,14 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("RBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
+            test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             test_benchmark(
-                "RBTreeInsert.roc",
+                "rBTreeInsert.roc",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
@@ -1179,25 +1179,25 @@ mod cli_run {
         #[test]
         fn rbtree_del() {
             test_benchmark(
-                "RBTreeDel.roc",
+                "rBTreeDel.roc",
                 &["420"],
-                &[],
                 "30\n",
-                true
+                UseValgrind::Yes,
             )
-        }*/
+        }
+        */
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("TestAStar.roc", &[], "True\n", UseValgrind::No)
+            test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
             test_benchmark(
-                "TestBase64.roc",
+                "testBase64.roc",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,

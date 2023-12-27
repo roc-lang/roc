@@ -6,12 +6,6 @@ If you're not using nix, install cargo criterion:
 cargo install cargo-criterion
 ```
 
-To prevent stack overflow on the `CFold` benchmark:
-
-```sh
-ulimit -s unlimited
-```
-
 In the `crates/cli` folder execute:
 
 ```sh

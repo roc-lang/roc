@@ -250,18 +250,12 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
 
     let cmd_str = pretty_command_string(&cmd);
 
-    dbg!(cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn());
-
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("Failed to execute cmd:\n\t`{:?}`", cmd_str));
+        .unwrap_or_else(|err| panic!("Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}", err, cmd_str));
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
