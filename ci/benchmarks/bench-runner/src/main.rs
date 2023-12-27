@@ -250,6 +250,7 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
     let mut files_w_sha = HashMap::new();
 
     for file_name in non_src_files {
+        dbg!(&file_name);
         let full_path_str = [benches_path_str, &file_name].join("");
         let full_path = Path::new(&full_path_str);
 
@@ -269,12 +270,17 @@ fn check_if_bench_executables_changed() -> bool {
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
 
+    dbg!(&main_benches_path_str);
     let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
+    dbg!(&main_bench_hashes);
 
     let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");
+    dbg!(&branch_benches_path_str);
     let branch_bench_hashes = calc_hashes_for_folder(&branch_benches_path_str);
+    dbg!(&branch_bench_hashes);
 
     if main_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {
+        dbg!("equallength");
         for key in main_bench_hashes.keys() {
             if let Some(main_hash_val) = main_bench_hashes.get(key) {
                 if let Some(branch_hash_val) = branch_bench_hashes.get(key) {
@@ -289,6 +295,7 @@ fn check_if_bench_executables_changed() -> bool {
 
         false
     } else {
+        dbg!("difflength");
         true
     }
 }
