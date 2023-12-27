@@ -5,3 +5,7 @@
 pub mod link;
 pub mod program;
 pub mod target;
+
+pub mod module;
+
+mod scatter_io;

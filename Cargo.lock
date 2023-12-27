@@ -125,6 +125,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

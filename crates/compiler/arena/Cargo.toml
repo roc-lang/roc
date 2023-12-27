@@ -1,0 +1,11 @@
+[package]
+name = "arena"
+description = "A Bumpalo-like arena allocator, but which never panics, and which includes collections that don't store the arena in memory."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+bumpalo.workspace = true

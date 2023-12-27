@@ -16,6 +16,10 @@ use core::{
     ptr::{self, NonNull},
 };
 
+#[cfg(any(unix, windows))]
+use std::fs::File;
+use std::marker::PhantomData;
+
 #[cfg(not(test))]
 /// We store both line and column numbers as u16s, so the largest possible file you could open
 /// would be every line having the longest possible column length, or u16::MAX * u16::MAX.
@@ -29,7 +33,9 @@ pub struct Src64<'a> {
     /// This slice is guaranteed to have a length that's a multiple of 64B, because the parser iterates in
     /// chunks of 64B. (If extra bytes are needed to make it a multiple of 64B, we add trailing newlines
     /// because the parser ignores those.)
-    bytes: &'a [u8],
+    ptr: *const u8,
+    len: u32,
+    _phantom: PhantomData<&'a ()>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -50,16 +56,26 @@ impl<'a> Src64<'a> {
     /// This slice is guaranteed to have a length that's a multiple of 64B, because the parser iterates in
     /// chunks of 64B. (If extra bytes are needed to make it a multiple of 64B, we add trailing newlines
     /// because the parser ignores those.)
-    pub fn bytes(&self) -> &[u8] {
-        self.bytes
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len as usize) }
     }
 
-    pub fn len(&self) -> usize {
-        self.bytes.len()
+    /// The underlying source bytes that originally came from a file or from a string.
+    ///
+    /// These bytes are guaranteed to have a 16B-aligned address (so the parser can do 128-bit SIMD on it).
+    /// This slice is guaranteed to have a length that's a multiple of 64B, because the parser iterates in
+    /// chunks of 64B. (If extra bytes are needed to make it a multiple of 64B, we add trailing newlines
+    /// because the parser ignores those.)
+    pub fn as_slice_mut(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr as *mut u8, self.len as usize) }
+    }
+
+    pub fn len(&self) -> u32 {
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
+        self.len == 0
     }
 
     /// Returns None if the given string exceeds the maximum size of a Roc source file.
@@ -75,9 +91,15 @@ impl<'a> Src64<'a> {
         debug_assert_eq!(capacity % 64, 0);
 
         if capacity == src_len && src.as_ptr().align_offset(Self::BYTES_ALIGNMENT) == 0 {
+            let slice = src.as_bytes();
+
+            debug_assert!(slice.len() <= u32::MAX as usize);
+
             // If the string already happens to meet our capacity and alignment requirements, just return it.
             return Some(Self {
-                bytes: src.as_bytes(),
+                ptr: slice.as_ptr(),
+                len: slice.len() as u32,
+                _phantom: PhantomData::default(),
             });
         }
 
@@ -97,16 +119,18 @@ impl<'a> Src64<'a> {
             ptr::copy_nonoverlapping(src.as_bytes().as_ptr(), dest, src_len);
         }
 
+        debug_assert!(capacity <= u32::MAX as usize);
+
         Some(Self {
             // Safety: all the bytes should now be initialized
-            bytes: unsafe { core::slice::from_raw_parts_mut(dest, capacity) },
+            ptr: dest,
+            len: capacity as u32,
+            _phantom: PhantomData::default(),
         })
     }
 
     #[cfg(any(unix, windows))] // This is not available on wasm32. We could make it work with WASI if desired.
-    pub fn from_file(arena: &'a Bump, path: &std::path::Path) -> Result<Self, FileErr> {
-        use core::ffi::c_void;
-
+    pub fn from_path(arena: &'a Bump, path: &std::path::Path) -> Result<Self, FileErr> {
         let file = match std::fs::File::open(path) {
             Ok(file) => file,
             Err(_) => {
@@ -138,6 +162,14 @@ impl<'a> Src64<'a> {
         if file_size == 0 {
             return Err(FileErr::FileWasEmpty);
         }
+
+        Self::from_file(arena, file, file_size)
+    }
+
+    /// The file_size argument should have been determined from file.metadata() after opening it.
+    #[cfg(any(unix, windows))] // This is not available on wasm32. We could make it work with WASI if desired.
+    pub fn from_file(arena: &'a Bump, file: File, file_size: usize) -> Result<Self, FileErr> {
+        use core::ffi::c_void;
 
         let capacity = round_up_to_nearest_64(file_size);
 
@@ -262,11 +294,15 @@ impl<'a> Src64<'a> {
                     };
                 }
 
+                debug_assert!(capacity <= u32::MAX as usize);
+
                 // Safety: bytes_ptr came from an allocation of `capacity` bytes, it's had
                 // newlines filled at the end, and `file_size` bytes written over the rest.
-                let bytes = unsafe { core::slice::from_raw_parts_mut(buf.as_ptr(), capacity) };
-
-                Ok(Self { bytes })
+                Ok(Self {
+                    ptr: buf.as_ptr(),
+                    len: capacity as u32,
+                    _phantom: PhantomData::default(),
+                })
             }
             None => Err(FileErr::FileWasTooBig(file_size)),
         }
@@ -405,7 +441,7 @@ mod src64_tests {
                 assert_eq!(actual.len() % 64, 0);
                 assert_eq!(
                     expected.as_ref().ok(),
-                    Some(&actual.bytes().into()),
+                    Some(&actual.as_slice().into()),
                     "Src64::from_str had unexpected output"
                 )
             }
@@ -419,7 +455,7 @@ mod src64_tests {
         }
     }
 
-    fn expect_from_file(arena: &Bump, contents: &str, expected: &Result<Vec<u8>, FileErr>) {
+    fn expect_from_path(arena: &Bump, contents: &str, expected: &Result<Vec<u8>, FileErr>) {
         let dir = tempdir().expect("Failed to create temp dir");
         let file_path = dir.path().join("temp_file");
 
@@ -430,12 +466,12 @@ mod src64_tests {
                 .expect("Failed to write to temp file");
         }
 
-        match Src64::from_file(arena, &file_path) {
+        match Src64::from_path(arena, &file_path) {
             Ok(actual) => {
                 assert_eq!(actual.len() % 64, 0);
                 assert_eq!(
                     expected,
-                    &Ok(actual.bytes().into()),
+                    &Ok(actual.as_slice().into()),
                     "Src64::from_file had unexpected output"
                 )
             }
@@ -454,7 +490,7 @@ mod src64_tests {
         let arena = Bump::new();
 
         expect_from_str(&arena, contents, &expected);
-        expect_from_file(&arena, contents, &expected);
+        expect_from_path(&arena, contents, &expected);
     }
 
     #[test]
@@ -547,7 +583,7 @@ mod src64_tests {
 
             let arena = Bump::new();
 
-            match Src64::from_file(&arena, &file_path) {
+            match Src64::from_path(&arena, &file_path) {
                 Ok(src64) => {
                     let len = src64.len();
 
