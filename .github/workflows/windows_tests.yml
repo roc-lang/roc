@@ -37,8 +37,8 @@ jobs:
           cd crates\compiler\builtins\bitcode\
           zig build test
 
-      - name: install rust nightly 1.71.0
-        run: rustup install nightly-2023-05-28
+      - name: install rust nightly 1.72.0
+        run: rustup install nightly-2023-07-09
 
       - name: set up llvm 16
         run: |
