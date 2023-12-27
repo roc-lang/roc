@@ -1207,19 +1207,19 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("Closure.roc", &[], "", UseValgrind::No)
+            test_benchmark("closure.roc", &[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("Issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark("issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
-                "QuicksortApp.roc",
+                "quicksortApp.roc",
                 &[],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,

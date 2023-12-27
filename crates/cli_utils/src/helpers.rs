@@ -255,7 +255,12 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|err| panic!("Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}", err, cmd_str));
+        .unwrap_or_else(|err| {
+            panic!(
+                "Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}",
+                err, cmd_str
+            )
+        });
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
