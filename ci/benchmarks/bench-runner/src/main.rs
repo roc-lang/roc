@@ -26,8 +26,7 @@ fn main() {
 
             std::env::set_var("BENCH_DRY_RUN", "1");
 
-            // TODO re-enable
-            //do_benchmark("main");
+            do_benchmark("main");
             do_benchmark("branch");
 
             std::env::set_var("BENCH_DRY_RUN", "0");
@@ -80,8 +79,8 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 // returns all benchmarks that have regressed
 fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
     delete_old_bench_results();
-    // TODO re-enable
-    //do_benchmark("main");
+
+    do_benchmark("main");
     let mut all_regressed_benches = do_benchmark("branch");
 
     // if no benches regressed this round, abort early
@@ -93,8 +92,8 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
 
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
-        // TODO re-enable
-        // do_benchmark("main");
+
+        do_benchmark("main");
         let regressed_benches = do_benchmark("branch");
 
         // if no benches regressed this round, abort early
