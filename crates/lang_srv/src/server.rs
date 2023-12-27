@@ -338,7 +338,7 @@ where
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env("ROCLS_LOG").init();
 
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
