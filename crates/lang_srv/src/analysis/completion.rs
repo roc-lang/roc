@@ -10,7 +10,7 @@ use roc_region::all::{Loc, Position, Region};
 use roc_types::subs::{Subs, Variable};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
-use crate::analysis::format_var_type;
+use super::utils::format_var_type;
 
 pub struct CompletionVisitor<'a> {
     position: Position,

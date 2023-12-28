@@ -1,48 +1,35 @@
-use std::path::{Path, PathBuf};
+use log::debug;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use bumpalo::Bump;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::MutMap;
 use roc_load::{CheckedModule, LoadedModule};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_region::all::LineInfo;
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
-use roc_types::subs::Subs;
+use roc_types::subs::{Subs, Variable};
 
-use tower_lsp::lsp_types::{Diagnostic, SemanticTokenType, Url};
+use tower_lsp::lsp_types::{
+    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
+    Location, MarkedString, Position, Range, SemanticTokenType, SemanticTokens,
+    SemanticTokensResult, TextEdit, Url,
+};
 
-mod analysed_doc;
-mod completion;
-mod parse_ast;
-mod semantic_tokens;
-mod tokens;
-mod utils;
+use crate::{
+    analysis::completion::{field_completion, get_completion_items},
+    convert::{
+        diag::{IntoLspDiagnostic, ProblemFmt},
+        ToRange, ToRocPosition,
+    },
+};
 
-use crate::convert::diag::{IntoLspDiagnostic, ProblemFmt};
-
-pub(crate) use self::analysed_doc::{AnalyzedDocument, DocInfo};
-use self::{analysed_doc::ModuleIdToUrl, tokens::Token};
-
-pub const HIGHLIGHT_TOKENS_LEGEND: &[SemanticTokenType] = Token::LEGEND;
-
-#[derive(Debug, Clone)]
-pub(super) struct AnalyzedModule {
-    module_id: ModuleId,
-    interns: Interns,
-    subs: Subs,
-    abilities: AbilitiesStore,
-    declarations: Declarations,
-    // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
-    // one module may not be true global to the language server.
-    module_id_to_url: ModuleIdToUrl,
-}
-#[derive(Debug, Clone)]
-pub struct AnalysisResult {
-    module: Option<AnalyzedModule>,
-    diagnostics: Vec<Diagnostic>,
-}
+use super::{AnalysisResult, AnalyzedDocument, AnalyzedModule, DocInfo, ModuleIdToUrl};
 
 pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
     let fi = doc_info.url.to_file_path().unwrap();
