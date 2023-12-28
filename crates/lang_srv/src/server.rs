@@ -35,7 +35,6 @@ impl RocLs {
             client,
         }
     }
-    ///Wait for all the semaphores associated with an in-progress document_info update to be released
     pub fn capabilities() -> ServerCapabilities {
         let text_document_sync = TextDocumentSyncCapability::Options(
             // TODO: later on make this incremental

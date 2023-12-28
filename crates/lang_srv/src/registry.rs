@@ -116,30 +116,24 @@ impl Registry {
         self.documents.lock().await.get(url).map(|a| a.info.clone())
     }
 
-    ///Waits for the latest document analysis to be complete.
-    ///Will block forever if the latest document is never written to
-    ///Probably should use `latest_document_by_url`
-    async fn wait_for_latest_doc(&self, url: &Url) -> Arc<AnalyzedDocument> {
-        loop {
-            let docs = self.documents.lock().await;
-            if let Some(a) = docs.get(url) {
-                if let Some(a) = a.latest_document.get() {
-                    return a.clone();
-                }
-            }
-            drop(docs);
-            tokio::task::yield_now().await;
-        }
-    }
-
     ///Tries to get the latest document from analysis.
     ///Gives up and returns none after 5 seconds.
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
         let duration = std::time::Duration::from_secs(5);
-        tokio::select! {
-          _ = tokio::time::sleep(duration) => { None },
-          doc = self.wait_for_latest_doc(url) => { Some(doc) }
-        }
+        tokio::time::timeout(duration, async {
+            loop {
+                let docs = self.documents.lock().await;
+                if let Some(a) = docs.get(url) {
+                    if let Some(a) = a.latest_document.get() {
+                        return a.clone();
+                    }
+                }
+                drop(docs);
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .ok()
     }
 
     pub async fn diagnostics(&self, url: &Url) -> Vec<Diagnostic> {
