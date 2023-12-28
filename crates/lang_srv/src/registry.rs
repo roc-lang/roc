@@ -51,7 +51,14 @@ impl Registry {
     fn update_document<'a>(
         documents: &mut MutexGuard<'a, HashMap<Url, DocumentPair>>,
         document: Arc<AnalyzedDocument>,
+        updating_url: &Url,
     ) {
+        if &document.doc_info.url == updating_url {
+            documents
+                .get_mut(&updating_url)
+                .map(|a| a.latest_document.set(document.clone()).unwrap());
+        }
+
         let url = document.url().clone();
         match documents.get_mut(&url) {
             Some(old_doc) => {
@@ -81,12 +88,7 @@ impl Registry {
         for document in analysed_docs {
             let document = Arc::new(document);
             //Write the newly analysed document into the partial document that any request requiring the latest document will be waiting on
-            if document.doc_info.url == updating_url {
-                documents
-                    .get_mut(&updating_url)
-                    .map(|a| a.latest_document.set(document.clone()).unwrap());
-            }
-            Registry::update_document(&mut documents, document);
+            Registry::update_document(&mut documents, document, &updating_url);
         }
     }
 
