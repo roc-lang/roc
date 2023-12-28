@@ -261,7 +261,7 @@ fn make_completion_item(
         },
         a => {
             debug!(
-                "No specific completionKind for variable type :{:?} defaulting to 'Variable'",
+                "No specific completionKind for variable type: {:?} defaulting to 'Variable'",
                 a
             );
             CompletionItemKind::VARIABLE
@@ -324,7 +324,7 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
                         .map(|a| (a.0.clone().into(), a.1.into_inner()))
                         .collect::<Vec<_>>(),
                     Err(err) => {
-                        warn!("Error getting record field types for completion{:?}", err);
+                        warn!("Error getting record field types for completion: {:?}", err);
                         vec![]
                     }
                 }
@@ -334,7 +334,7 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
                 let elems = match elems {
                     Ok(elem) => elem.map(|(num, var)| (num.to_string(), var)).collect(),
                     Err(err) => {
-                        warn!("Error getting tuple elems for completion{:?}", err);
+                        warn!("Error getting tuple elems for completion: {:?}", err);
                         vec![]
                     }
                 };
@@ -342,7 +342,10 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
             }
 
             _ => {
-                warn!("Trying to get field completion for a type that is not a record : {:?}", subs.dbg(typ));
+                warn!(
+                    "Trying to get field completion for a type that is not a record: {:?}",
+                    subs.dbg(typ)
+                );
                 vec![]
             }
         },
@@ -354,7 +357,7 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
         }
         _ => {
             warn!(
-                "Variable before field was unsupported type:{:?}",
+                "Variable before field was unsupported type: {:?}",
                 subs.dbg(var)
             );
             vec![]
@@ -397,7 +400,7 @@ pub fn field_completion(
     } = get_field_completion_parts(&symbol_prefix)?;
 
     debug!(
-        "getting record field completions: variable:{:?} field{:?} middle{:?} ",
+        "getting record field completions: variable: {:?} field: {:?} middle: {:?} ",
         var, field, middle_fields
     );
     //get the variable from within the region
