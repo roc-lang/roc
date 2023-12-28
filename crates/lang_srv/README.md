@@ -82,3 +82,7 @@ instead of the direct binary.
 If you would like to enable debug logging set the `ROCLS_LOG` environment variable to `debug` or `trace` for even more logs. 
 eg: `ROCLS_LOG=debug`  
 
+## Testing
+
+Tests use expect-test, which is a snapshot/expect testing framework.
+If a change is made that requires updating the expect tests run `cargo test` confirm that the diff is correct, then run `UPDATE_EXPECT=1 cargo test` to update the contents of the files with the new output.

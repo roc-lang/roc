@@ -332,7 +332,7 @@ where
     }
 }
 
-#[tokio::main(flavor = "multi_thread")]
+#[tokio::main]
 async fn main() {
     env_logger::Builder::from_env("ROCLS_LOG").init();
 
@@ -350,10 +350,30 @@ mod tests {
         time::Duration,
     };
 
-    use insta::assert_debug_snapshot;
+    use expect_test::expect;
     use tokio::{join, spawn};
 
     use super::*;
+
+    fn completion_resp_to_labels(resp: CompletionResponse) -> Vec<String> {
+        match resp {
+            CompletionResponse::Array(list) => list.into_iter(),
+            CompletionResponse::List(list) => list.items.into_iter(),
+        }
+        .map(|item| item.label)
+        .collect::<Vec<_>>()
+    }
+    ///Gets completion and returns only the label for each completion
+    async fn get_completion_labels(
+        reg: &Registry,
+        url: &Url,
+        position: Position,
+    ) -> Option<Vec<String>> {
+        reg.completion_items(url, position)
+            .await
+            .map(completion_resp_to_labels)
+    }
+
     const DOC_LIT: &str = r#"
 app "fizz-buzz"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
@@ -402,9 +422,8 @@ rectest=
         let a4 = spawn(inner.change(&url, doc.clone() + "lue.", 5));
         //start a completion that would only work if all changes have been applied
         let comp = spawn(async move {
-            let url2 = url.clone();
             let reg = inner.registry().await;
-            reg.completion_items(&url2, position).await
+            get_completion_labels(reg, &url, position).await
         });
         // Simulate two changes coming in with a slight delay
         let a = spawn(inner.change(&url, doc.clone() + "lue.o", 6));
@@ -413,7 +432,49 @@ rectest=
 
         let done = join!(a1, a2, a3, a4, comp, a, rest);
 
-        assert_debug_snapshot!(done)
+        expect![[r#"
+            (
+                Ok(
+                    Err(
+                        "Not latest version skipping analysis",
+                    ),
+                ),
+                Ok(
+                    Err(
+                        "Not latest version skipping analysis",
+                    ),
+                ),
+                Ok(
+                    Err(
+                        "Not latest version skipping analysis",
+                    ),
+                ),
+                Ok(
+                    Err(
+                        "Not latest version skipping analysis",
+                    ),
+                ),
+                Ok(
+                    Some(
+                        [
+                            "one",
+                            "two",
+                        ],
+                    ),
+                ),
+                Ok(
+                    Err(
+                        "version 6 doesn't match latest: 7 discarding analysis  ",
+                    ),
+                ),
+                Ok(
+                    Ok(
+                        (),
+                    ),
+                ),
+            )
+        "#]]
+        .assert_debug_eq(&done);
     }
     ///Test that completion works properly when we apply an "as" pattern to an identifier
     #[tokio::test]
@@ -425,25 +486,33 @@ main =
     inn as outer -> "#;
         let (inner, url) = test_setup(suffix.clone()).await;
         let position = Position::new(8, 21);
+        let reg = &inner.registry;
 
         let change = suffix.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = inner
-            .registry()
-            .await
-            .completion_items(&url, position)
-            .await;
+        let comp1 = get_completion_labels(&reg, &url, position).await;
 
         let c = suffix.clone() + "i";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = inner
-            .registry()
-            .await
-            .completion_items(&url, position)
-            .await;
+        let comp2 = get_completion_labels(&reg, &url, position).await;
 
         let actual = [comp1, comp2];
-        assert_debug_snapshot!(actual)
+        expect![[r#"
+            [
+                Some(
+                    [
+                        "outer",
+                    ],
+                ),
+                Some(
+                    [
+                        "inn",
+                        "outer",
+                    ],
+                ),
+            ]
+        "#]]
+        .assert_debug_eq(&actual)
     }
 
     ///Test that completion works properly when we apply an "as" pattern to a record
@@ -456,24 +525,35 @@ main =
     {one,two} as outer -> "#;
         let (inner, url) = test_setup(doc.clone()).await;
         let position = Position::new(8, 27);
+        let reg = &inner.registry;
 
         let change = doc.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = inner
-            .registry()
-            .await
-            .completion_items(&url, position)
-            .await;
+        let comp1 = get_completion_labels(&reg, &url, position).await;
 
         let c = doc.clone() + "t";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = inner
-            .registry()
-            .await
-            .completion_items(&url, position)
-            .await;
-
+        let comp2 = get_completion_labels(&reg, &url, position).await;
         let actual = [comp1, comp2];
-        assert_debug_snapshot!(actual);
+
+        expect![[r#"
+            [
+                Some(
+                    [
+                        "one",
+                        "two",
+                        "outer",
+                    ],
+                ),
+                Some(
+                    [
+                        "one",
+                        "two",
+                        "outer",
+                    ],
+                ),
+            ]
+        "#]]
+        .assert_debug_eq(&actual);
     }
 }

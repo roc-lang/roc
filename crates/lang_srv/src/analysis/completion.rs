@@ -371,7 +371,7 @@ struct FieldCompletion {
     middle_fields: Vec<String>,
 }
 ///Splits a completion prefix for a field into its components
-///E.g. a.b.c.d->("a",["b","c"],"d")
+///E.g. a.b.c.d->{var:"a",middle_fields:["b","c"],field:"d"}
 fn get_field_completion_parts(symbol_prefix: &str) -> Option<FieldCompletion> {
     let mut parts = symbol_prefix.split('.').collect::<Vec<_>>();
     let field = parts.pop().unwrap_or("").to_string();

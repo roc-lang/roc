@@ -7,12 +7,8 @@ edition = "2021"
 name = "roc_ls"
 path = "src/server.rs"
 
-[profile.dev.package]
-insta.opt-level = 3
-similar.opt-level = 3
-
 [dev-dependencies]
-insta = "1.34.0"
+expect-test = "1.4.1"
 
 
 [dependencies]
