@@ -15,23 +15,23 @@ mod convert;
 mod registry;
 
 #[derive(Debug)]
-struct RocLs {
-    pub inner: Inner,
+struct RocServer {
+    pub state: RocServerState,
     client: Client,
 }
 
 ///This exists so we can test most of RocLs without anything LSP related
 #[derive(Debug)]
-struct Inner {
+struct RocServerState {
     registry: Registry,
 }
 
-impl std::panic::RefUnwindSafe for RocLs {}
+impl std::panic::RefUnwindSafe for RocServer {}
 
-impl RocLs {
+impl RocServer {
     pub fn new(client: Client) -> Self {
         Self {
-            inner: Inner::new(),
+            state: RocServerState::new(),
             client,
         }
     }
@@ -89,7 +89,7 @@ impl RocLs {
 
     /// Records a document content change.
     async fn change(&self, fi: Url, text: String, version: i32) {
-        let updating_result = self.inner.change(&fi, text, version).await;
+        let updating_result = self.state.change(&fi, text, version).await;
 
         //The analysis task can be cancelled by another change coming in which will update the watched variable
         if let Err(e) = updating_result {
@@ -98,7 +98,7 @@ impl RocLs {
         }
         debug!("applied_change getting and returning diagnostics");
 
-        let diagnostics = self.inner.registry.diagnostics(&fi).await;
+        let diagnostics = self.state.registry.diagnostics(&fi).await;
 
         self.client
             .publish_diagnostics(fi, diagnostics, Some(version))
@@ -106,8 +106,8 @@ impl RocLs {
     }
 }
 
-impl Inner {
-    pub fn new() -> Inner {
+impl RocServerState {
+    pub fn new() -> RocServerState {
         Self {
             registry: Registry::default(),
         }
@@ -128,15 +128,11 @@ impl Inner {
         version: i32,
     ) -> std::result::Result<(), String> {
         debug!("V{:?}:starting change", version);
-        //was write lock
-
-        debug!("V{:?}:change acquired registry lock", version);
         let doc_info = DocInfo::new(fi.clone(), text, version);
 
         self.registry
             .apply_doc_info_changes(fi.clone(), doc_info.clone())
             .await;
-        //Now that we've got our new partial document written and we hold the exclusive write_handle to its analysis we can allow other tasks to access the registry and the doc_info inside this partial document
 
         debug!(
             "V{:?}:finished updating docinfo, starting analysis ",
@@ -145,7 +141,7 @@ impl Inner {
 
         let inner_ref = self;
         let updating_result = async {
-            //This reduces wasted computation by waiting to see if a new change comes in, but does delay the final analysis. Ideally this would be replaced with cancelling the analysis when a new one comes in.
+            //This reduces wasted computation by waiting to allow a new change to come in and update the version before we check, but does delay the final analysis. Ideally this would be replaced with cancelling the analysis when a new one comes in.
             tokio::time::sleep(Duration::from_millis(100)).await;
             let is_latest = inner_ref
                 .registry
@@ -188,7 +184,7 @@ impl Inner {
 }
 
 #[tower_lsp::async_trait]
-impl LanguageServer for RocLs {
+impl LanguageServer for RocServer {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
         Ok(InitializeResult {
             capabilities: Self::capabilities(),
@@ -223,7 +219,7 @@ impl LanguageServer for RocLs {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let TextDocumentIdentifier { uri } = params.text_document;
-        self.inner.close(uri).await;
+        self.state.close(uri).await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -241,7 +237,7 @@ impl LanguageServer for RocLs {
         } = params;
 
         panic_wrapper_async(|| async {
-            self.inner
+            self.state
                 .registry
                 .hover(&text_document.uri, position)
                 .await
@@ -264,7 +260,7 @@ impl LanguageServer for RocLs {
         } = params;
 
         panic_wrapper_async(|| async {
-            self.inner
+            self.state
                 .registry()
                 .await
                 .goto_definition(&text_document.uri, position)
@@ -281,7 +277,7 @@ impl LanguageServer for RocLs {
         } = params;
 
         panic_wrapper_async(|| async {
-            self.inner
+            self.state
                 .registry()
                 .await
                 .formatting(&text_document.uri)
@@ -301,7 +297,7 @@ impl LanguageServer for RocLs {
         } = params;
 
         panic_wrapper_async(|| async {
-            self.inner
+            self.state
                 .registry()
                 .await
                 .semantic_tokens(&text_document.uri)
@@ -309,11 +305,12 @@ impl LanguageServer for RocLs {
         })
         .await
     }
+
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
         trace!("got completion request");
         let res = panic_wrapper_async(|| async {
-            self.inner
+            self.state
                 .registry
                 .completion_items(&doc.text_document.uri, doc.position)
                 .await
@@ -342,7 +339,7 @@ async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(RocLs::new);
+    let (service, socket) = LspService::new(RocServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 
@@ -364,22 +361,16 @@ app "fizz-buzz"
     provides [main] to pf
 "#;
     static INIT: Once = Once::new();
-    async fn test_setup(doc: String) -> (Inner, Url) {
+    async fn test_setup(doc: String) -> (RocServerState, Url) {
         INIT.call_once(|| {
             env_logger::builder()
                 .is_test(true)
                 .filter_level(log::LevelFilter::Trace)
                 .init();
         });
-        // static INNER_CELL: OnceLock<Inner> = OnceLock::new();
-        // INNER_CELL.set(Inner::new()).unwrap();
-        // static URL_CELL: OnceLock<Url> = OnceLock::new();
-        // URL_CELL.set().unwrap()).unwrap();
-
-        // let inner = INNER_CELL.get().unwrap();
         let url = Url::parse("file:/test.roc").unwrap();
 
-        let inner = Inner::new();
+        let inner = RocServerState::new();
         //setup the file
         inner.change(&url, doc, 0).await.unwrap();
         (inner, url)
@@ -393,7 +384,7 @@ rectest=
   value= rec 1 2
   va"#;
         let (inner, url) = test_setup(doc.clone()).await;
-        static INNER_CELL: OnceLock<Inner> = OnceLock::new();
+        static INNER_CELL: OnceLock<RocServerState> = OnceLock::new();
         INNER_CELL.set(inner).unwrap();
         static URL_CELL: OnceLock<Url> = OnceLock::new();
         URL_CELL.set(url).unwrap();
@@ -424,6 +415,7 @@ rectest=
 
         assert_debug_snapshot!(done)
     }
+    ///Test that completion works properly when we apply an "as" pattern to an identifier
     #[tokio::test]
     async fn test_completion_as_identifier() {
         let suffix = DOC_LIT.to_string()
@@ -432,7 +424,6 @@ main =
   when a is
     inn as outer -> "#;
         let (inner, url) = test_setup(suffix.clone()).await;
-        //test compltion for outer
         let position = Position::new(8, 21);
 
         let change = suffix.clone() + "o";
@@ -455,6 +446,7 @@ main =
         assert_debug_snapshot!(actual)
     }
 
+    ///Test that completion works properly when we apply an "as" pattern to a record
     #[tokio::test]
     async fn test_completion_as_record() {
         let doc = DOC_LIT.to_string()
@@ -463,7 +455,6 @@ main =
   when a is
     {one,two} as outer -> "#;
         let (inner, url) = test_setup(doc.clone()).await;
-        //test compltion for outer
         let position = Position::new(8, 27);
 
         let change = doc.clone() + "o";
