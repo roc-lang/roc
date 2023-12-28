@@ -344,7 +344,7 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
             _ => {
                 warn!(
                     "Trying to get field completion for a type that is not a record: {:?}",
-                    subs.dbg(typ)
+                    typ
                 );
                 vec![]
             }
