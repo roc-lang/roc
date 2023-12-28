@@ -8,7 +8,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use crate::analysis::global_analysis;
+use crate::analysis::{global_analysis, DocInfo};
 
 mod analysis;
 mod convert;
@@ -132,10 +132,10 @@ impl Inner {
         //was write lock
 
         debug!("V{:?}:change acquired registry lock", version);
-        let (results, partial) = global_analysis(fi.clone(), text, version);
+        let doc_info = DocInfo::new(fi.clone(), text, version);
 
         self.registry
-            .apply_doc_info_changes(fi.clone(), partial.clone())
+            .apply_doc_info_changes(fi.clone(), doc_info.clone())
             .await;
         //Now that we've got our new partial document written and we hold the exclusive write_handle to its analysis we can allow other tasks to access the registry and the doc_info inside this partial document
 
@@ -158,7 +158,7 @@ impl Inner {
                 return Err("Not latest version skipping analysis".to_string());
             }
 
-            let results = match tokio::task::spawn_blocking(results).await {
+            let results = match tokio::task::spawn_blocking(|| global_analysis(doc_info)).await {
                 Err(e) => return Err(format!("Document analysis failed. reason:{:?}", e)),
                 Ok(a) => a,
             };
