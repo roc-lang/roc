@@ -2697,6 +2697,7 @@ dependencies = [
  "bumpalo",
  "env_logger 0.10.1",
  "expect-test",
+ "indoc",
  "log",
  "parking_lot",
  "roc_can",

@@ -1,8 +1,8 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
+use indoc::indoc;
 use log::{debug, trace};
 use registry::Registry;
 use std::future::Future;
-
 use std::time::Duration;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -374,12 +374,12 @@ mod tests {
             .map(completion_resp_to_labels)
     }
 
-    const DOC_LIT: &str = r#"
-app "fizz-buzz"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
-    imports [pf.Stdout,pf.Task.{ Task, await },]
-    provides [main] to pf
-"#;
+    const DOC_LIT: &str = indoc! {r#"
+        app "fizz-buzz"
+            packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
+            imports [pf.Stdout,pf.Task.{ Task, await },]
+            provides [main] to pf
+        "#};
     static INIT: Once = Once::new();
     async fn test_setup(doc: String) -> (RocServerState, Url) {
         INIT.call_once(|| {
@@ -399,10 +399,12 @@ app "fizz-buzz"
     #[tokio::test]
     async fn test_completion_with_changes() {
         let doc = DOC_LIT.to_string()
-            + r#"rec=\a,b->{one:{potato:\d->d,leak:59},two:b}
-rectest= 
-  value= rec 1 2
-  va"#;
+            + indoc! {r#"
+            rec=\a,b->{one:{potato:\d->d,leak:59},two:b}
+            rectest= 
+              value= rec 1 2
+              va
+            "#};
         let (inner, url) = test_setup(doc.clone()).await;
         static INNER_CELL: OnceLock<RocServerState> = OnceLock::new();
         INNER_CELL.set(inner).unwrap();
@@ -427,7 +429,7 @@ rectest=
         });
         // Simulate two changes coming in with a slight delay
         let a = spawn(inner.change(&url, doc.clone() + "lue.o", 6));
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         let rest = spawn(inner.change(&url, doc.clone() + "lue.on", 7));
 
         let done = join!(a1, a2, a3, a4, comp, a, rest);
@@ -480,10 +482,11 @@ rectest=
     #[tokio::test]
     async fn test_completion_as_identifier() {
         let suffix = DOC_LIT.to_string()
-            + r#"
-main =
-  when a is
-    inn as outer -> "#;
+            + indoc! {r#"
+            main =
+              when a is
+                inn as outer -> 
+                "#};
         let (inner, url) = test_setup(suffix.clone()).await;
         let position = Position::new(8, 21);
         let reg = &inner.registry;
@@ -519,10 +522,12 @@ main =
     #[tokio::test]
     async fn test_completion_as_record() {
         let doc = DOC_LIT.to_string()
-            + r#"
-main =
-  when a is
-    {one,two} as outer -> "#;
+            + indoc! {r#"
+            main =
+              when a is
+                {one,two} as outer -> 
+            "#};
+
         let (inner, url) = test_setup(doc.clone()).await;
         let position = Position::new(8, 27);
         let reg = &inner.registry;
