@@ -128,6 +128,13 @@ fn desugar_value_def<'a>(
                 preceding_comment: *preceding_comment,
             }
         }
+        ModuleImport(roc_parse::ast::ModuleImport {
+            before_name: _,
+            name: _,
+            alias: _,
+            exposed: _,
+        }) => *def,
+        IngestedFileImport(_) => *def,
     }
 }
 

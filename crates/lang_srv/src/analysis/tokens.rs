@@ -622,6 +622,12 @@ impl IterTokens for ValueDef<'_> {
             } => (onetoken(Token::Comment, *preceding_comment, arena).into_iter())
                 .chain(condition.iter_tokens(arena))
                 .collect_in(arena),
+            ValueDef::ModuleImport(..) => {
+                todo!("[modules-revamp]")
+            }
+            ValueDef::IngestedFileImport(..) => {
+                todo!("[modules-revamp]")
+            }
         }
     }
 }

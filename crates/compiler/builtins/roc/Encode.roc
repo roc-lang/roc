@@ -28,24 +28,24 @@ interface Encode
         append,
         toBytes,
     ]
-    imports [
-        Num.{
-            U8,
-            U16,
-            U32,
-            U64,
-            U128,
-            I8,
-            I16,
-            I32,
-            I64,
-            I128,
-            F32,
-            F64,
-            Dec,
-        },
-        Bool.{ Bool },
-    ]
+    imports []
+
+import Num exposing [
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    F32,
+    F64,
+    Dec,
+]
+import Bool exposing [Bool]
 
 Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
 

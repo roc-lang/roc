@@ -36,12 +36,12 @@ interface Inspect
         toInspector,
         toStr,
     ]
-    imports [
-        Bool.{ Bool },
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec, Nat },
-        List,
-        Str,
-    ]
+    imports []
+
+import Bool exposing [Bool]
+import Num exposing [U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec, Nat]
+import List
+import Str
 
 KeyValWalker state collection key val : collection, state, (state, key, val -> state) -> state
 ElemWalker state collection elem : collection, state, (state, elem -> state) -> state

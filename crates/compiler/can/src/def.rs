@@ -1042,6 +1042,7 @@ fn canonicalize_value_defs<'a>(
     let mut pending_dbgs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
     let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
+    let mut pending_ingested_files = Vec::with_capacity(value_defs.len());
 
     for loc_pending_def in value_defs {
         match loc_pending_def.value {
@@ -1061,6 +1062,10 @@ fn canonicalize_value_defs<'a>(
             }
             PendingValue::ExpectFx(pending_expect) => {
                 pending_expect_fx.push(pending_expect);
+            }
+            PendingValue::ModuleImport => { /* nothing to do */ }
+            PendingValue::IngestedFileImport(pending_ingested_file) => {
+                pending_ingested_files.push(pending_ingested_file);
             }
         }
     }
@@ -1114,6 +1119,10 @@ fn canonicalize_value_defs<'a>(
         defs.push(Some(temp_output.def));
 
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
+    }
+
+    for _ in pending_ingested_files {
+        todo!("[modules-revamp]: canonicalize_ingested_file_import");
     }
 
     let mut dbgs = ExpectsOrDbgs::with_capacity(pending_dbgs.len());
@@ -2750,6 +2759,8 @@ enum PendingValue<'a> {
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
     ExpectFx(PendingExpectOrDbg<'a>),
+    ModuleImport,
+    IngestedFileImport(ast::IngestedFileImport<'a>),
     SignatureDefMismatch,
 }
 
@@ -2874,6 +2885,44 @@ fn to_pending_value_def<'a>(
             condition,
             preceding_comment: *preceding_comment,
         }),
+
+        ModuleImport(module_import) => {
+            match module_import.exposed {
+                None => {}
+                Some(exposed) if exposed.item.is_empty() => {}
+                Some(exposed) => {
+                    for loc_name in exposed.item.items {
+                        let exposed_name = loc_name.value.item();
+                        let name = exposed_name.as_str();
+                        let ident = name.into();
+
+                        match env.qualified_lookup(
+                            scope,
+                            module_import.name.value.name,
+                            name,
+                            loc_name.region,
+                        ) {
+                            Ok(imported_symbol) => {
+                                match scope.import(ident, imported_symbol, loc_name.region) {
+                                    Ok(()) => {}
+                                    Err((_shadowed_symbol, _region)) => {
+                                        internal_error!(
+                                            "TODO gracefully handle shadowing in imports."
+                                        )
+                                    }
+                                }
+                            }
+                            Err(problem) => {
+                                env.problem(Problem::RuntimeError(problem.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+
+            PendingValue::ModuleImport
+        }
+        IngestedFileImport(module_import) => PendingValue::IngestedFileImport(*module_import),
     }
 }
 

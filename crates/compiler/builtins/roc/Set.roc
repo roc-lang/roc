@@ -24,14 +24,14 @@ interface Set
         map,
         joinMap,
     ]
-    imports [
-        List,
-        Bool.{ Bool, Eq },
-        Dict.{ Dict },
-        Num.{ Nat },
-        Hash.{ Hash, Hasher },
-        Inspect.{ Inspect, Inspector, InspectFormatter },
-    ]
+    imports []
+
+import List
+import Bool exposing [Bool, Eq]
+import Dict exposing [Dict]
+import Num exposing [Nat]
+import Hash exposing [Hash, Hasher]
+import Inspect exposing [Inspect, Inspector, InspectFormatter]
 
 ## Provides a [set](https://en.wikipedia.org/wiki/Set_(abstract_data_type))
 ## type which stores a collection of unique values, without any ordering

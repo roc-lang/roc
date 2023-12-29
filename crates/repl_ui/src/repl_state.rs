@@ -131,6 +131,12 @@ impl ReplState {
                     ValueDef::ExpectFx { .. } => {
                         todo!("handle receiving an `expect-fx` - what should the repl do for that?")
                     }
+                    ValueDef::ModuleImport(_) => {
+                        todo!("handle importing a module from the REPL")
+                    }
+                    ValueDef::IngestedFileImport(_) => {
+                        todo!("handle ingesting a file from the REPL")
+                    }
                 }
             }
             ParseOutcome::TypeDef(TypeDef::Alias {

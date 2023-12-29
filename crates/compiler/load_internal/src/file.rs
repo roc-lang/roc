@@ -47,12 +47,9 @@ use roc_mono::layout::{
 use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
-use roc_parse::ast::{
-    self, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaced, StrLiteral, ValueDef,
-};
+use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::{
-    ExposedName, HeaderType, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To,
-    TypedIdent,
+    ExposedName, HeaderType, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
 };
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
@@ -192,7 +189,13 @@ fn start_phase<'a>(
                 // parse the file
                 let header = state.module_cache.headers.remove(&module_id).unwrap();
 
-                BuildTask::Parse { header }
+                BuildTask::Parse {
+                    header,
+                    // Provide mutexes of ModuleIds and IdentIds by module,
+                    // so other modules can populate them as they load.
+                    module_ids: Arc::clone(&state.arc_modules),
+                    ident_ids_by_module: Arc::clone(&state.ident_ids_by_module),
+                }
             }
             Phase::CanonicalizeAndConstrain => {
                 // canonicalize the file
@@ -865,6 +868,8 @@ enum BuildTask<'a> {
     },
     Parse {
         header: ModuleHeader<'a>,
+        module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+        ident_ids_by_module: SharedIdentIdsByModule,
     },
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
@@ -2026,7 +2031,7 @@ fn worker_task<'a>(
                             BuildTask::LoadModule { module_name, .. } => {
                                 format!("BuildTask::LoadModule({module_name:?})")
                             }
-                            BuildTask::Parse { header } => {
+                            BuildTask::Parse { header, .. } => {
                                 format!("BuildTask::Parse({})", header.module_path.display())
                             }
                             BuildTask::CanonicalizeAndConstrain { parsed, .. } => format!(
@@ -2174,17 +2179,17 @@ fn report_unused_imported_modules(
     }
 }
 
-fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
-    header
+fn extend_module_with_builtin_import(module: &mut ParsedModule, module_id: ModuleId) {
+    module
         .package_qualified_imported_modules
-        .insert(PackageQualified::Unqualified(module));
+        .insert(PackageQualified::Unqualified(module_id));
 
-    header.imported_modules.insert(module, Region::zero());
+    module.imported_modules.insert(module_id, Region::zero());
 
-    let types = Symbol::builtin_types_in_scope(module)
+    let types = Symbol::builtin_types_in_scope(module_id)
         .iter()
         .map(|(name, info)| (Ident::from(*name), *info));
-    header.exposed_imports.extend(types);
+    module.initial_scope.extend(types);
 }
 
 fn update<'a>(
@@ -2214,7 +2219,6 @@ fn update<'a>(
 
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
-
             let mut work = MutSet::default();
 
             // Register the package's path under its shorthand
@@ -2311,25 +2315,6 @@ fn update<'a>(
                         exposes_ids,
                         ..
                     } => {
-                        let undefined_shorthands: Vec<_> = header
-                            .package_qualified_imported_modules
-                            .iter()
-                            .filter(|pqim| match pqim {
-                                PackageQualified::Unqualified(_) => false,
-                                PackageQualified::Qualified(shorthand, _) => {
-                                    !(header.packages.contains_key(shorthand)
-                                        || shorthand == &config_shorthand)
-                                }
-                            })
-                            .collect();
-
-                        // shorthands must be defined by the module!
-                        assert!(
-                            undefined_shorthands.is_empty(),
-                            "{undefined_shorthands:?} not in {:?} ",
-                            &header.packages
-                        );
-
                         work.extend(state.dependencies.notify_package(config_shorthand));
 
                         let is_prebuilt = if header.is_root_module {
@@ -2387,76 +2372,7 @@ fn update<'a>(
                 }
             }
 
-            // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
-            for (name, id) in header.deps_by_name.iter() {
-                state.module_cache.module_names.insert(*id, name.clone());
-            }
-
-            // This was a dependency. Write it down and keep processing messages.
-            let mut exposed_symbols: VecSet<Symbol> = VecSet::with_capacity(header.exposes.len());
-
-            // TODO can we avoid this loop by storing them as a Set in Header to begin with?
-            for symbol in header.exposes.iter() {
-                exposed_symbols.insert(*symbol);
-            }
-
-            // NOTE we currently re-parse the headers when a module is imported twice.
-            // We need a proper solution that marks a phase as in-progress so it's not repeated
-            // debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
-
-            state
-                .exposed_symbols_by_module
-                .insert(home, exposed_symbols);
-
-            // add the prelude
-            let mut header = header;
-
-            if !header.module_id.is_builtin() {
-                let header = &mut header;
-
-                extend_header_with_builtin(header, ModuleId::NUM);
-                extend_header_with_builtin(header, ModuleId::BOOL);
-                extend_header_with_builtin(header, ModuleId::STR);
-                extend_header_with_builtin(header, ModuleId::LIST);
-                extend_header_with_builtin(header, ModuleId::RESULT);
-                extend_header_with_builtin(header, ModuleId::DICT);
-                extend_header_with_builtin(header, ModuleId::SET);
-                extend_header_with_builtin(header, ModuleId::BOX);
-                extend_header_with_builtin(header, ModuleId::ENCODE);
-                extend_header_with_builtin(header, ModuleId::DECODE);
-                extend_header_with_builtin(header, ModuleId::HASH);
-                extend_header_with_builtin(header, ModuleId::INSPECT);
-            }
-
-            state
-                .module_cache
-                .imports
-                .entry(header.module_id)
-                .or_default()
-                .extend(
-                    header
-                        .package_qualified_imported_modules
-                        .iter()
-                        .map(|x| *x.as_inner()),
-                );
-
-            let added_deps_result = state.dependencies.add_module(
-                header.module_id,
-                &header.package_qualified_imported_modules,
-                state.exec_mode.goal_phase(),
-            );
-
-            let new_work = match added_deps_result {
-                Ok(work) => work,
-                Err(DepCycle { cycle }) => {
-                    return Err(LoadingProblem::ImportCycle(
-                        header.module_path.clone(),
-                        cycle,
-                    ));
-                }
-            };
-
-            work.extend(new_work);
+            work.insert((home, Phase::Parse));
 
             state.module_cache.headers.insert(header.module_id, header);
 
@@ -2469,12 +2385,108 @@ fn update<'a>(
             Ok(state)
         }
         Parsed(parsed) => {
+            let module_id = parsed.module_id;
+
+            if let HeaderType::Platform {
+                config_shorthand, ..
+            } = parsed.header_type
+            {
+                let undefined_shorthands: Vec<_> = parsed
+                    .package_qualified_imported_modules
+                    .iter()
+                    .filter(|pqim| match pqim {
+                        PackageQualified::Unqualified(_) => false,
+                        PackageQualified::Qualified(shorthand, _) => {
+                            !(parsed.packages.contains_key(shorthand)
+                                || shorthand == &config_shorthand)
+                        }
+                    })
+                    .collect();
+
+                // shorthands must be defined by the module!
+                assert!(
+                    undefined_shorthands.is_empty(),
+                    "{undefined_shorthands:?} not in {:?} ",
+                    &parsed.packages
+                );
+            }
+
+            // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
+            for (name, id) in parsed.deps_by_name.iter() {
+                state.module_cache.module_names.insert(*id, name.clone());
+            }
+
+            // This was a dependency. Write it down and keep processing messages.
+            let mut exposed_symbols: VecSet<Symbol> = VecSet::with_capacity(parsed.exposes.len());
+
+            // TODO can we avoid this loop by storing them as a Set in Header to begin with?
+            for symbol in parsed.exposes.iter() {
+                exposed_symbols.insert(*symbol);
+            }
+
+            // [modules-revamp] TODO: revise this
+            // NOTE we currently re-parse the headers when a module is imported twice.
+            // We need a proper solution that marks a phase as in-progress so it's not repeated
+            // debug_assert!(!state.exposed_symbols_by_module.contains_key(&home));
+
+            state
+                .exposed_symbols_by_module
+                .insert(module_id, exposed_symbols);
+
+            // add the prelude
+            let mut parsed = parsed;
+
+            if !module_id.is_builtin() {
+                let parsed = &mut parsed;
+
+                extend_module_with_builtin_import(parsed, ModuleId::NUM);
+                extend_module_with_builtin_import(parsed, ModuleId::BOOL);
+                extend_module_with_builtin_import(parsed, ModuleId::STR);
+                extend_module_with_builtin_import(parsed, ModuleId::LIST);
+                extend_module_with_builtin_import(parsed, ModuleId::RESULT);
+                extend_module_with_builtin_import(parsed, ModuleId::DICT);
+                extend_module_with_builtin_import(parsed, ModuleId::SET);
+                extend_module_with_builtin_import(parsed, ModuleId::BOX);
+                extend_module_with_builtin_import(parsed, ModuleId::ENCODE);
+                extend_module_with_builtin_import(parsed, ModuleId::DECODE);
+                extend_module_with_builtin_import(parsed, ModuleId::HASH);
+                extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
+            }
+
+            state
+                .module_cache
+                .imports
+                .entry(module_id)
+                .or_default()
+                .extend(
+                    parsed
+                        .package_qualified_imported_modules
+                        .iter()
+                        .map(|x| *x.as_inner()),
+                );
+
+            let added_deps_result = state.dependencies.add_module(
+                module_id,
+                &parsed.package_qualified_imported_modules,
+                state.exec_mode.goal_phase(),
+            );
+
+            let work = match added_deps_result {
+                Ok(work) => work,
+                Err(DepCycle { cycle }) => {
+                    return Err(LoadingProblem::ImportCycle(
+                        parsed.module_path.clone(),
+                        cycle,
+                    ));
+                }
+            };
+
+            start_tasks(arena, &mut state, work, injector, worker_listeners)?;
+
             state
                 .module_cache
                 .sources
                 .insert(parsed.module_id, (parsed.module_path.clone(), parsed.src));
-
-            let module_id = parsed.module_id;
 
             state.module_cache.parsed.insert(module_id, parsed);
 
@@ -3469,7 +3481,6 @@ fn load_package_from_disk<'a>(
                         parser_state,
                         module_ids,
                         exposes_ids.into_bump_slice(),
-                        ident_ids_by_module,
                         &header,
                         comments,
                         pkg_module_timing,
@@ -3541,7 +3552,6 @@ fn load_builtin_module_help<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Builtin {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
@@ -3560,7 +3570,6 @@ fn load_builtin_module_help<'a>(
 fn load_builtin_module<'a>(
     arena: &'a Bump,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
     module_id: ModuleId,
     module_name: &str,
@@ -3569,14 +3578,7 @@ fn load_builtin_module<'a>(
 
     let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
 
-    let (module_id, _, header) = build_header(
-        arena,
-        info,
-        parse_state,
-        module_ids,
-        ident_ids_by_module,
-        module_timing,
-    )?;
+    let (module_id, _, header) = build_header(info, parse_state, module_ids, module_timing)?;
     Ok((module_id, Msg::Header(header)))
 }
 
@@ -3609,7 +3611,6 @@ fn load_module<'a>(
                     let (module_id, msg) = load_builtin_module(
                         arena,
                         module_ids,
-                        ident_ids_by_module,
                         module_timing,
                         $module_id,
                         concat!($name, ".roc")
@@ -3843,7 +3844,6 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Interface {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
@@ -3851,14 +3851,8 @@ fn parse_header<'a>(
                 module_comments: comments,
             };
 
-            let (module_id, module_name, header) = build_header(
-                arena,
-                info,
-                parse_state.clone(),
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-            )?;
+            let (module_id, module_name, header) =
+                build_header(info, parse_state.clone(), module_ids, module_timing)?;
 
             if let Some(expected_module_name) = opt_expected_module_name {
                 if expected_module_name != module_name {
@@ -3896,7 +3890,6 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
@@ -3906,14 +3899,8 @@ fn parse_header<'a>(
                 module_comments: comments,
             };
 
-            let (module_id, _, header) = build_header(
-                arena,
-                info,
-                parse_state,
-                module_ids,
-                ident_ids_by_module,
-                module_timing,
-            )?;
+            let (module_id, _, header) =
+                build_header(info, parse_state, module_ids, module_timing)?;
 
             Ok(HeaderOutput {
                 module_id,
@@ -3955,11 +3942,6 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages,
-                imports: if let Some(imports) = header.imports {
-                    unspace(arena, imports.item.items)
-                } else {
-                    &[]
-                },
                 header_type: HeaderType::App {
                     provides: provides.into_bump_slice(),
                     output_name: header.name.value,
@@ -3968,14 +3950,8 @@ fn parse_header<'a>(
                 module_comments: comments,
             };
 
-            let (module_id, _, resolved_header) = build_header(
-                arena,
-                info,
-                parse_state,
-                module_ids.clone(),
-                ident_ids_by_module.clone(),
-                module_timing,
-            )?;
+            let (module_id, _, resolved_header) =
+                build_header(info, parse_state, module_ids.clone(), module_timing)?;
 
             let filename = resolved_header.module_path.clone();
             let mut messages = Vec::with_capacity(packages.len() + 1);
@@ -4067,7 +4043,6 @@ fn parse_header<'a>(
                 parse_state,
                 module_ids,
                 exposes_ids.into_bump_slice(),
-                ident_ids_by_module,
                 &header,
                 comments,
                 module_timing,
@@ -4239,17 +4214,14 @@ struct HeaderInfo<'a> {
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     packages: &'a [Loc<PackageEntry<'a>>],
-    imports: &'a [Loc<ImportsEntry<'a>>],
     header_type: HeaderType<'a>,
     module_comments: &'a [CommentOrNewline<'a>],
 }
 
 fn build_header<'a>(
-    arena: &'a Bump,
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> Result<(ModuleId, PQModuleName<'a>, ModuleHeader<'a>), LoadingProblem<'a>> {
     let HeaderInfo {
@@ -4257,32 +4229,13 @@ fn build_header<'a>(
         is_root_module,
         opt_shorthand,
         packages,
-        imports,
         header_type,
         module_comments: header_comments,
     } = info;
 
-    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
-    let exposed_values = header_type.exposed_or_provided_values();
-    let num_exposes = exposed_values.len();
-    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
-        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let declared_name: ModuleName = match &header_type {
         HeaderType::App { .. } => ModuleName::APP.into(),
-        HeaderType::Platform {
-            opt_app_module_id, ..
-        } => {
-            // Add standard imports, if there is an app module.
-            // (There might not be, e.g. when running `roc check myplatform.roc` or
-            // when generating bindings.)
-            if let Some(app_module_id) = opt_app_module_id {
-                imported_modules.insert(*app_module_id, Region::zero());
-                deps_by_name.insert(
-                    PQModuleName::Unqualified(ModuleName::APP.into()),
-                    *app_module_id,
-                );
-            }
-
+        HeaderType::Platform { .. } => {
             // Platform modules do not have names. This is important because otherwise
             // those names end up in host-generated symbols, and they may contain
             // characters that hosts might not allow in their function names.
@@ -4302,231 +4255,23 @@ fn build_header<'a>(
         }
     };
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
-        Vec::with_capacity(imports.len());
-    let mut scope_size = 0;
-
-    let mut defined_values = vec![];
-    for loc_entry in imports {
-        if let Some((qualified_module_name, exposed)) = exposed_from_import(&loc_entry.value) {
-            scope_size += num_exposes;
-
-            imported.push((qualified_module_name, exposed, loc_entry.region));
-        }
-        if let Some(value) = value_def_from_imports(arena, &filename, loc_entry)? {
-            defined_values.push(value);
-        }
-    }
-
-    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
-
-    // Make sure the module_ids has ModuleIds for all our deps,
-    // then record those ModuleIds in can_module_ids for later.
-    let mut scope: MutMap<Ident, (Symbol, Region)> =
-        HashMap::with_capacity_and_hasher(scope_size, default_hasher());
-    let home: ModuleId;
-    let name: PQModuleName;
-    let symbols_from_requires;
-
-    let ident_ids = {
+    let (name, home) = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        name = match opt_shorthand {
+        let name = match opt_shorthand {
             Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
             None => PQModuleName::Unqualified(declared_name),
         };
-        home = module_ids.get_or_insert(&name);
+        let home = module_ids.get_or_insert(&name);
 
-        // Ensure this module has an entry in the ident_ids_by_module map.
-        ident_ids_by_module.get_or_insert(home);
-
-        // For each of our imports, add an entry to deps_by_name
-        //
-        // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
-        //
-        // Also build a list of imported_values_to_expose (like `bar` above.)
-        for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
-            let pq_module_name = qualified_module_name.into_pq_module_name(opt_shorthand);
-
-            let module_id = module_ids.get_or_insert(&pq_module_name);
-
-            imported_modules.insert(module_id, region);
-
-            deps_by_name.insert(pq_module_name, module_id);
-
-            // Add the new exposed idents to the dep module's IdentIds, so
-            // once that module later gets loaded, its lookups will resolve
-            // to the same symbols as the ones we're using here.
-            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-
-            for loc_ident in exposed_idents {
-                let ident_id = ident_ids.get_or_insert(loc_ident.value.as_str());
-                let symbol = Symbol::new(module_id, ident_id);
-
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&loc_ident.value));
-
-                scope.insert(loc_ident.value, (symbol, loc_ident.region));
-            }
-        }
-
-        symbols_from_requires = if let HeaderType::Platform {
-            requires,
-            requires_types,
-            opt_app_module_id,
-            ..
-        } = header_type
-        {
-            // If we don't have an app module id (e.g. because we're doing
-            // `roc check myplatform.roc` or because we're generating glue code),
-            // insert the `requires` symbols into the platform module's IdentIds.
-            //
-            // Otherwise, get them from the app module's IdentIds, because it
-            // should already have a symbol for each `requires` entry, and we
-            // want to make sure we're referencing the same symbols!
-            let module_id = opt_app_module_id.unwrap_or(home);
-            let mut symbols_from_requires = Vec::with_capacity(requires.len());
-            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-
-            for Loc {
-                value: entry,
-                region: _,
-            } in requires
-            {
-                let ident: Ident = entry.ident.value.into();
-                let ident_id = ident_ids.get_or_insert(entry.ident.value);
-                let symbol = Symbol::new(module_id, ident_id);
-
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident.clone()));
-
-                scope.insert(ident, (symbol, entry.ident.region));
-                symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
-            }
-
-            for entry in requires_types {
-                let str_entry: &str = entry.value.into();
-                let ident: Ident = str_entry.into();
-                let ident_id = ident_ids.get_or_insert(str_entry);
-                let symbol = Symbol::new(module_id, ident_id);
-
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident));
-                scope.insert(ident, (symbol, entry.region));
-            }
-
-            symbols_from_requires
-        } else {
-            Vec::new()
-        };
-
-        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
-
-        for loc_exposed in exposed_values.iter() {
-            // Use get_or_insert here because the ident_ids may already
-            // created an IdentId for this, when it was imported exposed
-            // in a dependent module.
-            //
-            // For example, if module A implements [B.{ foo }], then
-            // when we get here for B, `foo` will already have
-            // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
-            let symbol = Symbol::new(home, ident_id);
-
-            exposed.push(symbol);
-        }
-
-        // Generate IdentIds entries for all values this module provides,
-        // and treat them as `exposes` values for later purposes.
-        // This way, when we encounter them in Defs later, they already
-        // have an IdentIds entry.
-        //
-        // We must *not* add them to scope yet, or else the Defs will
-        // incorrectly think they're shadowing them!
-        if let HeaderType::Platform { provides, .. } = header_type {
-            exposed.reserve(provides.len());
-
-            for (loc_name, _loc_typed_ident) in provides.iter() {
-                // Use get_or_insert here because the ident_ids may already
-                // created an IdentId for this, when it was imported exposed
-                // in a dependent module.
-                //
-                // For example, if module A implements [B.{ foo }], then
-                // when we get here for B, `foo` will already have
-                // an IdentId. We must reuse that!
-                let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
-                let symbol = Symbol::new(home, ident_id);
-
-                exposed.push(symbol);
-            }
-        }
-
-        if cfg!(debug_assertions) {
-            home.register_debug_idents(ident_ids);
-        }
-
-        ident_ids.clone()
+        (name, home)
     };
-
-    // This module depends on all the modules it exposes. We need to load those in order
-    // to do things like report errors for them, generate docs for them, etc.
-    if info.is_root_module {
-        if let HeaderType::Platform {
-            exposes,
-            exposes_ids,
-            ..
-        }
-        | HeaderType::Package {
-            exposes,
-            exposes_ids,
-            ..
-        } = header_type
-        {
-            for (loc_module_name, module_id) in exposes.iter().zip(exposes_ids.iter().copied()) {
-                let module_name_str = loc_module_name.value.as_str();
-                let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
-
-                // We should never change an entry here. Either we should have no entry,
-                // or if we do have one, it should be unchanged by this insertion.
-                debug_assert_eq!(
-                    &module_id,
-                    deps_by_name.get(&pq_module_name).unwrap_or(&module_id),
-                    "Already had a deps_by_name entry for {:?}, but it was {:?} rather than the expected {:?}",
-                    pq_module_name,
-                    deps_by_name.get(&pq_module_name).unwrap(),
-                    module_id,
-                );
-                deps_by_name.insert(pq_module_name, module_id);
-            }
-        }
-    }
 
     let package_entries = packages
         .iter()
         .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
         .collect::<MutMap<_, _>>();
-
-    // Send the deps to the coordinator thread for processing,
-    // then continue on to parsing and canonicalizing defs.
-    //
-    // We always need to send these, even if deps is empty,
-    // because the coordinator thread needs to receive this message
-    // to decrement its "pending" count.
-    let mut package_qualified_imported_modules = MutSet::default();
-    for (pq_module_name, module_id) in &deps_by_name {
-        match pq_module_name {
-            PackageQualified::Unqualified(_) => {
-                package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(*module_id));
-            }
-            PackageQualified::Qualified(shorthand, _) => {
-                package_qualified_imported_modules
-                    .insert(PackageQualified::Qualified(shorthand, *module_id));
-            }
-        }
-    }
 
     // make sure when we run the bulitin modules in /compiler/builtins/roc that we
     // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
@@ -4549,19 +4294,12 @@ fn build_header<'a>(
             module_id: home,
             module_path: filename,
             is_root_module,
-            exposed_ident_ids: ident_ids,
             packages: package_entries,
-            imported_modules,
-            package_qualified_imported_modules,
-            deps_by_name,
-            exposes: exposed,
             parse_state,
-            exposed_imports: scope,
-            symbols_from_requires,
             header_type,
             header_comments,
             module_timing,
-            defined_values,
+            opt_shorthand,
         },
     ))
 }
@@ -5173,19 +4911,11 @@ fn build_package_header<'a>(
         is_root_module,
         opt_shorthand,
         packages,
-        imports: &[],
         header_type,
         module_comments: comments,
     };
 
-    build_header(
-        arena,
-        info,
-        parse_state,
-        module_ids,
-        ident_ids_by_module,
-        module_timing,
-    )
+    build_header(info, parse_state, module_ids, module_timing)
 }
 
 fn build_platform_header<'a>(
@@ -5196,7 +4926,6 @@ fn build_platform_header<'a>(
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     exposes_ids: &'a [ModuleId],
-    ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
@@ -5221,7 +4950,6 @@ fn build_platform_header<'a>(
         arena,
     );
     let requires_types = unspace(arena, header.requires.item.rigids.items);
-    let imports = unspace(arena, header.imports.item.items);
 
     let header_type = HeaderType::Platform {
         // A config_shorthand of "" should be fine
@@ -5239,19 +4967,11 @@ fn build_platform_header<'a>(
         is_root_module,
         opt_shorthand,
         packages: &[],
-        imports,
         header_type,
         module_comments: comments,
     };
 
-    build_header(
-        arena,
-        info,
-        parse_state,
-        module_ids,
-        ident_ids_by_module,
-        module_timing,
-    )
+    build_header(info, parse_state, module_ids, module_timing)
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -5275,7 +4995,7 @@ fn canonicalize_and_constrain<'a>(
         header_type,
         exposed_ident_ids,
         parsed_defs,
-        exposed_imports,
+        initial_scope,
         imported_modules,
         mut module_timing,
         symbols_from_requires,
@@ -5289,6 +5009,7 @@ fn canonicalize_and_constrain<'a>(
     let parsed_defs = arena.alloc(parsed_defs);
 
     let mut var_store = VarStore::default();
+
     let module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
@@ -5301,11 +5022,12 @@ fn canonicalize_and_constrain<'a>(
         &dep_idents,
         aliases,
         imported_abilities_state,
-        exposed_imports,
+        initial_scope,
         exposed_symbols,
         &symbols_from_requires,
         &mut var_store,
     );
+
     let mut types = Types::new();
 
     // _after has an underscore because it's unused in --release builds
@@ -5451,12 +5173,17 @@ fn canonicalize_and_constrain<'a>(
     }
 }
 
-fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, LoadingProblem<'a>> {
+fn parse<'a>(
+    arena: &'a Bump,
+    header: ModuleHeader<'a>,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let mut module_timing = header.module_timing;
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let mut parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
+    let parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
         Ok((_, success, _state)) => success,
         Err((_, fail)) => {
             return Err(LoadingProblem::ParsingFailed(
@@ -5464,10 +5191,6 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
             ));
         }
     };
-    for value in header.defined_values.into_iter() {
-        // TODO: should these have a region?
-        parsed_defs.push_value_def(value, Region::zero(), &[], &[]);
-    }
 
     // Record the parse end time once, to avoid checking the time a second time
     // immediately afterward (for the beginning of canonicalization).
@@ -5475,7 +5198,245 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
     module_timing.parse_body = parse_end.duration_since(parse_start);
 
-    let imported_modules = header.imported_modules;
+    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
+    let exposed_values = header.header_type.exposed_or_provided_values();
+    let num_exposes = exposed_values.len();
+    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
+        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
+
+    match &header.header_type {
+        HeaderType::Platform {
+            opt_app_module_id, ..
+        } => {
+            // Add standard imports, if there is an app module.
+            // (There might not be, e.g. when running `roc check myplatform.roc` or
+            // when generating bindings.)
+            if let Some(app_module_id) = opt_app_module_id {
+                imported_modules.insert(*app_module_id, Region::zero());
+                deps_by_name.insert(
+                    PQModuleName::Unqualified(ModuleName::APP.into()),
+                    *app_module_id,
+                );
+            }
+        }
+        HeaderType::App { .. }
+        | HeaderType::Package { .. }
+        | HeaderType::Interface { .. }
+        | HeaderType::Builtin { .. }
+        | HeaderType::Hosted { .. } => {}
+    };
+
+    let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
+
+    for (index, either_index) in parsed_defs.tags.iter().enumerate() {
+        if let Err(value_index) = either_index.split() {
+            let value_def = &parsed_defs.value_defs[value_index.index()];
+            let region = parsed_defs.regions[index];
+
+            match value_def {
+                ValueDef::Annotation(..) => {}
+
+                ValueDef::ModuleImport(import) => {
+                    let qualified_module_name = QualifiedModuleName {
+                        opt_package: import.name.value.package,
+                        module: import.name.value.name.into(),
+                    };
+
+                    imported.push((qualified_module_name, region));
+                }
+
+                ValueDef::IngestedFileImport(_ingested_file) => {
+                    todo!("[modules-revamp] do we need to do anything here?")
+                }
+
+                _ => {
+
+                    // [modules-revamp] TODO: traverse exprs
+                }
+            }
+        }
+    }
+
+    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
+
+    // Make sure the module_ids has ModuleIds for all our deps,
+    // then record those ModuleIds in can_module_ids for later.
+    let mut scope: MutMap<Ident, (Symbol, Region)> = HashMap::with_hasher(default_hasher());
+    let symbols_from_requires;
+
+    let ident_ids = {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (*module_ids).lock();
+        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
+
+        // Ensure this module has an entry in the ident_ids_by_module map.
+        ident_ids_by_module.get_or_insert(header.module_id);
+
+        // For each of our imports, add an entry to deps_by_name
+        //
+        // e.g. for `import pf.Foo exposing [bar]`, add `Foo` to deps_by_name
+        //
+        // Also build a list of imported_values_to_expose (like `bar` above.)
+        for (qualified_module_name, region) in imported.into_iter() {
+            let pq_module_name = qualified_module_name.into_pq_module_name(header.opt_shorthand);
+
+            let module_id = module_ids.get_or_insert(&pq_module_name);
+
+            imported_modules.insert(module_id, region);
+
+            deps_by_name.insert(pq_module_name, module_id);
+        }
+
+        symbols_from_requires = if let HeaderType::Platform {
+            requires,
+            requires_types,
+            opt_app_module_id,
+            ..
+        } = header.header_type
+        {
+            // If we don't have an app module id (e.g. because we're doing
+            // `roc check myplatform.roc` or because we're generating glue code),
+            // insert the `requires` symbols into the platform module's IdentIds.
+            //
+            // Otherwise, get them from the app module's IdentIds, because it
+            // should already have a symbol for each `requires` entry, and we
+            // want to make sure we're referencing the same symbols!
+            let module_id = opt_app_module_id.unwrap_or(header.module_id);
+            let mut symbols_from_requires = Vec::with_capacity(requires.len());
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
+
+            for Loc {
+                value: entry,
+                region: _,
+            } in requires
+            {
+                let ident: Ident = entry.ident.value.into();
+                let ident_id = ident_ids.get_or_insert(entry.ident.value);
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, entry.ident.region));
+                symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
+            }
+
+            for entry in requires_types {
+                let str_entry: &str = entry.value.into();
+                let ident: Ident = str_entry.into();
+                let ident_id = ident_ids.get_or_insert(str_entry);
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident));
+                scope.insert(ident, (symbol, entry.region));
+            }
+
+            symbols_from_requires
+        } else {
+            Vec::new()
+        };
+
+        let ident_ids = ident_ids_by_module.get_mut(&header.module_id).unwrap();
+
+        for loc_exposed in exposed_values.iter() {
+            // Use get_or_insert here because the ident_ids may already
+            // created an IdentId for this, when it was imported exposed
+            // in a dependent module.
+            //
+            // For example, if module A implements [B.{ foo }], then
+            // when we get here for B, `foo` will already have
+            // an IdentId. We must reuse that!
+            let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
+            let symbol = Symbol::new(header.module_id, ident_id);
+
+            exposed.push(symbol);
+        }
+
+        // Generate IdentIds entries for all values this module provides,
+        // and treat them as `exposes` values for later purposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        if let HeaderType::Platform { provides, .. } = header.header_type {
+            exposed.reserve(provides.len());
+
+            for (loc_name, _loc_typed_ident) in provides.iter() {
+                // Use get_or_insert here because the ident_ids may already
+                // created an IdentId for this, when it was imported exposed
+                // in a dependent module.
+                //
+                // For example, if module A implements [B.{ foo }], then
+                // when we get here for B, `foo` will already have
+                // an IdentId. We must reuse that!
+                let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                let symbol = Symbol::new(header.module_id, ident_id);
+
+                exposed.push(symbol);
+            }
+        }
+
+        if cfg!(debug_assertions) {
+            header.module_id.register_debug_idents(ident_ids);
+        }
+
+        ident_ids.clone()
+    };
+
+    // This module depends on all the modules it exposes. We need to load those in order
+    // to do things like report errors for them, generate docs for them, etc.
+    if header.is_root_module {
+        if let HeaderType::Platform {
+            exposes,
+            exposes_ids,
+            ..
+        }
+        | HeaderType::Package {
+            exposes,
+            exposes_ids,
+            ..
+        } = header.header_type
+        {
+            for (loc_module_name, module_id) in exposes.iter().zip(exposes_ids.iter().copied()) {
+                let module_name_str = loc_module_name.value.as_str();
+                let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
+
+                // We should never change an entry here. Either we should have no entry,
+                // or if we do have one, it should be unchanged by this insertion.
+                debug_assert_eq!(
+                    &module_id,
+                    deps_by_name.get(&pq_module_name).unwrap_or(&module_id),
+                    "Already had a deps_by_name entry for {:?}, but it was {:?} rather than the expected {:?}",
+                    pq_module_name,
+                    deps_by_name.get(&pq_module_name).unwrap(),
+                    module_id,
+                );
+                deps_by_name.insert(pq_module_name, module_id);
+            }
+        }
+    }
+
+    // Send the deps to the coordinator thread for processing,
+    // then continue on to parsing and canonicalizing defs.
+    //
+    // We always need to send these, even if deps is empty,
+    // because the coordinator thread needs to receive this message
+    // to decrement its "pending" count.
+    let mut package_qualified_imported_modules = MutSet::default();
+    for (pq_module_name, module_id) in &deps_by_name {
+        match pq_module_name {
+            PackageQualified::Unqualified(_) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Unqualified(*module_id));
+            }
+            PackageQualified::Qualified(shorthand, _) => {
+                package_qualified_imported_modules
+                    .insert(PackageQualified::Qualified(shorthand, *module_id));
+            }
+        }
+    }
 
     // SAFETY: By this point we've already incrementally verified that there
     // are no UTF-8 errors in these bytes. If there had been any UTF-8 errors,
@@ -5484,12 +5445,8 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
     let ModuleHeader {
         module_id,
-        deps_by_name,
-        exposed_ident_ids,
-        exposed_imports,
         module_path,
         header_type,
-        symbols_from_requires,
         header_comments: header_docs,
         ..
     } = header;
@@ -5501,8 +5458,11 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         module_timing,
         deps_by_name,
         imported_modules,
-        exposed_ident_ids,
-        exposed_imports,
+        packages: header.packages,
+        package_qualified_imported_modules,
+        exposed_ident_ids: ident_ids,
+        initial_scope: scope,
+        exposes: exposed,
         parsed_defs,
         symbols_from_requires,
         header_type,
@@ -5510,107 +5470,6 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     };
 
     Ok(Msg::Parsed(parsed))
-}
-
-fn exposed_from_import<'a>(
-    entry: &ImportsEntry<'a>,
-) -> Option<(QualifiedModuleName<'a>, Vec<Loc<Ident>>)> {
-    use roc_parse::header::ImportsEntry::*;
-
-    match entry {
-        Module(module_name, exposes) => {
-            let mut exposed = Vec::with_capacity(exposes.len());
-
-            for loc_entry in exposes.iter() {
-                exposed.push(loc_entry.map(ident_from_exposed));
-            }
-
-            let qualified_module_name = QualifiedModuleName {
-                opt_package: None,
-                module: module_name.as_str().into(),
-            };
-
-            Some((qualified_module_name, exposed))
-        }
-
-        Package(package_name, module_name, exposes) => {
-            let mut exposed = Vec::with_capacity(exposes.len());
-
-            for loc_entry in exposes.iter() {
-                exposed.push(loc_entry.map(ident_from_exposed));
-            }
-
-            let qualified_module_name = QualifiedModuleName {
-                opt_package: Some(package_name),
-                module: module_name.as_str().into(),
-            };
-
-            Some((qualified_module_name, exposed))
-        }
-
-        IngestedFile(_, _) => None,
-    }
-}
-
-fn value_def_from_imports<'a>(
-    arena: &'a Bump,
-    header_path: &Path,
-    entry: &Loc<ImportsEntry<'a>>,
-) -> Result<Option<ValueDef<'a>>, LoadingProblem<'a>> {
-    use roc_parse::header::ImportsEntry::*;
-
-    let value = match entry.value {
-        Module(_, _) => None,
-        Package(_, _, _) => None,
-        IngestedFile(ingested_path, typed_ident) => {
-            let file_path = if let StrLiteral::PlainLine(ingested_path) = ingested_path {
-                let mut file_path = header_path.to_path_buf();
-                // Remove the header file name and push the new path.
-                file_path.pop();
-                file_path.push(ingested_path);
-
-                match fs::metadata(&file_path) {
-                    Ok(md) => {
-                        if md.is_dir() {
-                            return Err(LoadingProblem::FileProblem {
-                                filename: file_path,
-                                // TODO: change to IsADirectory once that is stable.
-                                error: io::ErrorKind::InvalidInput,
-                            });
-                        }
-                        file_path
-                    }
-                    Err(e) => {
-                        return Err(LoadingProblem::FileProblem {
-                            filename: file_path,
-                            error: e.kind(),
-                        });
-                    }
-                }
-            } else {
-                todo!(
-                    "Only plain strings are supported. Other cases should be made impossible here"
-                );
-            };
-            let typed_ident = typed_ident.extract_spaces().item;
-            let ident = arena.alloc(typed_ident.ident.map_owned(Pattern::Identifier));
-            let ann_type = arena.alloc(typed_ident.ann);
-            Some(ValueDef::AnnotatedBody {
-                ann_pattern: ident,
-                ann_type,
-                comment: None,
-                body_pattern: ident,
-                body_expr: arena
-                    .alloc(entry.with_value(Expr::IngestedFile(arena.alloc(file_path), ann_type))),
-            })
-        }
-    };
-
-    Ok(value)
-}
-
-fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
-    entry.extract_spaces().item.as_str().into()
 }
 
 fn make_specializations<'a>(
@@ -6312,7 +6171,11 @@ fn run_task<'a>(
             ident_ids_by_module,
         )
         .map(|HeaderOutput { msg, .. }| msg),
-        Parse { header } => parse(arena, header),
+        Parse {
+            header,
+            module_ids,
+            ident_ids_by_module,
+        } => parse(arena, header, module_ids, ident_ids_by_module),
         CanonicalizeAndConstrain {
             parsed,
             module_ids,

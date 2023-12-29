@@ -282,7 +282,7 @@ pub fn canonicalize_module_defs<'a>(
     dep_idents: &'a IdentIdsByModule,
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
-    exposed_imports: MutMap<Ident, (Symbol, Region)>,
+    initial_scope: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
@@ -316,18 +316,13 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut rigid_variables = RigidVariables::default();
 
-    // Exposed values are treated like defs that appear before any others, e.g.
-    //
-    // imports [Foo.{ bar, baz }]
-    //
-    // ...is basically the same as if we'd added these extra defs at the start of the module:
-    //
-    // bar = Foo.bar
-    // baz = Foo.baz
+    // Iniital scope values are treated like defs that appear before any others.
+    // They include builtin types that are automatically imported, and for a platform
+    // package, the required values from the app.
     //
     // Here we essentially add those "defs" to "the beginning of the module"
     // by canonicalizing them right before we canonicalize the actual ast::Def nodes.
-    for (ident, (symbol, region)) in exposed_imports {
+    for (ident, (symbol, region)) in initial_scope {
         let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
@@ -335,7 +330,7 @@ pub fn canonicalize_module_defs<'a>(
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
-                    // exposes [Bar.{ baz }] then insert Foo.baz as the key, so when
+                    // Bar exposes [baz] then insert Foo.baz as the key, so when
                     // anything references `baz` in this Foo module, it will resolve to Bar.baz.
                     can_exposed_imports.insert(symbol, region);
                 }

@@ -30,27 +30,27 @@ interface Decode
         fromBytes,
         mapResult,
     ]
-    imports [
-        List,
-        Result.{ Result },
-        Num.{
-            U8,
-            U16,
-            U32,
-            U64,
-            U128,
-            I8,
-            I16,
-            I32,
-            I64,
-            I128,
-            Nat,
-            F32,
-            F64,
-            Dec,
-        },
-        Bool.{ Bool },
-    ]
+    imports []
+
+import List
+import Result exposing [Result]
+import Num exposing [
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Nat,
+    F32,
+    F64,
+    Dec,
+]
+import Bool exposing [Bool]
 
 ## Error types when decoding a `List U8` of utf-8 bytes using a [Decoder]
 DecodeError : [TooShort]

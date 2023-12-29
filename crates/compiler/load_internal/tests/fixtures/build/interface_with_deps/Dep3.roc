@@ -1,10 +1,10 @@
-interface Dep3.Blah
+interface Dep3
     exposes [one, two, foo, bar]
-    imports [Dep3.Other]
+    imports []
 
 one = 1
 
 two = 2
 
 foo = "foo from Dep3"
-bar = Dep3.Other.bar
+bar = "bar from Dep3"

@@ -168,7 +168,6 @@ macro_rules! keywords {
 
 keywords! {
     ExposesKeyword => "exposes",
-    ImportsKeyword => "imports",
     WithKeyword => "with",
     GeneratesKeyword => "generates",
     PackageKeyword => "package",
@@ -176,6 +175,8 @@ keywords! {
     RequiresKeyword => "requires",
     ProvidesKeyword => "provides",
     ToKeyword => "to",
+    // [modules-revamp] TODO: Remove
+    ImportsKeyword => "imports",
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

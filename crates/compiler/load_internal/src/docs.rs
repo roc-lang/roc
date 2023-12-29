@@ -251,6 +251,12 @@ fn generate_entry_docs(
                 ValueDef::ExpectFx { .. } => {
                     // Don't generate docs for `expect-fx`s
                 }
+                ValueDef::ModuleImport { .. } => {
+                    // Don't generate docs for module imports
+                }
+                ValueDef::IngestedFileImport { .. } => {
+                    // Don't generate docs for ingested file imports
+                }
             },
             Ok(type_index) => match &defs.type_defs[type_index.index()] {
                 TypeDef::Alias {

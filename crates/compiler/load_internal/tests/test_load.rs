@@ -344,7 +344,9 @@ fn import_transitive_alias() {
             "Other",
             indoc!(
                 r"
-                        interface Other exposes [empty] imports [RBTree]
+                        interface Other exposes [empty] imports []
+
+                        import RBTree
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
@@ -831,7 +833,9 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Main",
             indoc!(
                 r"
-                    interface Main exposes [twenty, readAge] imports [Age.{ Age }]
+                    interface Main exposes [twenty, readAge] imports []
+
+                    import Age exposing [Age]
 
                     twenty = @Age 20
 
@@ -851,13 +855,13 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 The unwrapped opaque type Age referenced here:
 
-                3│  twenty = @Age 20
+                5│  twenty = @Age 20
                              ^^^^
 
                 is imported from another module:
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                            ^^^
+                3│  import Age exposing [Age]
+                                         ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
@@ -865,24 +869,15 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 The unwrapped opaque type Age referenced here:
 
-                5│  readAge = \@Age n -> n
+                7│  readAge = \@Age n -> n
                                ^^^^
 
                 is imported from another module:
 
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                            ^^^
+                3│  import Age exposing [Age]
+                                         ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
-
-                ── UNUSED IMPORT in tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ──
-
-                Nothing from Age is used in this module.
-
-                1│  interface Main exposes [twenty, readAge] imports [Age.{ Age }]
-                                                                      ^^^^^^^^^^^
-
-                Since Age isn't used, you don't need to import it.
                 "
         ),
         "\n{}",
@@ -962,8 +957,10 @@ fn import_builtin_in_platform_and_check_app() {
                         requires {} { main : Str }
                         exposes []
                         packages {}
-                        imports [Str]
+                        imports []
                         provides [mainForHost]
+
+                    import Str
 
                     mainForHost : Str
                     mainForHost = main
@@ -1029,7 +1026,9 @@ fn module_cyclic_import_itself() {
         "Age",
         indoc!(
             r"
-            interface Age exposes [] imports [Age]
+            interface Age exposes [] imports []
+
+            import Age
             "
         ),
     )];
@@ -1066,7 +1065,8 @@ fn module_cyclic_import_transitive() {
             "Age",
             indoc!(
                 r"
-                interface Age exposes [] imports [Person]
+                interface Age exposes [] imports []
+                import Person
                 "
             ),
         ),
@@ -1074,7 +1074,8 @@ fn module_cyclic_import_transitive() {
             "Person",
             indoc!(
                 r"
-                interface Person exposes [] imports [Age]
+                interface Person exposes [] imports []
+                import Age
                 "
             ),
         ),
@@ -1101,48 +1102,6 @@ fn module_cyclic_import_transitive() {
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
             itself?"
-        ),
-        "\n{}",
-        err
-    );
-}
-
-#[test]
-fn nested_module_has_incorrect_name() {
-    let modules = vec![
-        (
-            "Dep/Foo.roc",
-            indoc!(
-                r"
-                interface Foo exposes [] imports []
-                "
-            ),
-        ),
-        (
-            "I.roc",
-            indoc!(
-                r"
-                interface I exposes [] imports [Dep.Foo]
-                "
-            ),
-        ),
-    ];
-
-    let err = multiple_modules("nested_module_has_incorrect_name", modules).unwrap_err();
-    assert_eq!(
-        err,
-        indoc!(
-            r"
-            ── INCORRECT MODULE NAME in tmp/nested_module_has_incorrect_name/Dep/Foo.roc ───
-
-            This module has a different name than I expected:
-
-            1│  interface Foo exposes [] imports []
-                          ^^^
-
-            Based on the nesting and use of this module, I expect it to have name
-
-                Dep.Foo"
         ),
         "\n{}",
         err
