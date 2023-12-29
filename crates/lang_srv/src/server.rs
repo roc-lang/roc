@@ -4,6 +4,7 @@ use log::{debug, trace};
 use registry::Registry;
 use std::future::Future;
 use std::time::Duration;
+use std::u8;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -142,7 +143,9 @@ impl RocServerState {
         let inner_ref = self;
         let updating_result = async {
             //This reduces wasted computation by waiting to allow a new change to come in and update the version before we check, but does delay the final analysis. Ideally this would be replaced with cancelling the analysis when a new one comes in.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let debounce_ms = std::env::var("ROCLS_DEBOUNCE")
+                .map_or(100, |a| str::parse::<u64>(&a).unwrap_or(100));
+            tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
             let is_latest = inner_ref
                 .registry
                 .get_latest_version(fi)
@@ -351,6 +354,7 @@ mod tests {
     };
 
     use expect_test::expect;
+    use log::info;
     use tokio::{join, spawn};
 
     use super::*;
@@ -375,10 +379,9 @@ mod tests {
     }
 
     const DOC_LIT: &str = indoc! {r#"
-        app "fizz-buzz"
-            packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.5.0/Cufzl36_SnJ4QbOoEmiJ5dIpUxBvdB3NEySvuH82Wio.tar.br" }
-            imports [pf.Stdout,pf.Task.{ Task, await },]
-            provides [main] to pf
+        interface Test
+          exposes []
+          imports []
         "#};
     static INIT: Once = Once::new();
     async fn test_setup(doc: String) -> (RocServerState, Url) {
@@ -388,7 +391,8 @@ mod tests {
                 .filter_level(log::LevelFilter::Trace)
                 .init();
         });
-        let url = Url::parse("file:/test.roc").unwrap();
+        info!("doc is:\n{0}", doc);
+        let url = Url::parse("file:/Test.roc").unwrap();
 
         let inner = RocServerState::new();
         //setup the file
@@ -403,8 +407,7 @@ mod tests {
             rec=\a,b->{one:{potato:\d->d,leak:59},two:b}
             rectest= 
               value= rec 1 2
-              va
-            "#};
+              va"#};
         let (inner, url) = test_setup(doc.clone()).await;
         static INNER_CELL: OnceLock<RocServerState> = OnceLock::new();
         INNER_CELL.set(inner).unwrap();
@@ -413,7 +416,7 @@ mod tests {
 
         let inner = INNER_CELL.get().unwrap();
         let url = URL_CELL.get().unwrap();
-        let position = Position::new(8, 8);
+        let position = Position::new(6, 8);
         //setup the file
         inner.change(&url, doc.clone(), 1).await.unwrap();
 
@@ -428,8 +431,10 @@ mod tests {
             get_completion_labels(reg, &url, position).await
         });
         // Simulate two changes coming in with a slight delay
+        //set the debounce to 0 so we can guarntee that these will both be started
+        std::env::set_var("ROCLS_DEBOUNCE", "0");
         let a = spawn(inner.change(&url, doc.clone() + "lue.o", 6));
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
         let rest = spawn(inner.change(&url, doc.clone() + "lue.on", 7));
 
         let done = join!(a1, a2, a3, a4, comp, a, rest);
@@ -486,9 +491,9 @@ mod tests {
             main =
               when a is
                 inn as outer -> 
-                "#};
+                  "#};
         let (inner, url) = test_setup(suffix.clone()).await;
-        let position = Position::new(8, 21);
+        let position = Position::new(6, 7);
         let reg = &inner.registry;
 
         let change = suffix.clone() + "o";
@@ -526,10 +531,10 @@ mod tests {
             main =
               when a is
                 {one,two} as outer -> 
-            "#};
+                  "#};
 
         let (inner, url) = test_setup(doc.clone()).await;
-        let position = Position::new(8, 27);
+        let position = Position::new(6, 7);
         let reg = &inner.registry;
 
         let change = doc.clone() + "o";
