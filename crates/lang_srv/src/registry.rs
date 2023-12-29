@@ -62,7 +62,16 @@ impl Registry {
         let url = document.url().clone();
         match documents.get_mut(&url) {
             Some(old_doc) => {
-                if document.type_checked() {
+                //If the latest doc_info has a version higher than what we are setting we shouldn't overwrite the document, but we can update the last_good_document if the parse went well
+                if old_doc.info.version > document.doc_info.version {
+                    if document.type_checked() {
+                        *old_doc = DocumentPair {
+                            info: old_doc.info.clone(),
+                            latest_document: old_doc.latest_document.clone(),
+                            last_good_document: document,
+                        };
+                    }
+                } else if document.type_checked() {
                     *old_doc = DocumentPair::new(document.clone(), document);
                 } else {
                     debug!(
