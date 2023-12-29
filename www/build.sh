@@ -99,6 +99,10 @@ $roc version
 echo 'Building site markdown content'
 $roc run www/main.roc -- www/content/ www/build/
 
+echo "Adding github link examples"
+source add-github-link-examples.sh
+add_github_link_examples www/build/examples
+
 # cleanup
 rm -rf roc_nightly roc_releases.json
 
