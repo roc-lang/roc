@@ -276,9 +276,7 @@ fn make_completion_item(
         ..Default::default()
     }
 }
-///Gets completion items using the visitor pattern,
-///This will walk through declarations that would be accessible from the provided position adding them to a list of completion items until all accessible declarations have been fully explored
-
+/// Walks through declarations that would be accessible from the provided position adding them to a list of completion items until all accessible declarations have been fully explored
 pub fn get_completion_items(
     position: Position,
     prefix: String,
