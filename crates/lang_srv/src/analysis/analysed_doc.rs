@@ -241,6 +241,7 @@ impl AnalyzedDocument {
                 .map(|a| a.chars().nth(0).unwrap().is_uppercase())
                 .unwrap_or(false);
             if is_module_completion {
+                //TODO: this doesn't work with builtins for some reason
                 Some(get_upper_case_completion_items(
                     position,
                     symbol_prefix,
@@ -283,6 +284,7 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     module_id,
                     interns,
+                    exposed_imports,
                 );
                 Some(completions)
             }

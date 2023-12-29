@@ -105,7 +105,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         abilities_store,
         docs_by_module,
         imported_modules,
-        mut exposed_imports,
+        exposed_imports,
         mut imports,
         exposed_types_storage,
         mut exposes,
@@ -116,6 +116,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         subs: solved.into_inner(),
         abilities_store,
     });
+    debug!("exposed_imports: {:#?}", &exposed_imports);
     let exposed_imports: HashMap<_, _> = exposed_imports
         .into_iter()
         .map(|(id, symbols)| {
@@ -124,7 +125,10 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
                 symbols
                     .into_iter()
                     .filter_map(|(symbol, _)| {
-                        exposes.get(&id)?.iter().find(|(symb, _)| symb == &symbol)
+                        exposes.get(&id)?.iter().find(|(symb, _)| {
+                            //TODO this seems to not be comparing proprely so we aren't getting any exposed imports
+                            symb == &symbol
+                        })
                     })
                     .cloned()
                     .collect::<Vec<_>>(),

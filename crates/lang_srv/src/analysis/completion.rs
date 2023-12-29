@@ -308,8 +308,11 @@ pub fn get_completion_items(
     subs: &mut Subs,
     module_id: &ModuleId,
     interns: &Interns,
+    exposed_imports: &Vec<(Symbol, Variable)>,
 ) -> Vec<CompletionItem> {
-    let completions = get_completions(position, decls, prefix, interns);
+    let mut completions = get_completions(position, decls, prefix, interns);
+    completions.extend(exposed_imports);
+    debug!("extended with:{:#?}", exposed_imports);
     make_completion_items(
         subs,
         module_id,
@@ -340,15 +343,16 @@ pub fn get_upper_case_completion_items(
                 format!("`{0}` module", mod_name),
             )]
         } else if prefix.starts_with(&mod_name) {
-            make_completion_items(
-                subs,
-                module_id,
-                interns,
-                vars.clone()
-                    .iter()
-                    .map(|(sym, vars)| (sym.as_str(interns).to_string(), vars.clone()))
-                    .collect::<Vec<_>>(),
-            )
+            vars.clone()
+                .iter()
+                .map(|(sym, vars)| {
+                    CompletionItem::new_simple(
+                        sym.as_str(interns).to_string(),
+                        //TODO! I need to get subs from the module we are completing from
+                        "builtin".to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
         } else {
             vec![]
         }
