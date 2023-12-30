@@ -67,6 +67,8 @@ result
 # It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
 /**/Cargo.lock
 !/Cargo.lock
+!/examples/static-site-gen/platform/Cargo.lock
+# static-site-gen exception is because of https://github.com/tkaitchuck/aHash/issues/195
 
 # snapshot tests temp file
 *.pending-snap
