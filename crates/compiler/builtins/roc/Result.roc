@@ -92,3 +92,31 @@ onErr = \result, transform ->
     when result is
         Ok v -> Ok v
         Err e -> transform e
+
+## Changes value of Ok. Can be used instead of `when f is`.
+## ```
+## Result.onErr (Ok 123) "something"
+## Result.onErr (Err 456) "something"
+## ```
+setOk : Result ok err, dif -> Result dif err
+setOk = \result, ok ->
+    when result is
+        Ok _ -> Ok ok
+        Err e -> Err e
+
+expect setOk (Ok 123) "something" == Ok "something"
+expect setOk (Err 456) "something" == Err 456
+
+## Changes value of Err. Can be used instead of `when f is`.
+## ```
+## Result.onErr (Ok 123) "something"
+## Result.onErr (Err 456) "something"
+## ```
+setErr : Result ok err, dif -> Result ok dif
+setErr = \result, err ->
+    when result is
+        Ok v -> Ok v
+        Err _ -> Err err
+
+expect setErr (Ok 123) "something" == Ok 123
+expect setErr (Err 456) "something" == Err "something"
