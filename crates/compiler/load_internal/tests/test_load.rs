@@ -325,7 +325,7 @@ fn import_transitive_alias() {
         (
             "RBTree",
             indoc!(
-                r#"
+                r"
                         interface RBTree exposes [RedBlackTree, empty] imports []
 
                         # The color of a node. Leaves are considered Black.
@@ -337,18 +337,18 @@ fn import_transitive_alias() {
                         empty : RedBlackTree k v
                         empty =
                             Empty
-                    "#
+                    "
             ),
         ),
         (
             "Other",
             indoc!(
-                r#"
+                r"
                         interface Other exposes [empty] imports [RBTree]
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
-                    "#
+                    "
             ),
         ),
     ];
@@ -628,11 +628,11 @@ fn parse_problem() {
     let modules = vec![(
         "Main",
         indoc!(
-            r#"
+            r"
                 interface Main exposes [main] imports []
 
                 main = [
-                "#
+                "
         ),
     )];
 
@@ -820,23 +820,23 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         (
             "Age",
             indoc!(
-                r#"
+                r"
                     interface Age exposes [Age] imports []
 
                     Age := U32
-                    "#
+                    "
             ),
         ),
         (
             "Main",
             indoc!(
-                r#"
+                r"
                     interface Main exposes [twenty, readAge] imports [Age.{ Age }]
 
                     twenty = @Age 20
 
                     readAge = \@Age n -> n
-                    "#
+                    "
             ),
         ),
     ];
@@ -846,7 +846,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
     assert_eq!(
         err,
         indoc!(
-            r#"
+            r"
                 ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
@@ -883,7 +883,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                                                                       ^^^^^^^^^^^
 
                 Since Age isn't used, you don't need to import it.
-                "#
+                "
         ),
         "\n{}",
         err
@@ -993,11 +993,11 @@ fn module_doesnt_match_file_path() {
     let modules = vec![(
         "Age",
         indoc!(
-            r#"
+            r"
                 interface NotAge exposes [Age] imports []
 
                 Age := U32
-                "#
+                "
         ),
     )];
 
@@ -1005,7 +1005,7 @@ fn module_doesnt_match_file_path() {
     assert_eq!(
         err,
         indoc!(
-            r#"
+            r"
             ── WEIRD MODULE NAME ─────────────────── tmp/module_doesnt_match_file_path/Age ─
 
             This module name does not correspond with the file path it is defined
@@ -1016,7 +1016,7 @@ fn module_doesnt_match_file_path() {
 
             Module names must correspond with the file paths they are defined in.
             For example, I expect to see BigNum defined in BigNum.roc, or Math.Sin
-            defined in Math/Sin.roc."#
+            defined in Math/Sin.roc."
         ),
         "\n{}",
         err
@@ -1028,9 +1028,9 @@ fn module_cyclic_import_itself() {
     let modules = vec![(
         "Age",
         indoc!(
-            r#"
+            r"
             interface Age exposes [] imports [Age]
-            "#
+            "
         ),
     )];
 
@@ -1038,7 +1038,7 @@ fn module_cyclic_import_itself() {
     assert_eq!(
         err,
         indoc!(
-            r#"
+            r"
             ── IMPORT CYCLE ────────────────────────── tmp/module_cyclic_import_itself/Age ─
 
             I can't compile Age because it depends on itself through the following
@@ -1052,7 +1052,7 @@ fn module_cyclic_import_itself() {
 
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
-            itself?"#
+            itself?"
         ),
         "\n{}",
         err
@@ -1065,17 +1065,17 @@ fn module_cyclic_import_transitive() {
         (
             "Age",
             indoc!(
-                r#"
+                r"
                 interface Age exposes [] imports [Person]
-                "#
+                "
             ),
         ),
         (
             "Person",
             indoc!(
-                r#"
+                r"
                 interface Person exposes [] imports [Age]
-                "#
+                "
             ),
         ),
     ];
@@ -1084,7 +1084,7 @@ fn module_cyclic_import_transitive() {
     assert_eq!(
         err,
         indoc!(
-            r#"
+            r"
             ── IMPORT CYCLE ────────────────── tmp/module_cyclic_import_transitive/Age.roc ─
 
             I can't compile Age because it depends on itself through the following
@@ -1100,7 +1100,7 @@ fn module_cyclic_import_transitive() {
 
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
-            itself?"#
+            itself?"
         ),
         "\n{}",
         err
@@ -1113,17 +1113,17 @@ fn nested_module_has_incorrect_name() {
         (
             "Dep/Foo.roc",
             indoc!(
-                r#"
+                r"
                 interface Foo exposes [] imports []
-                "#
+                "
             ),
         ),
         (
             "I.roc",
             indoc!(
-                r#"
+                r"
                 interface I exposes [] imports [Dep.Foo]
-                "#
+                "
             ),
         ),
     ];
@@ -1132,7 +1132,7 @@ fn nested_module_has_incorrect_name() {
     assert_eq!(
         err,
         indoc!(
-            r#"
+            r"
             ── INCORRECT MODULE NAME ──── tmp/nested_module_has_incorrect_name/Dep/Foo.roc ─
 
             This module has a different name than I expected:
@@ -1142,7 +1142,7 @@ fn nested_module_has_incorrect_name() {
 
             Based on the nesting and use of this module, I expect it to have name
 
-                Dep.Foo"#
+                Dep.Foo"
         ),
         "\n{}",
         err

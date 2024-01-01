@@ -280,12 +280,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 f = \ a -> a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -296,12 +296,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
                 f = \ a -> a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -312,12 +312,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 g = \ a -> a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -340,12 +340,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
                 g = \ a -> a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -368,13 +368,13 @@ mod test_can {
     #[test]
     fn separated_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
                 f = \ a -> a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -389,13 +389,13 @@ mod test_can {
     #[test]
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 # comment
                 f = \ a -> a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -410,13 +410,13 @@ mod test_can {
     #[test]
     fn shadowed_annotation() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
                 f : Num.Int * -> Num.Int *
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -432,7 +432,7 @@ mod test_can {
     #[test]
     fn correct_nested_unannotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g = 42
@@ -440,7 +440,7 @@ mod test_can {
                     g + 1
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -451,7 +451,7 @@ mod test_can {
     #[test]
     fn correct_nested_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g : Num.Int *
@@ -460,7 +460,7 @@ mod test_can {
                     g + 1
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -471,7 +471,7 @@ mod test_can {
     #[test]
     fn correct_nested_body_annotated_multiple_lines() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g : Num.Int *
@@ -482,7 +482,7 @@ mod test_can {
                     g + h + z
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -493,7 +493,7 @@ mod test_can {
     #[test]
     fn correct_nested_body_unannotated_multiple_lines() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g = 42
@@ -503,7 +503,7 @@ mod test_can {
                     g + h + z
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -513,7 +513,7 @@ mod test_can {
     #[test]
     fn correct_double_nested_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g =
@@ -523,7 +523,7 @@ mod test_can {
 
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -534,13 +534,13 @@ mod test_can {
     #[test]
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
-            r#"
+            r"
                 F : Str
 
                 x = 1
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -554,7 +554,7 @@ mod test_can {
     #[test]
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
-            r#"
+            r"
                 G : Str
 
                 F : {}
@@ -562,7 +562,7 @@ mod test_can {
                 x = 1
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -581,11 +581,11 @@ mod test_can {
     //     // it only exists in the closure's arguments.
     //     let arena = Bump::new();
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //         func = \arg -> arg
 
     //         func 2
-    //     "#
+    //     "
     //     );
     //     let (_actual, output, problems, _var_store, _vars, _constraint) =
     //         can_expr_with(&arena, test_home(), src);
@@ -608,13 +608,13 @@ mod test_can {
     // fn call_by_pointer_for_fn_args() {
     //     // This function will get passed in as a pointer.
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //         apply = \f, x -> f x
 
     //         identity = \a -> a
 
     //         apply identity 5
-    //     "#
+    //     "
     //     );
     //     let arena = Bump::new();
     //     let (_actual, output, problems, _var_store, _vars, _constraint) =
@@ -637,9 +637,9 @@ mod test_can {
     #[test]
     fn incorrect_optional_value() {
         let src = indoc!(
-            r#"
+            r"
                 { x ? 42 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -911,7 +911,7 @@ mod test_can {
     #[test]
     fn recognize_tail_calls() {
         let src = indoc!(
-            r#"
+            r"
                 g = \x ->
                     when x is
                         0 -> 0
@@ -936,7 +936,7 @@ mod test_can {
                         { x: p, y: h }
                     )
                 )
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -963,7 +963,7 @@ mod test_can {
     // #[test]
     // fn reproduce_incorrect_unused_defs() {
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //             g = \x ->
     //                 when x is
     //                     0 -> 0
@@ -983,7 +983,7 @@ mod test_can {
     //             # variables must be (indirectly) referenced in the body for analysis to work
     //             # { x: p, y: h }
     //             g
-    //         "#
+    //         "
     //     );
     //     let arena = Bump::new();
     //     let CanExprOut {
@@ -1012,14 +1012,14 @@ mod test_can {
     #[test]
     fn when_tail_call() {
         let src = indoc!(
-            r#"
+            r"
                 g = \x ->
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
 
                 g 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1034,11 +1034,11 @@ mod test_can {
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
-            r#"
+            r"
                 f = \x -> f x
 
                 f 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1055,13 +1055,13 @@ mod test_can {
     #[test]
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
-            r#"
+            r"
             q = \x ->
                     when q x is
                         _ -> 0
 
             q 0
-        "#
+        "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1076,7 +1076,7 @@ mod test_can {
     #[test]
     fn good_mutual_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 q = \x ->
                         when x is
                             0 -> 0
@@ -1088,7 +1088,7 @@ mod test_can {
                             _ -> q (x - 1)
 
                 q p
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1107,11 +1107,11 @@ mod test_can {
     #[test]
     fn valid_self_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 boom = \_ -> boom {}
 
                 boom
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1128,13 +1128,13 @@ mod test_can {
     #[test]
     fn invalid_mutual_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 x = y
                 y = z
                 z = x
 
                 x
-            "#
+            "
         );
         let home = test_home();
         let arena = Bump::new();
@@ -1176,11 +1176,11 @@ mod test_can {
     #[test]
     fn dict() {
         let src = indoc!(
-            r#"
+            r"
                 x = Dict.empty {}
 
                 Dict.len x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1191,7 +1191,7 @@ mod test_can {
     #[test]
     fn unused_def_regression() {
         let src = indoc!(
-            r#"
+            r"
                 Booly : [Yes, No, Maybe]
 
                 y : Booly
@@ -1205,7 +1205,7 @@ mod test_can {
                 x = [y]
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1216,14 +1216,14 @@ mod test_can {
     #[test]
     fn optional_field_not_unused() {
         let src = indoc!(
-            r#"
+            r"
                 fallbackZ = 3
 
                 fn = \{ x, y, z ? fallbackZ } ->
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1234,12 +1234,12 @@ mod test_can {
     #[test]
     fn issue_2534() {
         let src = indoc!(
-            r#"
+            r"
             x = { a: 1 }
             {
                 x & a: 2
             }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1252,13 +1252,13 @@ mod test_can {
     //    // "local" should be used, because the closure used it.
     //    // However, "unused" should be unused.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        local = 5
     //        unused = 6
     //        func = \arg -> arg + local
 
     //        3 + func 2
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1283,13 +1283,13 @@ mod test_can {
     //fn unused_closure() {
     //    // "unused" should be unused because it's in func, which is unused.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        local = 5
     //        unused = 6
     //        func = \arg -> arg + unused
 
     //        local
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1316,9 +1316,9 @@ mod test_can {
     //     #[test]
     //     fn basic_unrecognized_constant() {
     //         let (expr, output, problems, _) = can_expr(indoc!(
-    //             r#"
+    //             r"
     //             x
-    //         "#
+    //         "
     //         ));
 
     //         assert_eq!(
@@ -1342,12 +1342,12 @@ mod test_can {
     //#[test]
     //fn complex_unrecognized_constant() {
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = 5
     //        b = 6
 
     //        a + b * z
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1375,13 +1375,13 @@ mod test_can {
     //    // This should report that both a and b are unused, since the return expr never references them.
     //    // It should not report them as circular, since we haven't solved the halting problem here.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = \arg -> if arg > 0 then b 7 else 0
     //        b = \arg -> if arg > 0 then a (arg - 1) else 0
     //        c = 5
 
     //        c
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![unused("a"), unused("b")]);
@@ -1400,7 +1400,7 @@ mod test_can {
     //#[test]
     //fn can_fibonacci() {
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        fibonacci = \num ->
     //            if num < 2 then
     //                num
@@ -1408,7 +1408,7 @@ mod test_can {
     //                fibonacci (num - 1) + fibonacci (num - 2)
 
     //        fibonacci 9
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1430,7 +1430,7 @@ mod test_can {
     //    // is considered a tail call, even though it only
     //    // calls itself from one branch!
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        factorial = \num ->
     //            factorialHelp num 0
 
@@ -1441,7 +1441,7 @@ mod test_can {
     //                factorialHelp (num - 1) (total * num)
 
     //        factorial 9
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1462,12 +1462,12 @@ mod test_can {
     //    // This should report that neither a nor b are unused,
     //    // since if you never call a function but do return it, that's okay!
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = \_ -> 42
     //        b = a
 
     //        b
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, Vec::new());
@@ -1488,14 +1488,14 @@ mod test_can {
     //#[test]
     //fn reorder_assignments() {
     //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        increment = \arg -> arg + 1
     //        z = (increment 2) + y
     //        y = x + 1
     //        x = 9
 
     //        z * 3
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1526,7 +1526,7 @@ mod test_can {
     //#[test]
     //fn reorder_closed_over_assignments() {
     //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        z = func1 x
     //        x = 9
     //        y = func2 3
@@ -1534,7 +1534,7 @@ mod test_can {
     //        func2 = \arg -> arg + x
 
     //        z
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1628,14 +1628,14 @@ mod test_can {
     //#[test]
     //fn circular_assignment() {
     //    let (_, _, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        c = d + 3
     //        b = 2 + c
     //        d = a + 7
     //        a = b + 1
 
     //        2 + d
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1655,9 +1655,9 @@ mod test_can {
     //    // There was a bug where this reported UnusedArgument("val")
     //    // since it was used only in the returned function only.
     //    let (_, _, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        \val -> \_ -> val
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1831,7 +1831,7 @@ mod test_can {
     //                      "abcd\\(efg)hij"
     //                      "#
     //             ),
-    //             Str(r#"abcd\(efg)hij"#.into()),
+    //             Str(r"abcd\(efg)hij".into()),
     //         );
     //     }
 
@@ -1848,7 +1848,7 @@ mod test_can {
 
     //     #[test]
     //     fn string_with_special_escapes() {
-    //         expect_parsed_str(r#"x\x"#, r#""x\\x""#);
+    //         expect_parsed_str(r"x\x", r#""x\\x""#);
     //         expect_parsed_str(r#"x"x"#, r#""x\"x""#);
     //         expect_parsed_str("x\tx", r#""x\tx""#);
     //         expect_parsed_str("x\rx", r#""x\rx""#);

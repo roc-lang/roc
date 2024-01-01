@@ -149,7 +149,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
         let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
             panic!(
                 indoc!(
-                    r#"
+                    r"
                     failed to parse the `valgrind` xml output:
 
                         Error was:
@@ -167,7 +167,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                         valgrind stderr was:
 
                             {}
-                    "#
+                    "
                 ),
                 err, raw_xml, valgrind_out.stdout, valgrind_out.stderr
             );
@@ -214,7 +214,7 @@ fn list_concat_consumes_first_argument() {
 #[test]
 fn list_concat_consumes_second_argument() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a : List U8
             a = []
@@ -223,7 +223,7 @@ fn list_concat_consumes_second_argument() {
             |> List.len
             |> Num.toStr
         )
-        "#
+        "
     ));
 }
 
@@ -273,7 +273,7 @@ fn str_concat_first_argument_not_unique() {
 #[test]
 fn list_concat_empty_list_zero_sized_type() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a = List.reserve [] 11
             b = []
@@ -281,7 +281,7 @@ fn list_concat_empty_list_zero_sized_type() {
             |> List.len
             |> Num.toStr
         )
-        "#
+        "
     ));
 }
 
@@ -316,7 +316,7 @@ fn str_trim_start_capacity() {
 #[test]
 fn str_concat_later_referencing_empty_list_with_capacity() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a : List U8
             a = List.withCapacity 1
@@ -326,7 +326,7 @@ fn str_concat_later_referencing_empty_list_with_capacity() {
             |> Num.addWrap (List.len a)
             |> Num.toStr
         )
-        "#
+        "
     ));
 }
 
@@ -504,7 +504,7 @@ fn tree_rebalance() {
 #[test]
 fn lowlevel_list_calls() {
     valgrind_test(indoc!(
-        r#"
+        r"
         (
             a = List.map [1,1,1,1,1] (\x -> x + 0)
             b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
@@ -514,7 +514,7 @@ fn lowlevel_list_calls() {
 
             Num.toStr (List.len e)
         )
-        "#
+        "
     ));
 }
 
