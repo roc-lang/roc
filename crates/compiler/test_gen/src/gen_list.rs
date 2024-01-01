@@ -983,11 +983,7 @@ fn list_walk_subtraction() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_until_sum() {
-    assert_evals_to!(
-        r"List.walkUntil [1, 2] 0 \a,b -> Continue (a + b)",
-        3,
-        i64
-    );
+    assert_evals_to!(r"List.walkUntil [1, 2] 0 \a,b -> Continue (a + b)", 3, i64);
 }
 
 #[test]
