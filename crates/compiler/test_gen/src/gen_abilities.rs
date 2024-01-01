@@ -542,7 +542,7 @@ mod encode_immediate {
                                 _ -> "<bad>"
                         "#
                     ), $num, stringify!($typ)),
-                    RocStr::from(format!(r#"{}"#, $num).as_str()),
+                    RocStr::from(format!(r"{}", $num).as_str()),
                     RocStr
                 )
             }
@@ -1011,7 +1011,7 @@ fn decode_derive_decoder_for_opaque() {
                     _ -> "FAIL"
             "#
         ),
-        RocStr::from(r#"Hello, World!"#),
+        RocStr::from(r"Hello, World!"),
         RocStr
     )
 }
@@ -1458,7 +1458,7 @@ mod hash {
     use indoc::indoc;
 
     const TEST_HASHER: &str = indoc!(
-        r#"
+        r"
         THasher := List U8 implements [Hasher {
             addBytes: tAddBytes,
             addU8: tAddU8,
@@ -1507,7 +1507,7 @@ mod hash {
         tComplete = \@THasher _ -> Num.maxU64
 
         tRead = \@THasher bytes -> bytes
-        "#
+        "
     );
 
     fn build_test(input: &str) -> String {
@@ -1668,7 +1668,7 @@ mod hash {
         #[test]
         fn list_u8() {
             assert_evals_to!(
-                &build_test(r#"[15u8, 23u8, 37u8]"#),
+                &build_test(r"[15u8, 23u8, 37u8]"),
                 RocList::from_slice(&[15, 23, 37]),
                 RocList<u8>
             )
@@ -1700,7 +1700,7 @@ mod hash {
         #[test]
         fn empty_record() {
             assert_evals_to!(
-                &build_test(r#"{}"#),
+                &build_test(r"{}"),
                 RocList::from_slice(&[] as &[u8]),
                 RocList<u8>
             )
@@ -1728,7 +1728,7 @@ mod hash {
         fn record_of_list_of_records() {
             assert_evals_to!(
                 &build_test(
-                    r#"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"#
+                    r"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"
                 ),
                 RocList::from_slice(&[15, 23, 45, 73]),
                 RocList<u8>
@@ -1757,7 +1757,7 @@ mod hash {
         fn tuple_of_list_of_tuples() {
             assert_evals_to!(
                 &build_test(
-                    r#"( [ ( 15u8, 32u8 ), ( 23u8, 41u8 ) ], [ (45u8, 63u8), (58u8, 73u8) ] )"#
+                    r"( [ ( 15u8, 32u8 ), ( 23u8, 41u8 ) ], [ (45u8, 63u8), (58u8, 73u8) ] )"
                 ),
                 RocList::from_slice(&[15, 32, 23, 41, 45, 63, 58, 73]),
                 RocList<u8>
@@ -2152,7 +2152,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
     with_larger_debug_stack(|| {
         assert_evals_to!(
             indoc!(
-                r###"
+                r#"
                 app "test"
                         imports [TotallyNotJson]
                         provides [main] to "./platform"
@@ -2173,7 +2173,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
                 main =
                     getNumber |> Result.map .val |> Result.withDefault 0
-                "###
+                "#
             ),
             1234i64,
             i64
@@ -2302,7 +2302,7 @@ mod inspect {
             main = Inspect.toStr (@Op {})
             "#
             ),
-            RocStr::from(r#"<opaque>"#),
+            RocStr::from(r"<opaque>"),
             RocStr
         );
     }
@@ -2322,7 +2322,7 @@ mod inspect {
             main = late (@Op {})
             "#
             ),
-            RocStr::from(r#"<opaque>"#),
+            RocStr::from(r"<opaque>"),
             RocStr
         );
     }
