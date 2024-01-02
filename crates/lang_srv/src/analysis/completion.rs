@@ -401,15 +401,16 @@ pub fn field_completion(
         "getting record field completions: variable: {:?} field: {:?} middle: {:?} ",
         var, field, middle_fields
     );
-    //get the variable from within the region
     //TODO: this is kind of just a hack. We are getting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
     let completion = get_completions(position, declarations, var.to_string(), interns)
         .into_iter()
         .map(|a| (a.0.as_str(&interns).to_string(), a.1))
         .next()?;
 
-    //We iterate through all the intermediate chunks eg var.field1.field2.field3 this iterates through fields until we get to field2, becuase it's second last
-    let second_last = middle_fields.iter().fold(completion, |state, chain_field| {
+    //If we have a type that has nested records we could have a completion prefix like: "var.field1.field2.fi"
+    //If the document isn't fully typechecked we won't know what the type of field2 is for us to offer completions based on it's fields
+    //Instead we get the type of "var" and then the type of "field1" within var's type and then "field2" within field1's type etc etc, until we have the type of the record we are actually looking for field completions for. 
+    let completion_record= middle_fields.iter().fold(completion, |state, chain_field| {
         let fields_vars = find_record_fields(state.1, subs);
         fields_vars
             .into_iter()
@@ -417,7 +418,7 @@ pub fn field_completion(
             .unwrap_or(state)
     });
 
-    let field_completions: Vec<_> = find_record_fields(second_last.1, subs)
+    let field_completions: Vec<_> = find_record_fields(completion_record.1, subs)
         .into_iter()
         .filter(|(str, _)| str.starts_with(&field.to_string()))
         .collect();
