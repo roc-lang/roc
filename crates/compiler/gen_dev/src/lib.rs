@@ -1010,7 +1010,7 @@ trait Backend<'a> {
                     arg_layouts[0], *ret_layout,
                     "NumAdd: expected to have the same argument and return layout"
                 );
-                self.build_num_add(sym, &args[0], &args[1], ret_layout)
+                self.build_num_add_wrap(sym, &args[0], &args[1], ret_layout)
             }
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
@@ -2196,6 +2196,14 @@ trait Backend<'a> {
         src2: &Symbol,
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
+    );
+
+    fn build_num_add_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
     );
 
     /// build_num_sub_checked stores the sum of src1 and src2 into dst.
