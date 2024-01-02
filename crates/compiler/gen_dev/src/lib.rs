@@ -1080,13 +1080,84 @@ trait Backend<'a> {
                 );
                 self.build_num_neg(sym, &args[0], ret_layout)
             }
-            LowLevel::NumPowInt => self.build_fn_call(
-                sym,
-                bitcode::NUM_POW_INT[IntWidth::I64].to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
+            LowLevel::NumPowInt => {
+                let repr = self.interner().get_repr(arg_layouts[0]);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid layout for NumPowInt")
+                };
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::NUM_POW_INT[int_width].to_string(),
+                    args,
+                    arg_layouts,
+                    ret_layout,
+                )
+            }
+            LowLevel::NumPow => {
+                let intrinsic = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::NUM_POW[float_width]
+                    }
+                    LayoutRepr::DEC => todo!("exponentiation for decimals"),
+                    _ => unreachable!("invalid layout for NumPow"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumFloor => {
+                let repr = self.interner().get_repr(*ret_layout);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid return layout for NumFloor")
+                };
+
+                match arg_layouts[0] {
+                    Layout::F32 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_FLOOR_F32[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::F64 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_FLOOR_F64[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::DEC => todo!("NumFloor for decimals"),
+                    _ => unreachable!("invalid layout for NumFloor"),
+                }
+            }
+
+            LowLevel::NumCeiling => {
+                let repr = self.interner().get_repr(*ret_layout);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid return layout for NumCeiling")
+                };
+
+                match arg_layouts[0] {
+                    Layout::F32 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_CEILING_F32[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::F64 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_CEILING_F64[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::DEC => todo!("NumCeiling for decimals"),
+                    _ => unreachable!("invalid layout for NumCeiling"),
+                }
+            }
+
             LowLevel::NumSub => {
                 debug_assert_eq!(
                     2,
@@ -1392,6 +1463,36 @@ trait Backend<'a> {
                 };
 
                 self.build_num_sqrt(*sym, args[0], float_width);
+            }
+            LowLevel::NumSin => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_SIN[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_SIN[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_SIN,
+                    _ => unreachable!("invalid layout for sin"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::NumCos => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_COS[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_COS[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_COS,
+                    _ => unreachable!("invalid layout for cos"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::NumTan => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_TAN[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_TAN[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_TAN,
+                    _ => unreachable!("invalid layout for tan"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
@@ -1970,12 +2071,15 @@ trait Backend<'a> {
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
+                let literal = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Builtin(Builtin::Int(_)) => Literal::Int(0i128.to_ne_bytes()),
+                    LayoutRepr::Builtin(Builtin::Float(_)) => Literal::Float(0.0),
+                    LayoutRepr::DEC => Literal::Decimal([0; 16]),
+                    _ => unreachable!("invalid layout for sin"),
+                };
+
                 self.load_literal_symbols(args);
-                self.load_literal(
-                    &Symbol::DEV_TMP,
-                    &arg_layouts[0],
-                    &Literal::Int(0i128.to_ne_bytes()),
-                );
+                self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &literal);
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }

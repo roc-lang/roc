@@ -820,7 +820,7 @@ fn gen_div_ceil_by_zero() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_int_eq() {
     assert_evals_to!(
         indoc!(
@@ -834,7 +834,7 @@ fn gen_int_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
@@ -866,7 +866,7 @@ fn float_greater_than() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_dec_eq() {
     assert_evals_to!(
         indoc!(
@@ -886,7 +886,7 @@ fn gen_dec_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_dec_neq() {
     assert_evals_to!(
         indoc!(
@@ -906,7 +906,7 @@ fn gen_dec_neq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_wrap_int_neq() {
     assert_evals_to!(
         indoc!(
@@ -924,7 +924,7 @@ fn gen_wrap_int_neq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_i8() {
     assert_evals_to!(
         indoc!(
@@ -938,7 +938,7 @@ fn gen_add_i8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_u8() {
     assert_evals_to!(
         indoc!(
@@ -952,7 +952,7 @@ fn gen_add_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_i16() {
     assert_evals_to!(
         indoc!(
@@ -966,7 +966,7 @@ fn gen_add_i16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_u16() {
     assert_evals_to!(
         indoc!(
@@ -980,7 +980,7 @@ fn gen_add_u16() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_i32() {
     assert_evals_to!(
         indoc!(
@@ -994,7 +994,7 @@ fn gen_add_i32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_u32() {
     assert_evals_to!(
         indoc!(
@@ -1008,7 +1008,7 @@ fn gen_add_u32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_add_i64() {
     assert_evals_to!(
         indoc!(
@@ -1022,7 +1022,7 @@ fn gen_add_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_sub_dec() {
     assert_evals_to!(
         indoc!(
@@ -1045,7 +1045,7 @@ fn gen_sub_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_mul_dec() {
     assert_evals_to!(
         indoc!(
@@ -1068,13 +1068,13 @@ fn gen_mul_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_sub_f64() {
     assert_evals_to!("1.5f64 - 2.4 - 3", -3.9, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_sub_f32() {
     assert_evals_to!("1.5f32 - 2.4 - 3", -3.9, f32);
 }
@@ -1164,7 +1164,7 @@ fn gen_div_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_div_checked_i64() {
     assert_evals_to!(
         indoc!(
@@ -1180,7 +1180,7 @@ fn gen_div_checked_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
@@ -1218,7 +1218,7 @@ fn gen_rem_checked_div_by_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_positive_i64() {
     assert_evals_to!("Num.isPositive 0", false, bool);
     assert_evals_to!("Num.isPositive 1", true, bool);
@@ -1226,7 +1226,7 @@ fn gen_is_positive_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_negative_i64() {
     assert_evals_to!("Num.isNegative 0", false, bool);
     assert_evals_to!("Num.isNegative 3", false, bool);
@@ -1234,7 +1234,7 @@ fn gen_is_negative_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_positive_f64() {
     assert_evals_to!("Num.isPositive 0.0", false, bool);
     assert_evals_to!("Num.isPositive 4.7", true, bool);
@@ -1242,7 +1242,7 @@ fn gen_is_positive_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_negative_f64() {
     assert_evals_to!("Num.isNegative 0.0", false, bool);
     assert_evals_to!("Num.isNegative 9.9", false, bool);
@@ -1258,27 +1258,33 @@ fn gen_is_zero_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_zero_f64() {
-    assert_evals_to!("Num.isZero 0.0", true, bool);
+    assert_evals_to!("Num.isZero 0.0f64", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_is_zero_dec() {
+    assert_evals_to!("Num.isZero 0.0dec", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_odd() {
     assert_evals_to!("Num.isOdd 4", false, bool);
     assert_evals_to!("Num.isOdd 5", true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_is_even() {
     assert_evals_to!("Num.isEven 6", true, bool);
     assert_evals_to!("Num.isEven 7", false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn sin() {
     assert_evals_to!("Num.sin 0f64", 0.0, f64);
     assert_evals_to!("Num.sin 1.41421356237f64", 0.9877659459922529, f64);
@@ -1291,7 +1297,7 @@ fn sin() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn cos() {
     assert_evals_to!("Num.cos 0f64", 1.0, f64);
     assert_evals_to!("Num.cos 3.14159265359f64", -1.0, f64);
@@ -1304,7 +1310,7 @@ fn cos() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn tan() {
     assert_evals_to!("Num.tan 0f64", 0.0f64, f64);
     assert_evals_to!("Num.tan 0dec", RocDec::from_str("0.0").unwrap(), RocDec);
@@ -1343,7 +1349,7 @@ fn bitwise_or() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lt_u8() {
     assert_evals_to!("1u8 < 2u8", true, bool);
     assert_evals_to!("1u8 < 1u8", false, bool);
@@ -1353,7 +1359,7 @@ fn lt_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lte_u8() {
     assert_evals_to!("1u8 <= 1u8", true, bool);
     assert_evals_to!("2u8 <= 1u8", false, bool);
@@ -1363,7 +1369,7 @@ fn lte_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gt_u8() {
     assert_evals_to!("2u8 > 1u8", true, bool);
     assert_evals_to!("2u8 > 2u8", false, bool);
@@ -1373,7 +1379,7 @@ fn gt_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gte_u8() {
     assert_evals_to!("1u8 >= 1u8", true, bool);
     assert_evals_to!("1u8 >= 2u8", false, bool);
@@ -1393,7 +1399,7 @@ fn lt_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lte_u64() {
     assert_evals_to!("1u64 <= 1u64", true, bool);
     assert_evals_to!("2u64 <= 1u64", false, bool);
@@ -1413,7 +1419,7 @@ fn gt_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gte_u64() {
     assert_evals_to!("1u64 >= 1u64", true, bool);
     assert_evals_to!("1u64 >= 2u64", false, bool);
@@ -1432,7 +1438,7 @@ fn lt_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lte_i64() {
     assert_evals_to!("1 <= 1", true, bool);
     assert_evals_to!("2 <= 1", false, bool);
@@ -1450,7 +1456,7 @@ fn gt_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gte_i64() {
     assert_evals_to!("1 >= 1", true, bool);
     assert_evals_to!("1 >= 2", false, bool);
@@ -1459,7 +1465,7 @@ fn gte_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lt_f64() {
     assert_evals_to!("1.1f64 < 1.2", true, bool);
     assert_evals_to!("1.1f64 < 1.1", false, bool);
@@ -1468,7 +1474,7 @@ fn lt_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lte_f64() {
     assert_evals_to!("1.1f64 <= 1.1", true, bool);
     assert_evals_to!("1.2f64 <= 1.1", false, bool);
@@ -1477,7 +1483,7 @@ fn lte_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gt_f64() {
     assert_evals_to!("2.2f64 > 1.1", true, bool);
     assert_evals_to!("2.2f64 > 2.2", false, bool);
@@ -1486,7 +1492,7 @@ fn gt_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gte_f64() {
     assert_evals_to!("1.1f64 >= 1.1", true, bool);
     assert_evals_to!("1.1f64 >= 1.2", false, bool);
@@ -1495,7 +1501,7 @@ fn gte_f64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_order_of_arithmetic_ops() {
     assert_evals_to!(
         indoc!(
@@ -1509,7 +1515,7 @@ fn gen_order_of_arithmetic_ops() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_order_of_arithmetic_ops_complex_float() {
     assert_evals_to!(
         indoc!(
@@ -1523,7 +1529,7 @@ fn gen_order_of_arithmetic_ops_complex_float() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_bind_variable_false() {
     assert_evals_to!(
         indoc!(
@@ -1542,7 +1548,7 @@ fn if_guard_bind_variable_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn if_guard_bind_variable_true() {
     assert_evals_to!(
         indoc!(
@@ -1561,7 +1567,7 @@ fn if_guard_bind_variable_true() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn tail_call_elimination() {
     assert_evals_to!(
         indoc!(
@@ -1591,7 +1597,7 @@ fn int_negate_dev() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_negate() {
     assert_evals_to!("Num.neg 123", -123, i64);
     assert_evals_to!("Num.neg Num.maxI64", -i64::MAX, i64);
@@ -1616,7 +1622,7 @@ fn neg_min_int_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_wrap_int_neg() {
     assert_evals_to!(
         indoc!(
@@ -1632,7 +1638,7 @@ fn gen_wrap_int_neg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_basic_fn() {
     assert_evals_to!(
         indoc!(
@@ -1782,7 +1788,7 @@ fn frac_is_finite() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn int_compare() {
     assert_evals_to!("Num.compare 0 1", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 1 1", RocOrder::Eq, RocOrder);
@@ -1790,7 +1796,7 @@ fn int_compare() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn float_compare() {
     assert_evals_to!("Num.compare 0.01 3.14", RocOrder::Lt, RocOrder);
     assert_evals_to!("Num.compare 3.14 3.14", RocOrder::Eq, RocOrder);
@@ -1798,26 +1804,26 @@ fn float_compare() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pow() {
     assert_evals_to!("Num.pow 2.0f64 2.0f64", 4.0, f64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn ceiling() {
     assert_evals_to!("Num.ceiling 1.1f64", 2, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn floor() {
     assert_evals_to!("Num.floor 1.9f64", 1, i64);
     assert_evals_to!("Num.floor -1.9f64", -2, i64);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn pow_int() {
     assert_evals_to!("Num.powInt 2 3", 8, i64);
 }
