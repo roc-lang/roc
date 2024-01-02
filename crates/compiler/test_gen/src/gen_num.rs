@@ -1989,7 +1989,7 @@ fn float_sub_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "Integer multiplication overflowed!"#)]
 fn int_positive_mul_overflow() {
     assert_evals_to!(
