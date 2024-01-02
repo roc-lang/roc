@@ -311,7 +311,6 @@ pub const NUM_MUL_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul
 pub const NUM_MUL_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.mul_with_overflow");
 pub const NUM_MUL_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.mul_with_overflow");
-pub const NUM_NEG_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.neg_or_panic");
 
 pub const NUM_IS_MULTIPLE_OF: IntrinsicName = int_intrinsic!("roc_builtins.num.is_multiple_of");
 
