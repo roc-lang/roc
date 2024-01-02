@@ -523,12 +523,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         use X86_64GeneralReg::*;
         type ASM = X86_64Assembler;
 
-        // move the first argument to roc_panic (a *RocStr) into r8
-        ASM::add_reg64_reg64_imm32(buf, R8, RSP, 8);
+        // move the first argument to roc_panic (a *const RocStr) into r8
+        ASM::mov_reg64_reg64(buf, R8, RDI);
 
         // move the crash tag into the second return register. We add 1 to it because the 0 value
         // is already used for "no crash occurred"
-        ASM::add_reg64_reg64_imm32(buf, RDX, RDI, 1);
+        ASM::add_reg64_reg64_imm32(buf, RDX, RSI, 1);
 
         // the setlongjmp_buffer
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
