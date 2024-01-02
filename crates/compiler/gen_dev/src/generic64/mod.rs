@@ -1652,6 +1652,15 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::div_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.build_fn_call(
+                    &dst,
+                    bitcode::DEC_DIV.to_string(),
+                    &[*src1, *src2],
+                    &[*layout, *layout],
+                    &layout,
+                );
+            }
             x => todo!("NumDiv: layout, {:?}", x),
         }
     }
