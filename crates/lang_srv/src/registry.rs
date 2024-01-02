@@ -130,6 +130,7 @@ impl Registry {
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
         let duration = std::time::Duration::from_secs(5);
         tokio::time::timeout(duration, async {
+            //TODO: This should really be a condvar that is triggered by the latest being ready, this will do for now though
             loop {
                 let docs = self.documents.lock().await;
                 if let Some(a) = docs.get(url) {
