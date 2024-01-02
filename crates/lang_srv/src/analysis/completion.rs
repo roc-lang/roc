@@ -63,7 +63,7 @@ impl CompletionVisitor<'_> {
         trace!("completion begin");
         def.pattern_vars
             .iter()
-            .map(|(symbol, var)| (symbol.clone(), var.clone()))
+            .map(|(symbol, var)| (*symbol, *var))
             .collect()
     }
     fn expression_defs(&self, expr: &Expr) -> Vec<(Symbol, Variable)> {
@@ -78,7 +78,7 @@ impl CompletionVisitor<'_> {
     ///Extract any variables made available by the branch of a when_is expression that contains `self.position`
     fn when_is_expr(
         &self,
-        branches: &Vec<WhenBranch>,
+        branches: &[WhenBranch],
         expr_var: &Variable,
     ) -> Vec<(Symbol, Variable)> {
         branches
@@ -100,7 +100,7 @@ impl CompletionVisitor<'_> {
             .collect()
     }
 
-    fn record_destructure(&self, destructs: &Vec<Loc<RecordDestruct>>) -> Vec<(Symbol, Variable)> {
+    fn record_destructure(&self, destructs: &[Loc<RecordDestruct>]) -> Vec<(Symbol, Variable)> {
         destructs
             .iter()
             .flat_map(|a| match &a.value.typ {
@@ -108,17 +108,17 @@ impl CompletionVisitor<'_> {
                 | roc_can::pattern::DestructType::Optional(_, _) => {
                     vec![(a.value.symbol, a.value.var)]
                 }
-                roc_can::pattern::DestructType::Guard(var, pat) => self.patterns(&pat.value, &var),
+                roc_can::pattern::DestructType::Guard(var, pat) => self.patterns(&pat.value, var),
             })
             .collect()
     }
 
-    fn tuple_destructure(&self, destructs: &Vec<Loc<TupleDestruct>>) -> Vec<(Symbol, Variable)> {
+    fn tuple_destructure(&self, destructs: &[Loc<TupleDestruct>]) -> Vec<(Symbol, Variable)> {
         destructs
             .iter()
             .flat_map(|a| {
                 let (var, pattern) = &a.value.typ;
-                self.patterns(&pattern.value, &var)
+                self.patterns(&pattern.value, var)
             })
             .collect()
     }
@@ -146,7 +146,7 @@ impl CompletionVisitor<'_> {
         //Get the variables introduced within the pattern
         let mut patterns = self.patterns(as_pat, var);
         //Add the "as" that wraps the whole pattern
-        patterns.push((as_symbol, var.clone()));
+        patterns.push((as_symbol, *var));
         patterns
     }
     ///Returns a list of symbols defined by this pattern.  
@@ -159,7 +159,7 @@ impl CompletionVisitor<'_> {
         match pattern {
             roc_can::pattern::Pattern::Identifier(symbol) => {
                 if self.is_match(symbol) {
-                    vec![(symbol.clone(), pattern_var.clone())]
+                    vec![(*symbol, *pattern_var)]
                 } else {
                     vec![]
                 }
@@ -172,7 +172,7 @@ impl CompletionVisitor<'_> {
                 elem_var, patterns, ..
             } => self.list_pattern(patterns, elem_var),
             roc_can::pattern::Pattern::As(pat, symbol) => {
-                self.as_pattern(&pat.value, symbol.clone(), pattern_var)
+                self.as_pattern(&pat.value, *symbol, pattern_var)
             }
             roc_can::pattern::Pattern::RecordDestructure { destructs, .. } => {
                 self.record_destructure(destructs)
@@ -227,9 +227,9 @@ impl CompletionVisitor<'_> {
     }
 }
 
-fn get_completions<'a>(
+fn get_completions(
     position: Position,
-    decls: &'a Declarations,
+    decls: &Declarations,
     prefix: String,
     interns: &Interns,
 ) -> Vec<(Symbol, Variable)> {
@@ -251,7 +251,7 @@ fn make_completion_item(
     var: Variable,
 ) -> CompletionItem {
     let type_str = format_var_type(var, subs, module_id, interns);
-    let typ = match subs.get(var.clone()).content {
+    let typ = match subs.get(var).content {
         roc_types::subs::Content::Structure(var) => match var {
             roc_types::subs::FlatType::Apply(_, _) => CompletionItemKind::FUNCTION,
             roc_types::subs::FlatType::Func(_, _, _) => CompletionItemKind::FUNCTION,
@@ -329,14 +329,14 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
             }
             roc_types::subs::FlatType::Tuple(elems, ext) => {
                 let elems = elems.unsorted_iterator(subs, ext);
-                let elems = match elems {
+                
+                match elems {
                     Ok(elem) => elem.map(|(num, var)| (num.to_string(), var)).collect(),
                     Err(err) => {
                         warn!("Error getting tuple elems for completion: {:?}", err);
                         vec![]
                     }
-                };
-                elems
+                }
             }
 
             _ => {
@@ -404,7 +404,7 @@ pub fn field_completion(
     //TODO: this is kind of just a hack. We are getting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
     let completion = get_completions(position, declarations, var.to_string(), interns)
         .into_iter()
-        .map(|a| (a.0.as_str(&interns).to_string(), a.1))
+        .map(|a| (a.0.as_str(interns).to_string(), a.1))
         .next()?;
 
     //If we have a type that has nested records we could have a completion prefix like: "var.field1.field2.fi"

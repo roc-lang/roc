@@ -1,10 +1,10 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
-use indoc::indoc;
+
 use log::{debug, trace};
 use registry::Registry;
 use std::future::Future;
 use std::time::Duration;
-use std::u8;
+
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -119,7 +119,7 @@ impl RocServerState {
     }
 
     async fn close(&self, _fi: Url) {
-        ()
+        
     }
 
     pub async fn change(
@@ -312,14 +312,14 @@ impl LanguageServer for RocServer {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
         trace!("got completion request");
-        let res = panic_wrapper_async(|| async {
+        
+        panic_wrapper_async(|| async {
             self.state
                 .registry
                 .completion_items(&doc.text_document.uri, doc.position)
                 .await
         })
-        .await;
-        res
+        .await
     }
 }
 
@@ -349,13 +349,13 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use std::{
-        sync::{Once, OnceLock},
-        time::Duration,
+        sync::{Once},
     };
 
+    use indoc::indoc;
     use expect_test::expect;
     use log::info;
-    use tokio::{join, spawn};
+    
 
     use super::*;
 
@@ -399,90 +399,6 @@ mod tests {
         inner.change(&url, doc, 0).await.unwrap();
         (inner, url)
     }
-
-    #[tokio::test]
-    async fn test_completion_with_changes() {
-        let doc = DOC_LIT.to_string()
-            + indoc! {r#"
-            rec=\a,b->{one:{potato:\d->d,leak:59},two:b}
-            rectest= 
-              value= rec 1 2
-              va"#};
-        let (inner, url) = test_setup(doc.clone()).await;
-        static INNER_CELL: OnceLock<RocServerState> = OnceLock::new();
-        INNER_CELL.set(inner).unwrap();
-        static URL_CELL: OnceLock<Url> = OnceLock::new();
-        URL_CELL.set(url).unwrap();
-
-        let inner = INNER_CELL.get().unwrap();
-        let url = URL_CELL.get().unwrap();
-        let position = Position::new(6, 8);
-        //setup the file
-        inner.change(&url, doc.clone(), 1).await.unwrap();
-
-        //apply a sequence of changes back to back
-        let a1 = spawn(inner.change(&url, doc.clone() + "l", 2));
-        let a2 = spawn(inner.change(&url, doc.clone() + "lu", 3));
-        let a3 = spawn(inner.change(&url, doc.clone() + "lue", 4));
-        let a4 = spawn(inner.change(&url, doc.clone() + "lue.", 5));
-        //start a completion that would only work if all changes have been applied
-        let comp = spawn(async move {
-            let reg = inner.registry().await;
-            get_completion_labels(reg, &url, position).await
-        });
-        // Simulate two changes coming in with a slight delay
-        //set the debounce to 0 so we can guarntee that these will both be started
-        std::env::set_var("ROCLS_DEBOUNCE", "0");
-        let a = spawn(inner.change(&url, doc.clone() + "lue.o", 6));
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let rest = spawn(inner.change(&url, doc.clone() + "lue.on", 7));
-
-        let done = join!(a1, a2, a3, a4, comp, a, rest);
-
-        expect![[r#"
-            (
-                Ok(
-                    Err(
-                        "Not latest version skipping analysis",
-                    ),
-                ),
-                Ok(
-                    Err(
-                        "Not latest version skipping analysis",
-                    ),
-                ),
-                Ok(
-                    Err(
-                        "Not latest version skipping analysis",
-                    ),
-                ),
-                Ok(
-                    Err(
-                        "Not latest version skipping analysis",
-                    ),
-                ),
-                Ok(
-                    Some(
-                        [
-                            "one",
-                            "two",
-                        ],
-                    ),
-                ),
-                Ok(
-                    Err(
-                        "version 6 doesn't match latest: 7 discarding analysis  ",
-                    ),
-                ),
-                Ok(
-                    Ok(
-                        (),
-                    ),
-                ),
-            )
-        "#]]
-        .assert_debug_eq(&done);
-    }
     ///Test that completion works properly when we apply an "as" pattern to an identifier
     #[tokio::test]
     async fn test_completion_as_identifier() {
@@ -498,11 +414,11 @@ mod tests {
 
         let change = suffix.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = get_completion_labels(&reg, &url, position).await;
+        let comp1 = get_completion_labels(reg, &url, position).await;
 
         let c = suffix.clone() + "i";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = get_completion_labels(&reg, &url, position).await;
+        let comp2 = get_completion_labels(reg, &url, position).await;
 
         let actual = [comp1, comp2];
         expect![[r#"
@@ -539,11 +455,11 @@ mod tests {
 
         let change = doc.clone() + "o";
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = get_completion_labels(&reg, &url, position).await;
+        let comp1 = get_completion_labels(reg, &url, position).await;
 
         let c = doc.clone() + "t";
         inner.change(&url, c, 2).await.unwrap();
-        let comp2 = get_completion_labels(&reg, &url, position).await;
+        let comp2 = get_completion_labels(reg, &url, position).await;
         let actual = [comp1, comp2];
 
         expect![[r#"

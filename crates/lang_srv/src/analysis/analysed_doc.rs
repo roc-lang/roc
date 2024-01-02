@@ -231,10 +231,10 @@ impl AnalyzedDocument {
             field_completion(
                 position,
                 symbol_prefix,
-                &declarations,
-                &interns,
+                declarations,
+                interns,
                 &mut subs.clone(),
-                &module_id,
+                module_id,
             )
         } else {
             let completions = get_completion_items(

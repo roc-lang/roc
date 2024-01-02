@@ -44,19 +44,18 @@ impl Registry {
         self.documents
             .lock()
             .await
-            .get(&url)
+            .get(url)
             .map(|x| x.info.version)
     }
 
-    fn update_document<'a>(
-        documents: &mut MutexGuard<'a, HashMap<Url, DocumentPair>>,
+    fn update_document(
+        documents: &mut MutexGuard<'_, HashMap<Url, DocumentPair>>,
         document: Arc<AnalyzedDocument>,
         updating_url: &Url,
     ) {
         if &document.doc_info.url == updating_url {
-            documents
-                .get_mut(&updating_url)
-                .map(|a| a.latest_document.set(document.clone()).unwrap());
+            if let Some(a) = documents
+                .get_mut(updating_url) { a.latest_document.set(document.clone()).unwrap() }
         }
 
         let url = document.url().clone();
@@ -196,7 +195,7 @@ impl Registry {
 
         let completions = pair
             .last_good_document
-            .completion_items(position, &latest_doc_info)?;
+            .completion_items(position, latest_doc_info)?;
 
         Some(CompletionResponse::Array(completions))
     }
