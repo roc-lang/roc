@@ -1904,7 +1904,7 @@ fn float_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn int_sub_overflow() {
     assert_evals_to!("-9_223_372_036_854_775_808 - 1", 0, i64);
