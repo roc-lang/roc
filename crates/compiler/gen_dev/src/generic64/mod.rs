@@ -1696,11 +1696,11 @@ impl<
             }
             LayoutRepr::Builtin(Builtin::Decimal) => {
                 self.build_fn_call(
-                    &dst,
+                    dst,
                     bitcode::DEC_DIV.to_string(),
                     &[*src1, *src2],
                     &[*layout, *layout],
-                    &layout,
+                    layout,
                 );
             }
             x => todo!("NumDiv: layout, {:?}", x),
