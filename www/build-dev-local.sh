@@ -18,8 +18,8 @@ cp -r build dist/
 cp -r public/* dist/
 roc run main.roc -- content/ dist/
 
-echo "Adding github link examples"
-source add-github-link-examples.sh
+echo "Adding github link to examples..."
+source scripts/add-github-link-to-examples.sh
 add_github_link_to_examples dist/examples
 
 simple-http-server -p 8080 --nocache --cors --index -- dist/
