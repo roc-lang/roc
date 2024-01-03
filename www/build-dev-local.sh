@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
 # Use this script to for testing the WIP site locally without downloading assets every time.
@@ -19,6 +20,6 @@ roc run main.roc -- content/ dist/
 
 echo "Adding github link examples"
 source add-github-link-examples.sh
-add_github_link_examples dist/examples
+add_github_link_to_examples dist/examples
 
 simple-http-server -p 8080 --nocache --cors --index -- dist/
