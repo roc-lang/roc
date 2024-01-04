@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use roc_collections::MutMap;
 use roc_module::symbol::{Interns, ModuleId};
+use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
 use roc_solve_problem::TypeError;
 
@@ -87,29 +88,6 @@ pub fn report_problems(
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
-        let problems = can_problems.remove(home).unwrap_or_default();
-
-        for problem in problems.into_iter() {
-            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            match severity {
-                Warning => {
-                    warnings.push(buf);
-                }
-                RuntimeError => {
-                    errors.push(buf);
-                }
-                Fatal => {
-                    fatally_errored = true;
-                    errors.push(buf);
-                }
-            }
-        }
-
         let problems = type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
@@ -130,6 +108,41 @@ pub fn report_problems(
                         fatally_errored = true;
                         errors.push(buf);
                     }
+                }
+            }
+        }
+
+        // Shadowing errors often cause cryptic type errors. To make it easy to spot the root cause, 
+        // we print the shadowing errors last.
+        let problems = can_problems.remove(home).unwrap_or_default();
+        let (shadowing_errs, mut ordered): (Vec<Problem>, Vec<Problem>) =
+            problems.into_iter().partition(|p| match p {
+                Problem::Shadowing {
+                    original_region: _,
+                    shadow: _,
+                    kind: _,
+                } => true,
+                _ => false,
+            });
+        ordered.extend(shadowing_errs);
+
+        for problem in ordered.into_iter() {
+            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
+            let severity = report.severity;
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            match severity {
+                Warning => {
+                    warnings.push(buf);
+                }
+                RuntimeError => {
+                    errors.push(buf);
+                }
+                Fatal => {
+                    fatally_errored = true;
+                    errors.push(buf);
                 }
             }
         }
