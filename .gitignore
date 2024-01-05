@@ -1,3 +1,14 @@
+### Do not modify these first three ignore rules.  Needed to ignore files with no extension ###
+# Ignore all files including binary files that have no extension
+*
+# Unignore all files with extensions
+!*.*
+# Unignore all directories
+!*/
+
+### Add specific file extensions and directories below ###
+
+# Ignore the following directories and file extensions
 target
 generated-docs
 zig-cache
@@ -16,6 +27,19 @@ zig-cache
 *.wasm
 *.exe
 *.pdb
+
+
+# Specifically keep these files with no extension
+!Earthfile
+!AUTHORS
+!LICENSE*
+!LEGAL*
+!Dockerfile
+!dep5
+!NotARocFile
+# also includes keeping one exe benchmark file
+!dynhost_benchmarks*
+!rust-toolchain
 
 # llvm human-readable output
 *.ll
@@ -84,3 +108,5 @@ www/dist
 www/content/examples
 www/examples-main.zip
 www/examples-main
+
+examples/static-site-gen/**/*.html
