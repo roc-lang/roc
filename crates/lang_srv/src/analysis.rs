@@ -6,6 +6,7 @@ use std::{
 
 use bumpalo::Bump;
 use log::debug;
+use parking_lot::Mutex;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::{MutMap, MutSet};
 use roc_load::{CheckedModule, LoadedModule};
@@ -43,6 +44,7 @@ pub(super) struct AnalyzedModule {
     module_id: ModuleId,
     interns: Interns,
     subs: Subs,
+    other_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
     abilities: AbilitiesStore,
     declarations: Declarations,
     // We need this because ModuleIds are not stable between compilations, so a ModuleId visible to
@@ -139,6 +141,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         .into_iter()
         .map(|(id, symbols)| (id, Arc::new(symbols)))
         .collect();
+    let all_subs = Arc::new(Mutex::new(
+        typechecked
+            .iter()
+            .map(|(k, v)| (k.clone(), v.solved_subs.0.clone()))
+            .collect::<HashMap<_, _>>(),
+    ));
     let mut builder = AnalyzedDocumentBuilder {
         interns: &interns,
         module_id_to_url: module_id_to_url_from_sources(&sources),
@@ -149,6 +157,7 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         root_module: &mut root_module,
         exposed_imports,
         imports: &mut imports,
+        all_subs,
         exposed,
     };
     debug!("docs: {:#?}", docs_by_module);
@@ -229,6 +238,7 @@ struct AnalyzedDocumentBuilder<'a> {
     imports: &'a mut MutMap<ModuleId, MutSet<ModuleId>>,
     exposed_imports: HashMap<ModuleId, Vec<(Symbol, Variable)>>,
     exposed: HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
+    all_subs: Arc<Mutex<HashMap<ModuleId, Subs>>>,
 }
 
 impl<'a> AnalyzedDocumentBuilder<'a> {
@@ -278,6 +288,7 @@ impl<'a> AnalyzedDocumentBuilder<'a> {
             abilities,
             declarations,
             module_id,
+            other_subs: self.all_subs.clone(),
             interns: self.interns.clone(),
             module_id_to_url: self.module_id_to_url.clone(),
         };

@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, info};
 use std::collections::HashMap;
 
 use bumpalo::Bump;
@@ -228,6 +228,7 @@ impl AnalyzedDocument {
             exposed_imports,
             aliases,
             imports,
+            other_subs,
             ..
         } = self.module()?;
 
@@ -241,6 +242,7 @@ impl AnalyzedDocument {
                 .map(|a| a.chars().nth(0).unwrap().is_uppercase())
                 .unwrap_or(false);
             if is_module_completion {
+                info!("Getting module dot completion");
                 //TODO: this doesn't work with builtins for some reason
                 Some(get_upper_case_completion_items(
                     position,
@@ -250,9 +252,11 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     imports,
                     aliases,
+                    other_subs,
                     true,
                 ))
             } else {
+                info!("Getting record dot completion");
                 field_completion(
                     position,
                     symbol_prefix,
@@ -265,6 +269,7 @@ impl AnalyzedDocument {
         } else {
             let is_module_or_type_completion = symbol_prefix.chars().nth(0).unwrap().is_uppercase();
             if is_module_or_type_completion {
+                info!("Getting module completion");
                 let completions = get_upper_case_completion_items(
                     position,
                     symbol_prefix,
@@ -273,10 +278,12 @@ impl AnalyzedDocument {
                     &mut subs.clone(),
                     imports,
                     aliases,
+                    other_subs,
                     false,
                 );
                 Some(completions)
             } else {
+                info!("Getting variable completion");
                 let completions = get_completion_items(
                     position,
                     symbol_prefix,

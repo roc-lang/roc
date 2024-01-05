@@ -4,6 +4,7 @@ use std::{
 };
 
 use log::{debug, trace, warn};
+use parking_lot::Mutex;
 use roc_can::{
     def::Def,
     expr::{ClosureData, Declarations, Expr, WhenBranch},
@@ -18,6 +19,8 @@ use roc_types::{
     types::Alias,
 };
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
+
+use crate::registry::Registry;
 
 use super::utils::format_var_type;
 
@@ -331,6 +334,7 @@ pub fn get_upper_case_completion_items(
     subs: &mut Subs,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     aliases: &MutMap<Symbol, (bool, Alias)>,
+    all_subs: &Mutex<HashMap<ModuleId, Subs>>,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
     //TODO! use a proper completion type instead of simple
@@ -345,11 +349,15 @@ pub fn get_upper_case_completion_items(
         } else if prefix.starts_with(&mod_name) {
             vars.clone()
                 .iter()
-                .map(|(sym, vars)| {
+                .map(|(sym, var)| {
                     CompletionItem::new_simple(
                         sym.as_str(interns).to_string(),
                         //TODO! I need to get subs from the module we are completing from
-                        "builtin".to_string(),
+                        all_subs
+                            .lock()
+                            .get_mut(mod_id)
+                            .map(|subs| format_var_type(*var, subs, module_id, interns))
+                            .unwrap(), // "builtin".to_string(),
                     )
                 })
                 .collect::<Vec<_>>()
