@@ -13,9 +13,9 @@ function add_github_link_to_examples {
 EOF
     )
 
-    # TODO use specific example link (e.g. https://github.com/roc-lang/examples/tree/main/examples/FizzBuzz) for every example
-    local examples_link="https://github.com/roc-lang/examples"
+    # Use specific example link (e.g. https://github.com/roc-lang/examples/tree/main/examples/FizzBuzz) for every example
+    local examples_link="https://github.com/roc-lang/examples/tree/main/examples"
 
-    # TODO move perl stuff to add-link.pl
-    find $examples_dir_path -type f -name "README.html" -exec perl -MFile::Basename -pi -e "(\$name = dirname(\$ARGV)); s!</h1>!</h1><a id='gh-example-link' href=\"\$name\" aria-label='view on github'>$github_logo_svg</a>!; s!href=\"$examples_dir_path!href=\"$examples_link!" {} \;
+    # Insert a github link to the example in HTML
+    find "$examples_dir_path" -type f -name "README.html" -exec perl scripts/add-link.pl "$examples_dir_path" "$examples_link" "$github_logo_svg" {} \;
 }
