@@ -164,7 +164,7 @@ Roc supports 128-bit integers, 128-bit fixed-point decimal numbers. Here are som
 
 For heap-allocated numbers to be worth including in Roc's builtins, a sufficient number of real-world use cases would need to exist where the above ranges are too small, but a heap-allocated number would be big enough, _and_ the performance hit from the heap-allocated numbers would be acceptable to those use cases, _and_ a user-created implementation of heap-allocated numbers would not be acceptable, _and_ using 64-bit floating-point numbers (which can be even larger than these, at the cost of precision loss in some operations) would not be acceptable either.
 
-So far, this has not happend.
+So far, this has not happened.
 
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
