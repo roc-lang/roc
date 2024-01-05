@@ -18,12 +18,12 @@ use roc_std::{RocDec, RocOrder, RocResult};
 fn nat_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             i : Num.Nat
             i = 1
 
             i
-            "#
+            "
         ),
         1,
         usize
@@ -35,12 +35,12 @@ fn nat_alias() {
 fn i128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             i : I128
             i = 128
 
             i
-            "#
+            "
         ),
         128,
         i128
@@ -70,12 +70,12 @@ fn i64_signed_int_alias() {
 fn i32_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             i : I32
             i = 32
 
             i
-            "#
+            "
         ),
         32,
         i32
@@ -86,12 +86,12 @@ fn i32_signed_int_alias() {
 fn i16_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : I16
                     i = 16
 
                     i
-                "#
+                "
         ),
         16,
         i16
@@ -102,12 +102,12 @@ fn i16_signed_int_alias() {
 fn i8_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : I8
                     i = 8
 
                     i
-                "#
+                "
         ),
         8,
         i8
@@ -119,12 +119,12 @@ fn i8_signed_int_alias() {
 fn i128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : I128
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         i128
@@ -135,12 +135,12 @@ fn i128_hex_int_alias() {
 fn i64_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : I64
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         i64
@@ -151,12 +151,12 @@ fn i64_hex_int_alias() {
 fn i32_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : I32
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         i32
@@ -167,12 +167,12 @@ fn i32_hex_int_alias() {
 fn i16_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : I16
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         i16
@@ -183,12 +183,12 @@ fn i16_hex_int_alias() {
 fn i8_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : I8
                     f = 0xA
 
                     f
-                "#
+                "
         ),
         0xA,
         i8
@@ -200,12 +200,12 @@ fn i8_hex_int_alias() {
 fn u128_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : U128
                     i = 128
 
                     i
-                "#
+                "
         ),
         128,
         u128
@@ -216,12 +216,12 @@ fn u128_signed_int_alias() {
 fn u64_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : U64
                     i = 64
 
                     i
-                "#
+                "
         ),
         64,
         u64
@@ -232,12 +232,12 @@ fn u64_signed_int_alias() {
 fn u32_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : U32
                     i = 32
 
                     i
-                "#
+                "
         ),
         32,
         u32
@@ -248,12 +248,12 @@ fn u32_signed_int_alias() {
 fn u16_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : U16
                     i = 16
 
                     i
-                "#
+                "
         ),
         16,
         u16
@@ -264,12 +264,12 @@ fn u16_signed_int_alias() {
 fn u8_signed_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     i : U8
                     i = 8
 
                     i
-                "#
+                "
         ),
         8,
         u8
@@ -281,12 +281,12 @@ fn u8_signed_int_alias() {
 fn u128_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : U128
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         i128
@@ -297,12 +297,12 @@ fn u128_hex_int_alias() {
 fn u64_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : U64
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         u64
@@ -313,12 +313,12 @@ fn u64_hex_int_alias() {
 fn u32_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : U32
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         u32
@@ -329,12 +329,12 @@ fn u32_hex_int_alias() {
 fn u16_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : U16
                     f = 0x123
 
                     f
-                "#
+                "
         ),
         0x123,
         u16
@@ -345,12 +345,12 @@ fn u16_hex_int_alias() {
 fn u8_hex_int_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : U8
                     f = 0xA
 
                     f
-                "#
+                "
         ),
         0xA,
         u8
@@ -361,11 +361,11 @@ fn u8_hex_int_alias() {
 fn character_literal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x = 'A'
 
                     x
-                "#
+                "
         ),
         65,
         i64
@@ -376,11 +376,11 @@ fn character_literal() {
 fn character_literal_back_slash() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x = '\\'
 
                     x
-                "#
+                "
         ),
         92,
         i64
@@ -391,11 +391,11 @@ fn character_literal_back_slash() {
 fn character_literal_single_quote() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x = '\''
 
                     x
-                "#
+                "
         ),
         39,
         i64
@@ -406,11 +406,11 @@ fn character_literal_single_quote() {
 fn character_literal_new_line() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x = '\n'
 
                     x
-                "#
+                "
         ),
         10,
         i64
@@ -422,12 +422,12 @@ fn character_literal_new_line() {
 fn dec_float_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 2.1
 
                     x
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("2.1"),
         i128
@@ -439,12 +439,12 @@ fn dec_float_alias() {
 fn f64_float_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : F64
                     f = 3.6
 
                     f
-                "#
+                "
         ),
         3.6,
         f64
@@ -455,12 +455,12 @@ fn f64_float_alias() {
 fn f32_float_alias() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f : F32
                     f = 3.6
 
                     f
-                "#
+                "
         ),
         3.6,
         f32
@@ -580,9 +580,9 @@ fn various_sized_abs() {
 fn abs_min_int_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Num.abs Num.minI64
-                "#
+                "
         ),
         0,
         i64
@@ -594,7 +594,7 @@ fn abs_min_int_overflow() {
 fn gen_if_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     limitedNegate = \num ->
                         x =
                             if num == 1 then
@@ -606,7 +606,7 @@ fn gen_if_fn() {
                         x
 
                     limitedNegate 1
-                "#
+                "
         ),
         -1,
         i64
@@ -618,9 +618,9 @@ fn gen_if_fn() {
 fn gen_float_eq() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1.0 == 1.0
-                "#
+                "
         ),
         true,
         bool
@@ -632,7 +632,7 @@ fn gen_float_eq() {
 fn gen_add_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 2.1
 
@@ -643,7 +643,7 @@ fn gen_add_dec() {
                     z = x + y
 
                     z
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("5.2"),
         i128
@@ -654,9 +654,9 @@ fn gen_add_dec() {
 fn gen_add_f32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1.1f32 + 2.4f32 + 3
-                "#
+                "
         ),
         6.5,
         f32
@@ -667,9 +667,9 @@ fn gen_add_f32() {
 fn gen_add_f64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1.1f64 + 2.4 + 3
-                "#
+                "
         ),
         6.5,
         f64
@@ -681,11 +681,11 @@ fn gen_add_f64() {
 fn gen_wrap_add_nums() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     add2 = \num1, num2 -> num1 + num2
 
                     add2 4 5
-                "#
+                "
         ),
         9,
         i64
@@ -709,11 +709,11 @@ fn gen_div_f32() {
 fn gen_div_checked_f64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     when Num.divChecked 48 2f64 is
                         Ok val -> val
                         Err _ -> -1
-                "#
+                "
         ),
         24.0,
         f64
@@ -725,11 +725,11 @@ fn gen_div_checked_f64() {
 fn gen_div_checked_by_zero_f64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     when Num.divChecked 47 0f64 is
                         Ok val -> val
                         Err _ -> -1
-                "#
+                "
         ),
         -1.0,
         f64
@@ -741,7 +741,7 @@ fn gen_div_checked_by_zero_f64() {
 fn gen_div_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 10
 
@@ -749,7 +749,7 @@ fn gen_div_dec() {
                     y = 3
 
                     x / y
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
         i128
@@ -761,7 +761,7 @@ fn gen_div_dec() {
 fn gen_div_checked_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 10
 
@@ -771,7 +771,7 @@ fn gen_div_checked_dec() {
                     when Num.divChecked x y is
                         Ok val -> val
                         Err _ -> -1
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("3.333333333333333333"),
         i128
@@ -782,7 +782,7 @@ fn gen_div_checked_dec() {
 fn gen_div_checked_by_zero_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 10
 
@@ -792,7 +792,7 @@ fn gen_div_checked_by_zero_dec() {
                     when Num.divChecked x y is
                         Ok val -> val
                         Err _ -> -1
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("-1"),
         i128
@@ -811,9 +811,9 @@ fn gen_div_dec_by_zero() {
 #[should_panic(expected = r#"Roc failed with message: "Integer division by 0!"#)]
 fn gen_div_ceil_by_zero() {
     assert_evals_to!(
-        r#"
+        r"
             Num.divCeil 5 0 == 0
-        "#,
+        ",
         false,
         bool
     );
@@ -824,9 +824,9 @@ fn gen_div_ceil_by_zero() {
 fn gen_int_eq() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     4 == 4
-                "#
+                "
         ),
         true,
         bool
@@ -838,9 +838,9 @@ fn gen_int_eq() {
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     4 != 5
-                "#
+                "
         ),
         true,
         bool
@@ -870,7 +870,7 @@ fn float_greater_than() {
 fn gen_dec_eq() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 4
 
@@ -878,7 +878,7 @@ fn gen_dec_eq() {
                     y = 4
 
                     x == y
-                "#
+                "
         ),
         true,
         bool
@@ -890,7 +890,7 @@ fn gen_dec_eq() {
 fn gen_dec_neq() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 4
 
@@ -898,7 +898,7 @@ fn gen_dec_neq() {
                     y = 5
 
                     x != y
-                "#
+                "
         ),
         true,
         bool
@@ -910,13 +910,13 @@ fn gen_dec_neq() {
 fn gen_wrap_int_neq() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     wrappedNotEq : a, a -> Bool where a implements Eq
                     wrappedNotEq = \num1, num2 ->
                         num1 != num2
 
                     wrappedNotEq 2 3
-                "#
+                "
         ),
         true,
         bool
@@ -928,9 +928,9 @@ fn gen_wrap_int_neq() {
 fn gen_add_i8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1i8 + 2i8 + 3i8
-                "#
+                "
         ),
         6,
         i8
@@ -942,9 +942,9 @@ fn gen_add_i8() {
 fn gen_add_u8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1u8 + 2u8 + 3u8
-                "#
+                "
         ),
         6,
         u8
@@ -956,9 +956,9 @@ fn gen_add_u8() {
 fn gen_add_i16() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1i16 + 2i16 + 3i16
-                "#
+                "
         ),
         6,
         i16
@@ -970,9 +970,9 @@ fn gen_add_i16() {
 fn gen_add_u16() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1u16 + 2u16 + 3u16
-                "#
+                "
         ),
         6,
         u16
@@ -984,9 +984,9 @@ fn gen_add_u16() {
 fn gen_add_i32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1i32 + 2i32 + 3i32
-                "#
+                "
         ),
         6,
         i32
@@ -998,9 +998,9 @@ fn gen_add_i32() {
 fn gen_add_u32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1u32 + 2u32 + 3u32
-                "#
+                "
         ),
         6,
         u32
@@ -1012,9 +1012,9 @@ fn gen_add_u32() {
 fn gen_add_i64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1 + 2 + 3
-                "#
+                "
         ),
         6,
         i64
@@ -1026,7 +1026,7 @@ fn gen_add_i64() {
 fn gen_sub_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 1.5
 
@@ -1037,7 +1037,7 @@ fn gen_sub_dec() {
                     z = 3
 
                     (x - y) - z
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("-3.9"),
         i128
@@ -1049,7 +1049,7 @@ fn gen_sub_dec() {
 fn gen_mul_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     x : Dec
                     x = 2
 
@@ -1060,7 +1060,7 @@ fn gen_mul_dec() {
                     z = 6
 
                     x * y * z
-                "#
+                "
         ),
         RocDec::from_str_to_i128_unsafe("48.0"),
         i128
@@ -1168,11 +1168,11 @@ fn gen_div_u64() {
 fn gen_div_checked_i64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     when Num.divTruncChecked 1000 10 is
                         Ok val -> val
                         Err _ -> -1
-                "#
+                "
         ),
         100,
         i64
@@ -1184,11 +1184,11 @@ fn gen_div_checked_i64() {
 fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     when Num.divTruncChecked 1000 0 is
                         Err DivByZero -> 99
                         _ -> -24
-                "#
+                "
         ),
         99,
         i64
@@ -1206,11 +1206,11 @@ fn gen_rem_i64() {
 fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when Num.remChecked 8 0 is
                 Err DivByZero -> 4
                 Ok _ -> -23
-            "#
+            "
         ),
         4,
         i64
@@ -1499,9 +1499,9 @@ fn gte_f64() {
 fn gen_order_of_arithmetic_ops() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1 + 3 * 7 - 2
-                "#
+                "
         ),
         20,
         i64
@@ -1513,9 +1513,9 @@ fn gen_order_of_arithmetic_ops() {
 fn gen_order_of_arithmetic_ops_complex_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     3 - 48 * 2.0f64
-                "#
+                "
         ),
         -93.0,
         f64
@@ -1527,14 +1527,14 @@ fn gen_order_of_arithmetic_ops_complex_float() {
 fn if_guard_bind_variable_false() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     when 10 is
                         x if x == 5 -> 0
                         _ -> 42
 
                 wrapper {}
-                "#
+                "
         ),
         42,
         i64
@@ -1546,14 +1546,14 @@ fn if_guard_bind_variable_false() {
 fn if_guard_bind_variable_true() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 wrapper = \{} ->
                     when 10 is
                         x if x == 10 -> 42
                         _ -> 0
 
                 wrapper {}
-                "#
+                "
         ),
         42,
         i64
@@ -1565,14 +1565,14 @@ fn if_guard_bind_variable_true() {
 fn tail_call_elimination() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     sum = \n, accum ->
                         when n is
                             0 -> accum
                             _ -> sum (n - 1) (n + accum)
 
                     sum 1_000_000 0
-                "#
+                "
         ),
         500000500000,
         i64
@@ -1606,9 +1606,9 @@ fn int_negate() {
 fn neg_min_int_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 Num.neg Num.minI64
-                "#
+                "
         ),
         0,
         i64
@@ -1620,11 +1620,11 @@ fn neg_min_int_overflow() {
 fn gen_wrap_int_neg() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     wrappedNeg = \num -> -num
 
                     wrappedNeg 3
-                "#
+                "
         ),
         -3,
         i64
@@ -1636,12 +1636,12 @@ fn gen_wrap_int_neg() {
 fn gen_basic_fn() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     always42 : Num.Num (Num.Integer Num.Signed64) -> Num.Num (Num.Integer Num.Signed64)
                     always42 = \_ -> 42
 
                     always42 5
-                "#
+                "
         ),
         42,
         i64
@@ -1665,14 +1665,14 @@ fn num_to_frac() {
 fn num_to_frac_f64_to_f32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     f64 : F64
                     f64 = 9.0
 
                     f32 : F32
                     f32 = Num.toFrac f64
                     f32
-                "#
+                "
         ),
         9.0,
         f32
@@ -1684,7 +1684,7 @@ fn num_to_frac_f64_to_f32() {
 fn num_to_frac_f32_to_f32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
 
                     arg : F32
                     arg = 9.0
@@ -1692,7 +1692,7 @@ fn num_to_frac_f32_to_f32() {
                     ret : F32
                     ret = Num.toFrac arg
                     ret
-                "#
+                "
         ),
         9.0,
         f32
@@ -1704,7 +1704,7 @@ fn num_to_frac_f32_to_f32() {
 fn num_to_frac_f64_to_f64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
 
                     arg : F64
                     arg = 9.0
@@ -1712,7 +1712,7 @@ fn num_to_frac_f64_to_f64() {
                     ret : F64
                     ret = Num.toFrac arg
                     ret
-                "#
+                "
         ),
         9.0,
         f64
@@ -1724,7 +1724,7 @@ fn num_to_frac_f64_to_f64() {
 fn num_to_frac_f32_to_f64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
 
                     f32 : F32
                     f32 = 9.0
@@ -1732,7 +1732,7 @@ fn num_to_frac_f32_to_f64() {
                     f64 : F64
                     f64 = Num.toFrac f32
                     f64
-                "#
+                "
         ),
         9.0,
         f64
@@ -1744,12 +1744,12 @@ fn num_to_frac_f32_to_f64() {
 fn float_to_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : F64
             x = Num.toFrac 0.5f64
 
             x
-            "#
+            "
         ),
         0.5,
         f64
@@ -1834,9 +1834,9 @@ fn atan() {
 fn int_add_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 9_223_372_036_854_775_807 + 1
-                "#
+                "
         ),
         0,
         i64
@@ -1937,11 +1937,11 @@ fn float_sub_overflow() {
 fn int_sub_checked() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.subChecked 5 2 is
                     Ok v -> v
                     _ -> -1
-                "#
+                "
         ),
         3,
         i64
@@ -1949,11 +1949,11 @@ fn int_sub_checked() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.subChecked Num.minI64 1 is
                     Err Overflow -> -1
                     Ok v -> v
-                "#
+                "
         ),
         -1,
         i64
@@ -1965,11 +1965,11 @@ fn int_sub_checked() {
 fn float_sub_checked() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.subChecked 1.0 0.0f64 is
                     Ok v -> v
                     Err Overflow -> -1.0
-                "#
+                "
         ),
         1.0,
         f64
@@ -1977,11 +1977,11 @@ fn float_sub_checked() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.subChecked -1.7976931348623157e308f64 1.7976931348623157e308 is
                     Err Overflow -> -1
                     Ok v -> v
-                "#
+                "
         ),
         -1.0,
         f64
@@ -1989,14 +1989,14 @@ fn float_sub_checked() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "Integer multiplication overflowed!"#)]
 fn int_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 9_223_372_036_854_775_807 * 2
-                "#
+                "
         ),
         0,
         i64
@@ -2009,9 +2009,9 @@ fn int_positive_mul_overflow() {
 fn int_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 (-9_223_372_036_854_775_808) * 2
-                "#
+                "
         ),
         0,
         i64
@@ -2023,9 +2023,9 @@ fn int_negative_mul_overflow() {
 fn float_positive_mul_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     1.7976931348623157e308f64 * 2
-                "#
+                "
         ),
         f64::INFINITY,
         f64
@@ -2037,9 +2037,9 @@ fn float_positive_mul_overflow() {
 fn float_negative_mul_overflow() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     -1.7976931348623157e308f64 * 2
-                "#
+                "
         ),
         -f64::INFINITY,
         f64
@@ -2063,11 +2063,11 @@ fn int_mul_wrap_i128() {
 fn int_mul_checked() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.mulChecked 20 2 is
                     Ok v -> v
                     _ -> -1
-                "#
+                "
         ),
         40,
         i64
@@ -2075,11 +2075,11 @@ fn int_mul_checked() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.mulChecked Num.maxI64 2 is
                     Err Overflow -> -1
                     Ok v -> v
-                "#
+                "
         ),
         -1,
         i64
@@ -2091,11 +2091,11 @@ fn int_mul_checked() {
 fn float_mul_checked() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.mulChecked 20.0 2.0f64 is
                     Ok v -> v
                     Err Overflow -> -1.0
-                "#
+                "
         ),
         40.0,
         f64
@@ -2103,11 +2103,11 @@ fn float_mul_checked() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.mulChecked 1.7976931348623157e308f64 2 is
                     Err Overflow -> -1
                     Ok v -> v
-                "#
+                "
         ),
         -1.0,
         f64
@@ -2776,11 +2776,11 @@ fn bytes_to_u128_subtly_out_of_bounds() {
 fn bytes_to_u16_max_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU16 [255, 255] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         65535,
         u16
@@ -2792,11 +2792,11 @@ fn bytes_to_u16_max_u8s() {
 fn bytes_to_u16_min_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU16 [0, 0] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         0,
         u16
@@ -2808,11 +2808,11 @@ fn bytes_to_u16_min_u8s() {
 fn bytes_to_u16_random_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU16 [164, 215] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         55_204,
         u16
@@ -2824,11 +2824,11 @@ fn bytes_to_u16_random_u8s() {
 fn bytes_to_u32_min_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU32 [0, 0, 0, 0] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         0,
         u32
@@ -2840,11 +2840,11 @@ fn bytes_to_u32_min_u8s() {
 fn bytes_to_u32_max_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU32 [255, 255, 255, 255] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         4_294_967_295,
         u32
@@ -2856,11 +2856,11 @@ fn bytes_to_u32_max_u8s() {
 fn bytes_to_u32_random_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU32 [252, 124, 128, 121] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         2_038_463_740,
         u32
@@ -2872,11 +2872,11 @@ fn bytes_to_u32_random_u8s() {
 fn bytes_to_u64_min_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU64 [0, 0, 0, 0, 0, 0, 0, 0] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         0,
         u64
@@ -2888,11 +2888,11 @@ fn bytes_to_u64_min_u8s() {
 fn bytes_to_u64_max_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU64 [255, 255, 255, 255, 255, 255, 255, 255] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         18_446_744_073_709_551_615,
         u64
@@ -2904,11 +2904,11 @@ fn bytes_to_u64_max_u8s() {
 fn bytes_to_u64_random_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU64 [252, 124, 128, 121, 1, 32, 177, 211] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         15_254_008_603_586_100_476,
         u64
@@ -2920,11 +2920,11 @@ fn bytes_to_u64_random_u8s() {
 fn bytes_to_u128_min_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU128 [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         0,
         u128
@@ -2936,11 +2936,11 @@ fn bytes_to_u128_min_u8s() {
 fn bytes_to_u128_max_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU128 [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         340_282_366_920_938_463_463_374_607_431_768_211_455,
         u128
@@ -2952,11 +2952,11 @@ fn bytes_to_u128_max_u8s() {
 fn bytes_to_u128_random_u8s() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when Num.bytesToU128 [252, 124, 128, 121, 1, 32, 177, 211, 3, 57, 203, 122, 95, 164, 23, 145] 0 is
                     Ok v -> v
                     Err OutOfBounds -> 1
-                "#
+                "
         ),
         192_860_816_096_412_392_720_639_456_393_488_792_828,
         u128
@@ -3014,23 +3014,15 @@ fn when_on_i16() {
 fn num_to_str() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr 1234"#, RocStr::from("1234"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1"#, RocStr::from("-1"), RocStr);
+    assert_evals_to!(r"Num.toStr 1234", RocStr::from("1234"), RocStr);
+    assert_evals_to!(r"Num.toStr 0", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr -1", RocStr::from("-1"), RocStr);
 
     let max = format!("{}", i64::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxI64"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxI64", RocStr::from(max.as_str()), RocStr);
 
     let min = format!("{}", i64::MIN);
-    assert_evals_to!(
-        r#"Num.toStr Num.minI64"#,
-        RocStr::from(min.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.minI64", RocStr::from(min.as_str()), RocStr);
 }
 
 #[test]
@@ -3038,12 +3030,12 @@ fn num_to_str() {
 fn num_to_str_u8() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr 0u8"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1u8"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10u8"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr 0u8", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1u8", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10u8", RocStr::from("10"), RocStr);
 
     let max = format!("{}", u8::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxU8"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(r"Num.toStr Num.maxU8", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3051,16 +3043,12 @@ fn num_to_str_u8() {
 fn num_to_str_u16() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr 0u16"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1u16"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10u16"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr 0u16", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1u16", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10u16", RocStr::from("10"), RocStr);
 
     let max = format!("{}", u16::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxU16"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxU16", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3068,16 +3056,12 @@ fn num_to_str_u16() {
 fn num_to_str_u32() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr 0u32"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1u32"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10u32"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr 0u32", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1u32", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10u32", RocStr::from("10"), RocStr);
 
     let max = format!("{}", u32::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxU32"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxU32", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3085,16 +3069,12 @@ fn num_to_str_u32() {
 fn num_to_str_u64() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr 0u64"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1u64"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10u64"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr 0u64", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1u64", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10u64", RocStr::from("10"), RocStr);
 
     let max = format!("{}", u64::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxU64"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxU64", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3102,17 +3082,17 @@ fn num_to_str_u64() {
 fn num_to_str_i8() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10i8"#, RocStr::from("-10"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1i8"#, RocStr::from("-1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0i8"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1i8"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10i8"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr -10i8", RocStr::from("-10"), RocStr);
+    assert_evals_to!(r"Num.toStr -1i8", RocStr::from("-1"), RocStr);
+    assert_evals_to!(r"Num.toStr 0i8", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1i8", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10i8", RocStr::from("10"), RocStr);
 
     let max = format!("{}", i8::MAX);
-    assert_evals_to!(r#"Num.toStr Num.maxI8"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(r"Num.toStr Num.maxI8", RocStr::from(max.as_str()), RocStr);
 
     let max = format!("{}", i8::MIN);
-    assert_evals_to!(r#"Num.toStr Num.minI8"#, RocStr::from(max.as_str()), RocStr);
+    assert_evals_to!(r"Num.toStr Num.minI8", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3120,25 +3100,17 @@ fn num_to_str_i8() {
 fn num_to_str_i16() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10i16"#, RocStr::from("-10"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1i16"#, RocStr::from("-1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0i16"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1i16"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10i16"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr -10i16", RocStr::from("-10"), RocStr);
+    assert_evals_to!(r"Num.toStr -1i16", RocStr::from("-1"), RocStr);
+    assert_evals_to!(r"Num.toStr 0i16", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1i16", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10i16", RocStr::from("10"), RocStr);
 
     let max = format!("{}", i16::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxI16"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxI16", RocStr::from(max.as_str()), RocStr);
 
     let max = format!("{}", i16::MIN);
-    assert_evals_to!(
-        r#"Num.toStr Num.minI16"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.minI16", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3146,25 +3118,17 @@ fn num_to_str_i16() {
 fn num_to_str_i32() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10i32"#, RocStr::from("-10"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1i32"#, RocStr::from("-1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0i32"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1i32"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10i32"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr -10i32", RocStr::from("-10"), RocStr);
+    assert_evals_to!(r"Num.toStr -1i32", RocStr::from("-1"), RocStr);
+    assert_evals_to!(r"Num.toStr 0i32", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1i32", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10i32", RocStr::from("10"), RocStr);
 
     let max = format!("{}", i32::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxI32"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxI32", RocStr::from(max.as_str()), RocStr);
 
     let max = format!("{}", i32::MIN);
-    assert_evals_to!(
-        r#"Num.toStr Num.minI32"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.minI32", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3172,25 +3136,17 @@ fn num_to_str_i32() {
 fn num_to_str_i64() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10i64"#, RocStr::from("-10"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1i64"#, RocStr::from("-1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0i64"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1i64"#, RocStr::from("1"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10i64"#, RocStr::from("10"), RocStr);
+    assert_evals_to!(r"Num.toStr -10i64", RocStr::from("-10"), RocStr);
+    assert_evals_to!(r"Num.toStr -1i64", RocStr::from("-1"), RocStr);
+    assert_evals_to!(r"Num.toStr 0i64", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1i64", RocStr::from("1"), RocStr);
+    assert_evals_to!(r"Num.toStr 10i64", RocStr::from("10"), RocStr);
 
     let max = format!("{}", i64::MAX);
-    assert_evals_to!(
-        r#"Num.toStr Num.maxI64"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.maxI64", RocStr::from(max.as_str()), RocStr);
 
     let max = format!("{}", i64::MIN);
-    assert_evals_to!(
-        r#"Num.toStr Num.minI64"#,
-        RocStr::from(max.as_str()),
-        RocStr
-    );
+    assert_evals_to!(r"Num.toStr Num.minI64", RocStr::from(max.as_str()), RocStr);
 }
 
 #[test]
@@ -3198,20 +3154,20 @@ fn num_to_str_i64() {
 fn num_to_str_f32() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10.75f32"#, RocStr::from("-10.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1.75f32"#, RocStr::from("-1.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0f32"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1.75f32"#, RocStr::from("1.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10.75f32"#, RocStr::from("10.75"), RocStr);
+    assert_evals_to!(r"Num.toStr -10.75f32", RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r"Num.toStr -1.75f32", RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r"Num.toStr 0f32", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1.75f32", RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r"Num.toStr 10.75f32", RocStr::from("10.75"), RocStr);
 
     assert_evals_to!(
-        r#"Num.toStr Num.maxF32"#,
+        r"Num.toStr Num.maxF32",
         RocStr::from("340282346638528860000000000000000000000"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"Num.toStr Num.minF32"#,
+        r"Num.toStr Num.minF32",
         RocStr::from("-340282346638528860000000000000000000000"),
         RocStr
     );
@@ -3222,20 +3178,20 @@ fn num_to_str_f32() {
 fn num_to_str_f64() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10.75f64"#, RocStr::from("-10.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1.75f64"#, RocStr::from("-1.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0f64"#, RocStr::from("0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1.75f64"#, RocStr::from("1.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10.75f64"#, RocStr::from("10.75"), RocStr);
+    assert_evals_to!(r"Num.toStr -10.75f64", RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r"Num.toStr -1.75f64", RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r"Num.toStr 0f64", RocStr::from("0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1.75f64", RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r"Num.toStr 10.75f64", RocStr::from("10.75"), RocStr);
 
     assert_evals_to!(
-        r#"Num.toStr Num.maxF64"#,
+        r"Num.toStr Num.maxF64",
         RocStr::from(f64::MAX.to_string().as_str()),
         RocStr
     );
 
     assert_evals_to!(
-        r#"Num.toStr Num.minF64"#,
+        r"Num.toStr Num.minF64",
         RocStr::from(f64::MIN.to_string().as_str()),
         RocStr
     );
@@ -3246,20 +3202,20 @@ fn num_to_str_f64() {
 fn num_to_str_dec() {
     use roc_std::RocStr;
 
-    assert_evals_to!(r#"Num.toStr -10.75dec"#, RocStr::from("-10.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr -1.75dec"#, RocStr::from("-1.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr 0dec"#, RocStr::from("0.0"), RocStr);
-    assert_evals_to!(r#"Num.toStr 1.75dec"#, RocStr::from("1.75"), RocStr);
-    assert_evals_to!(r#"Num.toStr 10.75dec"#, RocStr::from("10.75"), RocStr);
+    assert_evals_to!(r"Num.toStr -10.75dec", RocStr::from("-10.75"), RocStr);
+    assert_evals_to!(r"Num.toStr -1.75dec", RocStr::from("-1.75"), RocStr);
+    assert_evals_to!(r"Num.toStr 0dec", RocStr::from("0.0"), RocStr);
+    assert_evals_to!(r"Num.toStr 1.75dec", RocStr::from("1.75"), RocStr);
+    assert_evals_to!(r"Num.toStr 10.75dec", RocStr::from("10.75"), RocStr);
 
     assert_evals_to!(
-        r#"Num.toStr 170141183460469.105727dec"#,
+        r"Num.toStr 170141183460469.105727dec",
         RocStr::from("170141183460469.105727"),
         RocStr
     );
 
     assert_evals_to!(
-        r#"Num.toStr -170141183460469.105727dec"#,
+        r"Num.toStr -170141183460469.105727dec",
         RocStr::from("-170141183460469.105727"),
         RocStr
     );
@@ -3270,13 +3226,13 @@ fn num_to_str_dec() {
 fn u8_addition_greater_than_i8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : U8
             x = 100
             y : U8
             y = 100
             x + y
-            "#
+            "
         ),
         200,
         u8
@@ -3288,13 +3244,13 @@ fn u8_addition_greater_than_i8() {
 fn u8_sub_greater_than_i8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : U8
             x = 255
             y : U8
             y = 55
             x - y
-            "#
+            "
         ),
         200,
         u8
@@ -3306,13 +3262,13 @@ fn u8_sub_greater_than_i8() {
 fn u8_mul_greater_than_i8() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : U8
             x = 40
             y : U8
             y = 5
             x * y
-            "#
+            "
         ),
         200,
         u8
@@ -3324,13 +3280,13 @@ fn u8_mul_greater_than_i8() {
 fn add_saturated() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : U8
             x = 200
             y : U8
             y = 200
             Num.addSaturated x y
-            "#
+            "
         ),
         255,
         u8
@@ -3338,13 +3294,13 @@ fn add_saturated() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = 100
             y : I8
             y = 100
             Num.addSaturated x y
-            "#
+            "
         ),
         127,
         i8
@@ -3352,13 +3308,13 @@ fn add_saturated() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = -100
             y : I8
             y = -100
             Num.addSaturated x y
-            "#
+            "
         ),
         -128,
         i8
@@ -3370,39 +3326,39 @@ fn add_saturated() {
 fn sub_saturated() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : U8
             x = 10
             y : U8
             y = 20
             Num.subSaturated x y
-            "#
+            "
         ),
         0,
         u8
     );
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = -100
             y : I8
             y = 100
             Num.subSaturated x y
-            "#
+            "
         ),
         -128,
         i8
     );
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = 100
             y : I8
             y = -100
             Num.subSaturated x y
-            "#
+            "
         ),
         127,
         i8
@@ -3414,65 +3370,65 @@ fn sub_saturated() {
 fn mul_saturated() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : U8
             x = 20
             y : U8
             y = 20
             Num.mulSaturated x y
-            "#
+            "
         ),
         255,
         u8
     );
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = -20
             y : I8
             y = -20
             Num.mulSaturated x y
-            "#
+            "
         ),
         127,
         i8
     );
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = 20
             y : I8
             y = -20
             Num.mulSaturated x y
-            "#
+            "
         ),
         -128,
         i8
     );
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = -20
             y : I8
             y = 20
             Num.mulSaturated x y
-            "#
+            "
         ),
         -128,
         i8
     );
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : I8
             x = 20
             y : I8
             y = 20
             Num.mulSaturated x y
-            "#
+            "
         ),
         127,
         i8
@@ -3484,14 +3440,14 @@ fn mul_saturated() {
 fn monomorphized_ints() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x = 100
 
             f : U8, U32 -> Nat
             f = \_, _ -> 18
 
             f x x
-            "#
+            "
         ),
         18,
         usize
@@ -3503,14 +3459,14 @@ fn monomorphized_ints() {
 fn monomorphized_floats() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x = 100.0
 
             f : F32, F64 -> Nat
             f = \_, _ -> 18
 
             f x x
-            "#
+            "
         ),
         18,
         usize
@@ -3522,7 +3478,7 @@ fn monomorphized_floats() {
 fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             f : U8 -> Nat
             f = \_ -> 9
             x =
@@ -3534,7 +3490,7 @@ fn monomorphized_ints_names_dont_conflict() {
                 f n
 
             x + y
-            "#
+            "
         ),
         18,
         usize
@@ -3573,14 +3529,14 @@ fn monomorphized_ints_aliased() {
 fn to_float_f32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             n : U8
             n = 100
 
             f : F32
             f = Num.toFrac n
             f
-            "#
+            "
         ),
         100.,
         f32
@@ -3592,14 +3548,14 @@ fn to_float_f32() {
 fn to_float_f64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             n : U8
             n = 100
 
             f : F64
             f = Num.toFrac n
             f
-            "#
+            "
         ),
         100.,
         f64
@@ -3612,9 +3568,9 @@ fn to_float_f64() {
 fn upcast_of_int_is_zext() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Num.toU16 0b1000_0000u8
-            "#
+            "
         ),
         128,
         u16
@@ -3627,11 +3583,11 @@ fn upcast_of_int_is_zext() {
 fn upcast_of_int_checked_is_zext() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when Num.toU16Checked 0b1000_0000u8 is
                 Ok 128u16 -> 1u8
                 _ -> 0u8
-            "#
+            "
         ),
         1,
         u8
@@ -3643,9 +3599,9 @@ fn upcast_of_int_checked_is_zext() {
 fn modulo_of_unsigned() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             0b1111_1111u8 % 64
-            "#
+            "
         ),
         63,
         u8
@@ -3657,9 +3613,9 @@ fn modulo_of_unsigned() {
 fn div_of_unsigned() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             0b1111_1111u8 // 2
-            "#
+            "
         ),
         127,
         u8
@@ -3671,9 +3627,9 @@ fn div_of_unsigned() {
 fn dec_float_suffix() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             123.0dec
-            "#
+            "
         ),
         RocDec::from_str_to_i128_unsafe("123.0"),
         i128
@@ -3685,9 +3641,9 @@ fn dec_float_suffix() {
 fn dec_no_decimal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             3dec
-            "#
+            "
         ),
         RocDec::from_str_to_i128_unsafe("3.0"),
         i128
@@ -3699,11 +3655,11 @@ fn dec_no_decimal() {
 fn ceiling_to_u32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             n : U32
             n = Num.ceiling 124.5f64
             n
-            "#
+            "
         ),
         125,
         u32
@@ -3715,11 +3671,11 @@ fn ceiling_to_u32() {
 fn floor_to_u32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             n : U32
             n = Num.floor 124.5f64
             n
-            "#
+            "
         ),
         124,
         u32
@@ -3731,11 +3687,11 @@ fn floor_to_u32() {
 fn round_to_u32() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             n : U32
             n = Num.round 124.49f64
             n
-            "#
+            "
         ),
         124,
         u32
@@ -3747,9 +3703,9 @@ fn round_to_u32() {
 fn promote_u64_number_layout() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             9999999999999999999 + 1
-            "#
+            "
         ),
         10000000000000000000,
         u64
@@ -3761,12 +3717,12 @@ fn promote_u64_number_layout() {
 fn promote_i128_number_layout() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             {
                 a: 18446744073709551616 + 1,
                 b: -9223372036854775809 + 1,
             }
-            "#
+            "
         ),
         (18446744073709551617, -9223372036854775808),
         (i128, i128)
@@ -3778,9 +3734,9 @@ fn promote_i128_number_layout() {
 fn promote_u128_number_layout() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             170141183460469231731687303715884105728 + 1
-            "#
+            "
         ),
         170141183460469231731687303715884105729,
         u128
@@ -3792,13 +3748,13 @@ fn promote_u128_number_layout() {
 fn when_on_decimals() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when 42.42dec is
                 42.42 -> 42
                 0.05 -> 1
                 3.14 -> 2
                 _ -> 4
-            "#
+            "
         ),
         42,
         i64
@@ -3806,12 +3762,12 @@ fn when_on_decimals() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when 42.42dec is
                 0.05 -> 1
                 3.14 -> 2
                 _ -> 4
-            "#
+            "
         ),
         4,
         i64
@@ -3823,13 +3779,13 @@ fn when_on_decimals() {
 fn when_on_i128() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when 1701411834604692317316873037158841057i128 is
                 1701411834604692317316873037158841057 -> 42
                 32 -> 1
                 64 -> 2
                 _ -> 4
-            "#
+            "
         ),
         42,
         i64
@@ -3841,13 +3797,13 @@ fn when_on_i128() {
 fn when_on_u128() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             when 170141183460469231731687303715884105728u128 is
                 170141183460469231731687303715884105728u128 -> 42
                 32 -> 1
                 64 -> 2
                 _ -> 4
-            "#
+            "
         ),
         42,
         i64
@@ -3859,10 +3815,10 @@ fn when_on_u128() {
 fn condition_polymorphic_num_becomes_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x = if Bool.true then 2 else 3
             x * 5f32
-            "#
+            "
         ),
         10.,
         f32
@@ -3872,79 +3828,79 @@ fn condition_polymorphic_num_becomes_float() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_leading_zero_bits() {
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u8"#, 2, u8);
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u16"#, 10, u8);
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u32"#, 26, u8);
-    assert_evals_to!(r#"Num.countLeadingZeroBits 0b0010_1000u64"#, 58, u8);
+    assert_evals_to!(r"Num.countLeadingZeroBits 0b0010_1000u8", 2, u8);
+    assert_evals_to!(r"Num.countLeadingZeroBits 0b0010_1000u16", 10, u8);
+    assert_evals_to!(r"Num.countLeadingZeroBits 0b0010_1000u32", 26, u8);
+    assert_evals_to!(r"Num.countLeadingZeroBits 0b0010_1000u64", 58, u8);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_trailing_zero_bits() {
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1000u8"#, 3, u8);
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_0000u16"#, 5, u8);
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0u32"#, 32, u8);
-    assert_evals_to!(r#"Num.countTrailingZeroBits 0b0010_1111u64"#, 0, u8);
+    assert_evals_to!(r"Num.countTrailingZeroBits 0b0010_1000u8", 3, u8);
+    assert_evals_to!(r"Num.countTrailingZeroBits 0b0010_0000u16", 5, u8);
+    assert_evals_to!(r"Num.countTrailingZeroBits 0u32", 32, u8);
+    assert_evals_to!(r"Num.countTrailingZeroBits 0b0010_1111u64", 0, u8);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn num_count_one_bits() {
-    assert_evals_to!(r#"Num.countOneBits 0b0010_1000u8"#, 2, u8);
-    assert_evals_to!(r#"Num.countOneBits 0b0010_0000u16"#, 1, u8);
-    assert_evals_to!(r#"Num.countOneBits 0u32"#, 0, u8);
-    assert_evals_to!(r#"Num.countOneBits 0b0010_1111u64"#, 5, u8);
+    assert_evals_to!(r"Num.countOneBits 0b0010_1000u8", 2, u8);
+    assert_evals_to!(r"Num.countOneBits 0b0010_0000u16", 1, u8);
+    assert_evals_to!(r"Num.countOneBits 0u32", 0, u8);
+    assert_evals_to!(r"Num.countOneBits 0b0010_1111u64", 5, u8);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_abs_diff_int() {
-    assert_evals_to!(r#"Num.absDiff 0u8 0u8"#, 0, u8);
-    assert_evals_to!(r#"Num.absDiff 1u8 2u8"#, 1, u8);
-    assert_evals_to!(r#"Num.absDiff 2u8 1u8"#, 1, u8);
-    assert_evals_to!(r#"Num.absDiff -1 1"#, 2, i64);
-    assert_evals_to!(r#"Num.absDiff 1 -1"#, 2, i64);
-    assert_evals_to!(r#"Num.absDiff Num.minI64 -1"#, i64::MAX, i64);
+    assert_evals_to!(r"Num.absDiff 0u8 0u8", 0, u8);
+    assert_evals_to!(r"Num.absDiff 1u8 2u8", 1, u8);
+    assert_evals_to!(r"Num.absDiff 2u8 1u8", 1, u8);
+    assert_evals_to!(r"Num.absDiff -1 1", 2, i64);
+    assert_evals_to!(r"Num.absDiff 1 -1", 2, i64);
+    assert_evals_to!(r"Num.absDiff Num.minI64 -1", i64::MAX, i64);
 }
 
 #[test]
 #[cfg(feature = "gen-llvm")]
 fn num_abs_diff_large_bits() {
-    assert_evals_to!(r#"Num.absDiff 0u128 0u128"#, 0, u128);
-    assert_evals_to!(r#"Num.absDiff 1u128 2u128"#, 1, u128);
-    assert_evals_to!(r#"Num.absDiff -1i128 1i128"#, 2, i128);
-    assert_evals_to!(r#"Num.absDiff Num.minI128 -1i128"#, i128::MAX, i128);
+    assert_evals_to!(r"Num.absDiff 0u128 0u128", 0, u128);
+    assert_evals_to!(r"Num.absDiff 1u128 2u128", 1, u128);
+    assert_evals_to!(r"Num.absDiff -1i128 1i128", 2, i128);
+    assert_evals_to!(r"Num.absDiff Num.minI128 -1i128", i128::MAX, i128);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn num_abs_diff_float() {
-    assert_evals_to!(r#"Num.absDiff 0.0f64 0.0"#, 0.0, f64);
-    assert_evals_to!(r#"Num.absDiff 1.0f64 2.0"#, 1.0, f64);
-    assert_evals_to!(r#"Num.absDiff 2.0f64 1.0"#, 1.0, f64);
-    assert_evals_to!(r#"Num.absDiff -1.0f64 1.0"#, 2.0, f64);
-    assert_evals_to!(r#"Num.absDiff 1.0f64 -1.0"#, 2.0, f64);
+    assert_evals_to!(r"Num.absDiff 0.0f64 0.0", 0.0, f64);
+    assert_evals_to!(r"Num.absDiff 1.0f64 2.0", 1.0, f64);
+    assert_evals_to!(r"Num.absDiff 2.0f64 1.0", 1.0, f64);
+    assert_evals_to!(r"Num.absDiff -1.0f64 1.0", 2.0, f64);
+    assert_evals_to!(r"Num.absDiff 1.0f64 -1.0", 2.0, f64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_max_overflow() {
-    assert_evals_to!(r#"Num.absDiff Num.maxI64 -1"#, 0, i64);
+    assert_evals_to!(r"Num.absDiff Num.maxI64 -1", 0, i64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_int_min_overflow() {
-    assert_evals_to!(r#"Num.absDiff Num.minI64 0"#, 0, i64);
+    assert_evals_to!(r"Num.absDiff Num.minI64 0", 0, i64);
 }
 
 #[test]
 #[cfg(feature = "gen-llvm")]
 #[should_panic(expected = r#"Roc failed with message: "Integer subtraction overflowed!"#)]
 fn num_abs_large_bits_min_overflow() {
-    assert_evals_to!(r#"Num.absDiff Num.minI128 0"#, 0, i128);
+    assert_evals_to!(r"Num.absDiff Num.minI128 0", 0, i128);
 }
 
 #[test]
@@ -3982,9 +3938,9 @@ fn bool_in_switch() {
 fn add_checked_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Num.addChecked 2.0dec 4.0dec
-            "#
+            "
         ),
         RocResult::ok(RocDec::from(6)),
         RocResult<RocDec, ()>
@@ -3996,9 +3952,9 @@ fn add_checked_dec() {
 fn sub_checked_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Num.subChecked 5.0dec 2.0dec
-            "#
+            "
         ),
         RocResult::ok(RocDec::from(3)),
         RocResult<RocDec, ()>
@@ -4010,9 +3966,9 @@ fn sub_checked_dec() {
 fn mul_checked_dec() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Num.mulChecked 5.0dec 2.0dec
-            "#
+            "
         ),
         RocResult::ok(RocDec::from_str("10.0").unwrap()),
         RocResult<RocDec, ()>
@@ -4024,12 +3980,12 @@ fn mul_checked_dec() {
 fn mul_checked_u128() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : Result U128 [ Overflow ]
             x = Num.mulChecked 5u128 2u128
 
             x
-            "#
+            "
         ),
         RocResult::ok(5u128 * 2u128),
         RocResult<u128, ()>
@@ -4041,12 +3997,12 @@ fn mul_checked_u128() {
 fn sub_checked_u128() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : Result U128 [ Overflow ]
             x = Num.subChecked 5u128 2u128
 
             x
-            "#
+            "
         ),
         RocResult::ok(5u128 - 2u128),
         RocResult<u128, ()>
@@ -4058,12 +4014,12 @@ fn sub_checked_u128() {
 fn add_checked_u128() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             x : Result U128 [ Overflow ]
             x = Num.addChecked 5u128 2u128
 
             x
-            "#
+            "
         ),
         RocResult::ok(5u128 + 2u128),
         RocResult<u128, ()>
@@ -4073,23 +4029,23 @@ fn add_checked_u128() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn num_min() {
-    assert_evals_to!(r#"Num.min 0 0"#, 0, i64);
-    assert_evals_to!(r#"Num.min 1 2"#, 1, i64);
-    assert_evals_to!(r#"Num.min 2 1"#, 1, i64);
-    assert_evals_to!(r#"Num.min 2 -2"#, -2, i64);
-    assert_evals_to!(r#"Num.min -2 2"#, -2, i64);
-    assert_evals_to!(r#"Num.min Num.minI64 Num.maxI64"#, i64::MIN, i64);
-    assert_evals_to!(r#"Num.min Num.maxI64 Num.minI64"#, i64::MIN, i64);
+    assert_evals_to!(r"Num.min 0 0", 0, i64);
+    assert_evals_to!(r"Num.min 1 2", 1, i64);
+    assert_evals_to!(r"Num.min 2 1", 1, i64);
+    assert_evals_to!(r"Num.min 2 -2", -2, i64);
+    assert_evals_to!(r"Num.min -2 2", -2, i64);
+    assert_evals_to!(r"Num.min Num.minI64 Num.maxI64", i64::MIN, i64);
+    assert_evals_to!(r"Num.min Num.maxI64 Num.minI64", i64::MIN, i64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn num_max() {
-    assert_evals_to!(r#"Num.max 0 0"#, 0, i64);
-    assert_evals_to!(r#"Num.max 1 2"#, 2, i64);
-    assert_evals_to!(r#"Num.max 2 1"#, 2, i64);
-    assert_evals_to!(r#"Num.max 2 -2"#, 2, i64);
-    assert_evals_to!(r#"Num.max -2 2"#, 2, i64);
-    assert_evals_to!(r#"Num.max Num.minI64 Num.maxI64"#, i64::MAX, i64);
-    assert_evals_to!(r#"Num.max Num.maxI64 Num.minI64"#, i64::MAX, i64);
+    assert_evals_to!(r"Num.max 0 0", 0, i64);
+    assert_evals_to!(r"Num.max 1 2", 2, i64);
+    assert_evals_to!(r"Num.max 2 1", 2, i64);
+    assert_evals_to!(r"Num.max 2 -2", 2, i64);
+    assert_evals_to!(r"Num.max -2 2", 2, i64);
+    assert_evals_to!(r"Num.max Num.minI64 Num.maxI64", i64::MAX, i64);
+    assert_evals_to!(r"Num.max Num.maxI64 Num.minI64", i64::MAX, i64);
 }

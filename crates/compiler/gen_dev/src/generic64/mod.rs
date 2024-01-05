@@ -1424,9 +1424,38 @@ impl<
     }
 
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        // for the time being, `num_mul` is implemented as wrapping multiplication. In roc, the normal
-        // `mul` should panic on overflow, but we just don't do that yet
-        self.build_num_mul_wrap(dst, src1, src2, layout)
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_MUL_OR_PANIC_INT[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_MUL_OR_PANIC.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumMul for layout {other:?}"),
+        }
     }
 
     fn build_num_mul_wrap(

@@ -159,6 +159,30 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
     symbol_id
 }
 
+// needed to implement Crash when setjmp/longjmp is used
+fn define_panic_msg(output: &mut Object) -> SymbolId {
+    let bss_section = output.section_id(StandardSection::Data);
+
+    //  3 words for a RocStr
+    const SIZE: usize = 3 * core::mem::size_of::<u64>();
+
+    let symbol = Symbol {
+        name: b"panic_msg".to_vec(),
+        value: 0,
+        size: SIZE as u64,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(bss_section),
+        flags: SymbolFlags::None,
+    };
+
+    let symbol_id = output.add_symbol(symbol);
+    output.add_symbol_data(symbol_id, bss_section, &[0x00; SIZE], 8);
+
+    symbol_id
+}
+
 fn generate_setjmp<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) {
     let text_section = output.section_id(StandardSection::Text);
     let proc_symbol = Symbol {
@@ -422,6 +446,7 @@ fn build_object<'a, B: Backend<'a>>(
     */
 
     if backend.env().mode.generate_roc_panic() {
+        define_panic_msg(&mut output);
         define_setlongjmp_buffer(&mut output);
 
         generate_roc_panic(&mut backend, &mut output);

@@ -668,14 +668,22 @@ trait Backend<'a> {
             &Literal::Int((crash_tag as u128).to_ne_bytes()),
         );
 
+        // this function gets a RocStr, but the roc_panic defined by a platform expects a `*RocStr`.
+        // we store the value in a global variable and then use a pointer to this global
+        let panic_msg_ptr = self.debug_symbol("panic_msg_ptr");
+        let ignored = self.debug_symbol("ignored");
+        self.build_data_pointer(&panic_msg_ptr, "panic_msg".to_string());
+        self.load_literal_symbols(&[msg]);
+        self.build_ptr_store(ignored, panic_msg_ptr, msg, Layout::STR);
+
         // Now that the arguments are needed, load them if they are literals.
-        let arguments = &[msg, error_message];
+        let arguments = &[panic_msg_ptr, error_message];
         self.load_literal_symbols(arguments);
         self.build_fn_call(
             &Symbol::DEV_TMP2,
             String::from("roc_panic"),
             arguments,
-            &[Layout::STR, Layout::U32],
+            &[Layout::U64, Layout::U32],
             &Layout::UNIT,
         );
 
