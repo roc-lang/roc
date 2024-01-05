@@ -112,17 +112,19 @@ pub fn report_problems(
             }
         }
 
-        // Shadowing errors often cause cryptic type errors. To make it easy to spot the root cause, 
+        // Shadowing errors often cause cryptic type errors. To make it easy to spot the root cause,
         // we print the shadowing errors last.
         let problems = can_problems.remove(home).unwrap_or_default();
         let (shadowing_errs, mut ordered): (Vec<Problem>, Vec<Problem>) =
-            problems.into_iter().partition(|p| match p {
-                Problem::Shadowing {
-                    original_region: _,
-                    shadow: _,
-                    kind: _,
-                } => true,
-                _ => false,
+            problems.into_iter().partition(|p| {
+                matches!(
+                    p,
+                    Problem::Shadowing {
+                        original_region: _,
+                        shadow: _,
+                        kind: _,
+                    }
+                )
             });
         ordered.extend(shadowing_errs);
 
