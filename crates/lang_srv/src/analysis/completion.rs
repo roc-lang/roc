@@ -1,7 +1,7 @@
 use log::{debug, trace, warn};
 use roc_can::{
     def::Def,
-    expr::{Declarations, Expr, WhenBranch},
+    expr::{ClosureData, Declarations, Expr, WhenBranch},
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
@@ -71,6 +71,21 @@ impl CompletionVisitor<'_> {
             Expr::When {
                 expr_var, branches, ..
             } => self.when_is_expr(branches, expr_var),
+            Expr::Closure(ClosureData {
+                arguments,
+                loc_body,
+                ..
+            }) => {
+                //if we are inside the closure complete it's vars
+                if loc_body.region.contains_pos(self.position) {
+                    arguments
+                        .iter()
+                        .flat_map(|(var, _, pat)| self.patterns(&pat.value, var))
+                        .collect()
+                } else {
+                    vec![]
+                }
+            }
             _ => vec![],
         }
     }
@@ -206,14 +221,14 @@ impl CompletionVisitor<'_> {
 
                 if loc_body.region.contains_pos(self.position) {
                     //also add the arguments if we are inside the function
-                    let args: Vec<_> = function
+                    let args = function
                         .value
                         .arguments
                         .iter()
-                        .flat_map(|(var, _, pat)| self.patterns(&pat.value, var))
-                        //We add in the pattern for the function declaration
-                        .collect();
+                        .flat_map(|(var, _, pat)| self.patterns(&pat.value, var));
+                    //We add in the pattern for the function declaration
                     out.extend(args);
+                    trace!("added function args to completion output =:{:#?}", out);
                 }
                 out
             }
@@ -329,7 +344,7 @@ fn find_record_fields(var: Variable, subs: &mut Subs) -> Vec<(String, Variable)>
             }
             roc_types::subs::FlatType::Tuple(elems, ext) => {
                 let elems = elems.unsorted_iterator(subs, ext);
-                
+
                 match elems {
                     Ok(elem) => elem.map(|(num, var)| (num.to_string(), var)).collect(),
                     Err(err) => {
@@ -409,8 +424,8 @@ pub fn field_completion(
 
     //If we have a type that has nested records we could have a completion prefix like: "var.field1.field2.fi"
     //If the document isn't fully typechecked we won't know what the type of field2 is for us to offer completions based on it's fields
-    //Instead we get the type of "var" and then the type of "field1" within var's type and then "field2" within field1's type etc etc, until we have the type of the record we are actually looking for field completions for. 
-    let completion_record= middle_fields.iter().fold(completion, |state, chain_field| {
+    //Instead we get the type of "var" and then the type of "field1" within var's type and then "field2" within field1's type etc etc, until we have the type of the record we are actually looking for field completions for.
+    let completion_record = middle_fields.iter().fold(completion, |state, chain_field| {
         let fields_vars = find_record_fields(state.1, subs);
         fields_vars
             .into_iter()
