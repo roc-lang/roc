@@ -153,6 +153,19 @@ the data model that would break their call sites, even if that change would impr
 
 On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]`, so that design would not fit those languages as well as it fits Roc.
 
+## Why doesn't Roc have a builtin "arbitrary-sized" number type like BigNum or BigDecimal?
+
+Like all programming languages, Roc is subject to the limitations of the universe. Almost all numbers in mathematics cannot even be represented in the universe because you'd run out of matter trying to write them down, and therefore Roc must choose what subset of mathematics to support—including which numbers to support.
+
+Roc supports 128-bit integers, 128-bit fixed-point decimal numbers. Here are some approximate ranges for those:
+
+-   `I128`: ±170000000000000000000000000000000000000
+-   `Dec`: ±170000000000000000000.000000000000000000
+
+For heap-allocated numbers to be worth including in Roc's builtins, a sufficient number of real-world use cases would need to exist where the above ranges are too small, but a heap-allocated number would be big enough, _and_ the performance hit from the heap-allocated numbers would be acceptable to those use cases, _and_ a user-created implementation of heap-allocated numbers would not be acceptable, _and_ using 64-bit floating-point numbers (which can be even larger than these, at the cost of precision loss in some operations) would not be acceptable either.
+
+So far, this has not happend.
+
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
 _Since this is a FAQ answer, it assumes familiarity with higher-kinded types and higher-rank types instead of including a primer on them._
