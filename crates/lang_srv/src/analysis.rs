@@ -5,7 +5,7 @@ use std::{
 };
 
 use bumpalo::Bump;
-use log::debug;
+use log::{debug, trace};
 use parking_lot::Mutex;
 use roc_can::{abilities::AbilitiesStore, expr::Declarations};
 use roc_collections::{MutMap, MutSet};
@@ -160,12 +160,12 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         all_subs,
         exposed,
     };
-    debug!("docs: {:#?}", docs_by_module);
+    trace!("docs: {:#?}", docs_by_module);
 
     for (module_id, (path, source)) in sources {
         let doc = builder.build_document(path, source, module_id, doc_info.version);
-        debug!("================");
-        debug!("module:{:?}", module_id);
+        trace!("================");
+        trace!("module:{:?}", module_id);
 
         // let exposed_imp = exposed_imports.get(&module_id)?;
         if let Some(modu) = &doc.analysis_result.module {
@@ -175,10 +175,10 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
 
             // debug!("exposed_imports:{:#?}", exposed_imp);
             // debug!("exposed:{:#?}", );
-            debug!("imports:{:#?}", imports);
+            trace!("imports:{:#?}", imports);
 
             // debug!("docs:{:#?}", docs.1.entries);
-            debug!("alais:{:#?}", aliases);
+            trace!("alais:{:#?}", aliases);
             // debug!("decls:{:#?}", module.declarations)
         }
         documents.push(doc);
