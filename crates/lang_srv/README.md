@@ -1,4 +1,4 @@
-# roc_ls
+# roc_language_server
 
 This is a basic language server for Roc.
 
@@ -36,7 +36,7 @@ Note that the language server is a bit naïve:
 
 ## Installing
 
-The roc_lang_server binary is included with the [nightly releases](https://github.com/roc-lang/roc/releases). We recommend using the same version of roc and roc_lang_server.
+The roc_language_server binary is included with the [nightly releases](https://github.com/roc-lang/roc/releases). We recommend using the same version of roc and roc_language_server.
 
 ### Building from source
 
@@ -44,13 +44,13 @@ Follow the [building from source](https://github.com/roc-lang/roc/blob/main/BUIL
 
 ```
 # do `nix develop` first if you're using nix!
-cargo build -p roc_lang_srv --release
+cargo build -p roc_language_server --release
 ```
 
 This will give you the language server binary at:
 
 ```
-target/release/roc_ls
+target/release/roc_language_server
 ```
 
 ### Configuring in your editor
@@ -65,7 +65,7 @@ Add the following to your coc JSON configuration file:
 {
   "languageserver": {
     "roc": {
-      "command": "<path to binary folder>/roc_ls",
+      "command": "<path to binary folder>/roc_language_server",
       "filetypes": ["roc"]
     }
   }
