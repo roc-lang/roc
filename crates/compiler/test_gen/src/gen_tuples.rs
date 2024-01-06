@@ -577,7 +577,7 @@ fn tuple_length_polymorphism() {
             b = (1, 2, 44)
 
             f : (I64, I64)a, (I64, I64)b -> I64
-            f = \(x1, x2), (x3, x4) -> x1 + x2 + x3 + x4
+            f = $(x1, x2), (x3, x4) -> x1 + x2 + x3 + x4
 
             f a b
             "

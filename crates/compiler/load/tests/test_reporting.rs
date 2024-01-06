@@ -5426,7 +5426,7 @@ mod test_reporting {
         - An escaped quote: \"
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
-        - An interpolated string: \(myVariable)
+        - An interpolated string: $(myVariable)
     "#
     );
 
@@ -5549,7 +5549,7 @@ mod test_reporting {
                 r#"
             greeting = "Privet"
 
-            if Bool.true then 1 else "\(greeting), World!"
+            if Bool.true then 1 else "$(greeting), World!"
             "#,
             ),
             @r#"
@@ -5557,7 +5557,7 @@ mod test_reporting {
 
     This `if` has an `else` branch with a different type from its `then` branch:
 
-    6│      if Bool.true then 1 else "\(greeting), World!"
+    6│      if Bool.true then 1 else "$(greeting), World!"
                                      ^^^^^^^^^^^^^^^^^^^^^
 
     The `else` branch is a string of type:
@@ -6255,7 +6255,7 @@ In roc, functions are always written as a lambda, like{}
         pattern_in_parens_open,
         indoc!(
             r"
-            \( a
+            $( a
             "
         ),
         @r"
@@ -6264,7 +6264,7 @@ In roc, functions are always written as a lambda, like{}
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
 
-    4│      \( a
+    4│      $( a
     5│
     6│
         ^
@@ -6278,7 +6278,7 @@ In roc, functions are always written as a lambda, like{}
         pattern_in_parens_end_comma,
         indoc!(
             r"
-            \( a,
+            $( a,
             "
         ),
         @r"
@@ -6287,7 +6287,7 @@ In roc, functions are always written as a lambda, like{}
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
 
-    4│      \( a,
+    4│      $( a,
     5│
     6│
         ^
@@ -6301,7 +6301,7 @@ In roc, functions are always written as a lambda, like{}
         pattern_in_parens_end,
         indoc!(
             r"
-            \( a
+            $( a
             "
         ),
         @r"
@@ -6310,7 +6310,7 @@ In roc, functions are always written as a lambda, like{}
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
 
-    4│      \( a
+    4│      $( a
     5│
     6│
         ^
@@ -6324,7 +6324,7 @@ In roc, functions are always written as a lambda, like{}
         unfinished_closure_pattern_in_parens,
         indoc!(
             r"
-            x = \( a
+            x = $( a
             )
             "
         ),
@@ -6333,7 +6333,7 @@ In roc, functions are always written as a lambda, like{}
 
     I was partway through parsing a  function, but I got stuck here:
 
-    4│      x = \( a
+    4│      x = $( a
     5│      )
              ^
 
@@ -6345,7 +6345,7 @@ In roc, functions are always written as a lambda, like{}
         pattern_in_parens_indent_open,
         indoc!(
             r"
-            \(
+            $(
             "
         ),
         @r"
@@ -6354,7 +6354,7 @@ In roc, functions are always written as a lambda, like{}
     I am partway through parsing a pattern in parentheses, but I got stuck
     here:
 
-    4│      \(
+    4│      $(
     5│
     6│
         ^

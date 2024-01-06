@@ -952,7 +952,7 @@ fn phantom_polymorphic() {
                 zero = Point (@World {}) 0 0
 
                 add : Point a -> Point a
-                add = \(Point c x y) -> (Point c x y)
+                add = $(Point c x y) -> (Point c x y)
 
                 add zero
                 #"

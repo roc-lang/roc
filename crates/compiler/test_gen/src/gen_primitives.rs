@@ -1882,7 +1882,7 @@ fn task_always_twice() {
                 @Effect inner
 
             effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+            effectAfter = $(@Effect thunk), transform -> transform (thunk {})
 
             Task a err : Effect (Result a err)
 
@@ -1986,7 +1986,7 @@ fn todo_bad_error_message() {
                 @Effect inner
 
             effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+            effectAfter = $(@Effect thunk), transform -> transform (thunk {})
 
             Task a err : Effect (Result a err)
 
@@ -3197,7 +3197,7 @@ fn recursively_build_effect() {
                 hi = "Hello"
                 name = "World"
 
-                "\(hi), \(name)!"
+                "$(hi), $(name)!"
 
             main =
                 when nestHelp 4 is
@@ -3219,7 +3219,7 @@ fn recursively_build_effect() {
             always = \x -> @XEffect (\{} -> x)
 
             after : XEffect a, (a -> XEffect b) -> XEffect b
-            after = \(@XEffect e), toB ->
+            after = $(@XEffect e), toB ->
                 @XEffect \{} ->
                     when toB (e {}) is
                         @XEffect e2 ->
@@ -3953,8 +3953,8 @@ fn compose_recursive_lambda_set_productive_toplevel() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             main =
                 res: Str -> Str
@@ -3976,8 +3976,8 @@ fn compose_recursive_lambda_set_productive_nested() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             res: Str -> Str
             res = List.walk [ exclaim, whisper ] identity compose
@@ -3998,8 +3998,8 @@ fn compose_recursive_lambda_set_productive_inferred() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "\(s)!"
-            whisper = \s -> "(\(s))"
+            exclaim = \s -> "$(s)!"
+            whisper = \s -> "($(s))"
 
             res = List.walk [ exclaim, whisper ] identity compose
             res "hello"
@@ -4024,8 +4024,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
                 else \x -> f (g x)
 
              identity = \x -> x
-             exclame = \s -> "\(s)!"
-             whisper = \s -> "(\(s))"
+             exclame = \s -> "$(s)!"
+             whisper = \s -> "($(s))"
 
              main =
                  res: Str -> Str
@@ -4552,7 +4552,7 @@ fn reset_recursive_type_wraps_in_named_type() {
                 Cons x xs ->
                   strX = f x
                   strXs = printLinkedList xs f
-                  "Cons \(strX) (\(strXs))"
+                  "Cons $(strX) ($(strXs))"
             "#
         ),
         RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
