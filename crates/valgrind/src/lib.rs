@@ -550,3 +550,29 @@ fn joinpoint_nullpointer() {
         "#
     ));
 }
+
+#[test]
+fn freeing_boxes() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            # Without refcounted field
+            a : I32
+            a = 7
+                |> Box.box
+                |> Box.unbox
+
+            # With refcounted field
+            b : Str
+            b =
+                "Testing123. This will definitely be a large string that is on the heap."
+                |> Box.box
+                |> Box.unbox
+
+            a
+            |> Num.toStr
+            |> Str.concat b
+        )
+        "#
+    ));
+}
