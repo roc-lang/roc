@@ -25,6 +25,11 @@ function hello() {
                 }
                 exitCode = code;
             },
+            random_get: (bufPtr, bufLen) => {
+                const buf = wasmMemoryBuffer.subarray(bufPtr, bufPtr + bufLen);
+                crypto.getRandomValues(buf);
+                return 0;
+            },
             fd_write: (x) => {
                 console.error(`fd_write not supported: ${x}`);
             },
