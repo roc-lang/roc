@@ -782,7 +782,7 @@ mod test_can {
 
             number = "42"
 
-            succeed { 
+            succeed {
                 number: <- parse number,
                 raw: number,
             }
@@ -817,7 +817,7 @@ mod test_can {
     fn multiple_record_builders_error() {
         let src = indoc!(
             r#"
-                succeed 
+                succeed
                     { a: <- apply "a" }
                     { b: <- apply "b" }
             "#
@@ -1822,18 +1822,18 @@ mod test_can {
     //         );
     //     }
 
-    //     #[test]
-    //     fn string_with_escaped_interpolation() {
-    //         assert_parses_to(
-    //             // This should NOT be string interpolation, because of the \\
-    //             indoc!(
-    //                 r#"
-    //                      "abcd\\(efg)hij"
+    // #[test]
+    // fn string_with_escaped_interpolation() {
+    //     assert_parses_to(
+    //         // This should NOT be string interpolation, because of the \\
+    //         indoc!(
+    //             r#"
+    //                      "abcd\$(efg)hij"
     //                      "#
-    //             ),
-    //             Str(r"abcd\(efg)hij".into()),
-    //         );
-    //     }
+    //         ),
+    //         Str(r"abcd\(efg)hij".into()),
+    //     );
+    // }
 
     //     #[test]
     //     fn string_without_escape() {
