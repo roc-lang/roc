@@ -198,10 +198,11 @@ impl<'a> Formattable for ModuleImport<'a> {
 
         !before_name.is_empty()
             || name.is_multiline()
-            || alias.map_or(false, |a| a.is_multiline())
-            || exposed.map_or(false, |a| {
-                a.keyword.is_multiline() || is_collection_multiline(&a.item)
-            })
+            || alias.is_multiline()
+            || match exposed {
+                Some(a) => a.keyword.is_multiline() || is_collection_multiline(&a.item),
+                None => false,
+            }
     }
 
     fn format_with_options(
