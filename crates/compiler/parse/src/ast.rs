@@ -141,6 +141,7 @@ pub enum EscapedChar {
     SingleQuote,    // \'
     Backslash,      // \\
     CarriageReturn, // \r
+    Dollar,         // \$
 }
 
 impl EscapedChar {
@@ -155,6 +156,7 @@ impl EscapedChar {
             CarriageReturn => 'r',
             Tab => 't',
             Newline => 'n',
+            Dollar => '$',
         }
     }
 
@@ -168,6 +170,7 @@ impl EscapedChar {
             CarriageReturn => '\r',
             Tab => '\t',
             Newline => '\n',
+            Dollar => '$',
         }
     }
 }
