@@ -1266,6 +1266,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         add_reg64_reg64_reg64(buf, dst, src1, src2);
     }
+
     #[inline(always)]
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -1283,6 +1284,25 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src2: AArch64FloatReg,
     ) {
         fadd_freg_freg_freg(buf, FloatWidth::F64, dst, src1, src2);
+    }
+
+    #[inline(always)]
+    fn sub_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+    ) {
+        fsub_freg_freg_freg(buf, FloatWidth::F32, dst, src1, src2);
+    }
+    #[inline(always)]
+    fn sub_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+    ) {
+        fsub_freg_freg_freg(buf, FloatWidth::F64, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -3885,6 +3905,27 @@ fn fadd_freg_freg_freg(
     let inst =
         FloatingPointDataProcessingTwoSource::new(FloatingPointDataProcessingTwoSourceParams {
             opcode: 0b0010,
+            ptype: ftype,
+            rd: dst,
+            rn: src1,
+            rm: src2,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+/// `FSUB Sd/Dd, Sn/Dn, Sm/Dm` -> Sub Sn/Dn and Sm/Dm and place the result into Sd/Dd.
+#[inline(always)]
+fn fsub_freg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatWidth,
+    dst: AArch64FloatReg,
+    src1: AArch64FloatReg,
+    src2: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingTwoSource::new(FloatingPointDataProcessingTwoSourceParams {
+            opcode: 0b0011,
             ptype: ftype,
             rd: dst,
             rn: src1,

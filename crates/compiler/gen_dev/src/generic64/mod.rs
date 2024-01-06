@@ -166,6 +166,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
+    fn add_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
         dst: FloatReg,
@@ -177,12 +184,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: FloatReg,
         src1: FloatReg,
         src2: FloatReg,
-    );
-    fn add_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
     );
 
     fn and_reg64_reg64_reg64(
@@ -628,6 +629,19 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     ) where
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
+
+    fn sub_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn sub_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
 
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
@@ -1308,16 +1322,14 @@ impl<
 
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
-            LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_ADD_OR_PANIC_INT[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+
             LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
@@ -1330,16 +1342,60 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::DEC_ADD_OR_PANIC.to_string(),
-                    &[*src1, *src2],
-                    &[Layout::DEC, Layout::DEC],
-                    &Layout::DEC,
-                );
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_ADD_OR_PANIC.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumAdd for layout {other:?}"),
+        }
+    }
+
+    fn build_num_add_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    ) {
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => todo!("NumAdd: layout, {:?}", x),
+
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_ADD_SATURATED.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumAddWrap for layout {other:?}"),
         }
     }
 
@@ -1638,6 +1694,15 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::div_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_DIV.to_string(),
+                    &[*src1, *src2],
+                    &[*layout, *layout],
+                    layout,
+                );
+            }
             x => todo!("NumDiv: layout, {:?}", x),
         }
     }
@@ -1717,9 +1782,38 @@ impl<
     }
 
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        // for the time being, `num_sub` is implemented as wrapping subtraction. In roc, the normal
-        // `sub` should panic on overflow, but we just don't do that yet
-        self.build_num_sub_wrap(dst, src1, src2, layout)
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_SUB_OR_PANIC_INT[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::sub_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::sub_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_SUB_OR_PANIC.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumMul for layout {other:?}"),
+        }
     }
 
     fn build_num_sub_wrap(
