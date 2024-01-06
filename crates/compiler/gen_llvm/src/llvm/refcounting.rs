@@ -1295,6 +1295,9 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
             _ => tag_id,
         };
 
+        let block = env.context.append_basic_block(parent, "tag_id_decrement");
+        env.builder.position_at_end(block);
+
         // if none of the fields are or contain anything refcounted, just move on
         if fields_need_no_refcounting(layout_interner, field_layouts) {
             // Still make sure to decrement the refcount of the union as a whole.
@@ -1302,12 +1305,12 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
                 let union_layout = LayoutRepr::Union(union_layout);
                 refcount_ptr.modify(call_mode, union_layout, env, layout_interner);
             }
+
+            // this function returns void
+            builder.new_build_return(None);
+
             continue;
         }
-
-        let block = env.context.append_basic_block(parent, "tag_id_decrement");
-
-        env.builder.position_at_end(block);
 
         let fields_struct = LayoutRepr::struct_(field_layouts);
         let wrapper_type = basic_type_from_layout(env, layout_interner, fields_struct);
