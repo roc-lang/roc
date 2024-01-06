@@ -777,7 +777,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
