@@ -1309,6 +1309,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx>(
             // this function returns void
             builder.new_build_return(None);
 
+            cases.push((tag_id_int_type.const_int(tag_id as u64, false), block));
+
             continue;
         }
 
