@@ -738,7 +738,7 @@ fn type_problem_unary_operator() {
 #[test]
 fn type_problem_string_interpolation() {
     expect_failure(
-        "\"This is not a string -> \$(1)\"",
+        "\"This is not a string -> $(1)\"",
         indoc!(
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────

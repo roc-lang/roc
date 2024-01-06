@@ -448,7 +448,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                                 bytes.next();
                             }
 
-                            segments.push(StrSegment::Interpolated(loc_expr));
+                            segments.push(StrSegment::DeprecatedInterpolated(loc_expr));
 
                             // Reset the segment
                             segment_parsed_bytes = 0;
