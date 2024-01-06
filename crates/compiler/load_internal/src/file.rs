@@ -2367,6 +2367,20 @@ fn update<'a>(
                         }
                     }
                     Builtin { .. } | Interface { .. } => {
+                        let qualified_modules = header
+                            .package_qualified_imported_modules
+                            .iter()
+                            .filter(|pqim| match pqim {
+                                PackageQualified::Unqualified(_) => false,
+                                PackageQualified::Qualified(shorthand, _) => shorthand != &"",
+                            })
+                            .collect::<Vec<_>>();
+                        assert!(
+                            qualified_modules.is_empty(),
+                            "package qualified modules not allowed in interfaces. Remove: {:#?} ",
+                            qualified_modules
+                        );
+
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,

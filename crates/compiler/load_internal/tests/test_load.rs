@@ -1058,7 +1058,6 @@ fn module_cyclic_import_itself() {
         err
     );
 }
-
 #[test]
 fn module_cyclic_import_transitive() {
     let modules = vec![
@@ -1143,6 +1142,28 @@ fn nested_module_has_incorrect_name() {
             Based on the nesting and use of this module, I expect it to have name
 
                 Dep.Foo"
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn module_interface_with_qualified_import() {
+    let modules = vec![(
+        "A",
+        indoc!(
+            r"
+            interface A exposes [] imports [b.T]
+            "
+        ),
+    )];
+
+    let err = multiple_modules("module_interface_with_qualified_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            "
         ),
         "\n{}",
         err
