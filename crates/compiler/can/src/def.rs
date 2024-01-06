@@ -28,6 +28,7 @@ use roc_collections::{ImSet, MutMap, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
+use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
@@ -2887,23 +2888,32 @@ fn to_pending_value_def<'a>(
         }),
 
         ModuleImport(module_import) => {
+            let module_name = ModuleName::from(module_import.name.value.name);
+            let module_id = env
+                .module_ids
+                .get_id(&module_name)
+                .expect("Module id should have been added in load");
+
+            scope.import_module(module_id);
+
             match module_import.exposed {
                 None => {}
-                Some(exposed) if exposed.item.is_empty() => {}
-                Some(exposed) => {
-                    for loc_name in exposed.item.items {
+                Some(exposed_kw) => {
+                    let exposed_ids = env
+                        .dep_idents
+                        .get(&module_id)
+                        .expect("Module id should have been added in load");
+
+                    for loc_name in exposed_kw.item.items {
                         let exposed_name = loc_name.value.item();
                         let name = exposed_name.as_str();
-                        let ident = name.into();
+                        let ident = Ident::from(name);
 
-                        match env.qualified_lookup(
-                            scope,
-                            module_import.name.value.name,
-                            name,
-                            loc_name.region,
-                        ) {
-                            Ok(imported_symbol) => {
-                                match scope.import(ident, imported_symbol, loc_name.region) {
+                        match exposed_ids.get_id(name) {
+                            Some(ident_id) => {
+                                let symbol = Symbol::new(module_id, ident_id);
+
+                                match scope.import_symbol(ident, symbol, loc_name.region) {
                                     Ok(()) => {}
                                     Err((_shadowed_symbol, _region)) => {
                                         internal_error!(
@@ -2912,8 +2922,21 @@ fn to_pending_value_def<'a>(
                                     }
                                 }
                             }
-                            Err(problem) => {
-                                env.problem(Problem::RuntimeError(problem.clone()));
+                            None => {
+                                let exposed_values = exposed_ids
+                                    .ident_strs()
+                                    .filter(|(_, ident)| {
+                                        ident.starts_with(|c: char| c.is_lowercase())
+                                    })
+                                    .map(|(_, ident)| Lowercase::from(ident))
+                                    .collect();
+
+                                env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
+                                    module_name: module_name.clone(),
+                                    ident,
+                                    region: loc_name.region,
+                                    exposed_values,
+                                }))
                             }
                         }
                     }

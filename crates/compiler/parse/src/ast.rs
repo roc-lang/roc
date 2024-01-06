@@ -465,6 +465,252 @@ pub enum ValueDef<'a> {
     IngestedFileImport(IngestedFileImport<'a>),
 }
 
+impl<'a> ValueDef<'a> {
+    pub fn expr(&self) -> Option<&'a Expr<'a>> {
+        match self {
+            ValueDef::Body(_, body) => Some(&body.value),
+
+            ValueDef::AnnotatedBody {
+                ann_pattern: _,
+                ann_type: _,
+                comment: _,
+                body_pattern: _,
+                body_expr,
+            } => Some(&body_expr.value),
+
+            ValueDef::Dbg {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::Expect {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::ExpectFx {
+                condition,
+                preceding_comment: _,
+            } => Some(&condition.value),
+
+            ValueDef::Annotation(_, _)
+            | ValueDef::ModuleImport(ModuleImport {
+                before_name: _,
+                name: _,
+                alias: _,
+                exposed: _,
+            })
+            | ValueDef::IngestedFileImport(_) => None,
+        }
+    }
+}
+
+pub struct RecursiveValueDefIter<'a, 'b> {
+    current: &'b Defs<'a>,
+    index: usize,
+    pending: std::vec::Vec<&'b Defs<'a>>,
+}
+
+impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
+    pub fn new(defs: &'b Defs<'a>) -> Self {
+        Self {
+            current: defs,
+            index: 0,
+            pending: vec![],
+        }
+    }
+
+    fn push_pending_from_expr(&mut self, expr: &'b Expr<'a>) {
+        let mut expr_stack = vec![expr];
+
+        use Expr::*;
+
+        macro_rules! push_stack_from_record_fields {
+            ($fields:expr) => {
+                for field in $fields.items {
+                    let mut current = field.value;
+
+                    loop {
+                        use AssignedField::*;
+
+                        match current {
+                            RequiredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            OptionalValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            SpaceBefore(next, _) => current = *next,
+                            SpaceAfter(next, _) => current = *next,
+                            LabelOnly(_) | Malformed(_) => break,
+                        }
+                    }
+                }
+            };
+        }
+
+        while let Some(next) = expr_stack.pop() {
+            match next {
+                Defs(defs, cont) => {
+                    self.pending.push(defs);
+                    // We purposefully don't push the exprs inside defs here
+                    // because they will be traversed when the iterator
+                    // gets to their parent def.
+                    expr_stack.push(&cont.value);
+                }
+                RecordAccess(expr, _) => expr_stack.push(expr),
+                TupleAccess(expr, _) => expr_stack.push(expr),
+                List(list) => {
+                    expr_stack.reserve(list.len());
+                    for loc_expr in list.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordUpdate { update, fields } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&update.value);
+                    push_stack_from_record_fields!(fields);
+                }
+                Record(fields) => {
+                    expr_stack.reserve(fields.len());
+                    push_stack_from_record_fields!(fields);
+                }
+                Tuple(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_expr in fields.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordBuilder(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_record_builder_field in fields.items {
+                        let mut current_field = loc_record_builder_field.value;
+
+                        loop {
+                            use RecordBuilderField::*;
+
+                            match current_field {
+                                Value(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                                ApplyValue(_, _, _, loc_val) => {
+                                    break expr_stack.push(&loc_val.value)
+                                }
+                                SpaceBefore(next_field, _) => current_field = *next_field,
+                                SpaceAfter(next_field, _) => current_field = *next_field,
+                                LabelOnly(_) | Malformed(_) => break,
+                            }
+                        }
+                    }
+                }
+                Closure(_, body) => expr_stack.push(&body.value),
+                Backpassing(_, a, b) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&a.value);
+                    expr_stack.push(&b.value);
+                }
+                Expect(condition, cont)
+                | Dbg(condition, cont)
+                | LowLevelDbg(_, condition, cont) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
+                }
+                Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                BinOps(ops, expr) => {
+                    expr_stack.reserve(ops.len() + 1);
+
+                    for (a, _) in ops.iter() {
+                        expr_stack.push(&a.value);
+                    }
+                    expr_stack.push(&expr.value);
+                }
+                UnaryOp(expr, _) => expr_stack.push(&expr.value),
+                If(ifs, alternate) => {
+                    expr_stack.reserve(ifs.len() * 2 + 1);
+
+                    for (condition, consequent) in ifs.iter() {
+                        expr_stack.push(&condition.value);
+                        expr_stack.push(&consequent.value);
+                    }
+                    expr_stack.push(&alternate.value);
+                }
+                When(condition, branches) => {
+                    expr_stack.reserve(branches.len() + 1);
+                    expr_stack.push(&condition.value);
+
+                    for WhenBranch {
+                        patterns: _,
+                        value,
+                        guard,
+                    } in branches.iter()
+                    {
+                        expr_stack.push(&value.value);
+
+                        match guard {
+                            None => {}
+                            Some(guard) => expr_stack.push(&guard.value),
+                        }
+                    }
+                }
+                SpaceBefore(expr, _) => expr_stack.push(expr),
+                SpaceAfter(expr, _) => expr_stack.push(expr),
+                ParensAround(expr) => expr_stack.push(expr),
+                MultipleRecordBuilders(expr) => expr_stack.push(&expr.value),
+                UnappliedRecordBuilder(expr) => expr_stack.push(&expr.value),
+
+                Float(_)
+                | Num(_)
+                | NonBase10Int { .. }
+                | Str(_)
+                | SingleQuote(_)
+                | AccessorFunction(_)
+                | IngestedFile(_, _)
+                | Var { .. }
+                | Underscore(_)
+                | Crash
+                | Tag(_)
+                | OpaqueRef(_)
+                | MalformedIdent(_, _)
+                | MalformedClosure
+                | PrecedenceConflict(_) => { /* terminal */ }
+            }
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
+    type Item = (&'b ValueDef<'a>, &'b Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current.tags.get(self.index) {
+            Some(tag) => {
+                if let Err(def_index) = tag.split() {
+                    let def = &self.current.value_defs[def_index.index()];
+                    let region = &self.current.regions[self.index];
+
+                    if let Some(expr) = def.expr() {
+                        self.push_pending_from_expr(expr);
+                    }
+
+                    self.index += 1;
+
+                    Some((def, region))
+                } else {
+                    // Not a value def, try next
+                    self.index += 1;
+                    self.next()
+                }
+            }
+
+            None => {
+                self.current = self.pending.pop()?;
+                self.index = 0;
+                self.next()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModuleImport<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],

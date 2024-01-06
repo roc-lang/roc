@@ -2148,6 +2148,7 @@ fn report_unused_imported_modules(
     module_id: ModuleId,
     constrained_module: &ConstrainedModule,
 ) {
+    // [modules-revamp] TODO: take expr-level into account
     let mut unused_imported_modules = constrained_module.imported_modules.clone();
     let mut unused_imports = constrained_module.module.exposed_imports.clone();
 
@@ -5228,35 +5229,23 @@ fn parse<'a>(
 
     let mut imported: Vec<(QualifiedModuleName, Region)> = vec![];
 
-    for (index, either_index) in parsed_defs.tags.iter().enumerate() {
-        if let Err(value_index) = either_index.split() {
-            let value_def = &parsed_defs.value_defs[value_index.index()];
-            let region = parsed_defs.regions[index];
+    for (def, region) in ast::RecursiveValueDefIter::new(&parsed_defs) {
+        match def {
+            ValueDef::ModuleImport(import) => {
+                let qualified_module_name = QualifiedModuleName {
+                    opt_package: import.name.value.package,
+                    module: import.name.value.name.into(),
+                };
 
-            match value_def {
-                ValueDef::Annotation(..) => {}
-
-                ValueDef::ModuleImport(import) => {
-                    let qualified_module_name = QualifiedModuleName {
-                        opt_package: import.name.value.package,
-                        module: import.name.value.name.into(),
-                    };
-
-                    imported.push((qualified_module_name, region));
-                }
-
-                ValueDef::IngestedFileImport(_ingested_file) => {
-                    todo!("[modules-revamp] do we need to do anything here?")
-                }
-
-                _ => {
-
-                    // [modules-revamp] TODO: traverse exprs
-                }
+                imported.push((qualified_module_name, *region));
             }
+
+            ValueDef::IngestedFileImport(_ingested_file) => {
+                todo!("[modules-revamp] do we need to do anything here?")
+            }
+            _ => {}
         }
     }
-
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,

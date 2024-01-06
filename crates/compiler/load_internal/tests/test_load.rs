@@ -439,6 +439,42 @@ fn import_alias() {
 }
 
 #[test]
+fn import_inside_def() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("interface_with_deps", "ImportInsideDef", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "dep1Str" => "Str",
+            "dep2TwoDobuled" => "Frac *",
+        },
+    );
+}
+
+#[test]
+#[should_panic(expected = "LookupNotInScope")]
+fn exposed_used_outside_scope() {
+    let subs_by_module = Default::default();
+    load_fixture(
+        "interface_with_deps",
+        "ExposedUsedOutsideScope",
+        subs_by_module,
+    );
+}
+
+#[test]
+#[should_panic(expected = "ModuleNotImported")]
+fn import_used_outside_scope() {
+    let subs_by_module = Default::default();
+    load_fixture(
+        "interface_with_deps",
+        "ImportUsedOutsideScope",
+        subs_by_module,
+    );
+}
+
+#[test]
 fn test_load_and_typecheck() {
     let subs_by_module = Default::default();
     let loaded_module = load_fixture("interface_with_deps", "WithBuiltins", subs_by_module);
@@ -878,6 +914,15 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                                          ^^^
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
+
+                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
+
+                Nothing from Age is used in this module.
+
+                3│  import Age exposing [Age]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                Since Age isn't used, you don't need to import it.
                 "
         ),
         "\n{}",

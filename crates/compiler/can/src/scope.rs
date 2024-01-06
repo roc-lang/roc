@@ -29,8 +29,11 @@ pub struct Scope {
     /// The first `exposed_ident_count` identifiers are exposed
     exposed_ident_count: usize,
 
-    /// Identifiers that are imported (and introduced in the header)
-    imports: Vec<(Ident, Symbol, Region)>,
+    /// Modules that are imported
+    imported_modules: Vec<ModuleId>,
+
+    /// Identifiers that are imported
+    imported_symbols: Vec<(Ident, Symbol, Region)>,
 
     /// Shadows of an ability member, for example a local specialization of `eq` for the ability
     /// member `Eq implements eq : a, a -> Bool where a implements Eq` gets a shadow symbol it can use for its
@@ -68,7 +71,8 @@ impl Scope {
             aliases: VecMap::default(),
             abilities_store: starting_abilities_store,
             shadows: VecMap::default(),
-            imports: default_imports,
+            imported_modules: Vec::default(),
+            imported_symbols: default_imports,
             ignored_locals: VecMap::default(),
         }
     }
@@ -82,9 +86,9 @@ impl Scope {
     }
 
     pub fn add_docs_imports(&mut self) {
-        self.imports
+        self.imported_symbols
             .push(("Dict".into(), Symbol::DICT_DICT, Region::zero()));
-        self.imports
+        self.imported_symbols
             .push(("Set".into(), Symbol::SET_SET, Region::zero()));
     }
 
@@ -113,7 +117,7 @@ impl Scope {
 
     fn idents_in_scope(&self) -> impl Iterator<Item = Ident> + '_ {
         let it1 = self.locals.idents_in_scope();
-        let it2 = self.imports.iter().map(|t| t.0.clone());
+        let it2 = self.imported_symbols.iter().map(|t| t.0.clone());
 
         it2.chain(it1)
     }
@@ -139,7 +143,7 @@ impl Scope {
             },
             None => {
                 // opaque types can only be wrapped/unwrapped in the scope they are defined in (and below)
-                let error = if let Some((_, decl_region)) = self.has_imported(opaque_str) {
+                let error = if let Some((_, decl_region)) = self.has_imported_symbol(opaque_str) {
                     // specific error for when the opaque is imported, which definitely does not work
                     RuntimeError::OpaqueOutsideScope {
                         opaque,
@@ -202,8 +206,12 @@ impl Scope {
         }
     }
 
-    fn has_imported(&self, ident: &str) -> Option<(Symbol, Region)> {
-        for (import, shadow, original_region) in self.imports.iter() {
+    pub fn has_imported_module(&self, module_id: &ModuleId) -> bool {
+        module_id.is_builtin() || self.imported_modules.contains(module_id)
+    }
+
+    fn has_imported_symbol(&self, ident: &str) -> Option<(Symbol, Region)> {
+        for (import, shadow, original_region) in self.imported_symbols.iter() {
             if ident == import.as_str() {
                 return Some((*shadow, *original_region));
             }
@@ -215,7 +223,7 @@ impl Scope {
     /// Is an identifier in scope, either in the locals or imports
     fn scope_contains_ident(&self, ident: &str) -> ContainsIdent {
         // exposed imports are likely to be small
-        match self.has_imported(ident) {
+        match self.has_imported_symbol(ident) {
             Some((symbol, region)) => ContainsIdent::InScope(symbol, region),
             None => self.locals.contains_ident(ident),
         }
@@ -379,19 +387,23 @@ impl Scope {
     ///
     /// Returns Err if this would shadow an existing ident, including the
     /// Symbol and Region of the ident we already had in scope under that name.
-    pub fn import(
+    pub fn import_symbol(
         &mut self,
         ident: Ident,
         symbol: Symbol,
         region: Region,
     ) -> Result<(), (Symbol, Region)> {
-        if let Some((s, r)) = self.has_imported(ident.as_str()) {
+        if let Some((s, r)) = self.has_imported_symbol(ident.as_str()) {
             return Err((s, r));
         }
 
-        self.imports.push((ident, symbol, region));
+        self.imported_symbols.push((ident, symbol, region));
 
         Ok(())
+    }
+
+    pub fn import_module(&mut self, module_id: ModuleId) {
+        self.imported_modules.push(module_id);
     }
 
     pub fn add_alias(
@@ -423,17 +435,22 @@ impl Scope {
         //
         // - abilities_store: ability definitions not allowed in inner scopes
         // - locals: everything introduced in the inner scope is marked as not in scope in the rollback
+        // - imports: everything that was imported in the inner scope is removed in the rollback
         // - aliases: stored in a VecMap, we just discard anything added in an inner scope
         // - exposed_ident_count: unchanged
         // - home: unchanged
         let aliases_count = self.aliases.len();
         let ignored_locals_count = self.ignored_locals.len();
         let locals_snapshot = self.locals.in_scope.len();
+        let imported_modules_snapshot = self.imported_modules.len();
+        let imported_symbols_snapshot = self.imported_symbols.len();
 
         let result = f(self);
 
         self.aliases.truncate(aliases_count);
         self.ignored_locals.truncate(ignored_locals_count);
+        self.imported_modules.truncate(imported_modules_snapshot);
+        self.imported_symbols.truncate(imported_symbols_snapshot);
 
         // anything added in the inner scope is no longer in scope now
         for i in locals_snapshot..self.locals.in_scope.len() {
@@ -820,7 +837,7 @@ mod test {
 
         assert!(scope.lookup(&ident, region).is_err());
 
-        assert!(scope.import(ident.clone(), symbol, region).is_ok());
+        assert!(scope.import_symbol(ident.clone(), symbol, region).is_ok());
 
         assert!(scope.lookup(&ident, region).is_ok());
 
@@ -842,7 +859,7 @@ mod test {
         let region1 = Region::from_pos(Position { offset: 10 });
         let region2 = Region::from_pos(Position { offset: 20 });
 
-        scope.import(ident.clone(), symbol, region1).unwrap();
+        scope.import_symbol(ident.clone(), symbol, region1).unwrap();
 
         let (original, _ident, shadow_symbol) =
             scope.introduce(ident.clone(), region2).unwrap_err();

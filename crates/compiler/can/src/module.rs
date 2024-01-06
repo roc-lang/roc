@@ -326,7 +326,7 @@ pub fn canonicalize_module_defs<'a>(
         let first_char = ident.as_inline_str().as_str().chars().next().unwrap();
 
         if first_char.is_lowercase() {
-            match scope.import(ident, symbol, region) {
+            match scope.import_symbol(ident, symbol, region) {
                 Ok(()) => {
                     // Add an entry to exposed_imports using the current module's name
                     // as the key; e.g. if this is the Foo module and we have
@@ -349,7 +349,7 @@ pub fn canonicalize_module_defs<'a>(
 
             // but now we know this symbol by a different identifier, so we still need to add it to
             // the scope
-            match scope.import(ident, symbol, region) {
+            match scope.import_symbol(ident, symbol, region) {
                 Ok(()) => {
                     // here we do nothing special
                 }
