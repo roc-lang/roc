@@ -5066,6 +5066,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
 }
 
 pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
+    let word_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 => env.context.i32_type(),
+        PtrWidth::Bytes8 => env.context.i64_type(),
+    };
+
     // The size of jump_buf is target-dependent.
     //   - AArch64 needs 3 machine-sized words
     //   - LLVM says the following about the SJLJ intrinsic:
@@ -5077,11 +5082,15 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
     //     The following three words are available for use in a target-specific manner.
     //
     // So, let's create a 5-word buffer.
-    let word_type = match env.target_info.ptr_width() {
-        PtrWidth::Bytes4 => env.context.i32_type(),
-        PtrWidth::Bytes8 => env.context.i64_type(),
+    let size = if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // Due to https://github.com/llvm/llvm-project/issues/72908
+        // on windows, we store the register contents into this buffer directly!
+        30
+    } else {
+        5
     };
-    let type_ = word_type.array_type(5);
+
+    let type_ = word_type.array_type(size);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -5099,9 +5108,12 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
 
 pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> {
     let jmp_buf = get_sjlj_buffer(env);
-    if cfg!(target_arch = "aarch64") {
+    if env.target_info.architecture == roc_target::Architecture::Aarch64 {
         // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
+    } else if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // Due to https://github.com/llvm/llvm-project/issues/72908, we use a setjmp defined as asm in Zig
+        call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_WINDOWS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp

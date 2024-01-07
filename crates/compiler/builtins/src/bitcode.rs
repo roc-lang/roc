@@ -445,6 +445,9 @@ pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect"
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";
 
+pub const UTILS_WINDOWS_LONGJMP: &str = "windows_longjmp";
+pub const UTILS_WINDOWS_SETJMP: &str = "windows_setjmp";
+
 #[derive(Debug, Default)]
 pub struct IntToIntrinsicName {
     pub options: [IntrinsicName; 10],

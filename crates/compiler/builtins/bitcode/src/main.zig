@@ -287,6 +287,82 @@ fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
     longjmp(a0, a1);
 }
 
+comptime {
+    if (builtin.os.tag == .windows) {
+        asm (
+            \\.global windows_longjmp;
+            \\windows_longjmp:
+            \\  movq 0x00(%rcx), %rdx
+            \\  movq 0x08(%rcx), %rbx
+            \\  # note 0x10 is not used yet!
+            \\  movq 0x18(%rcx), %rbp
+            \\  movq 0x20(%rcx), %rsi
+            \\  movq 0x28(%rcx), %rdi
+            \\  movq 0x30(%rcx), %r12
+            \\  movq 0x38(%rcx), %r13
+            \\  movq 0x40(%rcx), %r14
+            \\  movq 0x48(%rcx), %r15
+            \\
+            \\  # restore stack pointer
+            \\  movq 0x10(%rcx), %rsp
+            \\
+            \\  # load jmp address
+            \\  movq 0x50(%rcx), %r8
+            \\
+            \\  # set up return value
+            \\  movq %rbx, %rax
+            \\
+            \\  movdqu 0x60(%rcx), %xmm6
+            \\  movdqu 0x70(%rcx), %xmm7
+            \\  movdqu 0x80(%rcx), %xmm8
+            \\  movdqu 0x90(%rcx), %xmm9
+            \\  movdqu 0xa0(%rcx), %xmm10
+            \\  movdqu 0xb0(%rcx), %xmm11
+            \\  movdqu 0xc0(%rcx), %xmm12
+            \\  movdqu 0xd0(%rcx), %xmm13
+            \\  movdqu 0xe0(%rcx), %xmm14
+            \\  movdqu 0xf0(%rcx), %xmm15
+            \\
+            \\  jmp *%r8
+            \\
+            \\.global windows_setjmp;
+            \\windows_setjmp:
+            \\  movq %rdx, 0x00(%rcx)
+            \\  movq %rbx, 0x08(%rcx)
+            \\  # note 0x10 is not used yet!
+            \\  movq %rbp, 0x18(%rcx)
+            \\  movq %rsi, 0x20(%rcx)
+            \\  movq %rdi, 0x28(%rcx)
+            \\  movq %r12, 0x30(%rcx)
+            \\  movq %r13, 0x38(%rcx)
+            \\  movq %r14, 0x40(%rcx)
+            \\  movq %r15, 0x48(%rcx)
+            \\
+            \\  # the stack location right after the windows_setjmp call
+            \\  leaq 0x08(%rsp), %r8
+            \\  movq %r8, 0x10(%rcx)
+            \\
+            \\  movq (%rsp), %r8
+            \\  movq %r8, 0x50(%rcx)
+            \\
+            \\  movdqu %xmm6,  0x60(%rcx)
+            \\  movdqu %xmm7,  0x70(%rcx)
+            \\  movdqu %xmm8,  0x80(%rcx)
+            \\  movdqu %xmm9,  0x90(%rcx)
+            \\  movdqu %xmm10, 0xa0(%rcx)
+            \\  movdqu %xmm11, 0xb0(%rcx)
+            \\  movdqu %xmm12, 0xc0(%rcx)
+            \\  movdqu %xmm13, 0xd0(%rcx)
+            \\  movdqu %xmm14, 0xe0(%rcx)
+            \\  movdqu %xmm15, 0xf0(%rcx)
+            \\
+            \\  xorl %eax, %eax
+            \\  ret
+            \\
+        );
+    }
+}
+
 // Export helpers - Must be run inside a comptime
 fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
     @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .Strong });
