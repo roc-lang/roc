@@ -1274,6 +1274,7 @@ define_builtins! {
         162 NUM_PI: "pi"
         163 NUM_TAU: "tau"
         164 NUM_BITWISE_NOT: "bitwiseNot"
+        165 NUM_APXE: "isApproxEq"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

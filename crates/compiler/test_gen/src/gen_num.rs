@@ -1486,6 +1486,49 @@ fn gte_f64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_is_approx_eq() {
+    assert_evals_to!(
+        "Num.isApproxEq (1f64 * 1e10) (1f64 * 1.00001e10) {}",
+        true,
+        bool
+    );
+    assert_evals_to!("Num.isApproxEq (1f64 * 1e-7) (1f64 * 1e-8) {}", false, bool);
+    assert_evals_to!("Num.isApproxEq (1f32 * 1e-8) (1f32 * 1e-9) {}", true, bool);
+    assert_evals_to!(
+        "Num.isApproxEq (1f64 * 1e10) (1f64 * 1.0001e10) {}",
+        false,
+        bool
+    );
+    assert_evals_to!("Num.isApproxEq 1.0 1.0 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq (1f64 / 0.0) (1f64 / 0.0) {}", true, bool);
+    assert_evals_to!("Num.isApproxEq (0f64 / 0.0) (0f64 / 0.0) {}", false, bool);
+    assert_evals_to!("Num.isApproxEq (1f64 * 1e-8) 0f64 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq (1f64 * 1e-7) 0f64 {}", false, bool);
+    assert_evals_to!(
+        "Num.isApproxEq (1f64 * 1e-100) 0f64 { atol: 0f64 }",
+        false,
+        bool
+    );
+    assert_evals_to!(
+        "Num.isApproxEq (1f64 * 1e-7) 0f64 { atol: 0f64 }",
+        false,
+        bool
+    );
+    assert_evals_to!(
+        "Num.isApproxEq (1f64 * 1e-10) (1f64 * 1e-20) {}",
+        true,
+        bool
+    );
+    assert_evals_to!("Num.isApproxEq (1f64 * 1e-10) 0f64 {}", true, bool);
+    assert_evals_to!(
+        "Num.isApproxEq (1f64 * 1e-10) (1f64 * 0.999999e-10) { atol: 0f64 }",
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_order_of_arithmetic_ops() {
     assert_evals_to!(
         indoc!(

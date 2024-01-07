@@ -44,8 +44,8 @@ procedure List.9 (List.331):
         ret List.571;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.297 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.297;
 
 procedure Str.27 (Str.100):
     let Str.292 : [C Int1, C I64] = CallByName Str.73 Str.100;
