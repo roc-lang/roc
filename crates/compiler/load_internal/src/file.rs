@@ -2185,7 +2185,7 @@ fn check_for_missing_package_shorthand<'a>(
             let package_missing=packages
                 .iter()
                 .find(|p| p.value.shorthand == shorthand)
-                .is_some();
+                .is_none();
             if package_missing{
                 Some(
                     LoadingProblem::FormattedReport(
