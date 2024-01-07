@@ -2174,6 +2174,8 @@ fn report_unused_imported_modules(
     }
 }
 
+///Generates an errorfor modules that are imported from packages that don't exist
+///TODO. This is temporary. Remove this once module params is implemented
 fn check_for_missing_package_shorthand<'a>(
     packages: &[Loc<PackageEntry>],
     imports: &[Loc<ImportsEntry>],
@@ -2182,10 +2184,8 @@ fn check_for_missing_package_shorthand<'a>(
         ImportsEntry::Module(_, _) | ImportsEntry::IngestedFile(_, _) => None,
         ImportsEntry::Package(shorthand, name, _) => {
             let name=name.as_str();
-            let package_missing=packages
-                .iter()
-                .find(|p| p.value.shorthand == shorthand)
-                .is_none();
+            let package_missing=!packages
+                .iter().any(|p| p.value.shorthand == shorthand);
             if package_missing{
                 Some(
                     LoadingProblem::FormattedReport(
@@ -2194,9 +2194,10 @@ fn check_for_missing_package_shorthand<'a>(
                 None
             }
         }
-    }).map_or(Ok(()),|x|Err(x))
+    }).map_or(Ok(()),Err)
 }
-///Genereates an error for referencing a package outside of a module that can reference one
+///Generates an error for referencing a package outside of a module that can reference one
+///TODO. This is temporary. Remove this once module params is implemented
 fn check_for_referencing_package<'a>(
     imports: &[Loc<Spaced<ImportsEntry>>],
     header_name: &str,
@@ -2209,45 +2210,8 @@ fn check_for_referencing_package<'a>(
                     LoadingProblem::FormattedReport(
                         format!("You seem to be trying to import from the package \'{shorthand}\' in the import \'{shorthand}.{name}\'.\nModules of type {:?} don't support package imports.",header_name)))
         }
-    }).map_or(Ok(()),|x|Err(x))
+    }).map_or(Ok(()),Err)
 }
-/// Report modules that are imported, but from which nothing is used
-///TODO. This is temporary. Remove this once module params is implemented
-// fn report_missing_package_shorthand<'a>(header: &ModuleHeader) -> Option<LoadingProblem<'a>> {
-//     let mut
-//     problems=
-//         header.package_qualified_imported_modules
-//             .iter()
-//             .filter_map(|pqim|
-//                 match pqim {
-//                     PackageQualified::Unqualified(_) => None,
-//                     PackageQualified::Qualified(shorthand, id) => {
-//                         if!(header.packages.contains_key(shorthand)){
-//                             let pkgs=format!("packages are{:#?},packages_qual are{:#?}",
-//                                 &header.packages,&header.package_qualified_imported_modules);
-//                             let response=
-//                                 match header.header_type{
-//                                     HeaderType::App {..} |
-//                                     HeaderType::Platform {..} |
-//                                     HeaderType::Package {..} =>
-//                                         LoadingProblem::FormattedReport(
-//                                             format!("The package name {:?} that you are importing from in the import \"{:?}\", doesn't exist in this module.\nImport it in the \"packages\" section of the header.{pkgs}",shorthand,id)),
-//                                     HeaderType::Builtin {..} |
-//                                     HeaderType::Interface {..} |
-//                                     HeaderType::Hosted {..} =>
-//                                         LoadingProblem::FormattedReport(
-//                                             format!("You seem to be trying to import from the package {:?} in the import \"{:?}\".\nModules of type {:?} don't support package imports.\n{pkgs}",shorthand,id,header.header_type.to_string()))
-//                                     };
-//                             Some(response)
-
-//                 }
-//                             else{None}
-//                 }
-//                 }
-//             );
-//     problems.next()
-// }
-
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
         .package_qualified_imported_modules
@@ -3912,7 +3876,7 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
-            check_for_referencing_package(&header.imports.item.items, "interface")?;
+            check_for_referencing_package(header.imports.item.items, "interface")?;
 
             let header_name_region = header.name.region;
             let info = HeaderInfo {
@@ -3968,7 +3932,7 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
-            check_for_referencing_package(&header.imports.item.items, "hosted")?;
+            check_for_referencing_package(header.imports.item.items, "hosted")?;
 
             let info = HeaderInfo {
                 filename,
