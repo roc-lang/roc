@@ -2174,6 +2174,41 @@ fn report_unused_imported_modules(
     }
 }
 
+/// Report modules that are imported, but from which nothing is used
+///TODO. This is temporary. Remove this once module params is implemented
+fn report_missing_package_shorthand<'a>(header: &ModuleHeader) -> Option<LoadingProblem<'a>> {
+    let mut
+    problems=
+        header.package_qualified_imported_modules
+            .iter()
+            .filter_map(|pqim|
+                match pqim {
+                    PackageQualified::Unqualified(_) => None,
+                    PackageQualified::Qualified(shorthand, id) => {
+                        if!(header.packages.contains_key(shorthand)){
+                            let response=
+                                match header.header_type{
+                                    HeaderType::App {..} |
+                                    HeaderType::Platform {..} |
+                                    HeaderType::Package {..} =>
+                                        LoadingProblem::FormattedReport(
+                                            format!("The package name {:?} that you are importing from in the import \"{:?}\", doesn't exist in this module.\nImport it in the \"packages\" section of the header.",shorthand,id)),
+                                    HeaderType::Builtin {..} |
+                                    HeaderType::Interface {..} |
+                                    HeaderType::Hosted {..} =>
+                                        LoadingProblem::FormattedReport(
+                                            format!("You seem to be trying to import from the package {:?} in the import \"{:?}\".\nModules of type {:?} don't support package imports.",shorthand,id,header.header_type.to_string()))
+                                    };
+                            Some(response)
+
+                }
+                            else{None}
+                }
+                }
+            );
+    problems.next()
+}
+
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
         .package_qualified_imported_modules
@@ -2257,7 +2292,9 @@ fn update<'a>(
 
                         #[cfg(target_family = "wasm")]
                         {
-                            panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                            panic!(
+                                "Specifying packages via URLs is currently unsupported in wasm."
+                            );
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
@@ -2367,20 +2404,6 @@ fn update<'a>(
                         }
                     }
                     Builtin { .. } | Interface { .. } => {
-                        let qualified_modules = header
-                            .package_qualified_imported_modules
-                            .iter()
-                            .filter(|pqim| match pqim {
-                                PackageQualified::Unqualified(_) => false,
-                                PackageQualified::Qualified(shorthand, _) => shorthand != &"",
-                            })
-                            .collect::<Vec<_>>();
-                        assert!(
-                            qualified_modules.is_empty(),
-                            "package qualified modules not allowed in interfaces. Remove: {:#?} ",
-                            qualified_modules
-                        );
-
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,
@@ -2400,6 +2423,11 @@ fn update<'a>(
                     }
                 }
             }
+
+            match report_missing_package_shorthand(&header) {
+                Some(prob) => return Err(prob),
+                None => (),
+            };
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
@@ -4157,7 +4185,7 @@ fn load_packages<'a>(
 
             #[cfg(target_family = "wasm")]
             {
-                panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                panic!("Specifying packages via URLs is currently unsupported in wasm.");
             }
         } else {
             cwd.join(src)
