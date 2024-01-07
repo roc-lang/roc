@@ -2196,21 +2196,27 @@ fn check_for_missing_package_shorthand<'a>(
         }
     }).map_or(Ok(()),Err)
 }
-///Generates an error for referencing a package outside of a module that can reference one
+
+///Generates an errorfor modules that are imported from packages that don't exist
 ///TODO. This is temporary. Remove this once module params is implemented
-fn check_for_referencing_package<'a>(
-    imports: &[Loc<Spaced<ImportsEntry>>],
-    header_name: &str,
+fn check_for_missing_package_shorthand_in_cache<'a>(
+    header: &ModuleHeader,
+    shorthands: &Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
 ) -> Result<(), LoadingProblem<'a>> {
-    imports.iter().find_map(|i| match i.value.item(){
-        ImportsEntry::Module(_, _) | ImportsEntry::IngestedFile(_, _) => None,
-        ImportsEntry::Package(shorthand, name, _) => {
-            let name=name.as_str();
-                Some(
-                    LoadingProblem::FormattedReport(
-                        format!("You seem to be trying to import from the package \'{shorthand}\' in the import \'{shorthand}.{name}\'.\nModules of type {:?} don't support package imports.",header_name)))
-        }
-    }).map_or(Ok(()),Err)
+    header.package_qualified_imported_modules
+            .iter()
+            .find_map(|pqim| match pqim {
+                PackageQualified::Unqualified(_) => None,
+                PackageQualified::Qualified(shorthand, _) => {
+                    if!(shorthands.lock().iter().any(|(short,_)|short==shorthand)){
+                        Some(LoadingProblem::FormattedReport(
+                            format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header doesn't exist in this module.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.")
+                        ))
+                    } else {
+                        None
+                    }
+                }
+            }).map_or(Ok(()),Err)
 }
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
@@ -2427,6 +2433,7 @@ fn update<'a>(
                 }
             }
 
+            check_for_missing_package_shorthand_in_cache(&header, &state.arc_shorthands)?;
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
                 state.module_cache.module_names.insert(*id, name.clone());
@@ -3876,7 +3883,6 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
-            check_for_referencing_package(header.imports.item.items, "interface")?;
 
             let header_name_region = header.name.region;
             let info = HeaderInfo {
@@ -3932,8 +3938,6 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
-            check_for_referencing_package(header.imports.item.items, "hosted")?;
-
             let info = HeaderInfo {
                 filename,
                 is_root_module,
@@ -4104,7 +4108,6 @@ fn parse_header<'a>(
                 &module_ids,
                 &ident_ids_by_module,
             );
-            check_for_referencing_package(header.imports.item.items, "platform")?;
 
             let (module_id, _, header) = build_platform_header(
                 arena,

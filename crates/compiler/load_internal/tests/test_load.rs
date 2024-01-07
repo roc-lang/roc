@@ -1163,8 +1163,8 @@ fn module_interface_with_qualified_import() {
         err,
         indoc!(
             r#"
-            You seem to be trying to import from the package 'b' in the import 'b.T'.
-            Modules of type "interface" don't support package imports."#
+            The package shorthand 'b' that you are using in the 'imports' section of the header doesn't exist in this module.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
         ),
         "\n{}",
         err
