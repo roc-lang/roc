@@ -2174,40 +2174,79 @@ fn report_unused_imported_modules(
     }
 }
 
+fn check_for_missing_package_shorthand<'a>(
+    packages: &[Loc<PackageEntry>],
+    imports: &[Loc<ImportsEntry>],
+) -> Result<(), LoadingProblem<'a>> {
+    imports.iter().find_map(|i| match i.value {
+        ImportsEntry::Module(_, _) | ImportsEntry::IngestedFile(_, _) => None,
+        ImportsEntry::Package(shorthand, name, _) => {
+            let name=name.as_str();
+            let package_missing=packages
+                .iter()
+                .find(|p| p.value.shorthand == shorthand)
+                .is_some();
+            if package_missing{
+                Some(
+                    LoadingProblem::FormattedReport(
+                        format!("The package shorthand '{shorthand}' that you are importing the module '{name}' from in '{shorthand}.{name}', doesn't exist in this module.\nImport it in the \"packages\" section of the header.")))
+            } else {
+                None
+            }
+        }
+    }).map_or(Ok(()),|x|Err(x))
+}
+///Genereates an error for referencing a package outside of a module that can reference one
+fn check_for_referencing_package<'a>(
+    imports: &[Loc<Spaced<ImportsEntry>>],
+    header_name: &str,
+) -> Result<(), LoadingProblem<'a>> {
+    imports.iter().find_map(|i| match i.value.item(){
+        ImportsEntry::Module(_, _) | ImportsEntry::IngestedFile(_, _) => None,
+        ImportsEntry::Package(shorthand, name, _) => {
+            let name=name.as_str();
+                Some(
+                    LoadingProblem::FormattedReport(
+                        format!("You seem to be trying to import from the package \'{shorthand}\' in the import \'{shorthand}.{name}\'.\nModules of type {:?} don't support package imports.",header_name)))
+        }
+    }).map_or(Ok(()),|x|Err(x))
+}
 /// Report modules that are imported, but from which nothing is used
 ///TODO. This is temporary. Remove this once module params is implemented
-fn report_missing_package_shorthand<'a>(header: &ModuleHeader) -> Option<LoadingProblem<'a>> {
-    let mut
-    problems=
-        header.package_qualified_imported_modules
-            .iter()
-            .filter_map(|pqim|
-                match pqim {
-                    PackageQualified::Unqualified(_) => None,
-                    PackageQualified::Qualified(shorthand, id) => {
-                        if!(header.packages.contains_key(shorthand)){
-                            let response=
-                                match header.header_type{
-                                    HeaderType::App {..} |
-                                    HeaderType::Platform {..} |
-                                    HeaderType::Package {..} =>
-                                        LoadingProblem::FormattedReport(
-                                            format!("The package name {:?} that you are importing from in the import \"{:?}\", doesn't exist in this module.\nImport it in the \"packages\" section of the header.",shorthand,id)),
-                                    HeaderType::Builtin {..} |
-                                    HeaderType::Interface {..} |
-                                    HeaderType::Hosted {..} =>
-                                        LoadingProblem::FormattedReport(
-                                            format!("You seem to be trying to import from the package {:?} in the import \"{:?}\".\nModules of type {:?} don't support package imports.",shorthand,id,header.header_type.to_string()))
-                                    };
-                            Some(response)
+// fn report_missing_package_shorthand<'a>(header: &ModuleHeader) -> Option<LoadingProblem<'a>> {
+//     let mut
+//     problems=
+//         header.package_qualified_imported_modules
+//             .iter()
+//             .filter_map(|pqim|
+//                 match pqim {
+//                     PackageQualified::Unqualified(_) => None,
+//                     PackageQualified::Qualified(shorthand, id) => {
+//                         if!(header.packages.contains_key(shorthand)){
+//                             let pkgs=format!("packages are{:#?},packages_qual are{:#?}",
+//                                 &header.packages,&header.package_qualified_imported_modules);
+//                             let response=
+//                                 match header.header_type{
+//                                     HeaderType::App {..} |
+//                                     HeaderType::Platform {..} |
+//                                     HeaderType::Package {..} =>
+//                                         LoadingProblem::FormattedReport(
+//                                             format!("The package name {:?} that you are importing from in the import \"{:?}\", doesn't exist in this module.\nImport it in the \"packages\" section of the header.{pkgs}",shorthand,id)),
+//                                     HeaderType::Builtin {..} |
+//                                     HeaderType::Interface {..} |
+//                                     HeaderType::Hosted {..} =>
+//                                         LoadingProblem::FormattedReport(
+//                                             format!("You seem to be trying to import from the package {:?} in the import \"{:?}\".\nModules of type {:?} don't support package imports.\n{pkgs}",shorthand,id,header.header_type.to_string()))
+//                                     };
+//                             Some(response)
 
-                }
-                            else{None}
-                }
-                }
-            );
-    problems.next()
-}
+//                 }
+//                             else{None}
+//                 }
+//                 }
+//             );
+//     problems.next()
+// }
 
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
@@ -2423,11 +2462,6 @@ fn update<'a>(
                     }
                 }
             }
-
-            match report_missing_package_shorthand(&header) {
-                Some(prob) => return Err(prob),
-                None => (),
-            };
 
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
@@ -3878,6 +3912,7 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
+            check_for_referencing_package(&header.imports.item.items, "interface")?;
 
             let header_name_region = header.name.region;
             let info = HeaderInfo {
@@ -3933,6 +3968,8 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
+            check_for_referencing_package(&header.imports.item.items, "hosted")?;
+
             let info = HeaderInfo {
                 filename,
                 is_root_module,
@@ -3978,6 +4015,13 @@ fn parse_header<'a>(
             } else {
                 &[]
             };
+            let imports = if let Some(imports) = header.imports {
+                unspace(arena, imports.item.items)
+            } else {
+                &[]
+            };
+
+            check_for_missing_package_shorthand(packages, imports)?;
 
             let mut provides = bumpalo::collections::Vec::new_in(arena);
 
@@ -3997,11 +4041,7 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages,
-                imports: if let Some(imports) = header.imports {
-                    unspace(arena, imports.item.items)
-                } else {
-                    &[]
-                },
+                imports,
                 header_type: HeaderType::App {
                     provides: provides.into_bump_slice(),
                     output_name: header.name.value,
@@ -4100,6 +4140,7 @@ fn parse_header<'a>(
                 &module_ids,
                 &ident_ids_by_module,
             );
+            check_for_referencing_package(header.imports.item.items, "platform")?;
 
             let (module_id, _, header) = build_platform_header(
                 arena,

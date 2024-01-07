@@ -1162,7 +1162,9 @@ fn module_interface_with_qualified_import() {
     assert_eq!(
         err,
         indoc!(
-            r#"You seem to be trying to import the module b.T from a package "b" inside a module of type "interface" that doesn't support that."#
+            r#"
+            You seem to be trying to import from the package 'b' in the import 'b.T'.
+            Modules of type "interface" don't support package imports."#
         ),
         "\n{}",
         err
