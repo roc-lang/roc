@@ -1170,3 +1170,31 @@ fn module_interface_with_qualified_import() {
         err
     );
 }
+#[test]
+fn app_missing_package_import() {
+    let modules = vec![(
+        "Main",
+        indoc!(
+            r#"
+                app "example"
+                    packages { pack: "./package/main.roc" }
+                    imports [notpack.Mod]
+                    provides [] to pack
+
+                main = ""
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("app_missing_package_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'notpack' that you are importing the module 'Mod' from in 'notpack.Mod', doesn't exist in this module.
+            Import it in the "packages" section of the header."#
+        ),
+        "\n{}",
+        err
+    );
+}
