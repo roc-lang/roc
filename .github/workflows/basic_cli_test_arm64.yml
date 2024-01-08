@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -52,6 +53,10 @@ jobs:
           git fetch --tags
           latestTag=$(git describe --tags $(git rev-list --tags --max-count=1))
           git checkout $latestTag
+
+      # temp issue with new string interpolation syntax
+      # TODO undo when 0.7.2 or 0.8.0 is released
+      - run: sed -i 's/\$//g' examples/tcp-client.roc
 
       - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
