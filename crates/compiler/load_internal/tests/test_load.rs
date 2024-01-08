@@ -1163,8 +1163,9 @@ fn module_interface_with_qualified_import() {
         err,
         indoc!(
             r#"
-            The package shorthand 'b' that you are using in the 'imports' section of the header doesn't exist in this module.
-            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
+            The package shorthand 'b' that you are using in the 'imports' section of the header of module 'tmp/module_interface_with_qualified_import/A' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header.
+            This module is an interface, because of a bug in the compiler we are unable to directly typecheck interface modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file."#
         ),
         "\n{}",
         err
@@ -1191,8 +1192,8 @@ fn app_missing_package_import() {
         err,
         indoc!(
             r#"
-            The package shorthand 'notpack' that you are importing the module 'Mod' from in 'notpack.Mod', doesn't exist in this module.
-            Import it in the "packages" section of the header."#
+            The package shorthand 'notpack' that you are using in the 'imports' section of the header of module 'tmp/app_missing_package_import/Main' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
         ),
         "\n{}",
         err

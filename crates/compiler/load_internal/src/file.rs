@@ -2176,29 +2176,6 @@ fn report_unused_imported_modules(
 
 ///Generates an errorfor modules that are imported from packages that don't exist
 ///TODO. This is temporary. Remove this once module params is implemented
-fn check_for_missing_package_shorthand<'a>(
-    packages: &[Loc<PackageEntry>],
-    imports: &[Loc<ImportsEntry>],
-) -> Result<(), LoadingProblem<'a>> {
-    imports.iter().find_map(|i| match i.value {
-        ImportsEntry::Module(_, _) | ImportsEntry::IngestedFile(_, _) => None,
-        ImportsEntry::Package(shorthand, name, _) => {
-            let name=name.as_str();
-            let package_missing=!packages
-                .iter().any(|p| p.value.shorthand == shorthand);
-            if package_missing{
-                Some(
-                    LoadingProblem::FormattedReport(
-                        format!("The package shorthand '{shorthand}' that you are importing the module '{name}' from in '{shorthand}.{name}', doesn't exist in this module.\nImport it in the \"packages\" section of the header.")))
-            } else {
-                None
-            }
-        }
-    }).map_or(Ok(()),Err)
-}
-
-///Generates an errorfor modules that are imported from packages that don't exist
-///TODO. This is temporary. Remove this once module params is implemented
 fn check_for_missing_package_shorthand_in_cache<'a>(
     header: &ModuleHeader,
     shorthands: &Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
@@ -2209,15 +2186,27 @@ fn check_for_missing_package_shorthand_in_cache<'a>(
                 PackageQualified::Unqualified(_) => None,
                 PackageQualified::Qualified(shorthand, _) => {
                     if!(shorthands.lock().iter().any(|(short,_)|short==shorthand)){
+                        let module_path=header.module_path.to_str().unwrap_or("");
                         Some(LoadingProblem::FormattedReport(
-                            format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header doesn't exist in this module.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.")
-                        ))
+                        match header.header_type {
+                            HeaderType::Hosted { ..} |
+                            HeaderType::Builtin {..} |
+                            HeaderType::Interface {..} => 
+                            {
+                                let mod_type= header.header_type.to_string();
+                                format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.\nThis module is an {mod_type}, because of a bug in the compiler we are unable to directly typecheck {mod_type} modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file.")
+                            },
+                            _=>
+                                format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.")
+                        
+            }))
                     } else {
                         None
                     }
                 }
             }).map_or(Ok(()),Err)
 }
+
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
         .package_qualified_imported_modules
@@ -3988,8 +3977,6 @@ fn parse_header<'a>(
             } else {
                 &[]
             };
-
-            check_for_missing_package_shorthand(packages, imports)?;
 
             let mut provides = bumpalo::collections::Vec::new_in(arena);
 
