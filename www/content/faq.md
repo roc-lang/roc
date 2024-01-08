@@ -154,7 +154,7 @@ On a historical note, `Maybe` may have been thought of as a substitute for null 
 
 Like all programming languages, Roc is subject to the limitations of the universe. Almost all numbers in mathematics cannot even be represented in the universe because you'd run out of matter trying to write them down, and therefore Roc must choose what subset of mathematics to support—including which numbers to support.
 
-Roc supports 128-bit integers, 128-bit fixed-point decimal numbers. Here are some approximate ranges for those:
+Roc supports 128-bit integers and 128-bit fixed-point decimal numbers. Here are some approximate ranges for those:
 
 -   `I128`: ±170000000000000000000000000000000000000
 -   `Dec`: ±170000000000000000000.000000000000000000
