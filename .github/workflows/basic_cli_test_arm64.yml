@@ -56,7 +56,7 @@ jobs:
 
       # temp issue with new string interpolation syntax
       # TODO undo when 0.7.2 or 0.8.0 is released
-      - run: sed -i 's/\$//g' examples/tcp-client.roc
+      - run: sed -i 's/\$//g' basic-cli/examples/tcp-client.roc
 
       - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
