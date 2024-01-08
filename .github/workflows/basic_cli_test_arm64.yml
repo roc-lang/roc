@@ -1,5 +1,4 @@
 on:
-  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
