@@ -264,6 +264,9 @@ comptime {
     if (builtin.target.cpu.arch == .aarch64) {
         @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
         @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+    } else if (builtin.os.tag == .windows) {
+        @export(__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
+        @export(__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
     }
 }
 
@@ -279,12 +282,25 @@ pub extern fn _longjmp([*c]c_int, c_int) noreturn;
 pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
 pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
 pub extern fn longjmperror() void;
+
 // Zig won't expose the externs (and hence link correctly) unless we force them to be used.
 fn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {
     return setjmp(it);
 }
+
 fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
     longjmp(a0, a1);
+}
+
+pub extern fn windows_setjmp([*c]c_int) c_int;
+pub extern fn windows_longjmp([*c]c_int, c_int) noreturn;
+
+fn __roc_force_setjmp_windows(it: [*c]c_int) callconv(.C) c_int {
+    return windows_setjmp(it);
+}
+
+fn __roc_force_longjmp_windows(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+    windows_longjmp(a0, a1);
 }
 
 comptime {
