@@ -315,11 +315,18 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
 pub fn build_longjmp_call(env: &Env) {
     let jmp_buf = get_sjlj_buffer(env);
-    if cfg!(target_arch = "aarch64") {
-        // Call the Zig-linked longjmp: `void longjmp(i32*, i32)`
+    if env.target_info.architecture == roc_target::Architecture::Aarch64 {
+        // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         let tag = env.context.i32_type().const_int(1, false);
         let _call =
             call_void_bitcode_fn(env, &[jmp_buf.into(), tag.into()], bitcode::UTILS_LONGJMP);
+    } else if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        let tag = env.context.i32_type().const_int(1, false);
+        let _call = call_void_bitcode_fn(
+            env,
+            &[jmp_buf.into(), tag.into()],
+            bitcode::UTILS_WINDOWS_LONGJMP,
+        );
     } else {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
         let jmp_buf_i8p = env.builder.new_build_pointer_cast(
