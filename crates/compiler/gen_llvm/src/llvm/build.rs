@@ -949,6 +949,12 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
+        let debug_metadata_version = module.get_context().i32_type().const_int(3, false);
+        module.add_basic_value_flag(
+            "Debug Info Version",
+            inkwell::module::FlagBehavior::Warning,
+            debug_metadata_version,
+        );
         module.create_debug_info_builder(
             true,
             /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
