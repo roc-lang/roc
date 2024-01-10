@@ -44,6 +44,7 @@ interface Num
         mul,
         min,
         max,
+        restrictToInterval,
         isLt,
         isLte,
         isGt,
@@ -866,6 +867,41 @@ max = \a, b ->
         a
     else
         b
+
+## Restricts a number to be between two other numbers.
+##
+## ```
+## restrictToInterval 5 { startAt: 3, endAt: 8 } == 5
+## restrictToInterval 1 { startAt: 3, endAt: 8 } == 3
+## restrictToInterval 10 { startAt: 3, endAt: 8 } == 8
+
+## restrictToInterval 5 { startAt: 8, endAt: 3 } == 5
+## restrictToInterval 1 { startAt: 8, endAt: 3 } == 3
+## restrictToInterval 10 { startAt: 8, endAt: 3 } == 8
+## ```
+## You may know this function as `clamp` in other languages.
+restrictToInterval : Num a, { startAt : Num a, endAt : Num a } -> Num a
+restrictToInterval = \x, { startAt, endAt } ->
+    if endAt > startAt then
+        restrictToInterval x { startAt: endAt, endAt: startAt }
+    else if x < startAt then
+        startAt
+    else if x > endAt then
+        endAt
+    else
+        x
+
+expect restrictToInterval 5 { startAt: 3, endAt: 8 } == 5
+expect restrictToInterval 1 { startAt: 3, endAt: 8 } == 3
+expect restrictToInterval 10 { startAt: 3, endAt: 8 } == 8
+expect restrictToInterval -5 { startAt: 3, endAt: 8 } == 3
+expect restrictToInterval -2 { startAt: -5, endAt: 5 } == -2
+expect restrictToInterval 7 { startAt: -5, endAt: 5 } == 5
+expect restrictToInterval 3 { startAt: -5, endAt: 5 } == 3
+
+expect restrictToInterval 5 { startAt: 8, endAt: 3 } == 5
+expect restrictToInterval 1 { startAt: 8, endAt: 3 } == 3
+expect restrictToInterval 10 { startAt: 8, endAt: 3 } == 8
 
 sin : Frac a -> Frac a
 cos : Frac a -> Frac a
