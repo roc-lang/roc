@@ -6,6 +6,19 @@
 # Unignore all directories
 !*/
 
+# Specifically keep these files with no extension
+!Earthfile
+!AUTHORS
+!LICENSE*
+!LEGAL*
+!Dockerfile
+# .reuse/dep5 see https://reuse.software/
+!dep5
+# NotARocFile is used for formatter test
+!NotARocFile
+# also includes keeping one exe benchmark file
+!dynhost_benchmarks*
+
 ### Add specific file extensions and directories below ###
 
 # Ignore the following directories and file extensions
@@ -27,19 +40,6 @@ zig-cache
 *.wasm
 *.exe
 *.pdb
-
-
-# Specifically keep these files with no extension
-!Earthfile
-!AUTHORS
-!LICENSE*
-!LEGAL*
-!Dockerfile
-!dep5
-!NotARocFile
-# also includes keeping one exe benchmark file
-!dynhost_benchmarks*
-!rust-toolchain
 
 # llvm human-readable output
 *.ll
