@@ -23,7 +23,7 @@ interface Hash
         hashUnordered,
     ] imports []
 
-import Bool exposing [Bool, isEq]
+import Bool exposing [Bool]
 import List
 import Str
 import Num exposing [

@@ -8,7 +8,7 @@ use crate::num::{
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
-use crate::procedure::References;
+use crate::procedure::{QualifiedReference, References};
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
 use roc_collections::soa::Index;
@@ -882,7 +882,9 @@ pub fn canonicalize_expr<'a>(
                         }
                         Ok((name, opaque_def)) => {
                             let argument = Box::new(args.pop().unwrap());
-                            output.references.insert_type_lookup(name);
+                            output
+                                .references
+                                .insert_type_lookup(name, QualifiedReference::Unqualified);
 
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
@@ -1193,7 +1195,9 @@ pub fn canonicalize_expr<'a>(
                 }
                 Ok((name, opaque_def)) => {
                     let mut output = Output::default();
-                    output.references.insert_type_lookup(name);
+                    output
+                        .references
+                        .insert_type_lookup(name, QualifiedReference::Unqualified);
 
                     let (type_arguments, lambda_set_variables, specialized_def_type) =
                         freshen_opaque_def(var_store, opaque_def);
@@ -1877,7 +1881,9 @@ fn canonicalize_var_lookup(
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
             Ok(symbol) => {
-                output.references.insert_value_lookup(symbol);
+                output
+                    .references
+                    .insert_value_lookup(symbol, QualifiedReference::Unqualified);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(
@@ -1900,7 +1906,9 @@ fn canonicalize_var_lookup(
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
             Ok(symbol) => {
-                output.references.insert_value_lookup(symbol);
+                output
+                    .references
+                    .insert_value_lookup(symbol, QualifiedReference::Qualified);
 
                 if scope.abilities_store.is_ability_member_name(symbol) {
                     AbilityMember(

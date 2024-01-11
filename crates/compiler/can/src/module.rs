@@ -1,6 +1,6 @@
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
-use crate::annotation::{canonicalize_annotation, AnnotationFor};
-use crate::def::{canonicalize_defs, Def};
+use crate::annotation::{canonicalize_annotation, AnnotationFor, AnnotationReferences};
+use crate::def::{canonicalize_defs, report_unused_imports, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
 use crate::expr::{
@@ -127,7 +127,6 @@ pub struct Module {
     pub exposed_imports: MutMap<Symbol, Region>,
     pub exposed_symbols: VecSet<Symbol>,
     pub referenced_values: VecSet<Symbol>,
-    pub referenced_types: VecSet<Symbol>,
     /// all aliases. `bool` indicates whether it is exposed
     pub aliases: MutMap<Symbol, (bool, Alias)>,
     pub rigid_variables: RigidVariables,
@@ -152,7 +151,6 @@ pub struct ModuleOutput {
     pub exposed_symbols: VecSet<Symbol>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
-    pub referenced_types: VecSet<Symbol>,
     pub symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     pub pending_derives: PendingDerives,
     pub scope: Scope,
@@ -363,7 +361,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let (defs, output, symbols_introduced) = canonicalize_defs(
+    let (defs, output, symbols_introduced, imports_introduced) = canonicalize_defs(
         &mut env,
         Output::default(),
         var_store,
@@ -389,6 +387,8 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
+    report_unused_imports(imports_introduced, &output.references, &mut env, &mut scope);
+
     for named in output.introduced_variables.named {
         rigid_variables.named.insert(named.variable, named.name);
     }
@@ -404,18 +404,15 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let mut referenced_values = VecSet::default();
-    let mut referenced_types = VecSet::default();
 
     // Gather up all the symbols that were referenced across all the defs' lookups.
     referenced_values.extend(output.references.value_lookups().copied());
-    referenced_types.extend(output.references.type_lookups().copied());
 
     // Gather up all the symbols that were referenced across all the defs' calls.
     referenced_values.extend(output.references.calls().copied());
 
     // Gather up all the symbols that were referenced from other modules.
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
-    referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
     // NOTE previously we inserted builtin defs into the list of defs here
     // this is now done later, in file.rs.
@@ -539,7 +536,7 @@ pub fn canonicalize_module_defs<'a>(
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
-                                references: Default::default(),
+                                references: AnnotationReferences::new(),
                                 aliases: Default::default(),
                             };
 
@@ -597,7 +594,7 @@ pub fn canonicalize_module_defs<'a>(
                             let annotation = crate::annotation::Annotation {
                                 typ: def_annotation.signature,
                                 introduced_variables: def_annotation.introduced_variables,
-                                references: Default::default(),
+                                references: AnnotationReferences::new(),
                                 aliases: Default::default(),
                             };
 
@@ -694,14 +691,12 @@ pub fn canonicalize_module_defs<'a>(
 
     // Incorporate any remaining output.lookups entries into references.
     referenced_values.extend(output.references.value_lookups().copied());
-    referenced_types.extend(output.references.type_lookups().copied());
 
     // Incorporate any remaining output.calls entries into references.
     referenced_values.extend(output.references.calls().copied());
 
     // Gather up all the symbols that were referenced from other modules.
     referenced_values.extend(env.qualified_value_lookups.iter().copied());
-    referenced_types.extend(env.qualified_type_lookups.iter().copied());
 
     let mut fix_closures_no_capture_symbols = VecSet::default();
     let mut fix_closures_closure_captures = VecMap::default();
@@ -797,7 +792,6 @@ pub fn canonicalize_module_defs<'a>(
         rigid_variables,
         declarations,
         referenced_values,
-        referenced_types,
         exposed_imports: can_exposed_imports,
         problems: env.problems,
         symbols_from_requires,

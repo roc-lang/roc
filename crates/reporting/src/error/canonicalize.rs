@@ -107,9 +107,8 @@ pub fn can_problem<'b>(
         Problem::UnusedModuleImport(module_id, region) => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("Nothing from "),
                     alloc.module(module_id),
-                    alloc.reflow(" is used in this module."),
+                    alloc.reflow(" is imported but not used."),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([

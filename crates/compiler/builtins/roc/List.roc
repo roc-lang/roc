@@ -75,7 +75,7 @@ interface List
 
 import Bool exposing [Bool, Eq]
 import Result exposing [Result]
-import Num exposing [Nat, Num, Int]
+import Num exposing [Nat, Num]
 
 ## ## Types
 ##

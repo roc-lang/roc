@@ -35,7 +35,7 @@ import Bool exposing [Bool, Eq]
 import Result exposing [Result]
 import List
 import Str
-import Num exposing [Nat, U64, F32, U32, U8, I8]
+import Num exposing [Nat, U64, F32, U32, U8]
 import Hash exposing [Hasher, Hash]
 import Inspect exposing [Inspect, Inspector, InspectFormatter]
 

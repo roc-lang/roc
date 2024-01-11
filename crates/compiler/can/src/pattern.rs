@@ -446,7 +446,10 @@ pub fn canonicalize_pattern<'a>(
                             let (type_arguments, lambda_set_variables, specialized_def_type) =
                                 freshen_opaque_def(var_store, opaque_def);
 
-                            output.references.insert_type_lookup(opaque);
+                            output.references.insert_type_lookup(
+                                opaque,
+                                crate::procedure::QualifiedReference::Unqualified,
+                            );
 
                             Pattern::UnwrappedOpaque {
                                 whole_var: var_store.fresh(),

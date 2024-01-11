@@ -3,7 +3,7 @@ interface WithBuiltins
     imports []
 
 import Dep1
-import Dep2 exposing [two]
+import Dep2
 
 floatTest = Num.maxF64
 

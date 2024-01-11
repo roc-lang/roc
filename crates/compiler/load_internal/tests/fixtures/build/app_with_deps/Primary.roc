@@ -3,7 +3,7 @@ interface Primary
     imports []
 
 import Dep1
-import Dep2 exposing [two]
+import Dep2
 import Dep3Blah exposing [bar]
 import Res
 

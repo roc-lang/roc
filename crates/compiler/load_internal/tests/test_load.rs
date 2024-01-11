@@ -217,10 +217,21 @@ fn load_fixture(
 
     let home = loaded_module.module_id;
 
-    assert_eq!(
-        loaded_module.can_problems.remove(&home).unwrap_or_default(),
-        Vec::new()
-    );
+    let (filepath, src) = loaded_module.sources.get(&home).unwrap();
+    let can_problems = loaded_module.can_problems.remove(&home).unwrap_or_default();
+    if !can_problems.is_empty() {
+        panic!(
+            "{}",
+            format_can_problems(
+                can_problems,
+                home,
+                &loaded_module.interns,
+                filepath.clone(),
+                src,
+            )
+        );
+    }
+
     assert!(loaded_module
         .type_problems
         .remove(&home)
@@ -453,7 +464,7 @@ fn import_inside_def() {
 }
 
 #[test]
-#[should_panic(expected = "LookupNotInScope")]
+#[should_panic(expected = "UNRECOGNIZED NAME")]
 fn exposed_used_outside_scope() {
     let subs_by_module = Default::default();
     load_fixture(
@@ -464,7 +475,7 @@ fn exposed_used_outside_scope() {
 }
 
 #[test]
-#[should_panic(expected = "ModuleNotImported")]
+#[should_panic(expected = "MODULE NOT IMPORTED")]
 fn import_used_outside_scope() {
     let subs_by_module = Default::default();
     load_fixture(
@@ -915,9 +926,9 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
+                ── UNUSED IMPORT in tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ──
 
-                Nothing from Age is used in this module.
+                Age is imported but not used.
 
                 3│  import Age exposing [Age]
                     ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -928,6 +939,114 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         "\n{}",
         err
     );
+}
+
+#[test]
+fn unused_imports() {
+    let modules = vec![
+        (
+            "Dep1",
+            indoc!(
+                r#"
+                interface Dep1 exposes [one] imports []
+                one = 1
+                "#
+            ),
+        ),
+        (
+            "Dep2",
+            indoc!(
+                r#"
+                interface Dep2 exposes [two] imports []
+                two = 2
+                "#
+            ),
+        ),
+        (
+            "Dep3",
+            indoc!(
+                r#"
+                interface Dep3 exposes [Three, three] imports []
+
+                Three : [Three]
+
+                three = Three
+                "#
+            ),
+        ),
+        (
+            "Main",
+            indoc!(
+                r#"
+            interface Main exposes [usedModule, unusedModule, unusedExposed, usingThreeValue] imports []
+
+            import Dep1
+            import Dep3 exposing [Three]
+
+            usedModule =
+                import Dep2
+                Dep2.two
+
+            unusedModule =
+                import Dep2
+                2
+
+            unusedExposed =
+                import Dep2 exposing [two]
+                2
+
+            usingThreeValue =
+                Dep3.three
+                "#
+            ),
+        ),
+    ];
+
+    let err = multiple_modules("unused_imports", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r"
+            ── UNUSED IMPORT in tmp/unused_imports/Main ────────────────────────────────────
+
+            Dep2 is imported but not used.
+
+            11│      import Dep2
+                     ^^^^^^^^^^^
+
+            Since Dep2 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main ────────────────────────────────────
+
+            Dep2 is imported but not used.
+
+            15│      import Dep2 exposing [two]
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            Since Dep2 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main ────────────────────────────────────
+
+            Dep1 is imported but not used.
+
+            3│  import Dep1
+                ^^^^^^^^^^^
+
+            Since Dep1 isn't used, you don't need to import it.
+
+            ── UNUSED IMPORT in tmp/unused_imports/Main ────────────────────────────────────
+
+            `Dep3.Three` is not used in this module.
+
+            4│  import Dep3 exposing [Three]
+                                      ^^^^^
+
+            Since `Dep3.Three` isn't used, you don't need to import it.
+            "
+        ),
+        "\n{}",
+        err
+    )
 }
 
 #[test]

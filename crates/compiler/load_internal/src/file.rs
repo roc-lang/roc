@@ -2142,44 +2142,6 @@ macro_rules! debug_check_ir {
     };
 }
 
-/// Report modules that are imported, but from which nothing is used
-fn report_unused_imported_modules(
-    state: &mut State<'_>,
-    module_id: ModuleId,
-    constrained_module: &ConstrainedModule,
-) {
-    // [modules-revamp] TODO: take expr-level into account
-    let mut unused_imported_modules = constrained_module.imported_modules.clone();
-    let mut unused_imports = constrained_module.module.exposed_imports.clone();
-
-    for symbol in constrained_module.module.referenced_values.iter() {
-        unused_imported_modules.remove(&symbol.module_id());
-        unused_imports.remove(symbol);
-    }
-
-    for symbol in constrained_module.module.referenced_types.iter() {
-        unused_imported_modules.remove(&symbol.module_id());
-        unused_imports.remove(symbol);
-    }
-
-    let existing = match state.module_cache.can_problems.entry(module_id) {
-        Vacant(entry) => entry.insert(std::vec::Vec::new()),
-        Occupied(entry) => entry.into_mut(),
-    };
-
-    for (unused, region) in unused_imported_modules.drain() {
-        if !unused.is_builtin() {
-            existing.push(roc_problem::can::Problem::UnusedModuleImport(
-                unused, region,
-            ));
-        }
-    }
-
-    for (unused, region) in unused_imports.drain() {
-        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
-    }
-}
-
 fn extend_module_with_builtin_import(module: &mut ParsedModule, module_id: ModuleId) {
     module
         .package_qualified_imported_modules
@@ -2513,8 +2475,6 @@ fn update<'a>(
             if let Some(docs) = module_docs {
                 state.module_cache.documentation.insert(module_id, docs);
             }
-
-            report_unused_imported_modules(&mut state, module_id, &constrained_module);
 
             state
                 .module_cache
@@ -5145,7 +5105,6 @@ fn canonicalize_and_constrain<'a>(
         exposed_imports: module_output.exposed_imports,
         exposed_symbols: module_output.exposed_symbols,
         referenced_values: module_output.referenced_values,
-        referenced_types: module_output.referenced_types,
         aliases,
         rigid_variables: module_output.rigid_variables,
         abilities_store: module_output.scope.abilities_store,

@@ -6,6 +6,7 @@ use crate::annotation::canonicalize_annotation;
 use crate::annotation::find_type_def_symbols;
 use crate::annotation::make_apply_symbol;
 use crate::annotation::AnnotationFor;
+use crate::annotation::AnnotationReferences;
 use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
@@ -358,9 +359,7 @@ fn canonicalize_alias<'a>(
     );
 
     // Record all the annotation's references in output.references.lookups
-    for symbol in can_ann.references {
-        output.references.insert_type_lookup(symbol);
-    }
+    can_ann.references.insert_lookups(&mut output.references);
 
     let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
     let mut is_phantom = false;
@@ -704,6 +703,8 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
+    let mut references = AnnotationReferences::new();
+
     let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
         let has_abilities = has_abilities.value.collection();
@@ -722,7 +723,8 @@ fn canonicalize_opaque<'a>(
             // Op := {} has [Eq]
             let (ability, members) = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
-                    match make_apply_symbol(env, region, scope, module_name, ident) {
+                    match make_apply_symbol(env, region, scope, module_name, ident, &mut references)
+                    {
                         Ok(ability) => {
                             let opt_members = scope
                                 .abilities_store
@@ -915,6 +917,8 @@ fn canonicalize_opaque<'a>(
         }
     }
 
+    references.insert_lookups(&mut output.references);
+
     Ok(CanonicalizedOpaque {
         opaque_def: alias,
         derived_defs,
@@ -929,7 +933,12 @@ pub(crate) fn canonicalize_defs<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut roc_parse::ast::Defs<'a>,
     pattern_type: PatternType,
-) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+) -> (
+    CanDefs,
+    Output,
+    MutMap<Symbol, Region>,
+    Vec<IntroducedImport>,
+) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -979,6 +988,7 @@ pub(crate) fn canonicalize_defs<'a>(
                 env,
                 var_store,
                 value_def,
+                region,
                 scope,
                 &pending_abilities_in_scope,
                 &mut output,
@@ -1035,7 +1045,12 @@ fn canonicalize_value_defs<'a>(
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,
-) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+) -> (
+    CanDefs,
+    Output,
+    MutMap<Symbol, Region>,
+    Vec<IntroducedImport>,
+) {
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
@@ -1044,6 +1059,8 @@ fn canonicalize_value_defs<'a>(
     let mut pending_expects = Vec::with_capacity(value_defs.len());
     let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
     let mut pending_ingested_files = Vec::with_capacity(value_defs.len());
+
+    let mut imports_introduced = Vec::with_capacity(value_defs.len());
 
     for loc_pending_def in value_defs {
         match loc_pending_def.value {
@@ -1064,7 +1081,9 @@ fn canonicalize_value_defs<'a>(
             PendingValue::ExpectFx(pending_expect) => {
                 pending_expect_fx.push(pending_expect);
             }
-            PendingValue::ModuleImport => { /* nothing to do */ }
+            PendingValue::ModuleImport(introduced_import) => {
+                imports_introduced.push(introduced_import);
+            }
             PendingValue::IngestedFileImport(pending_ingested_file) => {
                 pending_ingested_files.push(pending_ingested_file);
             }
@@ -1181,7 +1200,7 @@ fn canonicalize_value_defs<'a>(
         aliases,
     };
 
-    (can_defs, output, symbols_introduced)
+    (can_defs, output, symbols_introduced, imports_introduced)
 }
 
 struct CanonicalizedTypeDefs<'a> {
@@ -1395,9 +1414,9 @@ fn resolve_abilities(
             );
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in member_annot.references {
-                output.references.insert_type_lookup(symbol);
-            }
+            member_annot
+                .references
+                .insert_lookups(&mut output.references);
 
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
@@ -2470,7 +2489,7 @@ pub fn can_defs_with_return<'a>(
     loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
+    let (unsorted, defs_output, symbols_introduced, imports_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
@@ -2504,6 +2523,8 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
+    report_unused_imports(imports_introduced, &output.references, env, scope);
+
     let mut loc_expr: Loc<Expr> = ret_expr;
 
     for declaration in declarations.into_iter().rev() {
@@ -2511,6 +2532,27 @@ pub fn can_defs_with_return<'a>(
     }
 
     (loc_expr.value, output)
+}
+
+pub fn report_unused_imports(
+    imports_introduced: Vec<IntroducedImport>,
+    references: &References,
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+) {
+    for import in imports_introduced {
+        if references.has_module_lookup(import.module_id) {
+            for (symbol, region) in import.exposed_symbols {
+                if !references.has_unqualified_type_or_value_lookup(symbol)
+                    && !scope.abilities_store.is_specialization_name(symbol)
+                {
+                    env.problem(Problem::UnusedImport(symbol, region));
+                }
+            }
+        } else {
+            env.problem(Problem::UnusedModuleImport(import.module_id, import.region));
+        }
+    }
 }
 
 fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
@@ -2760,7 +2802,7 @@ enum PendingValue<'a> {
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
     ExpectFx(PendingExpectOrDbg<'a>),
-    ModuleImport,
+    ModuleImport(IntroducedImport),
     IngestedFileImport(ast::IngestedFileImport<'a>),
     SignatureDefMismatch,
 }
@@ -2770,10 +2812,18 @@ struct PendingExpectOrDbg<'a> {
     preceding_comment: Region,
 }
 
+pub struct IntroducedImport {
+    module_id: ModuleId,
+    region: Region,
+    exposed_symbols: Vec<(Symbol, Region)>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn to_pending_value_def<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
+    region: Region,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     output: &mut Output,
@@ -2896,13 +2946,19 @@ fn to_pending_value_def<'a>(
 
             scope.import_module(module_id);
 
+            let mut exposed_symbols;
+
             match module_import.exposed {
-                None => {}
+                None => {
+                    exposed_symbols = Vec::new();
+                }
                 Some(exposed_kw) => {
                     let exposed_ids = env
                         .dep_idents
                         .get(&module_id)
                         .expect("Module id should have been added in load");
+
+                    exposed_symbols = Vec::with_capacity(exposed_kw.item.len());
 
                     for loc_name in exposed_kw.item.items {
                         let exposed_name = loc_name.value.item();
@@ -2912,6 +2968,7 @@ fn to_pending_value_def<'a>(
                         match exposed_ids.get_id(name) {
                             Some(ident_id) => {
                                 let symbol = Symbol::new(module_id, ident_id);
+                                exposed_symbols.push((symbol, loc_name.region));
 
                                 match scope.import_symbol(ident, symbol, loc_name.region) {
                                     Ok(()) => {}
@@ -2943,7 +3000,11 @@ fn to_pending_value_def<'a>(
                 }
             }
 
-            PendingValue::ModuleImport
+            PendingValue::ModuleImport(IntroducedImport {
+                module_id,
+                region,
+                exposed_symbols,
+            })
         }
         IngestedFileImport(module_import) => PendingValue::IngestedFileImport(*module_import),
     }

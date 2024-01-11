@@ -28,7 +28,7 @@ interface Set
 
 import List
 import Bool exposing [Bool, Eq]
-import Dict exposing [Dict]
+import Dict
 import Num exposing [Nat]
 import Hash exposing [Hash, Hasher]
 import Inspect exposing [Inspect, Inspector, InspectFormatter]
