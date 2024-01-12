@@ -4,7 +4,7 @@
 set -euxo pipefail
 
 function add_github_link_to_examples {
-    local examples_dir_path="$1"
+    local examples_dir_path="$1" # for example: www/build/examples
 
     local github_logo_svg=$(cat <<'EOF'
 <svg viewBox="0 0 98 96" height="25" xmlns="http://www.w3.org/2000/svg" fill-rule="evenodd" clip-rule="evenodd" role="img" id="gh-logo">
@@ -13,9 +13,12 @@ function add_github_link_to_examples {
 EOF
     )
 
-    # Use specific example link (e.g. https://github.com/roc-lang/examples/tree/main/examples/FizzBuzz) for every example
     local examples_link="https://github.com/roc-lang/examples/tree/main/examples"
 
+    local perl_script=www/scripts/add-link.pl
+    # test if we can find perl script
+    test -e $perl_script
+
     # Insert a github link to the example in HTML
-    find "$examples_dir_path" -type f -name "README.html" -exec perl scripts/add-link.pl "$examples_dir_path" "$examples_link" "$github_logo_svg" {} \;
+    find "$examples_dir_path" -type f -name "README.html" -exec perl $perl_script "$examples_dir_path" "$examples_link" "$github_logo_svg" {} \;
 }

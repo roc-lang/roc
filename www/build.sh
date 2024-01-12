@@ -100,7 +100,7 @@ echo 'Building site markdown content'
 $roc run www/main.roc -- www/content/ www/build/
 
 echo "Adding github link to examples' html..."
-source scripts/add-github-link-to-examples.sh
+source www/scripts/add-github-link-to-examples.sh
 add_github_link_to_examples www/build/examples
 
 # cleanup
