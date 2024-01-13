@@ -54,6 +54,9 @@ interface Num
         atan,
         acos,
         asin,
+        infinity,
+        negInfinity,
+        NaN,
         isZero,
         isEven,
         isOdd,
@@ -874,6 +877,21 @@ tan : Frac a -> Frac a
 asin : Frac a -> Frac a
 acos : Frac a -> Frac a
 atan : Frac a -> Frac a
+
+## Constant value for 
+## * ∞ ([infinity](https://en.wikipedia.org/wiki/Infinity))
+infinity : Frac a
+infinity = 1.0 / 0.0
+
+## Constant value for negative infinity
+## * -∞ (negative infinity)
+negInfinity : Frac a
+negInfinity = -1.0 / 0.0
+
+## Constant value for not a number
+## * *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN))
+NaN : Frac a
+NaN = 0.0 / 0.0
 
 ## Returns an approximation of the absolute value of a [Frac]'s square root.
 ##
