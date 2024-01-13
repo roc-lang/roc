@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=676fe5e01b9a41fa14aaa48d87685677664104b1";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=886c9aee6ca9324e127f9c2c4e6f68c2641c8256";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -134,7 +134,9 @@
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
             ${aliases}
-          '';
+          '' + pkgs.lib.optionalString (system == "aarch64-darwin") ''
+            export RUSTFLAGS="-C link-arg=-lc++abi"
+          ''; # lc++abi as workaround for github.com/NixOS/nixpkgs/issues/166205, see also github.com/roc-lang/roc/issues/6303
         };
 
         formatter = pkgs.nixpkgs-fmt;

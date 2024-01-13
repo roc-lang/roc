@@ -3085,7 +3085,9 @@ fn specialize_host_specializations<'a>(
         let from_app = offset_variable(from_app);
         let index = specialize_external_help(env, procs, layout_cache, lambda_name, from_app);
 
-        let Some(from_platform) = opt_from_platform else { continue };
+        let Some(from_platform) = opt_from_platform else {
+            continue;
+        };
 
         // now run the lambda set numbering scheme
         let hels = find_lambda_sets(env.arena, env.subs, from_platform);
@@ -3146,7 +3148,9 @@ fn specialize_host_specializations<'a>(
             };
 
             let in_progress = &mut procs.specialized.procedures[index.0];
-            let InProgressProc::Done(proc) = in_progress else { unreachable!() };
+            let InProgressProc::Done(proc) = in_progress else {
+                unreachable!()
+            };
 
             procs.host_exposed_lambda_sets.push((proc.name, key, hels));
         }

@@ -802,7 +802,7 @@ fn build_loaded_file<'a>(
         platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target).unwrap())
     };
 
-    let mut output_exe_path = match out_path {
+    let output_exe_path = match out_path {
         Some(path) => {
             // true iff the path ends with a directory separator,
             // e.g. '/' on UNIX, '/' or '\\' on Windows
@@ -830,12 +830,22 @@ fn build_loaded_file<'a>(
             if ends_with_sep {
                 let filename = app_module_path.file_name().unwrap_or_default();
 
-                with_executable_extension(&path.join(filename), operating_system)
+                with_output_extension(
+                    &path.join(filename),
+                    operating_system,
+                    linking_strategy,
+                    link_type,
+                )
             } else {
                 path.to_path_buf()
             }
         }
-        None => with_executable_extension(&app_module_path, operating_system),
+        None => with_output_extension(
+            &app_module_path,
+            operating_system,
+            linking_strategy,
+            link_type,
+        ),
     };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
@@ -994,7 +1004,6 @@ fn build_loaded_file<'a>(
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
             // Just copy the object file to the output folder.
-            output_exe_path.set_extension(operating_system.object_file_ext());
             std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
@@ -1324,6 +1333,17 @@ pub fn build_str_test<'a>(
     )
 }
 
-fn with_executable_extension(path: &Path, os: OperatingSystem) -> PathBuf {
-    path.with_extension(os.executable_file_ext().unwrap_or_default())
+fn with_output_extension(
+    path: &Path,
+    os: OperatingSystem,
+    linking_strategy: LinkingStrategy,
+    link_type: LinkType,
+) -> PathBuf {
+    match (linking_strategy, link_type) {
+        (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
+            // Additive linking and no linking both output the object file type.
+            path.with_extension(os.object_file_ext())
+        }
+        _ => path.with_extension(os.executable_file_ext().unwrap_or_default()),
+    }
 }

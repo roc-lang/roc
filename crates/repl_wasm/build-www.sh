@@ -9,7 +9,7 @@
 # We use this two-step process because Netlify times out if we try to build the Web REPL there.
 
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
-set -euxo pipefail
+set -exo pipefail
 
 if ! which wasm-pack
 then
@@ -23,9 +23,22 @@ cd $SCRIPT_RELATIVE_DIR
 mkdir -p build
 rm -rf build/*
 
-# We want a release build, but with debug info (to get stack traces for Wasm backend panics)
-# This configuration is called `--profiling`
-wasm-pack build --profiling --target web -- --features console_error_panic_hook
+# c++abi is not needed for wasm-pack and causes an error, see #6303 for more info
+REMOVE_STR="-C link-arg=-lc++abi"
+
+( # start subshell to limit scope of export RUSTFLAGS
+    # Check if RUSTFLAGS contains the string to be removed
+    if [[ $RUSTFLAGS == *"$REMOVE_STR"* ]]; then
+    # Remove the string
+    RUSTFLAGS=$(echo "$RUSTFLAGS" | sed "s/$REMOVE_STR//g")
+
+    export RUSTFLAGS
+    fi
+
+    # We want a release build, but with debug info (to get stack traces for Wasm backend panics)
+    # This configuration is called `--profiling`
+    wasm-pack build --profiling --target web -- --features console_error_panic_hook
+)
 cp -v pkg/roc_repl_wasm.js build
 
 # To disable optimizations while debugging, do `export REPL_DEBUG=1` before running the script

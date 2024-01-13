@@ -119,10 +119,11 @@ pub struct WhenPattern<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrSegment<'a> {
-    Plaintext(&'a str),              // e.g. "foo"
-    Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
-    EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
-    Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
+    Plaintext(&'a str),       // e.g. "foo"
+    Unicode(Loc<&'a str>),    // e.g. "00A0" in "\u(00A0)"
+    EscapedChar(EscapedChar), // e.g. '\n' in "Hello!\n"
+    Interpolated(Loc<&'a Expr<'a>>),
+    DeprecatedInterpolated(Loc<&'a Expr<'a>>), // The old "$(...)" syntax - will be removed someday
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +142,7 @@ pub enum EscapedChar {
     SingleQuote,    // \'
     Backslash,      // \\
     CarriageReturn, // \r
+    Dollar,         // \$
 }
 
 impl EscapedChar {
@@ -155,6 +157,7 @@ impl EscapedChar {
             CarriageReturn => 'r',
             Tab => 't',
             Newline => 'n',
+            Dollar => '$',
         }
     }
 
@@ -168,6 +171,7 @@ impl EscapedChar {
             CarriageReturn => '\r',
             Tab => '\t',
             Newline => '\n',
+            Dollar => '$',
         }
     }
 }
@@ -213,6 +217,7 @@ impl<'a> TryFrom<StrSegment<'a>> for SingleQuoteSegment<'a> {
             StrSegment::Unicode(s) => Ok(SingleQuoteSegment::Unicode(s)),
             StrSegment::EscapedChar(s) => Ok(SingleQuoteSegment::EscapedChar(s)),
             StrSegment::Interpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
+            StrSegment::DeprecatedInterpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
         }
     }
 }
@@ -1587,7 +1592,9 @@ impl<'a> Malformed for StrSegment<'a> {
     fn is_malformed(&self) -> bool {
         match self {
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => false,
-            StrSegment::Interpolated(expr) => expr.is_malformed(),
+            StrSegment::Interpolated(expr) | StrSegment::DeprecatedInterpolated(expr) => {
+                expr.is_malformed()
+            }
         }
     }
 }

@@ -731,7 +731,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_middle() {
-        assert_segments(r#""Hi, \(name)!""#, |arena| {
+        assert_segments(r#""Hi, $(name)!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -747,7 +747,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""\(name), hi!""#, |arena| {
+        assert_segments(r#""$(name), hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -762,7 +762,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello \(name)""#, |arena| {
+        assert_segments(r#""Hello $(name)""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -777,7 +777,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",

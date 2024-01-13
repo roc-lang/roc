@@ -1853,6 +1853,11 @@ fn build_float_binop<'ctx>(
 
     let bd = env.builder;
 
+    let float_type = match float_width {
+        FloatWidth::F32 => env.context.f32_type(),
+        FloatWidth::F64 => env.context.f64_type(),
+    };
+
     match op {
         NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
@@ -1865,10 +1870,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1894,10 +1897,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1924,10 +1925,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
