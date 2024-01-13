@@ -2191,15 +2191,14 @@ fn check_for_missing_package_shorthand_in_cache<'a>(
                         match header.header_type {
                             HeaderType::Hosted { ..} |
                             HeaderType::Builtin {..} |
-                            HeaderType::Interface {..} => 
+                            HeaderType::Interface {..} =>
                             {
                                 let mod_type= header.header_type.to_string();
                                 format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.\nThis module is an {mod_type}, because of a bug in the compiler we are unable to directly typecheck {mod_type} modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file.")
                             },
                             _=>
                                 format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.")
-                        
-            }))
+                        }))
                     } else {
                         None
                     }
