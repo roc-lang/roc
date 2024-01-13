@@ -35,3 +35,11 @@ jobs:
 
       - name: run benchmarks with regression check
         run: nix develop -c ./ci/benchmarks/bench-runner/target/release/bench-runner --check-executables-changed
+
+      - name: Upload benchmark folders
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-folders
+          path: |
+            bench-folder-main/crates/cli_testing_examples/benchmarks
+            bench-folder-branch/crates/cli_testing_examples/benchmarks

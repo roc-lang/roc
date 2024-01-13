@@ -280,7 +280,6 @@ fn check_if_bench_executables_changed() -> bool {
     dbg!(&branch_bench_hashes);
 
     if main_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {
-        dbg!("equallength");
         for key in main_bench_hashes.keys() {
             if let Some(main_hash_val) = main_bench_hashes.get(key) {
                 if let Some(branch_hash_val) = branch_bench_hashes.get(key) {
