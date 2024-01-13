@@ -349,7 +349,7 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
                         return Err((MadeProgress, EString::EndlessSingleLine(start_state.pos())));
                     }
                 }
-                b'$' => {
+                b'$' if !is_single_quote => {
                     // This is for the byte we're about to parse.
                     segment_parsed_bytes += 1;
 
