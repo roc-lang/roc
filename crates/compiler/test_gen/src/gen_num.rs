@@ -3951,3 +3951,12 @@ fn num_max() {
     assert_evals_to!(r"Num.max Num.minI64 Num.maxI64", i64::MAX, i64);
     assert_evals_to!(r"Num.max Num.maxI64 Num.minI64", i64::MAX, i64);
 }
+
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn num_infinity_nan() {
+    assert_evals_to!(r"Num.infinity", f64::INFINITY, f64);
+    assert_evals_to!(r"Num.negInfinity", f64::NEG_INFINITY, f64);
+    assert_evals_to!(r"Num.isNaN Num.notANumber", true, bool);
+}

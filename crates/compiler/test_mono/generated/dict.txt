@@ -30,8 +30,8 @@ procedure List.6 (#Attr.2):
     ret List.569;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.291 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.294 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.294;
 
 procedure Test.0 ():
     let Test.3 : {} = Struct {};
