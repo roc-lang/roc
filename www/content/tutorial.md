@@ -1199,7 +1199,7 @@ Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
 - Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
-- Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+- Smaller integer sizes take up less memory. These savings rarely matter in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
 - Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 Here are the different fixed-size integer types that Roc supports:
@@ -1247,7 +1247,7 @@ There are some use cases where `F64` and `F32` can be better choices than `Dec` 
 
 ### [Num, Int, and Frac](#num-int-and-frac) {#num-int-and-frac}
 
-Some operations work on specific numeric types - such as `I64` or `Dec` - but operations support multiple numeric types. For example, the `Num.abs` function works on any number, since you can take the [absolute value](https://en.wikipedia.org/wiki/Absolute_value) of integers and fractions alike. Its type is:
+Some operations work on specific numeric types - such as `I64` or `Dec` - but some operations support multiple numeric types. For example, the `Num.abs` function works on any number, since you can take the [absolute value](https://en.wikipedia.org/wiki/Absolute_value) of integers and fractions alike. Its type is:
 
 ```roc
 abs : Num a -> Num a
@@ -1404,7 +1404,7 @@ These modules are not ordinary `.roc` files that live on your filesystem. Rather
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
 - They are always imported. You never need to add them to `imports`.
-- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module.
+- All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module).
 
 ### [App Module Header](#app-module-header) {#app-module-header}
 
@@ -1425,8 +1425,8 @@ The remaining lines all involve the [platform](https://github.com/roc-lang/roc/w
 
 ```roc
 packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
-    imports [pf.Stdout]
-    provides [main] to pf
+imports [pf.Stdout]
+provides [main] to pf
 ```
 
 The `packages { pf: "https://...tar.br" }` part says three things:
@@ -1455,7 +1455,7 @@ imports [pf.Stdout, AdditionalModule, AnotherModule]
 
 You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
 
-### [Package Modules](#interface-modules) {#interface-modules}
+### [Package Modules](#package-modules) {#package-modules}
 
 Package modules enable Roc code to be easily re-used and shared. This is achieved by organizing code into different Interface modules and then including these in the `exposes` field of the package file structure, `package "name" exposes [ MyInterface ] packages {}`. The modules that are listed in the `exposes` field are then available for use in applications, platforms, or other packages. Internal modules that are not listed will be unavailable for use outside of the package.
 
@@ -1487,7 +1487,7 @@ Including the hash solves a number of problems:
 
 See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
 
-### [Platform Modules](#interface-modules) {#interface-modules}
+### [Platform Modules](#platform-modules) {#platform-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
@@ -1495,7 +1495,7 @@ See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples
 
 ### [Importing Files](#importing-files) {#importing-files}
 
-You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful for when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
+You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
 imports [
@@ -1566,7 +1566,7 @@ main =
         Stdout.line "Your input was: \(Inspect.toStr input)"
 ```
 
-The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value. It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but in a real program we'd run a `when` on `answer` and do something different depending on whether we got an `End` or `Input` tag.
+The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value. It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but in a real program we'd run a `when` on `input` and do something different depending on whether we got an `End` or `Input` tag.
 
 If you run this program, at first it won't do anything. It's waiting for you to type something in and press Enter! Once you do, it should print back out what you entered—either `Your input was: End` or `Your input was: Input <whatever you entered>` depending on whether you pressed Enter or the key combination to close stdin (namely Ctrl+D on UNIX or Ctrl+Z on Windows). Try doing it both ways to watch the output change!
 
@@ -1710,7 +1710,7 @@ Some important things to note about backpassing and `await`:
 
 See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
 
-## Examples
+## [Examples](#examples) {#examples}
 
 Well done on making it this far! 
 
