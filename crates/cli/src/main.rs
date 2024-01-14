@@ -5,8 +5,8 @@ use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
     CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB,
-    FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_IGNORE_WARNINGS,
+    FLAG_LIB, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR,
     GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
@@ -237,7 +237,13 @@ fn main() -> io::Result<()> {
                         total_time.as_millis(),
                     );
 
-                    Ok(problems.exit_code())
+                    // If there are only warnings, and warnings are ignored, return successful exit code. Otherwise return exit code unaltered.
+                    let exit_code = problems.exit_code();
+                    if exit_code == 2 && matches.get_flag(FLAG_IGNORE_WARNINGS) {
+                        Ok(0)
+                    } else {
+                        Ok(exit_code)
+                    }
                 }
 
                 Err(LoadingProblem::FormattedReport(report)) => {
