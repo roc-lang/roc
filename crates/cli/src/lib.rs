@@ -142,7 +142,7 @@ pub fn build_app() -> Command {
 
     let flag_ignore_warnings = Arg::new(FLAG_IGNORE_WARNINGS)
         .long(FLAG_IGNORE_WARNINGS)
-        .help("Return a successful exit code even if there are warnings.")
+        .help("Return successful exit code even if there are warnings.")
         .action(ArgAction::SetTrue)
         .required(false);
 
@@ -183,7 +183,7 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(flag_wasm_stack_size_kb)
-            .arg(flag_ignore_warnings.clone())
+            .arg(flag_ignore_warnings)
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
@@ -309,7 +309,6 @@ pub fn build_app() -> Command {
             .about("Check the code for problems, but don’t build or run it")
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
-            .arg(flag_ignore_warnings)
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file of an app to check")
@@ -814,7 +813,7 @@ pub fn build(
                     problems.print_to_stdout(total_time);
                     println!(" while successfully building:\n\n    {generated_filename}");
 
-                    // If there are only warnings, and warnings are ignored, return successful exit code. Otherwise return exit code unaltered.
+                    // If there were only warnings, and warnings are ignored, return successful exit code. Otherwise return exit code unaltered.
                     let exit_code = problems.exit_code();
                     if exit_code == 2 && matches.get_flag(FLAG_IGNORE_WARNINGS) {
                         Ok(0)
