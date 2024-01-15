@@ -68,7 +68,6 @@ pub const FLAG_STDIN: &str = "stdin";
 pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
-pub const FLAG_IGNORE_WARNINGS: &str = "ignore-warnings";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -140,12 +139,6 @@ pub fn build_app() -> Command {
         .value_parser(value_parser!(u32))
         .required(false);
 
-    let flag_ignore_warnings = Arg::new(FLAG_IGNORE_WARNINGS)
-        .long(FLAG_IGNORE_WARNINGS)
-        .help("Return successful exit code even if there are warnings.")
-        .action(ArgAction::SetTrue)
-        .required(false);
-
     let roc_file_to_run = Arg::new(ROC_FILE)
         .help("The .roc file of an app to run")
         .value_parser(value_parser!(PathBuf))
@@ -183,7 +176,6 @@ pub fn build_app() -> Command {
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
             .arg(flag_wasm_stack_size_kb)
-            .arg(flag_ignore_warnings)
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
@@ -813,13 +805,8 @@ pub fn build(
                     problems.print_to_stdout(total_time);
                     println!(" while successfully building:\n\n    {generated_filename}");
 
-                    // If there were only warnings, and warnings are ignored, return successful exit code. Otherwise return exit code unaltered.
-                    let exit_code = problems.exit_code();
-                    if exit_code == 2 && matches.get_flag(FLAG_IGNORE_WARNINGS) {
-                        Ok(0)
-                    } else {
-                        Ok(exit_code)
-                    }
+                    // Return a nonzero exit code if there were problems
+                    Ok(problems.exit_code())
                 }
                 BuildAndRun => {
                     if problems.fatally_errored {
