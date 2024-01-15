@@ -21,7 +21,7 @@ fn main() {
         delete_old_bench_results();
 
         if optional_args.check_executables_changed {
-            println!("Doing a test run to verify benchmarks are working correctly and generate executables.");
+            println!("\nDoing a test run to verify benchmarks are working correctly and generate executables.\n");
 
             std::env::set_var("BENCH_DRY_RUN", "1");
 
@@ -219,7 +219,13 @@ fn sha_file(file_path: &Path) -> Result<String, io::Error> {
 
     assert!(disassembly_output.status.success());
 
-    let reader = BufReader::new(disassembly_output.stdout.as_slice());
+    let mut reader = BufReader::new(disassembly_output.stdout.as_slice());
+    
+    // the first line contains the path, we want to skip it
+    let mut _discard_lines = String::new();
+    reader.read_line(&mut _discard_lines)?;
+    reader.read_line(&mut _discard_lines)?;
+
     let digest = sha256_digest(reader)?;
 
     Ok(HEXUPPER.encode(digest.as_ref()))
@@ -244,7 +250,6 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
     let mut files_w_sha = HashMap::new();
 
     for file_name in non_src_files {
-        dbg!(&file_name);
         let full_path_str = [benches_path_str, &file_name].join("");
         let full_path = Path::new(&full_path_str);
 
@@ -264,14 +269,11 @@ fn check_if_bench_executables_changed() -> bool {
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
 
-    dbg!(&main_benches_path_str);
     let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
-    dbg!(&main_bench_hashes);
 
     let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");
-    dbg!(&branch_benches_path_str);
+
     let branch_bench_hashes = calc_hashes_for_folder(&branch_benches_path_str);
-    dbg!(&branch_bench_hashes);
 
     if main_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {
         for key in main_bench_hashes.keys() {
@@ -288,7 +290,6 @@ fn check_if_bench_executables_changed() -> bool {
 
         false
     } else {
-        dbg!("difflength");
         true
     }
 }
