@@ -3,7 +3,6 @@ use data_encoding::HEXUPPER;
 use is_executable::IsExecutable;
 use regex::Regex;
 use ring::digest::{Context, Digest, SHA256};
-use std::fs::File;
 use std::io::Read;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -212,20 +211,15 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, io::Error> {
 }
 
 fn sha_file(file_path: &Path) -> Result<String, io::Error> {
-    // Debug info is dependent on the dir in which executable was created,
-    // so we need to strip that to be able to compare binaries.
-    let no_debug_info_file_path = file_path.to_str().unwrap().to_string() + ("_no_debug_info");
-    std::fs::copy(file_path, &no_debug_info_file_path)?;
+    // only checking disassembly because of #6386
+    let disassembly_output = Command::new("objdump")
+        .args(["-d", file_path.to_str().unwrap()])
+        .output()
+        .expect("failed to execute objdump");
 
-    let strip_output = Command::new("strip")
-            .args(["--strip-debug", &no_debug_info_file_path])
-            .output()
-            .expect("failed to execute process");
+    assert!(disassembly_output.status.success());
 
-    assert!(strip_output.status.success());
-
-    let no_debug_info_file = File::open(no_debug_info_file_path)?;
-    let reader = BufReader::new(no_debug_info_file);
+    let reader = BufReader::new(disassembly_output.stdout.as_slice());
     let digest = sha256_digest(reader)?;
 
     Ok(HEXUPPER.encode(digest.as_ref()))
