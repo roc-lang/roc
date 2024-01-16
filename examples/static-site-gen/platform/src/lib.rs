@@ -244,17 +244,19 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
                 pulldown_cmark::CodeBlockKind::Fenced(extention_str),
             )) => {
                 if in_code_block {
-                    match replace_code_with_static_file(&code_to_highlight, input_file) {
-                        None => {}
-                        // Check if the code block is actually just a relative
-                        // path to a static file, if so replace the code with
-                        // the contents of the file.
-                        // ```
-                        // file:myCodeFile.roc
-                        // ```
-                        Some(new_code_to_highlight) => {
-                            code_to_highlight = new_code_to_highlight;
+                    match &code_to_highlight.split(':').collect::<Vec<_>>()[..] {
+                        ["file", replacement_file_name, "snippet", snippet_name] => {
+                            code_to_highlight = read_replacement_snippet(
+                                replacement_file_name.trim(),
+                                snippet_name.trim(),
+                                input_file,
+                            );
                         }
+                        ["file", replacement_file_name] => {
+                            code_to_highlight =
+                                read_replacement_file(replacement_file_name.trim(), input_file);
+                        }
+                        _ => {}
                     }
 
                     // Format the whole multi-line code block as HTML all at once
@@ -365,35 +367,50 @@ fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
     }
 }
 
-fn replace_code_with_static_file(code: &str, input_file: &Path) -> Option<String> {
-    let input_dir = input_file.parent()?;
-    let trimmed_code = code.trim();
+fn read_replacement_file(replacement_file_name: &str, input_file: &Path) -> String {
+    if replacement_file_name.contains("../") {
+        panic!(
+            "ERROR File \"{}\" must be located within the input diretory.",
+            replacement_file_name
+        );
+    }
 
-    // Confirm the code block starts with a `file:` tag
-    match trimmed_code.strip_prefix("file:") {
-        None => None,
-        Some(path) => {
-            // File must be located in input folder or sub-directory
-            if path.contains("../") {
-                panic!("ERROR File must be located within the input diretory!");
-            }
+    let input_dir = input_file.parent().unwrap();
+    let replacement_file_path = input_dir.join(replacement_file_name);
 
-            let file_path = input_dir.join(path);
-
-            // Check file exists before opening
-            match file_path.try_exists() {
-                Err(_) | Ok(false) => {
-                    panic!(
-                        "ERROR File does not exist: \"{}\"",
-                        file_path.to_str().unwrap()
-                    );
-                }
-                Ok(true) => {
-                    let vec_u8 = fs::read(file_path).ok()?;
-
-                    String::from_utf8(vec_u8).ok()
-                }
-            }
+    match fs::read(&replacement_file_path) {
+        Ok(content) => String::from_utf8(content).unwrap(),
+        Err(err) => {
+            panic!(
+                "ERROR File \"{}\" is unreadable ({}). ",
+                replacement_file_path.to_str().unwrap(),
+                err
+            );
         }
+    }
+}
+
+fn read_replacement_snippet(
+    replacement_file_name: &str,
+    snippet_name: &str,
+    input_file: &Path,
+) -> String {
+    let start_marker = format!("### start snippet {}", snippet_name);
+    let end_marker = "### end snippet";
+
+    let replacement_file_content = read_replacement_file(replacement_file_name.trim(), input_file);
+
+    let start_position = replacement_file_content
+        .find(&start_marker)
+        .expect(format!("ERROR Cannot find start marker \"{}\". ", &start_marker).as_str());
+
+    let end_position = replacement_file_content
+        .find(&end_marker)
+        .expect(format!("ERROR Cannot find end marker \"{}\". ", &end_marker).as_str());
+
+    if start_position > end_position {
+        "".to_string()
+    } else {
+        replacement_file_content[start_position + start_marker.len()..end_position].to_string()
     }
 }
