@@ -1817,6 +1817,18 @@ fn parse_expr_end<'a>(
             }
         }
     }
+    .map(|(progress, expr, state)| {
+        // If the next thing after the expression is a `!`, then it's Suffixed
+        if state.bytes().starts_with(b"!") {
+            (
+                progress,
+                Expr::Suffixed(arena.alloc(expr)),
+                state.advance(1),
+            )
+        } else {
+            (progress, expr, state)
+        }
+    })
 }
 
 pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
