@@ -1640,7 +1640,7 @@ fn parse_expr_end<'a>(
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((
             _,
-            has @ Loc {
+            implements @ Loc {
                 value:
                     Expr::Var {
                         module_name: "",
@@ -1672,17 +1672,17 @@ fn parse_expr_end<'a>(
             }
 
             // Attach any spaces to the `implements` keyword
-            let has = if !expr_state.spaces_after.is_empty() {
+            let implements = if !expr_state.spaces_after.is_empty() {
                 arena
                     .alloc(Implements::Implements)
-                    .with_spaces_before(expr_state.spaces_after, has.region)
+                    .with_spaces_before(expr_state.spaces_after, implements.region)
             } else {
-                Loc::at(has.region, Implements::Implements)
+                Loc::at(implements.region, Implements::Implements)
             };
 
             let args = arguments.into_bump_slice();
             let (_, (type_def, def_region), state) =
-                finish_parsing_ability_def_help(min_indent, name, args, has, arena, state)?;
+                finish_parsing_ability_def_help(min_indent, name, args, implements, arena, state)?;
 
             let mut defs = Defs::default();
 
