@@ -438,11 +438,19 @@ impl<R: Read> Read for ProgressReporter<R> {
         self.read += size;
 
         if let Some(total) = self.total {
-            eprint!(
-                "\u{001b}[2K\u{001b}[G[{:.1} / {:.1} MB]",
-                self.read as f32 / 1_000_000.0,
-                total as f32 / 1_000_000.0,
-            );
+            let total = total as f32 / 1_000_000.0;
+            let read = self.read as f32 / 1_000_000.0;
+
+            if total < 1.0 {
+                eprint!(
+                    "\u{001b}[2K\u{001b}[G[{:.1} / {:.1} KB]",
+                    // Convert MB to KB
+                    read * 1000.0,
+                    total * 1000.0,
+                );
+            } else {
+                eprint!("\u{001b}[2K\u{001b}[G[{:.1} / {:.1} MB]", read, total,);
+            }
         } else {
             eprint!(
                 "\u{001b}[2K\u{001b}[G[{:.1} MB]",

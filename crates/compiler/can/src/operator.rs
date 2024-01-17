@@ -634,6 +634,22 @@ fn desugar_str_segments<'a>(
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => {
                 *segment
             }
+            StrSegment::DeprecatedInterpolated(loc_expr) => {
+                let loc_desugared = desugar_expr(
+                    arena,
+                    arena.alloc(Loc {
+                        region: loc_expr.region,
+                        value: *loc_expr.value,
+                    }),
+                    src,
+                    line_info,
+                    module_path,
+                );
+                StrSegment::DeprecatedInterpolated(Loc {
+                    region: loc_desugared.region,
+                    value: arena.alloc(loc_desugared.value),
+                })
+            }
             StrSegment::Interpolated(loc_expr) => {
                 let loc_desugared = desugar_expr(
                     arena,

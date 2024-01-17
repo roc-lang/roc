@@ -159,8 +159,19 @@ mod test_parse {
     // INTERPOLATION
 
     #[test]
+    fn escaped_interpolation() {
+        assert_segments(r#""Hi, \$(name)!""#, |arena| {
+            bumpalo::vec![in arena;
+                 Plaintext("Hi, "),
+                 EscapedChar(EscapedChar::Dollar),
+                 Plaintext("(name)!"),
+            ]
+        });
+    }
+
+    #[test]
     fn string_with_interpolation_in_middle() {
-        assert_segments(r#""Hi, \(name)!""#, |arena| {
+        assert_segments(r#""Hi, $(name)!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -176,7 +187,7 @@ mod test_parse {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""\(name), hi!""#, |arena| {
+        assert_segments(r#""$(name), hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -191,7 +202,7 @@ mod test_parse {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello \(name)""#, |arena| {
+        assert_segments(r#""Hello $(name)""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -206,7 +217,7 @@ mod test_parse {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -225,6 +236,32 @@ mod test_parse {
                  Plaintext(" going?")
             ]
         });
+    }
+
+    #[test]
+    fn string_with_non_interpolation_dollar_signs() {
+        assert_segments(
+            r#""$a Hi, $(name)! $b How is $(project) going? $c""#,
+            |arena| {
+                let expr1 = arena.alloc(Var {
+                    module_name: "",
+                    ident: "name",
+                });
+
+                let expr2 = arena.alloc(Var {
+                    module_name: "",
+                    ident: "project",
+                });
+
+                bumpalo::vec![in arena;
+                     Plaintext("$a Hi, "),
+                     Interpolated(Loc::new(10, 14, expr1)),
+                     Plaintext("! $b How is "),
+                     Interpolated(Loc::new(29, 36, expr2)),
+                     Plaintext(" going? $c")
+                ]
+            },
+        );
     }
 
     #[test]

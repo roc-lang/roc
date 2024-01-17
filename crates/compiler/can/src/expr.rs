@@ -2423,7 +2423,9 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                 | ast::StrSegment::Plaintext(_) => true,
                 // Disallow nested interpolation. Alternatively, we could allow it but require
                 // a comment above it apologizing to the next person who has to read the code.
-                ast::StrSegment::Interpolated(_) => false,
+                ast::StrSegment::Interpolated(_) | ast::StrSegment::DeprecatedInterpolated(_) => {
+                    false
+                }
             })
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
@@ -2550,7 +2552,7 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 },
-                Interpolated(loc_expr) => {
+                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
                         // Interpolations desugar to Str.concat calls
                         output.references.insert_call(Symbol::STR_CONCAT);

@@ -526,12 +526,12 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         use X86_64GeneralReg::*;
         type ASM = X86_64Assembler;
 
-        // move the first argument to roc_panic (a *RocStr) into r8
-        ASM::add_reg64_reg64_imm32(buf, R8, RSP, 8);
+        // move the first argument to roc_panic (a *const RocStr) into r8
+        ASM::mov_reg64_reg64(buf, R8, RDI);
 
         // move the crash tag into the second return register. We add 1 to it because the 0 value
         // is already used for "no crash occurred"
-        ASM::add_reg64_reg64_imm32(buf, RDX, RDI, 1);
+        ASM::add_reg64_reg64_imm32(buf, RDX, RSI, 1);
 
         // the setlongjmp_buffer
         ASM::data_pointer(buf, relocs, String::from("setlongjmp_buffer"), RDI);
@@ -2008,6 +2008,39 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn sub_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            subss_freg32_freg32(buf, dst, src2);
+        } else if dst == src2 {
+            subss_freg32_freg32(buf, dst, src1);
+        } else {
+            movss_freg32_freg32(buf, dst, src1);
+            subss_freg32_freg32(buf, dst, src2);
+        }
+    }
+    #[inline(always)]
+    fn sub_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64FloatReg,
+        src1: X86_64FloatReg,
+        src2: X86_64FloatReg,
+    ) {
+        if dst == src1 {
+            subsd_freg64_freg64(buf, dst, src2);
+        } else if dst == src2 {
+            subsd_freg64_freg64(buf, dst, src1);
+        } else {
+            movsd_freg64_freg64(buf, dst, src1);
+            subsd_freg64_freg64(buf, dst, src2);
+        }
+    }
+
+    #[inline(always)]
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String) {
         buf.extend([0xE8, 0x00, 0x00, 0x00, 0x00]);
         relocs.push(Relocation::LinkedFunction {
@@ -3055,124 +3088,78 @@ fn sar_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     buf.extend([rex, 0xD3, 0xC0 | (7 << 3) | dst_mod]);
 }
 
-/// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
-#[inline(always)]
-fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+fn double_binary_operation(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64FloatReg,
+    src: X86_64FloatReg,
+    float_width: FloatWidth,
+    op_code2: u8,
+) {
+    let op_code1 = match float_width {
+        FloatWidth::F32 => 0xF3,
+        FloatWidth::F64 => 0xF2,
+    };
     let dst_high = dst as u8 > 7;
     let dst_mod = dst as u8 % 8;
     let src_high = src as u8 > 7;
     let src_mod = src as u8 % 8;
     if dst_high || src_high {
         buf.extend([
-            0xF2,
+            op_code1,
             0x40 | ((dst_high as u8) << 2) | (src_high as u8),
             0x0F,
-            0x58,
+            op_code2,
             0xC0 | (dst_mod << 3) | (src_mod),
         ])
     } else {
-        buf.extend([0xF2, 0x0F, 0x58, 0xC0 | (dst_mod << 3) | (src_mod)])
+        buf.extend([op_code1, 0x0F, op_code2, 0xC0 | (dst_mod << 3) | (src_mod)])
     }
+}
+
+/// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn addsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    double_binary_operation(buf, dst, src, FloatWidth::F64, 0x58)
 }
 
 /// `ADDSS xmm1,xmm2/m64` -> Add the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
 #[inline(always)]
 fn addss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    let dst_high = dst as u8 > 7;
-    let dst_mod = dst as u8 % 8;
-    let src_high = src as u8 > 7;
-    let src_mod = src as u8 % 8;
-    if dst_high || src_high {
-        buf.extend([
-            0xF3,
-            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
-            0x0F,
-            0x58,
-            0xC0 | (dst_mod << 3) | (src_mod),
-        ])
-    } else {
-        buf.extend([0xF3, 0x0F, 0x58, 0xC0 | (dst_mod << 3) | (src_mod)])
-    }
+    double_binary_operation(buf, dst, src, FloatWidth::F32, 0x58)
 }
 
-/// `MULSD xmm1,xmm2/m64` -> Multiply the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+/// `SUBSD xmm1,xmm2/m64` -> Sub the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn subsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    double_binary_operation(buf, dst, src, FloatWidth::F64, 0x5C)
+}
+
+/// `SUBSS xmm1,xmm2/m64` -> Sub the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
+#[inline(always)]
+fn subss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    double_binary_operation(buf, dst, src, FloatWidth::F32, 0x5C)
+}
+
 #[inline(always)]
 fn mulsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    let dst_high = dst as u8 > 7;
-    let dst_mod = dst as u8 % 8;
-    let src_high = src as u8 > 7;
-    let src_mod = src as u8 % 8;
-    if dst_high || src_high {
-        buf.extend([
-            0xF2,
-            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
-            0x0F,
-            0x59,
-            0xC0 | (dst_mod << 3) | (src_mod),
-        ])
-    } else {
-        buf.extend([0xF2, 0x0F, 0x59, 0xC0 | (dst_mod << 3) | (src_mod)])
-    }
+    double_binary_operation(buf, dst, src, FloatWidth::F64, 0x59)
+}
+
+#[inline(always)]
+fn mulss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
+    double_binary_operation(buf, dst, src, FloatWidth::F32, 0x59)
 }
 
 /// `DIVSS xmm1,xmm2/m64` -> Divide the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
 #[inline(always)]
 fn divss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    let dst_high = dst as u8 > 7;
-    let dst_mod = dst as u8 % 8;
-    let src_high = src as u8 > 7;
-    let src_mod = src as u8 % 8;
-    if dst_high || src_high {
-        buf.extend([
-            0xF3,
-            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
-            0x0F,
-            0x5E,
-            0xC0 | (dst_mod << 3) | (src_mod),
-        ])
-    } else {
-        buf.extend([0xF3, 0x0F, 0x5E, 0xC0 | (dst_mod << 3) | (src_mod)])
-    }
+    double_binary_operation(buf, dst, src, FloatWidth::F32, 0x5E)
 }
 
 /// `DIVSD xmm1,xmm2/m64` -> Divide the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
 #[inline(always)]
 fn divsd_freg64_freg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    let dst_high = dst as u8 > 7;
-    let dst_mod = dst as u8 % 8;
-    let src_high = src as u8 > 7;
-    let src_mod = src as u8 % 8;
-    if dst_high || src_high {
-        buf.extend([
-            0xF2,
-            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
-            0x0F,
-            0x5E,
-            0xC0 | (dst_mod << 3) | (src_mod),
-        ])
-    } else {
-        buf.extend([0xF2, 0x0F, 0x5E, 0xC0 | (dst_mod << 3) | (src_mod)])
-    }
-}
-
-/// `ADDSS xmm1,xmm2/m64` -> Add the low single-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
-#[inline(always)]
-fn mulss_freg32_freg32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64FloatReg) {
-    let dst_high = dst as u8 > 7;
-    let dst_mod = dst as u8 % 8;
-    let src_high = src as u8 > 7;
-    let src_mod = src as u8 % 8;
-    if dst_high || src_high {
-        buf.extend([
-            0xF3,
-            0x40 | ((dst_high as u8) << 2) | (src_high as u8),
-            0x0F,
-            0x59,
-            0xC0 | (dst_mod << 3) | (src_mod),
-        ])
-    } else {
-        buf.extend([0xF3, 0x0F, 0x59, 0xC0 | (dst_mod << 3) | (src_mod)])
-    }
+    double_binary_operation(buf, dst, src, FloatWidth::F64, 0x5E)
 }
 
 #[inline(always)]
