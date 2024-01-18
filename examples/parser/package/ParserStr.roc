@@ -45,8 +45,9 @@ strToRaw = \str ->
 
 strFromAscii : U8 -> Str
 strFromAscii = \asciiNum ->
-    Str.fromUtf8 [asciiNum]
-    |> Result.onErr \_ -> crash "The number $(asciiNum) is not a valid ASCII constant!"
+    when Str.fromUtf8 [asciiNum] is
+        Ok answer -> answer
+        Err _ -> crash "The number $(Num.toStr asciiNum) is not a valid ASCII constant!"
 
 strFromCodeunit : U8 -> Str
 strFromCodeunit = \cu ->
