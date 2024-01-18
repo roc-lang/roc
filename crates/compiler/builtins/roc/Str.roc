@@ -316,7 +316,7 @@
 ##
 ## All of these strings are semantically immutable, so sharing these bytes is an implementation detail that should only affect performance. By design, there is no way at either compile time or runtime to tell whether a string is a seamless slice. This allows the optimization's behavior to change in the future without affecting Roc programs' semantic behavior.
 ##
-## Seamless slices create additional references to the original string, which make it ineligible for opportunistic mutation (along with the slices themselves; slices are never eligible for mutation), and which also make it take longer before the original string can be deallocated. A case where this might be noticeable in terms of performace would be:
+## Seamless slices create additional references to the original string, which make it ineligible for opportunistic mutation (along with the slices themselves; slices are never eligible for mutation), and which also make it take longer before the original string can be deallocated. A case where this might be noticeable in terms of performance would be:
 ## 1. A function takes a very large string as an argument and returns a much smaller slice into that string.
 ## 2. The smaller slice is used for a long time in the program, whereas the much larger original string stops being used.
 ## 3. In this situation, it might have been better for total program memory usage (although not necessarily overall performance) if the original large string could have been deallocated sooner, even at the expense of having to copy the smaller string into a new allocation instead of reusing the bytes with a seamless slice.
