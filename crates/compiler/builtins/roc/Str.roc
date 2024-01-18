@@ -516,7 +516,6 @@ split : Str, Str -> List Str
 ## ```
 repeat : Str, Nat -> Str
 
-
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
