@@ -1333,7 +1333,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
 
                 Something is off with the body of the main definition:
 
@@ -1369,7 +1369,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
+                ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
 
                 bar is listed as exposed, but it isn't defined in this module.
 
@@ -1390,7 +1390,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
+                ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
                 Nothing from Symbol is used in this module.
 
@@ -1413,7 +1413,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
+                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
 
                 I don't know how to generate the foobar function.
 
