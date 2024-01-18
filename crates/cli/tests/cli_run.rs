@@ -1363,6 +1363,29 @@ mod cli_run {
     }
 
     #[test]
+    fn known_type_error_with_long_path() {
+        check_compile_error(
+            &known_bad_file("UnusedImportButWithALongFileNameForTesting.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
     fn exposed_not_defined() {
         check_compile_error(
             &known_bad_file("ExposedNotDefined.roc"),
