@@ -62,20 +62,14 @@
 ##
 ## ### Single quote syntax
 ##
-## Try putting `'👩'` into `roc repl`. You should see this:
-##
-## ```
-## » '👩'
-##
-## 128105 : Int *
-## ```
+## Try putting `'👩'` into `roc repl` and you will see it gives `128105 : Int *`.
 ##
 ## The single-quote `'` syntax lets you represent a Unicode code point (discussed in the next section) in source code, in a way that renders as the actual text it represents rather than as a number literal. This lets you see what it looks like in the source code rather than looking at a number.
 ##
 ## At runtime, the single-quoted value will be treated the same as an ordinary number literal—in other words, `'👩'` is syntax sugar for writing `128105`. You can verify this in `roc repl`:
 ##
 ## ```
-## » '👩' == 128105
+## expect '👩' == 128105
 ##
 ## Bool.true : Bool
 ## ```
@@ -107,7 +101,7 @@
 ##
 ## Let's start with the following string:
 ##
-## "👩‍👩‍👦‍👦"
+## `"👩‍👩‍👦‍👦"`
 ##
 ## Some might call this a "character." After all, in a monospace font, it looks to be about the same width as the letter "A" or the punctuation mark "!"—both of which are commonly called "characters." Unfortunately, the term "character" in programming has changed meanings many times across the years and across programming languages, and today it's become a major source of confusion.
 ##
