@@ -1595,30 +1595,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrStartsWithScalar => self.build_fn_call(
-                sym,
-                bitcode::STR_STARTS_WITH_SCALAR.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrAppendScalar => self.build_fn_call(
-                sym,
-                bitcode::STR_APPEND_SCALAR.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::StrEndsWith => self.build_fn_call(
                 sym,
                 bitcode::STR_ENDS_WITH.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrCountGraphemes => self.build_fn_call(
-                sym,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -1698,23 +1677,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrToScalars => self.build_fn_call(
-                sym,
-                bitcode::STR_TO_SCALARS.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::StrGetUnsafe => self.build_fn_call(
                 sym,
                 bitcode::STR_GET_UNSAFE.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrGetScalarUnsafe => self.build_fn_call(
-                sym,
-                bitcode::STR_GET_SCALAR_UNSAFE.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -2119,18 +2084,6 @@ trait Backend<'a> {
                 } else {
                     self.load_literal(sym, BOOL_LAYOUT, LITERAL);
                 }
-            }
-            Symbol::STR_IS_VALID_SCALAR => {
-                // just call the function
-                let fn_name = self.lambda_name_to_string(
-                    func_name,
-                    arg_layouts.iter().copied(),
-                    None,
-                    *ret_layout,
-                );
-                // Now that the arguments are needed, load them if they are literals.
-                self.load_literal_symbols(args);
-                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             _other => {
                 // just call the function

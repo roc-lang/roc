@@ -333,9 +333,7 @@ interface Str
         joinWith,
         split,
         repeat,
-        countGraphemes,
         countUtf8Bytes,
-        startsWithScalar,
         toUtf8,
         fromUtf8,
         fromUtf8Range,
@@ -358,7 +356,6 @@ interface Str
         toI16,
         toU8,
         toI8,
-        toScalars,
         replaceEach,
         replaceFirst,
         replaceLast,
@@ -368,12 +365,8 @@ interface Str
         walkUtf8WithIndex,
         reserve,
         releaseExcessCapacity,
-        appendScalar,
-        walkScalars,
-        walkScalarsUntil,
         withCapacity,
         withPrefix,
-        graphemes,
         contains,
     ]
     imports [
@@ -504,8 +497,7 @@ joinWith : List Str, Str -> Str
 ## Split a string around a separator.
 ##
 ## Passing `""` for the separator is not useful;
-## it returns the original string wrapped in a [List]. To split a string
-## into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103), use `Str.graphemes`
+## it returns the original string wrapped in a [List].
 ## ```
 ## expect Str.split "1,2,3" "," == ["1","2","3"]
 ## expect Str.split "1,2,3" "" == ["1,2,3"]
@@ -524,77 +516,6 @@ split : Str, Str -> List Str
 ## ```
 repeat : Str, Nat -> Str
 
-## Counts the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
-## in the string.
-##
-## Note that the number of extended grapheme clusters can be different from the number
-## of visual glyphs rendered! Consider the following examples:
-## ```
-## expect Str.countGraphemes "Roc" == 3
-## expect Str.countGraphemes "👩‍👩‍👦‍👦"  == 4
-## expect Str.countGraphemes "🕊"  == 1
-## ```
-## Note that "👩‍👩‍👦‍👦" takes up 4 graphemes (even though visually it appears as a single
-## glyph) because under the hood it's represented using an emoji modifier sequence.
-## In contrast, "🕊" only takes up 1 grapheme because under the hood it's represented
-## using a single Unicode code point.
-countGraphemes : Str -> Nat
-
-## Split a string into its constituent graphemes.
-##
-## This function breaks a string into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103),
-## returning them as a list of strings. This is useful for working with text that
-## contains complex characters, such as emojis.
-##
-## Examples:
-## ```
-## expect Str.graphemes "Roc" == ["R", "o", "c"]
-## expect Str.graphemes "नमस्ते" == ["न", "म", "स्", "ते"]
-## expect Str.graphemes "👩‍👩‍👦‍👦" == ["👩‍", "👩‍", "👦‍", "👦"]
-## ```
-##
-## Note that the "👩‍👩‍👦‍👦" example consists of 4 grapheme clusters, although it visually
-## appears as a single glyph. This is because it uses an emoji modifier sequence.
-graphemes : Str -> List Str
-
-## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], returns [Bool.true]. Otherwise returns [Bool.false].
-##
-## If the given string is empty, or if the given [U32] is not a valid
-## code point, returns [Bool.false].
-## ```
-## expect Str.startsWithScalar "鹏 means 'roc'" 40527 # "鹏" is Unicode scalar 40527
-## expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
-## expect !Str.startsWithScalar "" 40527
-## ```
-##
-## ## Performance Details
-##
-## This runs slightly faster than [Str.startsWith], so
-## if you want to check whether a string begins with something that's representable
-## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
-## instead of `Str.startsWith "鹏"`. ('鹏' evaluates to the [U32] value `40527`.)
-## This will not work for graphemes which take up multiple code points, however;
-## `Str.startsWithScalar '👩‍👩‍👦‍👦'` would be a compiler error because 👩‍👩‍👦‍👦 takes up
-## multiple code points and cannot be represented as a single [U32].
-## You'd need to use `Str.startsWithScalar "🕊"` instead.
-startsWithScalar : Str, U32 -> Bool
-
-## Returns a [List] of the [Unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
-## in the given string.
-##
-## (Roc strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
-## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
-## ```
-## expect Str.toScalars "Roc" == [82, 111, 99]
-## expect Str.toScalars "鹏" == [40527]
-## expect Str.toScalars "சி" == [2970, 3007]
-## expect Str.toScalars "🐦" == [128038]
-## expect Str.toScalars "👩‍👩‍👦‍👦" == [128105, 8205, 128105, 8205, 128102, 8205, 128102]
-## expect Str.toScalars "I ♥ Roc" == [73, 32, 9829, 32, 82, 111, 99]
-## expect Str.toScalars "" == []
-## ```
-toScalars : Str -> List U32
 
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
@@ -1145,80 +1066,6 @@ expect (walkUtf8 "鹏" [] List.append) == [233, 185, 143]
 ## Shrink the memory footprint of a str such that its capacity and length are equal.
 ## Note: This will also convert seamless slices to regular lists.
 releaseExcessCapacity : Str -> Str
-
-## is UB when the scalar is invalid
-appendScalarUnsafe : Str, U32 -> Str
-
-## Append a [U32] scalar to the given string. If the given scalar is not a valid
-## unicode value, it returns [Err InvalidScalar].
-## ```
-## expect Str.appendScalar "H" 105 == Ok "Hi"
-## expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
-## ```
-appendScalar : Str, U32 -> Result Str [InvalidScalar]
-appendScalar = \string, scalar ->
-    if isValidScalar scalar then
-        Ok (appendScalarUnsafe string scalar)
-    else
-        Err InvalidScalar
-
-isValidScalar : U32 -> Bool
-isValidScalar = \scalar ->
-    scalar <= 0xD7FF || (scalar >= 0xE000 && scalar <= 0x10FFFF)
-
-getScalarUnsafe : Str, Nat -> { scalar : U32, bytesParsed : Nat }
-
-## Walks over the unicode [U32] values for the given [Str] and calls a function
-## to update state for each.
-## ```
-## f : List U32, U32 -> List U32
-## f = \state, scalar -> List.append state scalar
-## expect Str.walkScalars "ABC" [] f == [65, 66, 67]
-## ```
-walkScalars : Str, state, (state, U32 -> state) -> state
-walkScalars = \string, init, step ->
-    walkScalarsHelp string init step 0 (Str.countUtf8Bytes string)
-
-walkScalarsHelp : Str, state, (state, U32 -> state), Nat, Nat -> state
-walkScalarsHelp = \string, state, step, index, length ->
-    if index < length then
-        { scalar, bytesParsed } = getScalarUnsafe string index
-        newState = step state scalar
-
-        walkScalarsHelp string newState step (Num.addWrap index bytesParsed) length
-    else
-        state
-
-## Walks over the unicode [U32] values for the given [Str] and calls a function
-## to update state for each.
-## ```
-## f : List U32, U32 -> [Break (List U32), Continue (List U32)]
-## f = \state, scalar ->
-##     check = 66
-##     if scalar == check then
-##         Break [check]
-##     else
-##         Continue (List.append state scalar)
-## expect Str.walkScalarsUntil "ABC" [] f == [66]
-## expect Str.walkScalarsUntil "AxC" [] f == [65, 120, 67]
-## ```
-walkScalarsUntil : Str, state, (state, U32 -> [Break state, Continue state]) -> state
-walkScalarsUntil = \string, init, step ->
-    walkScalarsUntilHelp string init step 0 (Str.countUtf8Bytes string)
-
-walkScalarsUntilHelp : Str, state, (state, U32 -> [Break state, Continue state]), Nat, Nat -> state
-walkScalarsUntilHelp = \string, state, step, index, length ->
-    if index < length then
-        { scalar, bytesParsed } = getScalarUnsafe string index
-
-        when step state scalar is
-            Continue newState ->
-                walkScalarsUntilHelp string newState step (Num.addWrap index bytesParsed) length
-
-            Break newState ->
-                newState
-    else
-        state
 
 strToNum : Str -> { berrorcode : U8, aresult : Num * }
 

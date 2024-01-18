@@ -185,7 +185,6 @@ impl<'a> LowLevelCall<'a> {
         match self.lowlevel {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
-            StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
             StrGetUnsafe => self.load_args_and_call_zig(backend, bitcode::STR_GET_UNSAFE),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
@@ -200,14 +199,8 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for Str"),
             },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
-            StrStartsWithScalar => {
-                self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
-            }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
             StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT),
-            StrCountGraphemes => {
-                self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
-            }
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
@@ -263,16 +256,11 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_RELEASE_EXCESS_CAPACITY)
             }
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
-            StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
-            StrGetScalarUnsafe => {
-                self.load_args_and_call_zig(backend, bitcode::STR_GET_SCALAR_UNSAFE)
-            }
             StrSubstringUnsafe => {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
-            StrGraphemes => self.load_args_and_call_zig(backend, bitcode::STR_GRAPHEMES),
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {
