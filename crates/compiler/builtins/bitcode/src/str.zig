@@ -1134,8 +1134,8 @@ test "countSegments: overlapping delimiter 2" {
     try expectEqual(segments_count, 3);
 }
 
-pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
-    return string.len();
+pub fn countUtf8Bytes(string: RocStr) callconv(.C) u64 {
+    return @intCast(string.len());
 }
 
 pub fn isEmpty(string: RocStr) callconv(.C) bool {
@@ -1146,7 +1146,10 @@ pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
 
-pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
+pub fn substringUnsafe(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
+    const start: usize = @intCast(start_u64);
+    const length: usize = @intCast(length_u64);
+
     if (string.isSmallStr()) {
         if (start == 0) {
             var output = string;
@@ -1178,8 +1181,8 @@ pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C)
     return RocStr.empty();
 }
 
-pub fn getUnsafe(string: RocStr, index: usize) callconv(.C) u8 {
-    return string.getUnchecked(index);
+pub fn getUnsafe(string: RocStr, index: u64) callconv(.C) u8 {
+    return string.getUnchecked(@intCast(index));
 }
 
 test "substringUnsafe: start" {
@@ -1242,7 +1245,8 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 }
 
 // Str.repeat
-pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
+pub fn repeat(string: RocStr, count_u64: u64) callconv(.C) RocStr {
+    const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -1497,7 +1501,7 @@ inline fn strToBytes(arg: RocStr) RocList {
 }
 
 const FromUtf8Result = extern struct {
-    byte_index: usize,
+    byte_index: u64,
     string: RocStr,
     is_ok: bool,
     problem_code: Utf8ByteProblem,
@@ -1510,14 +1514,17 @@ const CountAndStart = extern struct {
 
 pub fn fromUtf8RangeC(
     list: RocList,
-    start: usize,
-    count: usize,
+    start: u64,
+    count: u64,
     update_mode: UpdateMode,
 ) callconv(.C) FromUtf8Result {
     return fromUtf8Range(list, start, count, update_mode);
 }
 
-pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
+pub fn fromUtf8Range(arg: RocList, start_u64: u64, count_u64: u64, update_mode: UpdateMode) FromUtf8Result {
+    const start: usize = @intCast(start_u64);
+    const count: usize = @intCast(count_u64);
+
     if (arg.len() == 0 or count == 0) {
         arg.decref(RocStr.alignment);
         return FromUtf8Result{
@@ -1547,7 +1554,7 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
         return FromUtf8Result{
             .is_ok = false,
             .string = RocStr.empty(),
-            .byte_index = temp.index,
+            .byte_index = @intCast(temp.index),
             .problem_code = temp.problem,
         };
     }
@@ -1674,7 +1681,7 @@ fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
 }
 
 fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
-    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = index, .problem_code = problem };
+    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(index, @intCast(u64)), .problem_code = problem };
 }
 
 // NOTE on memory: the validate function consumes a RC token of the input. Since
@@ -2367,8 +2374,10 @@ test "capacity: big string" {
     try expect(data.getCapacity() >= data_bytes.len);
 }
 
-pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
+pub fn reserve(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
     const old_length = string.len();
+    const spare: usize = @intCast(spare_u64);
+
     if (string.getCapacity() >= old_length + spare) {
         return string;
     } else {
@@ -2378,8 +2387,8 @@ pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
     }
 }
 
-pub fn withCapacity(capacity: usize) callconv(.C) RocStr {
-    var str = RocStr.allocate(capacity);
+pub fn withCapacity(capacity: u64) callconv(.C) RocStr {
+    var str = RocStr.allocate(@intCast(capacity));
     str.setLen(0);
     return str;
 }
