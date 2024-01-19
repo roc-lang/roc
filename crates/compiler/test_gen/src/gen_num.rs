@@ -531,11 +531,18 @@ fn f64_abs() {
     assert_evals_to!("Num.abs -4.7f64", 4.7, f64);
     assert_evals_to!("Num.abs 5.8f64", 5.8, f64);
 
-    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-    {
-        assert_evals_to!("Num.abs Num.maxF64", f64::MAX, f64);
-        assert_evals_to!("Num.abs Num.minF64", f64::MAX, f64);
-    }
+    assert_evals_to!("Num.abs Num.maxF64", f64::MAX, f64);
+    assert_evals_to!("Num.abs Num.minF64", f64::MAX, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_abs() {
+    assert_evals_to!("Num.abs -4.7f32", 4.7, f32);
+    assert_evals_to!("Num.abs 5.8f32", 5.8, f32);
+
+    assert_evals_to!("Num.abs Num.maxF32", f32::MAX, f32);
+    assert_evals_to!("Num.abs Num.minF32", f32::MAX, f32);
 }
 
 #[test]
