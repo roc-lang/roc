@@ -3788,6 +3788,17 @@ trait Label: subs::Label + Ord + Clone + Into<TagOrClosure> {
         Self: 'r;
 }
 
+impl Label for TagOrClosure{
+    fn semantic_repr<'a, 'r>(
+        arena: &'a Bump,
+        labels: impl ExactSizeIterator<Item = &'r Self>,
+    ) -> SemanticRepr<'a> {
+        SemanticRepr::tag_union(
+            arena.alloc_slice_fill_iter(labels.map(|x| &*arena.alloc_str(x.0.as_str()))),
+        )
+    }
+}
+
 impl Label for TagName {
     fn semantic_repr<'a, 'r>(
         arena: &'a Bump,
@@ -4340,12 +4351,14 @@ where
                     let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
                     tag_layouts.extend(tags.iter().map(|r| r.1));
 
+                    let tag_names = TagOrClosure::semantic_repr(env.arena, tags.iter());
+
                     let layout = Layout {
                         repr: LayoutRepr::Union(UnionLayout::NonRecursive(
                             tag_layouts.into_bump_slice(),
                         ))
                         .direct(),
-                        semantic: SemanticRepr::NONE,
+                        semantic: SemanticRepr::tag_union(tag_names.into_bump_slice()),
                     };
                     env.cache.put_in(layout)
                 }
