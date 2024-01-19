@@ -174,9 +174,7 @@
 ## We can verify this too:
 ##
 ## ```
-## » "caf\u(e9)" == "café"
-##
-## Bool.true : Bool
+## expect "caf\u(e9)" == "café"
 ## ```
 ##
 ## As it turns out, `"cafe\u(301)"` is another way to represent the same word. The Unicode code point 0x301 represents a ["combining acute accent"](https://unicodeplus.com/U+0301)—which essentially means that it will add an accent mark to whatever came before it. In this case, since `"cafe\u(301)"` has an `e` before the `"\u(301)"`, that `e` ends up with an accent mark on it and becomes `é`.
@@ -184,9 +182,7 @@
 ## Although these two strings get rendered identically to one another, they are different in memory because their code points are different! We can also confirm this in `roc repl`:
 ##
 ## ```
-## » "caf\u(e9)" == "cafe\u(301)"
-##
-## Bool.false : Bool
+## expect "caf\u(e9)" != "cafe\u(301)"
 ## ```
 ##
 ## As you can imagine, this can be a source of bugs. Not only are they considered unequal, they also hash differently, meaning `"caf\u(e9)"` and `"cafe\u(301)"` can both be separate entries in the same [`Set`](https://www.roc-lang.org/builtins/Set).
@@ -286,9 +282,8 @@
 ## Try putting this into `roc repl`:
 ##
 ## ```
-## » "foo/bar/baz" |> Str.split "/"
-##
-## ["foo", "bar", "baz"] : List Str
+## expect "foo/bar/baz" |> Str.split "/"
+##     == ["foo", "bar", "baz"]
 ## ```
 ##
 ## All of these strings are small enough that the [small string optimization](#small) will apply, so none of them will be allocated on the heap.
@@ -296,9 +291,8 @@
 ## Now let's suppose they were long enough that this optimization no longer applied:
 ##
 ## ```
-## » "a much, much, much, much/longer/string compared to the last one!" |> Str.split "/"
-##
-## ["a much, much, much, much", "longer", "string compared to the last one!"] : List Str
+## expect "a much, much, much, much/longer/string compared to the last one!" |> Str.split "/"
+##     == ["a much, much, much, much", "longer", "string compared to the last one!"]
 ## ```
 ##
 ## Here, the only strings small enough for the small string optimization are `"/"` and `"longer"`. They will be allocated on the stack.
