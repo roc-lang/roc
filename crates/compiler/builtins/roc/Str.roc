@@ -62,14 +62,20 @@
 ##
 ## ### Single quote syntax
 ##
-## Try putting `'👩'` into `roc repl` and you will see it gives `128105 : Int *`.
+## Try putting `'👩'` into `roc repl`. You should see this:
+##
+## ```
+## » '👩'
+##
+## 128105 : Int *
+## ```
 ##
 ## The single-quote `'` syntax lets you represent a Unicode code point (discussed in the next section) in source code, in a way that renders as the actual text it represents rather than as a number literal. This lets you see what it looks like in the source code rather than looking at a number.
 ##
 ## At runtime, the single-quoted value will be treated the same as an ordinary number literal—in other words, `'👩'` is syntax sugar for writing `128105`. You can verify this in `roc repl`:
 ##
 ## ```
-## expect '👩' == 128105
+## » '👩' == 128105
 ##
 ## Bool.true : Bool
 ## ```
@@ -174,7 +180,9 @@
 ## We can verify this too:
 ##
 ## ```
-## expect "caf\u(e9)" == "café"
+## » "caf\u(e9)" == "café"
+##
+## Bool.true : Bool
 ## ```
 ##
 ## As it turns out, `"cafe\u(301)"` is another way to represent the same word. The Unicode code point 0x301 represents a ["combining acute accent"](https://unicodeplus.com/U+0301)—which essentially means that it will add an accent mark to whatever came before it. In this case, since `"cafe\u(301)"` has an `e` before the `"\u(301)"`, that `e` ends up with an accent mark on it and becomes `é`.
@@ -182,7 +190,9 @@
 ## Although these two strings get rendered identically to one another, they are different in memory because their code points are different! We can also confirm this in `roc repl`:
 ##
 ## ```
-## expect "caf\u(e9)" != "cafe\u(301)"
+## » "caf\u(e9)" == "cafe\u(301)"
+##
+## Bool.false : Bool
 ## ```
 ##
 ## As you can imagine, this can be a source of bugs. Not only are they considered unequal, they also hash differently, meaning `"caf\u(e9)"` and `"cafe\u(301)"` can both be separate entries in the same [`Set`](https://www.roc-lang.org/builtins/Set).
@@ -282,8 +292,9 @@
 ## Try putting this into `roc repl`:
 ##
 ## ```
-## expect "foo/bar/baz" |> Str.split "/"
-##     == ["foo", "bar", "baz"]
+## » "foo/bar/baz" |> Str.split "/"
+##
+## ["foo", "bar", "baz"] : List Str
 ## ```
 ##
 ## All of these strings are small enough that the [small string optimization](#small) will apply, so none of them will be allocated on the heap.
@@ -291,8 +302,9 @@
 ## Now let's suppose they were long enough that this optimization no longer applied:
 ##
 ## ```
-## expect "a much, much, much, much/longer/string compared to the last one!" |> Str.split "/"
-##     == ["a much, much, much, much", "longer", "string compared to the last one!"]
+## » "a much, much, much, much/longer/string compared to the last one!" |> Str.split "/"
+##
+## ["a much, much, much, much", "longer", "string compared to the last one!"] : List Str
 ## ```
 ##
 ## Here, the only strings small enough for the small string optimization are `"/"` and `"longer"`. They will be allocated on the stack.
