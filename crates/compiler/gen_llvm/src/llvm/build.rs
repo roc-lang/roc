@@ -2979,8 +2979,7 @@ fn list_literal<'a, 'ctx>(
 
     // TODO re-enable, currently causes morphic segfaults because it tries to update
     // constants in-place...
-    // if element_type.is_int_type() {
-    if false {
+    if element_type.is_int_type() {
         let element_type = element_type.into_int_type();
         let element_width = layout_interner.stack_size(element_layout);
         let size = list_length * element_width as usize;
@@ -3067,16 +3066,12 @@ fn list_literal<'a, 'ctx>(
             // all elements are constants, so we can use the memory in the constants section directly
             // here we make a pointer to the first actual element (skipping the 0 bytes that
             // represent the refcount)
-            let zero = env.ptr_int().const_zero();
             let offset = env.ptr_int().const_int(zero_elements as _, false);
 
             let ptr = unsafe {
-                env.builder.new_build_in_bounds_gep(
-                    element_type,
-                    global,
-                    &[zero, offset],
-                    "first_element_pointer",
-                )
+                env.builder
+                    .build_in_bounds_gep(element_type, global, &[offset], "first_element_pointer")
+                    .unwrap()
             };
 
             super::build_list::store_list(env, ptr, list_length_intval).into()
