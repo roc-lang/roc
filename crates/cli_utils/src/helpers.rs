@@ -255,7 +255,12 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{cmd_name}` in CLI test"));
+        .unwrap_or_else(|err| {
+            panic!(
+                "Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}",
+                err, cmd_str
+            )
+        });
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -269,7 +274,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
 
     let output = child
         .wait_with_output()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{cmd_name}` in CLI test"));
+        .unwrap_or_else(|_| panic!("Failed to execute cmd:\n\t`{:?}`", cmd_str));
 
     Out {
         cmd_str,

@@ -82,9 +82,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     .to_str()
     .unwrap();
 
+    let additional_path_display = "in";
+    let additional_path_display_width = additional_path_display.len() + 1;
     let title_width = title.len() + 4;
-    let relative_path_width = relative_path.len() + 3;
-    let available_path_width = HEADER_WIDTH - title_width - 1;
+    let relative_path_width = relative_path.len() + 1;
+    let available_path_width = HEADER_WIDTH - title_width - additional_path_display_width - 1;
 
     // If path is too long to fit in 80 characters with everything else then truncate it
     let path_width = relative_path_width.min(available_path_width);
@@ -96,10 +98,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     };
 
     let header = format!(
-        "── {} {} {} ─",
+        "── {} {} {} {}",
         title,
-        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
-        path
+        additional_path_display,
+        path,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width + additional_path_display_width))
     );
 
     header

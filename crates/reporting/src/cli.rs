@@ -18,8 +18,10 @@ impl Problems {
         // 0 means no problems, 1 means errors, 2 means warnings
         if self.errors > 0 {
             1
+        } else if self.warnings > 0 {
+            2
         } else {
-            self.warnings.min(1) as i32
+            0
         }
     }
 

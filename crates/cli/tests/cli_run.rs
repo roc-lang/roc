@@ -976,13 +976,13 @@ mod cli_run {
 
             // TODO fix QuicksortApp and then remove this!
             match roc_filename {
-                "QuicksortApp.roc" => {
+                "quicksortApp.roc" => {
                     eprintln!(
                     "WARNING: skipping testing benchmark {roc_filename} because the test is broken right now!"
                 );
                     return;
                 }
-                "TestAStar.roc" => {
+                "testAStar.roc" => {
                     if cfg!(feature = "wasm32-cli-run") {
                         eprintln!(
                         "WARNING: skipping testing benchmark {roc_filename} because it currently does not work on wasm32 due to dictionaries."
@@ -1137,20 +1137,20 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("NQueens.roc", &["6"], "4\n", UseValgrind::Yes)
+            test_benchmark("nQueens.roc", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("CFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
+            test_benchmark("cFold.roc", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn deriv() {
             test_benchmark(
-                "Deriv.roc",
+                "deriv.roc",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
                 UseValgrind::Yes,
@@ -1160,14 +1160,14 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("RBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
+            test_benchmark("rBTreeCk.roc", &["100"], "10\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             test_benchmark(
-                "RBTreeInsert.roc",
+                "rBTreeInsert.roc",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
                 UseValgrind::Yes,
@@ -1179,25 +1179,25 @@ mod cli_run {
         #[test]
         fn rbtree_del() {
             test_benchmark(
-                "RBTreeDel.roc",
+                "rBTreeDel.roc",
                 &["420"],
-                &[],
                 "30\n",
-                true
+                UseValgrind::Yes,
             )
-        }*/
+        }
+        */
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("TestAStar.roc", &[], "True\n", UseValgrind::No)
+            test_benchmark("testAStar.roc", &[], "True\n", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn base64() {
             test_benchmark(
-                "TestBase64.roc",
+                "testBase64.roc",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
                 UseValgrind::Yes,
@@ -1207,19 +1207,19 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("Closure.roc", &[], "", UseValgrind::No)
+            test_benchmark("closure.roc", &[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("Issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
+            test_benchmark("issue2279.roc", &[], "Hello, world!\n", UseValgrind::Yes)
         }
 
         #[test]
         fn quicksort_app() {
             test_benchmark(
-                "QuicksortApp.roc",
+                "quicksortApp.roc",
                 &[],
                 "todo put the correct quicksort answer here",
                 UseValgrind::Yes,
@@ -1333,7 +1333,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
 
                 Something is off with the body of the main definition:
 
@@ -1363,13 +1363,36 @@ mod cli_run {
     }
 
     #[test]
+    fn known_type_error_with_long_path() {
+        check_compile_error(
+            &known_bad_file("UnusedImportButWithALongFileNameForTesting.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
     fn exposed_not_defined() {
         check_compile_error(
             &known_bad_file("ExposedNotDefined.roc"),
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
+                ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
 
                 bar is listed as exposed, but it isn't defined in this module.
 
@@ -1390,7 +1413,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
+                ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
                 Nothing from Symbol is used in this module.
 
@@ -1413,7 +1436,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
+                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
 
                 I don't know how to generate the foobar function.
 

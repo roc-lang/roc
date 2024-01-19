@@ -1,7 +1,0 @@
-*.log
-*.class
-*.o
-*.so
-*.jar
-libhello*
-*.h
