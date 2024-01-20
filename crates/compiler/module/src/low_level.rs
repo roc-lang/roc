@@ -50,8 +50,9 @@ pub enum LowLevel {
     ListSublist,
     ListDropAt,
     ListSwap,
-    ListIsUnique,
     ListGetCapacity,
+    ListIsUnique,
+    ListClone,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -291,6 +292,7 @@ map_symbol_to_lowlevel! {
     ListReserve <= LIST_RESERVE;
     ListReleaseExcessCapacity <= LIST_RELEASE_EXCESS_CAPACITY;
     ListIsUnique <= LIST_IS_UNIQUE;
+    ListClone <= LIST_CLONE;
     ListAppendUnsafe <= LIST_APPEND_UNSAFE;
     ListPrepend <= LIST_PREPEND;
     ListGetUnsafe <= LIST_GET_UNSAFE, DICT_LIST_GET_UNSAFE;

@@ -142,6 +142,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
     ListReserve; LIST_RESERVE; 2,
     ListIsUnique; LIST_IS_UNIQUE; 1,
+    ListClone; LIST_CLONE; 1,
     ListAppendUnsafe; LIST_APPEND_UNSAFE; 2,
     ListPrepend; LIST_PREPEND; 2,
     ListGetUnsafe; LIST_GET_UNSAFE; 2,

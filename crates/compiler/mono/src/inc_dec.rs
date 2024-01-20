@@ -1366,6 +1366,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
 
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
+        ListClone => arena.alloc_slice_copy(&[owned]),
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")

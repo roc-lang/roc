@@ -34,8 +34,8 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
-        list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
+        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len,
+        list_map, list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
         list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
         list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
@@ -961,6 +961,31 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 BitcodeReturns::Basic,
                 bitcode::LIST_IS_UNIQUE,
             )
+        }
+        ListClone => {
+            // List.clone : List a -> List a
+            arguments_with_layouts!((list, list_layout));
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+
+            match update_mode {
+                UpdateMode::Immutable => {
+                    //
+                    call_list_bitcode_fn(
+                        env,
+                        &[list.into_struct_value()],
+                        &[
+                            env.alignment_intvalue(layout_interner, element_layout),
+                            layout_width(env, layout_interner, element_layout),
+                        ],
+                        BitcodeReturns::List,
+                        bitcode::LIST_CLONE,
+                    )
+                }
+                UpdateMode::InPlace => {
+                    // we statically know the list is unique
+                    list
+                }
+            }
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
