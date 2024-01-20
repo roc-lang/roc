@@ -5199,9 +5199,7 @@ fn parse<'a>(
                 imported.push((qualified_module_name, *region));
             }
 
-            ValueDef::IngestedFileImport(_ingested_file) => {
-                todo!("[modules-revamp] do we need to do anything here?")
-            }
+            ValueDef::IngestedFileImport(_) => {}
             _ => {}
         }
     }

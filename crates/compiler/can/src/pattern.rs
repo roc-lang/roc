@@ -260,6 +260,7 @@ pub fn canonicalize_def_header_pattern<'a>(
     pattern_type: PatternType,
     pattern: &ast::Pattern<'a>,
     region: Region,
+    module_path: &str,
 ) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
 
@@ -311,6 +312,7 @@ pub fn canonicalize_def_header_pattern<'a>(
             pattern,
             region,
             PermitShadows(false),
+            module_path,
         ),
     }
 }
@@ -368,6 +370,7 @@ pub fn canonicalize_pattern<'a>(
     pattern: &ast::Pattern<'a>,
     region: Region,
     permit_shadows: PermitShadows,
+    module_path: &str,
 ) -> Loc<Pattern> {
     use roc_parse::ast::Pattern::*;
     use PatternType::*;
@@ -414,6 +417,7 @@ pub fn canonicalize_pattern<'a>(
                     &loc_pattern.value,
                     loc_pattern.region,
                     permit_shadows,
+                    module_path,
                 );
 
                 can_patterns.push((var_store.fresh(), can_pattern));
@@ -586,6 +590,7 @@ pub fn canonicalize_pattern<'a>(
                 sub_pattern,
                 region,
                 permit_shadows,
+                module_path,
             )
         }
 
@@ -604,6 +609,7 @@ pub fn canonicalize_pattern<'a>(
                     &loc_pattern.value,
                     loc_pattern.region,
                     permit_shadows,
+                    module_path,
                 );
 
                 destructs.push(Loc {
@@ -679,6 +685,7 @@ pub fn canonicalize_pattern<'a>(
                             &loc_guard.value,
                             loc_guard.region,
                             permit_shadows,
+                            module_path,
                         );
 
                         destructs.push(Loc {
@@ -701,6 +708,7 @@ pub fn canonicalize_pattern<'a>(
                                     scope,
                                     loc_default.region,
                                     &loc_default.value,
+                                    module_path,
                                 );
 
                                 // an optional field binds the symbol!
@@ -822,6 +830,7 @@ pub fn canonicalize_pattern<'a>(
                             pattern,
                             loc_pattern.region,
                             permit_shadows,
+                            module_path,
                         );
                         can_pats.push(pat);
                     }
@@ -856,6 +865,7 @@ pub fn canonicalize_pattern<'a>(
                 &loc_pattern.value,
                 loc_pattern.region,
                 permit_shadows,
+                module_path,
             );
 
             match canonicalize_pattern_symbol(

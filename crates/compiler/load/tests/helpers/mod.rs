@@ -184,6 +184,7 @@ pub fn can_expr_with<'a>(
         &mut scope,
         loc_expr.region,
         &loc_expr.value,
+        "Test.roc",
     );
 
     let constraint = constrain_expr(

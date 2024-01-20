@@ -81,6 +81,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         &mut scope,
         Region::zero(),
         &loc_expr.value,
+        "Test.roc",
     );
 
     let mut all_ident_ids = IdentIds::exposed_builtins(1);

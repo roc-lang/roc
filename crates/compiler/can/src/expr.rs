@@ -619,6 +619,7 @@ pub fn canonicalize_expr<'a>(
     scope: &mut Scope,
     region: Region,
     expr: &'a ast::Expr<'a>,
+    module_path: &str,
 ) -> (Loc<Expr>, Output) {
     use Expr::*;
 
@@ -637,7 +638,8 @@ pub fn canonicalize_expr<'a>(
             if fields.is_empty() {
                 (EmptyRecord, Output::default())
             } else {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items, module_path)
+                {
                     Ok((can_fields, output)) => (
                         Record {
                             record_var: var_store.fresh(),
@@ -665,10 +667,17 @@ pub fn canonicalize_expr<'a>(
             fields,
             update: loc_update,
         } => {
-            let (can_update, update_out) =
-                canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
+            let (can_update, update_out) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                loc_update.region,
+                &loc_update.value,
+                module_path,
+            );
             if let Var(symbol, _) = &can_update.value {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
+                match canonicalize_fields(env, var_store, scope, region, fields.items, module_path)
+                {
                     Ok((can_fields, mut output)) => {
                         output.references.union_mut(&update_out.references);
 
@@ -714,8 +723,14 @@ pub fn canonicalize_expr<'a>(
             let mut references = References::new();
 
             for loc_elem in fields.iter() {
-                let (can_expr, elem_out) =
-                    canonicalize_expr(env, var_store, scope, loc_elem.region, &loc_elem.value);
+                let (can_expr, elem_out) = canonicalize_expr(
+                    env,
+                    var_store,
+                    scope,
+                    loc_elem.region,
+                    &loc_elem.value,
+                    module_path,
+                );
 
                 references.union_mut(&elem_out.references);
 
@@ -737,7 +752,7 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+        ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal, module_path),
 
         ast::Expr::IngestedFile(file_path, _) => match File::open(file_path) {
             Ok(mut file) => {
@@ -824,8 +839,14 @@ pub fn canonicalize_expr<'a>(
                 let mut references = References::new();
 
                 for loc_elem in loc_elems.iter() {
-                    let (can_expr, elem_out) =
-                        canonicalize_expr(env, var_store, scope, loc_elem.region, &loc_elem.value);
+                    let (can_expr, elem_out) = canonicalize_expr(
+                        env,
+                        var_store,
+                        scope,
+                        loc_elem.region,
+                        &loc_elem.value,
+                        module_path,
+                    );
 
                     references.union_mut(&elem_out.references);
 
@@ -857,8 +878,14 @@ pub fn canonicalize_expr<'a>(
             let mut output = Output::default();
 
             for loc_arg in loc_args.iter() {
-                let (arg_expr, arg_out) =
-                    canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
+                let (arg_expr, arg_out) = canonicalize_expr(
+                    env,
+                    var_store,
+                    scope,
+                    loc_arg.region,
+                    &loc_arg.value,
+                    module_path,
+                );
 
                 args.push((var_store.fresh(), arg_expr));
                 output.references.union_mut(&arg_out.references);
@@ -911,8 +938,14 @@ pub fn canonicalize_expr<'a>(
                 let mut output = Output::default();
 
                 for loc_arg in loc_args.iter() {
-                    let (arg_expr, arg_out) =
-                        canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
+                    let (arg_expr, arg_out) = canonicalize_expr(
+                        env,
+                        var_store,
+                        scope,
+                        loc_arg.region,
+                        &loc_arg.value,
+                        module_path,
+                    );
 
                     args.push(arg_expr);
                     output.references.union_mut(&arg_out.references);
@@ -946,7 +979,7 @@ pub fn canonicalize_expr<'a>(
             } else {
                 // Canonicalize the function expression and its arguments
                 let (fn_expr, fn_expr_output) =
-                    canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
+                    canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value, module_path);
 
                 output.union(fn_expr_output);
 
@@ -1062,7 +1095,14 @@ pub fn canonicalize_expr<'a>(
             // The body expression gets a new scope for canonicalization,
             scope.inner_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
-                can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
+                can_defs_with_return(
+                    env,
+                    var_store,
+                    inner_scope,
+                    env.arena.alloc(defs),
+                    loc_ret,
+                    module_path,
+                )
             })
         }
         ast::Expr::RecordBuilder(_) => {
@@ -1072,16 +1112,29 @@ pub fn canonicalize_expr<'a>(
             internal_error!("Backpassing should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
-            let (closure_data, output) =
-                canonicalize_closure(env, var_store, scope, loc_arg_patterns, loc_body_expr, None);
+            let (closure_data, output) = canonicalize_closure(
+                env,
+                var_store,
+                scope,
+                loc_arg_patterns,
+                loc_body_expr,
+                None,
+                module_path,
+            );
 
             (Closure(closure_data), output)
         }
         ast::Expr::When(loc_cond, branches) => {
             // Infer the condition expression's type.
             let cond_var = var_store.fresh();
-            let (can_cond, mut output) =
-                canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
+            let (can_cond, mut output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                loc_cond.region,
+                &loc_cond.value,
+                module_path,
+            );
 
             // the condition can never be a tail-call
             output.tail_call = None;
@@ -1097,6 +1150,7 @@ pub fn canonicalize_expr<'a>(
                         region,
                         branch,
                         &mut output,
+                        module_path,
                     )
                 });
 
@@ -1126,7 +1180,8 @@ pub fn canonicalize_expr<'a>(
             (expr, output)
         }
         ast::Expr::RecordAccess(record_expr, field) => {
-            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, record_expr);
+            let (loc_expr, output) =
+                canonicalize_expr(env, var_store, scope, region, record_expr, module_path);
 
             (
                 RecordAccess {
@@ -1155,7 +1210,8 @@ pub fn canonicalize_expr<'a>(
             Output::default(),
         ),
         ast::Expr::TupleAccess(tuple_expr, field) => {
-            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, tuple_expr);
+            let (loc_expr, output) =
+                canonicalize_expr(env, var_store, scope, region, tuple_expr, module_path);
 
             (
                 TupleAccess {
@@ -1225,8 +1281,14 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Expect(condition, continuation) => {
             let mut output = Output::default();
 
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let (loc_condition, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                condition.region,
+                &condition.value,
+                module_path,
+            );
 
             // Get all the lookups that were referenced in the condition,
             // so we can print their values later.
@@ -1238,6 +1300,7 @@ pub fn canonicalize_expr<'a>(
                 scope,
                 continuation.region,
                 &continuation.value,
+                module_path,
             );
 
             output.union(output1);
@@ -1258,8 +1321,14 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
             let mut output = Output::default();
 
-            let (loc_message, output1) =
-                canonicalize_expr(env, var_store, scope, message.region, &message.value);
+            let (loc_message, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                message.region,
+                &message.value,
+                module_path,
+            );
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1267,6 +1336,7 @@ pub fn canonicalize_expr<'a>(
                 scope,
                 continuation.region,
                 &continuation.value,
+                module_path,
             );
 
             output.union(output1);
@@ -1297,8 +1367,14 @@ pub fn canonicalize_expr<'a>(
             let mut output = Output::default();
 
             for (condition, then_branch) in if_thens.iter() {
-                let (loc_cond, cond_output) =
-                    canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+                let (loc_cond, cond_output) = canonicalize_expr(
+                    env,
+                    var_store,
+                    scope,
+                    condition.region,
+                    &condition.value,
+                    module_path,
+                );
 
                 let (loc_then, then_output) = canonicalize_expr(
                     env,
@@ -1306,6 +1382,7 @@ pub fn canonicalize_expr<'a>(
                     scope,
                     then_branch.region,
                     &then_branch.value,
+                    module_path,
                 );
 
                 branches.push((loc_cond, loc_then));
@@ -1320,6 +1397,7 @@ pub fn canonicalize_expr<'a>(
                 scope,
                 final_else_branch.region,
                 &final_else_branch.value,
+                module_path,
             );
 
             output.references.union_mut(&else_output.references);
@@ -1415,7 +1493,8 @@ pub fn canonicalize_expr<'a>(
             (answer, Output::default())
         }
         &ast::Expr::ParensAround(sub_expr) => {
-            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+            let (loc_expr, output) =
+                canonicalize_expr(env, var_store, scope, region, sub_expr, module_path);
 
             (loc_expr.value, output)
         }
@@ -1470,6 +1549,7 @@ pub fn canonicalize_closure<'a>(
     loc_arg_patterns: &'a [Loc<ast::Pattern<'a>>],
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
+    module_path: &str,
 ) -> (ClosureData, Output) {
     scope.inner_scope(|inner_scope| {
         canonicalize_closure_body(
@@ -1479,6 +1559,7 @@ pub fn canonicalize_closure<'a>(
             loc_arg_patterns,
             loc_body_expr,
             opt_def_name,
+            module_path,
         )
     })
 }
@@ -1490,6 +1571,7 @@ fn canonicalize_closure_body<'a>(
     loc_arg_patterns: &'a [Loc<ast::Pattern<'a>>],
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
+    module_path: &str,
 ) -> (ClosureData, Output) {
     // The globally unique symbol that will refer to this closure once it gets converted
     // into a top-level procedure for code gen.
@@ -1511,6 +1593,7 @@ fn canonicalize_closure_body<'a>(
             &loc_pattern.value,
             loc_pattern.region,
             PermitShadows(false),
+            module_path,
         );
 
         can_args.push((
@@ -1529,6 +1612,7 @@ fn canonicalize_closure_body<'a>(
         scope,
         loc_body_expr.region,
         &loc_body_expr.value,
+        module_path,
     );
 
     let mut captured_symbols: Vec<_> = new_output
@@ -1659,6 +1743,7 @@ fn canonicalize_when_branch<'a>(
     _region: Region,
     branch: &'a ast::WhenBranch<'a>,
     output: &mut Output,
+    module_path: &str,
 ) -> (WhenBranch, References) {
     let mut patterns = Vec::with_capacity(branch.patterns.len());
     let mut multi_pattern_variables = MultiPatternVariables::new(branch.patterns.len());
@@ -1675,6 +1760,7 @@ fn canonicalize_when_branch<'a>(
             &loc_pattern.value,
             loc_pattern.region,
             permit_shadows,
+            module_path,
         );
 
         multi_pattern_variables.add_pattern(&can_pattern);
@@ -1700,13 +1786,20 @@ fn canonicalize_when_branch<'a>(
         scope,
         branch.value.region,
         &branch.value.value,
+        module_path,
     );
 
     let guard = match &branch.guard {
         None => None,
         Some(loc_expr) => {
-            let (can_guard, guard_branch_output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+            let (can_guard, guard_branch_output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                loc_expr.region,
+                &loc_expr.value,
+                module_path,
+            );
 
             branch_output.union(guard_branch_output);
             Some(can_guard)
@@ -1769,12 +1862,13 @@ fn canonicalize_fields<'a>(
     scope: &mut Scope,
     region: Region,
     fields: &'a [Loc<ast::AssignedField<'a, ast::Expr<'a>>>],
+    module_path: &str,
 ) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
-        match canonicalize_field(env, var_store, scope, &loc_field.value) {
+        match canonicalize_field(env, var_store, scope, &loc_field.value, module_path) {
             Ok((label, field_expr, field_out, field_var)) => {
                 let field = Field {
                     var: field_var,
@@ -1827,6 +1921,7 @@ fn canonicalize_field<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
+    module_path: &str,
 ) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
@@ -1834,8 +1929,14 @@ fn canonicalize_field<'a>(
         // Both a label and a value, e.g. `{ name: "blah" }`
         RequiredValue(label, _, loc_expr) => {
             let field_var = var_store.fresh();
-            let (loc_can_expr, output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+            let (loc_can_expr, output) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                loc_expr.region,
+                &loc_expr.value,
+                module_path,
+            );
 
             Ok((
                 Lowercase::from(label.value),
@@ -1856,7 +1957,7 @@ fn canonicalize_field<'a>(
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
-            canonicalize_field(env, var_store, scope, sub_field)
+            canonicalize_field(env, var_store, scope, sub_field, module_path)
         }
 
         Malformed(_string) => {
@@ -2385,13 +2486,14 @@ fn flatten_str_literal<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     literal: &StrLiteral<'a>,
+    module_path: &str,
 ) -> (Expr, Output) {
     use ast::StrLiteral::*;
 
     match literal {
         PlainLine(str_slice) => (Expr::Str((*str_slice).into()), Output::default()),
-        Line(segments) => flatten_str_lines(env, var_store, scope, &[segments]),
-        Block(lines) => flatten_str_lines(env, var_store, scope, lines),
+        Line(segments) => flatten_str_lines(env, var_store, scope, &[segments], module_path),
+        Block(lines) => flatten_str_lines(env, var_store, scope, lines, module_path),
     }
 }
 
@@ -2520,6 +2622,7 @@ fn flatten_str_lines<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     lines: &[&[ast::StrSegment<'a>]],
+    module_path: &str,
 ) -> (Expr, Output) {
     use ast::StrSegment::*;
 
@@ -2577,6 +2680,7 @@ fn flatten_str_lines<'a>(
                             scope,
                             loc_expr.region,
                             loc_expr.value,
+                            module_path,
                         );
 
                         output.union(new_output);

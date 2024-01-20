@@ -368,6 +368,7 @@ pub fn canonicalize_module_defs<'a>(
         &mut scope,
         loc_defs,
         PatternType::TopLevelDef,
+        module_path,
     );
 
     let pending_derives = output.pending_derives;

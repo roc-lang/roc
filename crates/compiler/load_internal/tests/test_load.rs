@@ -654,6 +654,7 @@ fn ingested_file() {
         hashmap! {
             "foo" => "Str",
             "str" => "Str",
+            "nested" => "Str",
         },
     );
 }
