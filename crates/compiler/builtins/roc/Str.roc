@@ -541,7 +541,7 @@ toUtf8 : Str -> List U8
 ## ```
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]
 fromUtf8 = \bytes ->
-    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes |> Num.toU64)
+    result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
 
     if result.cIsOk then
         Ok result.bString
@@ -561,7 +561,7 @@ expect (Str.fromUtf8 [255]) |> Result.isErr
 ## ```
 fromUtf8Range : List U8, { start : U64, count : U64 } -> Result Str [BadUtf8 Utf8ByteProblem U64, OutOfBounds]
 fromUtf8Range = \bytes, config ->
-    if Num.addSaturated config.start config.count <= (List.len bytes |> Num.toU64) then
+    if Num.addSaturated config.start config.count <= List.len bytes then
         result = fromUtf8RangeLowlevel bytes config.start config.count
 
         if result.cIsOk then
