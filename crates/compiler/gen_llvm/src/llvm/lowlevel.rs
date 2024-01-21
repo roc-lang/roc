@@ -618,10 +618,15 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListLen => {
-            // List.len : List * -> Nat
+            // List.len : List * -> U64
             arguments!(list);
 
-            list_len(env.builder, list.into_struct_value()).into()
+            let len_usize = list_len(env.builder, list.into_struct_value());
+
+            // List.len returns U64, although length is stored as usize
+            env.builder
+                .new_build_int_cast(len_usize, env.context.i64_type(), "usize_to_u64")
+                .into()
         }
         ListGetCapacity => {
             // List.capacity: List a -> Nat

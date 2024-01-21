@@ -143,6 +143,8 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
         layout_interner,
         layout_interner.get_repr(element_layout),
     );
+    // listGetUnsafe takes a U64, but we need to convert that to usize for index calculation.
+    let elem_index = builder.new_build_int_cast(elem_index, env.ptr_int(), "u64_to_usize");
     let ptr_type = elem_type.ptr_type(AddressSpace::default());
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
@@ -423,7 +425,7 @@ fn bounds_check_comparison<'ctx>(
     builder.new_build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
-/// List.len : List * -> Nat
+/// List.len : List * -> usize (return value will be cast to usize in user-facing API)
 pub(crate) fn list_len<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
