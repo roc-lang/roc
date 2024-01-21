@@ -197,8 +197,8 @@ procedure Num.96 (#Attr.2):
     ret Num.292;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.292 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.292;
+    let Str.251 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.251;
 
 procedure Test.0 ():
     let Test.3 : Decimal = 3dec;

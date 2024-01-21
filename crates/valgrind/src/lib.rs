@@ -233,16 +233,6 @@ fn str_capacity_concat() {
 }
 
 #[test]
-fn append_scalar() {
-    valgrind_test(indoc!(
-        r#"
-        Str.appendScalar "abcd" 'A'
-            |> Result.withDefault ""
-        "#
-    ));
-}
-
-#[test]
 fn split_not_present() {
     valgrind_test(indoc!(
         r#"

@@ -18,6 +18,18 @@ pub fn highlight(code: &str) -> Vec<String> {
     let mut buf: Vec<String> = Vec::new();
     let mut offset = 0;
 
+    // Sometimes code snippets start with "»" in order to show that they're in the repl.
+    // Special-case that even though it's normally not a valid highlight.
+    const REPL_PROMPT: &str = "»";
+
+    let code = if let Some(stripped) = code.strip_prefix(REPL_PROMPT) {
+        buf = push_html_span(buf, REPL_PROMPT, "kw");
+
+        stripped
+    } else {
+        code
+    };
+
     for location in locations {
         let current_text = &code[offset..location.byte_range().end];
 
