@@ -22,10 +22,10 @@ pub fn highlight(code: &str) -> Vec<String> {
     // Special-case that even though it's normally not a valid highlight.
     const REPL_PROMPT: &str = "»";
 
-    let code = if code.starts_with(REPL_PROMPT) {
+    let code = if let Some(stripped) = code.strip_prefix(REPL_PROMPT) {
         buf = push_html_span(buf, REPL_PROMPT, "kw");
 
-        &code[REPL_PROMPT.len()..]
+        stripped
     } else {
         code
     };
