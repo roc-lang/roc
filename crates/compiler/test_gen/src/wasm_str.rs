@@ -1029,21 +1029,6 @@ fn str_trim_end_small_to_small_shared() {
 }
 
 #[test]
-fn str_to_nat() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-             when Str.toNat "1" is
-                 Ok n -> n
-                 Err _ -> 0
-                "#
-        ),
-        1,
-        usize
-    );
-}
-
-#[test]
 fn str_to_i128() {
     assert_evals_to!(
         indoc!(

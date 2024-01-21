@@ -1371,11 +1371,11 @@ fn str_to_nat() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toNat "1"
+            Str.toU64 "1"
             "#
         ),
         RocResult::ok(1),
-        RocResult<usize, ()>
+        RocResult<u64, ()>
     );
 }
 
