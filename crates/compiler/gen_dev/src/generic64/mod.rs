@@ -164,6 +164,12 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: FloatReg,
         src: FloatReg,
     );
+    fn abs_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn add_reg64_reg64_reg64(
@@ -1315,6 +1321,11 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::abs_freg32_freg32(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
             }
             x => todo!("NumAbs: layout, {:?}", x),
         }
@@ -2796,6 +2807,55 @@ impl<
 
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
         self.storage_manager.list_len(&mut self.buf, dst, list);
+    }
+
+    fn build_list_clone(
+        &mut self,
+        dst: Symbol,
+        input_list: Symbol,
+        elem_layout: InLayout<'a>,
+        ret_layout: InLayout<'a>,
+    ) {
+        // List alignment argument (u32).
+        self.load_layout_alignment(ret_layout, Symbol::DEV_TMP);
+
+        // Load element_width argument (usize).
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
+
+        // Setup the return location.
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, dst, ret_layout);
+
+        let lowlevel_args = [
+            input_list,
+            // alignment
+            Symbol::DEV_TMP,
+            // element_width
+            Symbol::DEV_TMP2,
+        ];
+        let lowlevel_arg_layouts = [ret_layout, Layout::U32, Layout::U64];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP3,
+            bitcode::LIST_CLONE.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            &ret_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+
+        // Copy from list to the output record.
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP3,
+            &ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP3);
     }
 
     fn build_list_with_capacity(

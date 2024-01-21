@@ -287,6 +287,28 @@ impl<'a> LowLevelCall<'a> {
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
+            ListClone => {
+                let input_list: Symbol = self.arguments[0];
+                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  input_list: &RocList       i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[self.ret_symbol, input_list]);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CLONE);
+            }
+
             ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }

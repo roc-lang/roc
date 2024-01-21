@@ -962,6 +962,14 @@ pub fn listIsUnique(
     return list.isEmpty() or list.isUnique();
 }
 
+pub fn listClone(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+) callconv(.C) RocList {
+    return list.makeUnique(alignment, element_width);
+}
+
 pub fn listCapacity(
     list: RocList,
 ) callconv(.C) usize {

@@ -1430,6 +1430,7 @@ define_builtins! {
         84 LIST_APPEND_IF_OK: "appendIfOk"
         85 LIST_PREPEND_IF_OK: "prependIfOk"
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
+        87 LIST_CLONE: "clone"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

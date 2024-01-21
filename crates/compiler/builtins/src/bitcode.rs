@@ -380,6 +380,7 @@ pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_REPLACE: &str = "roc_builtins.list.replace";
 pub const LIST_REPLACE_IN_PLACE: &str = "roc_builtins.list.replace_in_place";
 pub const LIST_IS_UNIQUE: &str = "roc_builtins.list.is_unique";
+pub const LIST_CLONE: &str = "roc_builtins.list.clone";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_APPEND_UNSAFE: &str = "roc_builtins.list.append_unsafe";
 pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";

@@ -1607,6 +1607,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         Hash => RC::NoRc,
 
         ListIsUnique => RC::Rc,
+        ListClone => RC::Rc,
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")

@@ -1518,6 +1518,15 @@ trait Backend<'a> {
                 let elem_layout = list_element_layout!(self.interner(), *ret_layout);
                 self.build_list_with_capacity(sym, args[0], arg_layouts[0], elem_layout, ret_layout)
             }
+            LowLevel::ListClone => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListClone: expected to have exactly one argument"
+                );
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_clone(*sym, args[0], elem_layout, *ret_layout)
+            }
             LowLevel::ListReserve => {
                 debug_assert_eq!(
                     2,
@@ -2368,6 +2377,14 @@ trait Backend<'a> {
 
     fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+
+    fn build_list_clone(
+        &mut self,
+        dst: Symbol,
+        input_list: Symbol,
+        elem_layout: InLayout<'a>,
+        ret_layout: InLayout<'a>,
+    );
 
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(
