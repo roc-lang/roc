@@ -13,7 +13,7 @@ interface Community
 
 Community := {
     people : List Person,
-    friends : List (Set Nat),
+    friends : List (Set U64),
 }
     implements [Inspect]
 
@@ -81,4 +81,3 @@ walkFriendNames = \@Community { people, friends }, s0, nextFn ->
 
         (nextFn s1 personName friendNames, id + 1)
     out
-
