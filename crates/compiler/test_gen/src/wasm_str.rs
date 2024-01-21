@@ -27,27 +27,6 @@ fn str_split_empty_delimiter() {
     );
 }
 
-// This test produces an app that exposes nothing to the host!
-#[test]
-#[ignore]
-fn str_split_empty_delimiter_broken() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when List.first (Str.split "JJJ" "") is
-                    Ok str ->
-                        Str.countGraphemes str
-
-                    _ ->
-                        -1
-
-            "#
-        ),
-        3,
-        usize
-    );
-}
-
 #[test]
 fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
@@ -57,27 +36,6 @@ fn str_split_bigger_delimiter_small_str() {
             "#
         ),
         1,
-        usize
-    );
-}
-
-// This test produces an app that exposes nothing to the host!
-#[test]
-#[ignore]
-fn str_split_bigger_delimiter_small_str_broken() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when List.first (Str.split "JJJ" "JJJJ there") is
-                    Ok str ->
-                        Str.countGraphemes str
-
-                    _ ->
-                        -1
-
-            "#
-        ),
-        3,
         usize
     );
 }
@@ -415,43 +373,10 @@ fn str_starts_with() {
 }
 
 #[test]
-fn str_starts_with_scalar() {
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "foobar" {}"#, 'f' as u32),
-        true,
-        bool
-    );
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "zoobar" {}"#, 'f' as u32),
-        false,
-        bool
-    );
-}
-
-#[test]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
     assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
-}
-
-#[test]
-fn str_count_graphemes_small_str() {
-    assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
-}
-
-#[test]
-fn str_count_graphemes_three_js() {
-    assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
-}
-
-#[test]
-fn str_count_graphemes_big_str() {
-    assert_evals_to!(
-        r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
-        45,
-        usize
-    );
 }
 
 #[test]
@@ -1312,18 +1237,5 @@ fn str_to_dec() {
         ),
         RocDec::from_str("1.0").unwrap(),
         RocDec
-    );
-}
-
-#[test]
-fn str_walk_scalars() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.walkScalars "abcd" [] List.append
-            "#
-        ),
-        RocList::from_slice(&['a', 'b', 'c', 'd']),
-        RocList<char>
     );
 }

@@ -75,6 +75,7 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listClone, "clone");
     exportListFn(list.listCapacity, "capacity");
     exportListFn(list.listAllocationPtr, "allocation_ptr");
     exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
@@ -177,15 +178,12 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
-    exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplit, "str_split");
     exportStrFn(str.countSegments, "count_segments");
-    exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.isEmpty, "is_empty");
     exportStrFn(str.getCapacity, "capacity");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
@@ -194,8 +192,6 @@ comptime {
     exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.getUnsafe, "get_unsafe");
     exportStrFn(str.reserve, "reserve");
-    exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
-    exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
@@ -204,7 +200,6 @@ comptime {
     exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
     exportStrFn(str.withCapacity, "with_capacity");
-    exportStrFn(str.strGraphemes, "graphemes");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 

@@ -1,38 +1,38 @@
-procedure List.2 (List.105, List.106):
-    let List.575 : U64 = CallByName List.6 List.105;
-    let List.571 : Int1 = CallByName Num.22 List.106 List.575;
-    if List.571 then
-        let List.573 : Str = CallByName List.66 List.105 List.106;
-        inc List.573;
-        dec List.105;
-        let List.572 : [C {}, C Str] = TagId(1) List.573;
-        ret List.572;
+procedure List.2 (List.106, List.107):
+    let List.577 : U64 = CallByName List.6 List.106;
+    let List.573 : Int1 = CallByName Num.22 List.107 List.577;
+    if List.573 then
+        let List.575 : Str = CallByName List.66 List.106 List.107;
+        inc List.575;
+        dec List.106;
+        let List.574 : [C {}, C Str] = TagId(1) List.575;
+        ret List.574;
     else
-        dec List.105;
-        let List.570 : {} = Struct {};
-        let List.569 : [C {}, C Str] = TagId(0) List.570;
-        ret List.569;
+        dec List.106;
+        let List.572 : {} = Struct {};
+        let List.571 : [C {}, C Str] = TagId(0) List.572;
+        ret List.571;
 
 procedure List.5 (#Attr.2, #Attr.3):
-    let List.577 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
+    let List.579 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.3 #Attr.3;
     decref #Attr.2;
-    ret List.577;
+    ret List.579;
 
 procedure List.6 (#Attr.2):
-    let List.576 : U64 = lowlevel ListLen #Attr.2;
-    ret List.576;
+    let List.578 : U64 = lowlevel ListLen #Attr.2;
+    ret List.578;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.574 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.574;
+    let List.576 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.576;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.291;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.293 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.293;
+    let Str.252 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.252;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

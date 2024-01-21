@@ -150,35 +150,35 @@ procedure Inspect.61 (Inspect.304, Inspect.300):
 procedure Inspect.62 (Inspect.306):
     ret Inspect.306;
 
-procedure List.18 (List.156, List.157, List.158):
-    let List.570 : U64 = 0i64;
-    let List.571 : U64 = CallByName List.6 List.156;
-    let List.569 : {Str, Int1} = CallByName List.89 List.156 List.157 List.158 List.570 List.571;
-    ret List.569;
+procedure List.18 (List.158, List.159, List.160):
+    let List.572 : U64 = 0i64;
+    let List.573 : U64 = CallByName List.6 List.158;
+    let List.571 : {Str, Int1} = CallByName List.90 List.158 List.159 List.160 List.572 List.573;
+    ret List.571;
 
 procedure List.6 (#Attr.2):
-    let List.580 : U64 = lowlevel ListLen #Attr.2;
-    ret List.580;
+    let List.582 : U64 = lowlevel ListLen #Attr.2;
+    ret List.582;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.579 : {[C I64, C Decimal], Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.579;
+    let List.581 : {[C I64, C Decimal], Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.581;
 
-procedure List.89 (#Derived_gen.14, #Derived_gen.15, #Derived_gen.16, #Derived_gen.17, #Derived_gen.18):
-    joinpoint List.572 List.159 List.160 List.161 List.162 List.163:
-        let List.574 : Int1 = CallByName Num.22 List.162 List.163;
-        if List.574 then
-            let List.578 : {[C I64, C Decimal], Str} = CallByName List.66 List.159 List.162;
-            inc List.578;
-            let List.164 : {Str, Int1} = CallByName Inspect.234 List.160 List.578;
-            let List.577 : U64 = 1i64;
-            let List.576 : U64 = CallByName Num.51 List.162 List.577;
-            jump List.572 List.159 List.164 List.161 List.576 List.163;
+procedure List.90 (#Derived_gen.16, #Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_gen.20):
+    joinpoint List.574 List.161 List.162 List.163 List.164 List.165:
+        let List.576 : Int1 = CallByName Num.22 List.164 List.165;
+        if List.576 then
+            let List.580 : {[C I64, C Decimal], Str} = CallByName List.66 List.161 List.164;
+            inc List.580;
+            let List.166 : {Str, Int1} = CallByName Inspect.234 List.162 List.580;
+            let List.579 : U64 = 1i64;
+            let List.578 : U64 = CallByName Num.51 List.164 List.579;
+            jump List.574 List.161 List.166 List.163 List.578 List.165;
         else
-            dec List.159;
-            ret List.160;
+            dec List.161;
+            ret List.162;
     in
-    jump List.572 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18;
+    jump List.574 #Derived_gen.16 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
@@ -197,8 +197,8 @@ procedure Num.96 (#Attr.2):
     ret Num.292;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.292 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.292;
+    let Str.251 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.251;
 
 procedure Test.0 ():
     let Test.3 : Decimal = 3dec;

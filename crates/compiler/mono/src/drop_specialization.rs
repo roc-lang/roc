@@ -1533,17 +1533,14 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
     match lowlevel {
         Unreachable => RC::Uknown,
-        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
-        | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => RC::NoRc,
-        ListWithCapacity | StrWithCapacity => RC::NoRc,
+        ListLen | StrIsEmpty | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity
+        | ListWithCapacity | StrWithCapacity => RC::NoRc,
         ListReplaceUnsafe => RC::Rc,
         StrGetUnsafe | ListGetUnsafe => RC::NoRc,
         ListConcat => RC::Rc,
         StrConcat => RC::Rc,
         StrSubstringUnsafe => RC::Rc,
         StrReserve => RC::Rc,
-        StrAppendScalar => RC::Rc,
-        StrGetScalarUnsafe => RC::NoRc,
         StrTrim => RC::Rc,
         StrTrimStart => RC::Rc,
         StrTrimEnd => RC::Rc,
@@ -1603,7 +1600,6 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         I128OfDec => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
-        StrStartsWithScalar => RC::NoRc,
         StrFromUtf8Range => RC::Rc,
         StrToUtf8 => RC::Rc,
         StrRepeat => RC::NoRc,
@@ -1611,6 +1607,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         Hash => RC::NoRc,
 
         ListIsUnique => RC::Rc,
+        ListClone => RC::Rc,
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")

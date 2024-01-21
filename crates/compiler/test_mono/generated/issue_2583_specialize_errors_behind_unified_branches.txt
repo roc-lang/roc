@@ -6,69 +6,69 @@ procedure Bool.2 ():
     let Bool.23 : Int1 = true;
     ret Bool.23;
 
-procedure List.2 (List.105, List.106):
-    let List.583 : U64 = CallByName List.6 List.105;
-    let List.579 : Int1 = CallByName Num.22 List.106 List.583;
-    if List.579 then
-        let List.581 : I64 = CallByName List.66 List.105 List.106;
-        dec List.105;
-        let List.580 : [C {}, C I64] = TagId(1) List.581;
-        ret List.580;
+procedure List.2 (List.106, List.107):
+    let List.585 : U64 = CallByName List.6 List.106;
+    let List.581 : Int1 = CallByName Num.22 List.107 List.585;
+    if List.581 then
+        let List.583 : I64 = CallByName List.66 List.106 List.107;
+        dec List.106;
+        let List.582 : [C {}, C I64] = TagId(1) List.583;
+        ret List.582;
     else
-        dec List.105;
-        let List.578 : {} = Struct {};
-        let List.577 : [C {}, C I64] = TagId(0) List.578;
-        ret List.577;
+        dec List.106;
+        let List.580 : {} = Struct {};
+        let List.579 : [C {}, C I64] = TagId(0) List.580;
+        ret List.579;
 
 procedure List.6 (#Attr.2):
-    let List.584 : U64 = lowlevel ListLen #Attr.2;
-    ret List.584;
+    let List.586 : U64 = lowlevel ListLen #Attr.2;
+    ret List.586;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.582 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.582;
+    let List.584 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.584;
 
-procedure List.9 (List.331):
-    let List.576 : U64 = 0i64;
-    let List.569 : [C {}, C I64] = CallByName List.2 List.331 List.576;
-    let List.573 : U8 = 1i64;
-    let List.574 : U8 = GetTagId List.569;
-    let List.575 : Int1 = lowlevel Eq List.573 List.574;
-    if List.575 then
-        let List.332 : I64 = UnionAtIndex (Id 1) (Index 0) List.569;
-        let List.570 : [C Int1, C I64] = TagId(1) List.332;
-        ret List.570;
+procedure List.9 (List.333):
+    let List.578 : U64 = 0i64;
+    let List.571 : [C {}, C I64] = CallByName List.2 List.333 List.578;
+    let List.575 : U8 = 1i64;
+    let List.576 : U8 = GetTagId List.571;
+    let List.577 : Int1 = lowlevel Eq List.575 List.576;
+    if List.577 then
+        let List.334 : I64 = UnionAtIndex (Id 1) (Index 0) List.571;
+        let List.572 : [C Int1, C I64] = TagId(1) List.334;
+        ret List.572;
     else
-        let List.572 : Int1 = true;
-        let List.571 : [C Int1, C I64] = TagId(0) List.572;
-        ret List.571;
+        let List.574 : Int1 = true;
+        let List.573 : [C Int1, C I64] = TagId(0) List.574;
+        ret List.573;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.291;
 
-procedure Str.27 (Str.100):
-    let Str.292 : [C Int1, C I64] = CallByName Str.73 Str.100;
-    ret Str.292;
+procedure Str.27 (Str.88):
+    let Str.251 : [C Int1, C I64] = CallByName Str.61 Str.88;
+    ret Str.251;
 
-procedure Str.47 (#Attr.2):
-    let Str.300 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    ret Str.300;
+procedure Str.42 (#Attr.2):
+    let Str.259 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    ret Str.259;
 
-procedure Str.73 (Str.236):
-    let Str.237 : {I64, U8} = CallByName Str.47 Str.236;
-    dec Str.236;
-    let Str.298 : U8 = StructAtIndex 1 Str.237;
-    let Str.299 : U8 = 0i64;
-    let Str.295 : Int1 = CallByName Bool.11 Str.298 Str.299;
-    if Str.295 then
-        let Str.297 : I64 = StructAtIndex 0 Str.237;
-        let Str.296 : [C Int1, C I64] = TagId(1) Str.297;
-        ret Str.296;
+procedure Str.61 (Str.195):
+    let Str.196 : {I64, U8} = CallByName Str.42 Str.195;
+    dec Str.195;
+    let Str.257 : U8 = StructAtIndex 1 Str.196;
+    let Str.258 : U8 = 0i64;
+    let Str.254 : Int1 = CallByName Bool.11 Str.257 Str.258;
+    if Str.254 then
+        let Str.256 : I64 = StructAtIndex 0 Str.196;
+        let Str.255 : [C Int1, C I64] = TagId(1) Str.256;
+        ret Str.255;
     else
-        let Str.294 : Int1 = false;
-        let Str.293 : [C Int1, C I64] = TagId(0) Str.294;
-        ret Str.293;
+        let Str.253 : Int1 = false;
+        let Str.252 : [C Int1, C I64] = TagId(0) Str.253;
+        ret Str.252;
 
 procedure Test.0 ():
     let Test.3 : Int1 = CallByName Bool.2;

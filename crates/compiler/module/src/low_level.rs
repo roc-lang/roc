@@ -9,10 +9,8 @@ pub enum LowLevel {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithScalar,
     StrEndsWith,
     StrSplit,
-    StrCountGraphemes,
     StrCountUtf8Bytes,
     StrFromInt,
     StrFromUtf8Range,
@@ -23,15 +21,11 @@ pub enum LowLevel {
     StrTrimStart,
     StrTrimEnd,
     StrToNum,
-    StrToScalars,
     StrGetUnsafe,
     StrSubstringUnsafe,
     StrReserve,
-    StrAppendScalar,
-    StrGetScalarUnsafe,
     StrGetCapacity,
     StrWithCapacity,
-    StrGraphemes,
     StrReleaseExcessCapacity,
     ListLen,
     ListWithCapacity,
@@ -50,8 +44,9 @@ pub enum LowLevel {
     ListSublist,
     ListDropAt,
     ListSwap,
-    ListIsUnique,
     ListGetCapacity,
+    ListIsUnique,
+    ListClone,
     NumAdd,
     NumAddWrap,
     NumAddChecked,
@@ -263,10 +258,8 @@ map_symbol_to_lowlevel! {
     StrJoinWith <= STR_JOIN_WITH;
     StrIsEmpty <= STR_IS_EMPTY;
     StrStartsWith <= STR_STARTS_WITH;
-    StrStartsWithScalar <= STR_STARTS_WITH_SCALAR;
     StrEndsWith <= STR_ENDS_WITH;
     StrSplit <= STR_SPLIT;
-    StrCountGraphemes <= STR_COUNT_GRAPHEMES;
     StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
     StrFromUtf8Range <= STR_FROM_UTF8_RANGE_LOWLEVEL;
     StrToUtf8 <= STR_TO_UTF8;
@@ -274,16 +267,12 @@ map_symbol_to_lowlevel! {
     StrTrim <= STR_TRIM;
     StrTrimStart <= STR_TRIM_START;
     StrTrimEnd <= STR_TRIM_END;
-    StrToScalars <= STR_TO_SCALARS;
     StrGetUnsafe <= STR_GET_UNSAFE;
     StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE;
     StrReserve <= STR_RESERVE;
-    StrAppendScalar <= STR_APPEND_SCALAR_UNSAFE;
-    StrGetScalarUnsafe <= STR_GET_SCALAR_UNSAFE;
     StrToNum <= STR_TO_NUM;
     StrGetCapacity <= STR_CAPACITY;
     StrWithCapacity <= STR_WITH_CAPACITY;
-    StrGraphemes <= STR_GRAPHEMES;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
     ListLen <= LIST_LEN;
     ListGetCapacity <= LIST_CAPACITY;
@@ -291,6 +280,7 @@ map_symbol_to_lowlevel! {
     ListReserve <= LIST_RESERVE;
     ListReleaseExcessCapacity <= LIST_RELEASE_EXCESS_CAPACITY;
     ListIsUnique <= LIST_IS_UNIQUE;
+    ListClone <= LIST_CLONE;
     ListAppendUnsafe <= LIST_APPEND_UNSAFE;
     ListPrepend <= LIST_PREPEND;
     ListGetUnsafe <= LIST_GET_UNSAFE, DICT_LIST_GET_UNSAFE;
