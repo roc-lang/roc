@@ -279,6 +279,9 @@ impl<'a> LowLevelCall<'a> {
                     backend
                         .code_builder
                         .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+
+                    // Length is stored as 32 bits in memory, but List.len returns U64
+                    backend.code_builder.i64_extend_u_i32();
                 }
                 _ => internal_error!("invalid storage for List"),
             },
@@ -321,6 +324,7 @@ impl<'a> LowLevelCall<'a> {
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[index]);
+                backend.code_builder.i32_wrap_i64(); // listGetUnsafe takes a U64, but we do 32-bit indexing on wasm.
                 let elem_size = backend.layout_interner.stack_size(self.ret_layout);
                 backend.code_builder.i32_const(elem_size as i32);
                 backend.code_builder.i32_mul(); // index*size
