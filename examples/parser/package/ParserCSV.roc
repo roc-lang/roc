@@ -9,7 +9,7 @@ interface ParserCSV
         parseStrToCSVRecord,
         field,
         string,
-        nat,
+        i64,
         f64,
     ]
     imports [
@@ -120,18 +120,18 @@ field = \fieldParser ->
 string : Parser CSVField Str
 string = ParserStr.anyString
 
-## Parse a natural number from a CSV field
-nat : Parser CSVField Nat
-nat =
+## Parse a 64-bit signed integer from a CSV field
+i64 : Parser CSVField I64
+i64 =
     string
     |> map
         (\val ->
-            when Str.toNat val is
+            when Str.toI64 val is
                 Ok num ->
                     Ok num
 
                 Err _ ->
-                    Err "\(val) is not a Nat."
+                    Err "\(val) is not an I64."
         )
     |> flatten
 
