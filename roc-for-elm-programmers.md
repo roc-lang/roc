@@ -29,7 +29,7 @@ Roc strings work like Elm strings except that they support string interpolation.
 Here's a Roc string which uses interpolation:
 
 ```elm
-"Hi, my name is \(name)!"
+"Hi, my name is $(name)!"
 ```
 
 The Elm equivalent would be:
