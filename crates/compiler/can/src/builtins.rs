@@ -226,7 +226,7 @@ map_symbol_to_lowlevel_and_arity! {
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
-/// List.get : List elem, Nat -> Result elem [OutOfBounds]*
+/// List.get : List elem, U64 -> Result elem [OutOfBounds]*
 ///
 /// Because this returns an open tag union for its Err type, it's not possible
 /// for code gen to return a hardcoded value for OutOfBounds. For example,
