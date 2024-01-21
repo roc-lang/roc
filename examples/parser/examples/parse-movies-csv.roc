@@ -38,7 +38,7 @@ main =
                 SyntaxError error ->
                     "Parsing failure. Syntax error in the CSV: \(error)"
 
-MovieInfo := { title : Str, releaseYear : Nat, actors : List Str }
+MovieInfo := { title : Str, releaseYear : U64, actors : List Str }
 
 movieInfoParser =
     record (\title -> \releaseYear -> \actors -> @MovieInfo { title, releaseYear, actors })
