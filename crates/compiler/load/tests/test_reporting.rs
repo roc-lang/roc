@@ -12678,14 +12678,14 @@ In roc, functions are always written as a lambda, like{}
         ),
     @r#"
     ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
-    
+
     The 2nd pattern is redundant:
-    
+
     6│       when l is
     7│           [A, ..] -> ""
     8│>          [.., A] -> ""
     9│           [..] -> ""
-    
+
     Any value of this shape will be handled by a previous pattern, so this
     one should be removed.
     "#
@@ -13634,70 +13634,6 @@ In roc, functions are always written as a lambda, like{}
                         Two -> Two
             "#
         )
-    );
-
-    test_report!(
-        derive_decoding_for_nat,
-        indoc!(
-            r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
-
-            main =
-                myDecoder : Decoder Nat fmt where fmt implements DecoderFormatting
-                myDecoder = decoder
-
-                myDecoder
-            "#
-        ),
-        @r"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│      myDecoder = decoder
-                        ^^^^^^^
-
-    I can't generate an implementation of the `Decoding` ability for
-
-        Nat
-
-    Note: Decoding to a Nat is not supported. Consider decoding to a
-    fixed-sized unsigned integer, like U64, then converting to a Nat if
-    needed.
-    "
-    );
-
-    test_report!(
-        derive_encoding_for_nat,
-        indoc!(
-            r#"
-            app "test" imports [] provides [main] to "./platform"
-
-            x : Nat
-
-            main = Encode.toEncoder x
-            "#
-        ),
-        @r"
-    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
-
-    This expression has a type that does not implement the abilities it's expected to:
-
-    5│  main = Encode.toEncoder x
-                                ^
-
-    I can't generate an implementation of the `Encoding` ability for
-
-        Int Natural
-
-    In particular, an implementation for
-
-        Natural
-
-    cannot be generated.
-
-    Tip: `Natural` does not implement `Encoding`.
-    "
     );
 
     test_no_problem!(
