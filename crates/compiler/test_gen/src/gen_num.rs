@@ -19,7 +19,7 @@ fn nat_alias() {
     assert_evals_to!(
         indoc!(
             r"
-            i : Num.Nat
+            i : Num.U64
             i = 1
 
             i
@@ -3352,7 +3352,7 @@ fn monomorphized_ints() {
             r"
             x = 100
 
-            f : U8, U32 -> Nat
+            f : U8, U32 -> U64
             f = \_, _ -> 18
 
             f x x
@@ -3371,7 +3371,7 @@ fn monomorphized_floats() {
             r"
             x = 100.0
 
-            f : F32, F64 -> Nat
+            f : F32, F64 -> U64
             f = \_, _ -> 18
 
             f x x
@@ -3388,7 +3388,7 @@ fn monomorphized_ints_names_dont_conflict() {
     assert_evals_to!(
         indoc!(
             r"
-            f : U8 -> Nat
+            f : U8 -> U64
             f = \_ -> 9
             x =
                 n = 100
