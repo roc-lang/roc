@@ -4828,7 +4828,7 @@ fn import_variable_for_symbol(
                             // Today we define builtins in each module that uses them
                             // so even though they have a different module name from
                             // the surrounding module, they are not technically imported
-                            debug_assert!(symbol.is_builtin());
+                            debug_assert!(symbol.is_builtin(), "The symbol {:?} was not found and was assumed to be a builtin, but it wasn't a builtin.", symbol);
                             return;
                         }
                         AbilityMemberMustBeAvailable => {
