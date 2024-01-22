@@ -54,7 +54,7 @@ const RocList = extern struct {
 };
 
 const FromHost = extern struct {
-    eventHandlerId: usize,
+    eventHandlerId: u64,
     eventJsonList: ?RocList,
     eventPlatformState: ?*anyopaque,
     initJson: RocList,
@@ -79,7 +79,7 @@ export fn roc_vdom_init(init_pointer: ?[*]u8, init_length: usize, init_capacity:
         .capacity = init_capacity,
     };
     const from_host = FromHost{
-        .eventHandlerId = std.math.maxInt(usize),
+        .eventHandlerId = std.math.maxInt(u64),
         .eventJsonList = null,
         .eventPlatformState = null,
         .initJson = init_json,
@@ -90,7 +90,7 @@ export fn roc_vdom_init(init_pointer: ?[*]u8, init_length: usize, init_capacity:
 }
 
 // Called from JS
-export fn roc_dispatch_event(list_ptr: ?[*]u8, list_length: usize, handler_id: usize) usize {
+export fn roc_dispatch_event(list_ptr: ?[*]u8, list_length: usize, handler_id: u64) usize {
     const json_list = RocList{
         .bytes = list_ptr,
         .length = list_length,
