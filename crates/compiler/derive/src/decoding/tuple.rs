@@ -643,7 +643,7 @@ fn step_elem(
                         Variable::NATURAL,
                         index.to_string().into_boxed_str(),
                         IntValue::I128((index as i128).to_ne_bytes()),
-                        IntBound::Exact(IntLitWidth::Nat),
+                        IntBound::Exact(IntLitWidth::U64),
                     )),
                     degenerate: false,
                 }],

@@ -27,7 +27,6 @@ interface Inspect
         i64,
         u128,
         i128,
-        nat,
         f32,
         f64,
         dec,
@@ -38,7 +37,7 @@ interface Inspect
     ]
     imports [
         Bool.{ Bool },
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec, Nat },
+        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
         List,
         Str,
     ]
@@ -77,7 +76,6 @@ InspectFormatter implements
     i64 : I64 -> Inspector f where f implements InspectFormatter
     u128 : U128 -> Inspector f where f implements InspectFormatter
     i128 : I128 -> Inspector f where f implements InspectFormatter
-    nat : Nat -> Inspector f where f implements InspectFormatter
     f32 : F32 -> Inspector f where f implements InspectFormatter
     f64 : F64 -> Inspector f where f implements InspectFormatter
     dec : Dec -> Inspector f where f implements InspectFormatter
@@ -131,7 +129,6 @@ DbgFormatter := { data : Str }
             i64: dbgI64,
             u128: dbgU128,
             i128: dbgI128,
-            nat: dbgNat,
             f32: dbgF32,
             f64: dbgF64,
             dec: dbgDec,
@@ -323,11 +320,6 @@ dbgU128 = \num ->
 
 dbgI128 : I128 -> Inspector DbgFormatter
 dbgI128 = \num ->
-    f0 <- custom
-    dbgWrite f0 (num |> Num.toStr)
-
-dbgNat : Nat -> Inspector DbgFormatter
-dbgNat = \num ->
     f0 <- custom
     dbgWrite f0 (num |> Num.toStr)
 

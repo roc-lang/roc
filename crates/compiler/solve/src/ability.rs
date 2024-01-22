@@ -492,11 +492,6 @@ fn is_builtin_fixed_int_alias(symbol: Symbol) -> bool {
 }
 
 #[inline(always)]
-fn is_builtin_nat_alias(symbol: Symbol) -> bool {
-    matches!(symbol, Symbol::NUM_NAT | Symbol::NUM_NATURAL)
-}
-
-#[inline(always)]
 #[rustfmt::skip]
 fn is_builtin_float_alias(symbol: Symbol) -> bool {
     matches!(symbol,
@@ -1021,18 +1016,7 @@ impl DerivableVisitor for DeriveEncoding {
 
     #[inline(always)]
     fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
-        if is_builtin_number_alias(symbol) {
-            if is_builtin_nat_alias(symbol) {
-                Err(NotDerivable {
-                    var,
-                    context: NotDerivableContext::Encode(NotDerivableEncode::Nat),
-                })
-            } else {
-                Ok(Descend(false))
-            }
-        } else {
-            Ok(Descend(true))
-        }
+        Ok(Descend(!is_builtin_number_alias(symbol)))
     }
 
     #[inline(always)]
@@ -1137,18 +1121,7 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
-        if is_builtin_number_alias(symbol) {
-            if is_builtin_nat_alias(symbol) {
-                Err(NotDerivable {
-                    var,
-                    context: NotDerivableContext::Decode(NotDerivableDecode::Nat),
-                })
-            } else {
-                Ok(Descend(false))
-            }
-        } else {
-            Ok(Descend(true))
-        }
+        Ok(Descend(!is_builtin_number_alias(symbol)))
     }
 
     #[inline(always)]

@@ -1590,13 +1590,12 @@ define_builtins! {
         12 HASH_HASH_I32: "hashI32"
         13 HASH_HASH_I64: "hashI64"
         14 HASH_HASH_I128: "hashI128"
-        15 HASH_HASH_NAT: "hashNat"
+        15 HASH_HASH_UNORDERED: "hashUnordered"
         16 I128_OF_DEC: "i128OfDec"
         17 HASH_HASH_DEC: "hashDec"
         18 HASH_COMPLETE: "complete"
         19 HASH_HASH_STR_BYTES: "hashStrBytes"
         20 HASH_HASH_LIST: "hashList"
-        21 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 INSPECT: "Inspect" => {
         0 INSPECT_INSPECT_ABILITY: "Inspect" exposed_type=true
