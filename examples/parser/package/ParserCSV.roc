@@ -10,6 +10,7 @@ interface ParserCSV
         field,
         string,
         i64,
+        u64,
         f64,
     ]
     imports [
@@ -132,6 +133,21 @@ i64 =
 
                 Err _ ->
                     Err "\(val) is not an I64."
+        )
+    |> flatten
+
+## Parse a 64-bit unsigned integer from a CSV field
+u64 : Parser CSVField U64
+u64 =
+    string
+    |> map
+        (\val ->
+            when Str.toU64 val is
+                Ok num ->
+                    Ok num
+
+                Err _ ->
+                    Err "\(val) is not an U64."
         )
     |> flatten
 
