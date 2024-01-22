@@ -32,7 +32,7 @@ Html state : [
 ]
 
 # The pre-calculated byte size of the rendered HTML string
-Size : Nat
+Size : U64
 
 Attribute state : [
     EventListener Str (List CyclicStructureAccessor) (Handler state),
@@ -74,14 +74,14 @@ text = \content -> Text content
 none : Html state
 none = None
 
-nodeSize : Html state -> Nat
+nodeSize : Html state -> U64
 nodeSize = \node ->
     when node is
         Text content -> Str.countUtf8Bytes content
         Element _ size _ _ -> size
         None -> 0
 
-attrSize : Attribute state -> Nat
+attrSize : Attribute state -> U64
 attrSize = \attr ->
     when attr is
         EventListener _ _ _ -> 0
