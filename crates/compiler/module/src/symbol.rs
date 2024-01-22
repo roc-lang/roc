@@ -1192,9 +1192,9 @@ define_builtins! {
         80 NUM_MUL_SATURATED: "mulSaturated"
         81 NUM_INT: "Int" exposed_type=true
         82 NUM_FRAC: "Frac" exposed_type=true
-        83 NUM_NATURAL: "Natural" exposed_type=true
-        84 NUM_NAT: "Nat" exposed_type=true
-        85 NUM_INT_CAST: "intCast"
+        83 NUM_E: "e"
+        84 NUM_PI: "pi"
+        85 NUM_TAU: "tau"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
         87 NUM_DECIMAL: "Decimal" exposed_type=true
         88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
@@ -1270,10 +1270,8 @@ define_builtins! {
         158 NUM_IS_FINITE: "isFinite"
         159 NUM_MIN: "min"
         160 NUM_MAX: "max"
-        161 NUM_E: "e"
-        162 NUM_PI: "pi"
-        163 NUM_TAU: "tau"
-        164 NUM_BITWISE_NOT: "bitwiseNot"
+        161 NUM_BITWISE_NOT: "bitwiseNot"
+        162 NUM_INT_CAST: "intCast"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1630,8 +1628,7 @@ define_builtins! {
         30 INSPECT_CUSTOM: "custom"
         31 INSPECT_APPLY: "apply"
         32 INSPECT_TO_INSPECTOR: "toInspector"
-        33 INSPECT_NAT: "nat"
-        34 INSPECT_TO_STR: "toStr"
+        33 INSPECT_TO_STR: "toStr"
     }
     15 JSON: "TotallyNotJson" => {
         0 JSON_JSON: "TotallyNotJson"

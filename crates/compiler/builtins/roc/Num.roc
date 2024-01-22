@@ -25,7 +25,6 @@ interface Num
         Unsigned32,
         Unsigned16,
         Unsigned8,
-        Nat,
         Dec,
         F64,
         F32,

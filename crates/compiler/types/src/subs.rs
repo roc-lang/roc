@@ -1592,7 +1592,6 @@ fn define_integer_types(subs: &mut Subs) {
 
     integer_type(
         subs,
-        Symbol::NUM_NATURAL,
         Symbol::NUM_NAT,
         Variable::NATURAL,
         Variable::INTEGER_NATURAL,

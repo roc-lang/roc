@@ -574,12 +574,6 @@ impl<'a> RawFunctionLayout<'a> {
                 cacheable(Ok(Self::ZeroArgumentThunk(Layout::F32)))
             }
 
-            // Nat
-            Alias(Symbol::NUM_NAT, args, _, _) => {
-                debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::usize(env.target_info))))
-            }
-
             Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var),
 
             Alias(symbol, _, var, _) if symbol.is_builtin() => {
@@ -2505,10 +2499,6 @@ impl<'a> Layout<'a> {
                 match symbol {
                     Symbol::NUM_DECIMAL => cacheable(Ok(Layout::DEC)),
 
-                    Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                        cacheable(Ok(Layout::usize(env.target_info)))
-                    }
-
                     Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_INTEGER
                         if is_unresolved_var(env.subs, actual_var) =>
                     {
@@ -3054,7 +3044,6 @@ impl<'a> Layout<'a> {
             I32 => Layout::I32,
             I64 => Layout::I64,
             I128 => Layout::I128,
-            Nat => Layout::usize(target_info),
             // f32 int literal bounded by +/- 2^24, so fit it into an i32
             F32 => Layout::F32,
             // f64 int literal bounded by +/- 2^53, so fit it into an i32
