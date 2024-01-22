@@ -1681,7 +1681,7 @@ fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
 }
 
 fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
-    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(index, @intCast(u64)), .problem_code = problem };
+    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
 }
 
 // NOTE on memory: the validate function consumes a RC token of the input. Since
