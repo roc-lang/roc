@@ -1058,7 +1058,6 @@ fn module_cyclic_import_itself() {
         err
     );
 }
-
 #[test]
 fn module_cyclic_import_transitive() {
     let modules = vec![
@@ -1143,6 +1142,58 @@ fn nested_module_has_incorrect_name() {
             Based on the nesting and use of this module, I expect it to have name
 
                 Dep.Foo"
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn module_interface_with_qualified_import() {
+    let modules = vec![(
+        "A",
+        indoc!(
+            r"
+            interface A exposes [] imports [b.T]
+            "
+        ),
+    )];
+
+    let err = multiple_modules("module_interface_with_qualified_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'b' that you are using in the 'imports' section of the header of module 'tmp/module_interface_with_qualified_import/A' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header.
+            This module is an interface, because of a bug in the compiler we are unable to directly typecheck interface modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file."#
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn app_missing_package_import() {
+    let modules = vec![(
+        "Main",
+        indoc!(
+            r#"
+                app "example"
+                    packages { pack: "./package/main.roc" }
+                    imports [notpack.Mod]
+                    provides [] to pack
+
+                main = ""
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("app_missing_package_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'notpack' that you are using in the 'imports' section of the header of module 'tmp/app_missing_package_import/Main' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
         ),
         "\n{}",
         err
