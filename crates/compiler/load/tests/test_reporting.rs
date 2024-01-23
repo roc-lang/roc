@@ -7107,7 +7107,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32
         1, "i64",  mismatched_suffix_i64
         1, "i128", mismatched_suffix_i128
-        1, "nat",  mismatched_suffix_nat
         1, "dec",  mismatched_suffix_dec
         1, "f32",  mismatched_suffix_f32
         1, "f64",  mismatched_suffix_f64
@@ -7177,7 +7176,6 @@ In roc, functions are always written as a lambda, like{}
         1, "i32",  mismatched_suffix_i32_pattern
         1, "i64",  mismatched_suffix_i64_pattern
         1, "i128", mismatched_suffix_i128_pattern
-        1, "nat",  mismatched_suffix_nat_pattern
         1, "dec",  mismatched_suffix_dec_pattern
         1, "f32",  mismatched_suffix_f32_pattern
         1, "f64",  mismatched_suffix_f64_pattern
@@ -11313,7 +11311,7 @@ In roc, functions are always written as a lambda, like{}
         custom_type_conflicts_with_builtin,
         indoc!(
             r#"
-            Nat := [ S Nat, Z ]
+            Dec := [ S Dec, Z ]
 
             ""
             "#
@@ -11323,7 +11321,7 @@ In roc, functions are always written as a lambda, like{}
 
     This opaque type has the same name as a builtin:
 
-    4│      Nat := [ S Nat, Z ]
+    4│      Dec := [ S Dec, Z ]
             ^^^^^^^^^^^^^^^^^^^
 
     All builtin opaque types are in scope by default, so I need this

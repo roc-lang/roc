@@ -4981,8 +4981,6 @@ mod solve_expr {
                     i64:  123i64,
                     i128: 123i128,
 
-                    nat:  123nat,
-
                     bu8:   0b11u8,
                     bu16:  0b11u16,
                     bu32:  0b11u32,
@@ -4995,8 +4993,6 @@ mod solve_expr {
                     bi64:  0b11i64,
                     bi128: 0b11i128,
 
-                    bnat:  0b11nat,
-
                     dec:  123.0dec,
                     f32:  123.0f32,
                     f64:  123.0f64,
@@ -5007,7 +5003,7 @@ mod solve_expr {
                 }
                 "
             ),
-            r"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bnat : Nat, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, nat : Nat, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }",
+            r"{ bi128 : I128, bi16 : I16, bi32 : I32, bi64 : I64, bi8 : I8, bu128 : U128, bu16 : U16, bu32 : U32, bu64 : U64, bu8 : U8, dec : Dec, f32 : F32, f64 : F64, fdec : Dec, ff32 : F32, ff64 : F64, i128 : I128, i16 : I16, i32 : I32, i64 : I64, i8 : I8, u128 : U128, u16 : U16, u32 : U32, u64 : U64, u8 : U8 }",
         )
     }
 
@@ -5059,11 +5055,6 @@ mod solve_expr {
                               123i128 -> n
                               _ -> n),
 
-                    nat:  (\n ->
-                            when n is
-                              123nat -> n
-                              _ -> n),
-
                     bu8:   (\n ->
                             when n is
                               0b11u8 -> n
@@ -5106,11 +5097,6 @@ mod solve_expr {
                               0b11i128 -> n
                               _ -> n),
 
-                    bnat:  (\n ->
-                            when n is
-                              0b11nat -> n
-                              _ -> n),
-
                     dec:  (\n ->
                             when n is
                               123.0dec -> n
@@ -5139,7 +5125,7 @@ mod solve_expr {
                 }
                 "
             ),
-            r"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bnat : Nat -> Nat, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, nat : Nat -> Nat, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }",
+            r"{ bi128 : I128 -> I128, bi16 : I16 -> I16, bi32 : I32 -> I32, bi64 : I64 -> I64, bi8 : I8 -> I8, bu128 : U128 -> U128, bu16 : U16 -> U16, bu32 : U32 -> U32, bu64 : U64 -> U64, bu8 : U8 -> U8, dec : Dec -> Dec, f32 : F32 -> F32, f64 : F64 -> F64, fdec : Dec -> Dec, ff32 : F32 -> F32, ff64 : F64 -> F64, i128 : I128 -> I128, i16 : I16 -> I16, i32 : I32 -> I32, i64 : I64 -> I64, i8 : I8 -> I8, u128 : U128 -> U128, u16 : U16 -> U16, u32 : U32 -> U32, u64 : U64 -> U64, u8 : U8 -> U8 }",
         )
     }
 }

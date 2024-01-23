@@ -2366,7 +2366,6 @@ num_conversion_tests! {
         to_f32_from_u32, "15u32", 15.0
         to_f32_from_u64, "15u64", 15.0
         to_f32_from_u128, "15u128", 15.0
-        to_f32_from_nat, "15nat", 15.0
         to_f32_from_f32, "1.5f32", 1.5
         to_f32_from_f64, "1.5f64", 1.5
     )
@@ -2381,7 +2380,6 @@ num_conversion_tests! {
         to_f64_from_u32, "15u32", 15.0
         to_f64_from_u64, "15u64", 15.0
         to_f64_from_u128, "15u128", 15.0
-        to_f64_from_nat, "15nat", 15.0
         to_f64_from_f32, "1.5f32", 1.5
         to_f64_from_f64, "1.5f64", 1.5
     )
