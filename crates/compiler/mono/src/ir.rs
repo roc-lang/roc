@@ -818,7 +818,7 @@ type NumberSpecializations<'a> = VecMap<InLayout<'a>, (Symbol, UseDepth)>;
 ///  n = 1
 ///  use1 : U8
 ///  use1 = 1
-///  use2 : Nat
+///  use2 : Dec
 ///  use2 = 2
 ///
 /// We keep track of the specializations of `myTag` and create fresh symbols when there is more

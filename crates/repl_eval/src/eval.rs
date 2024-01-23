@@ -134,7 +134,7 @@ fn get_newtype_tag_and_var(
 
 /// Unrolls types that are newtypes. These include
 ///   - Singleton tags with one type argument (e.g. `Container Str`)
-///   - Records with exactly one field (e.g. `{ number: Nat }`)
+///   - Records with exactly one field (e.g. `{ number: Dec }`)
 ///
 /// This is important in synchronizing `Content`s with `Layout`s, since `Layout`s will
 /// always unwrap newtypes and use the content of the underlying type.
