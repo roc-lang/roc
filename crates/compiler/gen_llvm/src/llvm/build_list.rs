@@ -274,7 +274,7 @@ pub(crate) fn list_swap<'a, 'ctx>(
     )
 }
 
-/// List.sublist : List elem, { start : Nat, len : Nat } -> List elem
+/// List.sublist : List elem, { start : U64, len : U64 } -> List elem
 pub(crate) fn list_sublist<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,

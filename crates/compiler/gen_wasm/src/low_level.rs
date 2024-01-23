@@ -676,8 +676,8 @@ impl<'a> LowLevelCall<'a> {
                 //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
-                //  start: usize,              i32
-                //  len: usize,                i32
+                //  start: u64,                i64
+                //  len: u64,                  i64
                 //  dec: Dec,                  i32
 
                 backend.storage.load_symbols_for_call(
