@@ -688,7 +688,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
         }
         ListReserve => {
-            // List.reserve : List elem, Nat -> List elem
+            // List.reserve : List elem, U64 -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);

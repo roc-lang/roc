@@ -482,16 +482,22 @@ pub fn listWithCapacity(
 pub fn listReserve(
     list: RocList,
     alignment: u32,
-    spare: usize,
+    spare: u64,
     element_width: usize,
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
-    const old_length = list.len();
-    if ((update_mode == .InPlace or list.isUnique()) and list.getCapacity() >= list.len() + spare) {
+    const original_len = list.len();
+    const cap = @as(u64, @intCast(list.getCapacity()));
+    const desired_cap = @as(u64, @intCast(original_len)) +| spare;
+
+    if ((update_mode == .InPlace or list.isUnique()) and cap >= desired_cap) {
         return list;
     } else {
-        var output = list.reallocate(alignment, old_length + spare, element_width);
-        output.length = old_length;
+        // Make sure on 32-bit targets we don't accidentally wrap when we cast our U64 desired capacity to U32.
+        const reserve_size: u64 = @min(desired_cap, @as(u64, @intCast(std.math.maxInt(usize))));
+
+        var output = list.reallocate(alignment, @as(usize, @intCast(reserve_size)), element_width);
+        output.length = original_len;
         return output;
     }
 }
