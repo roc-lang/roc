@@ -514,7 +514,7 @@ impl<'a> LowLevelCall<'a> {
                 //  (return pointer)           i32
                 //  list: RocList              i32
                 //  alignment: u32             i32
-                //  spare: usize               i32
+                //  spare: u64                 i64
                 //  element_width: usize       i32
                 //  update_mode: UpdateMode    i32
 
