@@ -1205,7 +1205,7 @@ Following this pattern, the 16 in `I16` means that it's a signed 16-bit integer.
 Choosing a size depends on your performance needs and the range of numbers you want to represent. Consider:
 
 -   Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
--   Smaller integer sizes take up less memory. These savings rarely matter in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
+-   Smaller integer sizes take up less memory. These savings rarely matters in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can easily be a performance bottleneck.
 -   Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
 
 Here are the different fixed-size integer types that Roc supports:
@@ -1221,11 +1221,23 @@ Here are the different fixed-size integer types that Roc supports:
 | `-9_223_372_036_854_775_808` <br> `9_223_372_036_854_775_807`                                                     | `I64`  |
 | `0` <br> _(over 18 quintillion)_`18_446_744_073_709_551_615`                                                      | `U64`  |
 | `-170_141_183_460_469_231_731_687_303_715_884_105_728` <br> `170_141_183_460_469_231_731_687_303_715_884_105_727` | `I128` |
-| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455`                            | `U128` |
+
+<<<<<<< HEAD
+| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` |
 
 Roc also has one variable-size integer type: `Nat` (short for "natural number"). The size of `Nat` is equal to the size of a memory address, which varies by system. For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`. When compiling for a 32-bit system, it works the same way as `U32`. Most popular computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly, `Nat` will work like a `U32` in that program.
 
 A common use for `Nat` is to store the length of a collection like a `List`; there's a function `List.len : List * -> Nat` which returns the length of the given list. 64-bit systems can represent longer lists in memory than 32-bit systems can, which is why the length of a list is represented as a `Nat`.
+||||||| parent of cda0cfb47 (Remove Nat from documentation)
+| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` |
+
+Roc also has one variable-size integer type: `Nat` (short for "natural number"). The size of `Nat` is equal to the size of a memory address, which varies by system. For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`. When compiling for a 32-bit system, it works the same way as `U32`. Most popular computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly, `Nat` will work like a `U32` in that program.
+
+# A common use for `Nat` is to store the length of a collection like a `List`; there's a function `List.len : List * -> Nat` which returns the length of the given list. 64-bit systems can represent longer lists in memory than 32-bit systems can, which is why the length of a list is represented as a `Nat`.
+
+| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` |
+
+> > > > > > > cda0cfb47 (Remove Nat from documentation)
 
 If any operation would result in an integer that is either too big or too small to fit in that range (e.g. calling `Int.maxI32 + 1`, which adds 1 to the highest possible 32-bit integer), then the operation will [overflow](https://en.wikipedia.org/wiki/Integer_overflow). When an overflow occurs, the program will crash.
 
@@ -1281,7 +1293,7 @@ You can give a number literal a more specific type by adding the type you want a
 
 The full list of possible suffixes includes:
 
-`u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `u128`, `i128`, `nat`, `f32`, `f64`, `dec`
+`u8`, `i8`, `u16`, `i16`, `u32`, `i32`, `u64`, `i64`, `u128`, `i128`, `f32`, `f64`, `dec`
 
 Integer literals can be written in [hexadecimal](https://en.wikipedia.org/wiki/Hexadecimal) form by prefixing with `0x` followed by hexadecimal characters (`a` - `f` in addition to `0` - `9`). For example, writing `0xfe` is the same as writing `254`. Similarly, the prefix `0b` specifies binary integers. Writing `0b0000_1000` is the same as writing `8`.
 
@@ -1411,8 +1423,16 @@ These modules are not ordinary `.roc` files that live on your filesystem. Rather
 
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
+<<<<<<< HEAD
+
 -   They are always imported. You never need to add them to `imports`.
 -   All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module).
+    ||||||| parent of cda0cfb47 (Remove Nat from documentation)
+-   They are always imported. You never need to add them to `imports`.
+-   # All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module.
+-   They are always imported. You never need to add them to `imports`.
+-   All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.
+    > > > > > > > cda0cfb47 (Remove Nat from documentation)
 
 ### [App Module Header](#app-module-header) {#app-module-header}
 

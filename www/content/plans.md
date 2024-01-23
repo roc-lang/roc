@@ -30,12 +30,6 @@ Implementing the very important [module params](https://docs.google.com/document
 
 Work has not started on this yet, but we'd like to have the project completed sometime in 2024.
 
-### Removal of `Nat`
-
-We are removing the `Nat` number type in favour of using `U64` as the default. This will further improve the portability of Roc programs, by removing a potential source of different behaviour across architectures.
-
-You can track progress in [this PR](https://github.com/roc-lang/roc/pull/5923).
-
 ## Planned Non-Breaking Changes
 
 These are planned changes to how things work, which should be backwards-compatible and require no code changes. These won't include bugfixes, just changing something that currently works as designed to have a different design.
