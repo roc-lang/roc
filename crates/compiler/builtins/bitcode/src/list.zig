@@ -698,28 +698,33 @@ pub fn listDropAt(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    drop_index: usize,
+    drop_index_u64: u64,
     dec: Dec,
 ) callconv(.C) RocList {
     const size = list.len();
+    const size_u64 = @as(u64, @intCast(size));
     // If droping the first or last element, return a seamless slice.
     // For simplicity, do this by calling listSublist.
     // In the future, we can test if it is faster to manually inline the important parts here.
-    if (drop_index == 0) {
+    if (drop_index_u64 == 0) {
         return listSublist(list, alignment, element_width, 1, size -| 1, dec);
-    } else if (drop_index == size -| 1) {
+    } else if (drop_index_u64 == size_u64 - 1) { // It's fine if (size - 1) wraps on size == 0 here,
+        // because if size is 0 then it's always fine for this branch to be taken; no
+        // matter what drop_index was, we're size == 0, so empty list will always be returned.
         return listSublist(list, alignment, element_width, 0, size -| 1, dec);
     }
 
     if (list.bytes) |source_ptr| {
-        if (drop_index >= size) {
+        if (drop_index_u64 >= size_u64) {
             return list;
         }
 
-        if (drop_index < size) {
-            const element = source_ptr + drop_index * element_width;
-            dec(element);
-        }
+        // This cast must be lossless, because we would have just early-returned if drop_index
+        // were >= than `size`, and we know `size` fits in usize.
+        const drop_index = @as(usize, @intCast(drop_index_u64));
+
+        const element = source_ptr + drop_index * element_width;
+        dec(element);
 
         // NOTE
         // we need to return an empty list explicitly,

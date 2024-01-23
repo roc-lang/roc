@@ -1991,7 +1991,7 @@ trait Backend<'a> {
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
-                //    drop_index: usize,
+                //    drop_index: u64,
                 //    dec: Dec,
 
                 self.build_fn_call(
@@ -2008,7 +2008,7 @@ trait Backend<'a> {
                         list_layout,
                         Layout::U32,
                         layout_usize,
-                        layout_usize,
+                        Layout::U64,
                         layout_usize,
                     ],
                     ret_layout,

@@ -722,7 +722,7 @@ impl<'a> LowLevelCall<'a> {
                 //  list: RocList,             i32
                 //  element_width: usize,      i32
                 //  alignment: u32,            i32
-                //  drop_index: usize,         i32
+                //  drop_index: u64,           i64
                 //  dec: Dec,                  i32
 
                 // Load the return pointer and the list

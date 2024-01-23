@@ -299,7 +299,7 @@ pub(crate) fn list_sublist<'a, 'ctx>(
     )
 }
 
-/// List.dropAt : List elem, Nat -> List elem
+/// List.dropAt : List elem, U64 -> List elem
 pub(crate) fn list_drop_at<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
