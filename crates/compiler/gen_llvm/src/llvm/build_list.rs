@@ -250,7 +250,7 @@ pub(crate) fn list_prepend<'a, 'ctx>(
     )
 }
 
-/// List.swap : List elem, Nat, Nat -> List elem
+/// List.swap : List elem, U64,U64 -> List elem
 pub(crate) fn list_swap<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,

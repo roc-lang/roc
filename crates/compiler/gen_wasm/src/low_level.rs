@@ -743,7 +743,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT);
             }
             ListSwap => {
-                // List.swap : List elem, Nat, Nat -> List elem
+                // List.swap : List elem, U64, U64 -> List elem
                 let list: Symbol = self.arguments[0];
                 let index_1: Symbol = self.arguments[1];
                 let index_2: Symbol = self.arguments[2];
@@ -758,8 +758,8 @@ impl<'a> LowLevelCall<'a> {
                 //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
-                //  index_1: usize,            i32
-                //  index_2: usize,            i32
+                //  index_1: u64,              i64
+                //  index_2: u64,              i64
                 //  update_mode: UpdateMode,   i32
 
                 // Load the return pointer and the list
