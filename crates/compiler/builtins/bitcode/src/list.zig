@@ -615,12 +615,12 @@ pub fn listSublist(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    start: usize,
-    len: usize,
+    start_u64: u64,
+    len_u64: u64,
     dec: Dec,
 ) callconv(.C) RocList {
     const size = list.len();
-    if (len == 0 or start >= size) {
+    if (size == 0 or start_u64 >= @as(u64, @intCast(size))) {
         // Decrement the reference counts of all elements.
         if (list.bytes) |source_ptr| {
             var i: usize = 0;
@@ -639,9 +639,26 @@ pub fn listSublist(
     }
 
     if (list.bytes) |source_ptr| {
-        const keep_len = @min(len, size - start);
+        // This cast is lossless because we would have early-returned already
+        // if `start_u64` were greater than `size`, and `size` fits in usize.
+        const start = @as(usize, @intCast(start_u64));
         const drop_start_len = start;
-        const drop_end_len = size - (start + keep_len);
+
+        // (size - start) can't overflow because we would have early-returned already
+        // if `start` were greater than `size`.
+        const size_minus_start = size - start;
+
+        // This outer cast to usize is lossless. size, start, and size_minus_start all fit in usize,
+        // and @min guarantees that if `len_u64` gets returned, it's because it was smaller
+        // than something that fit in usize.
+        const keep_len = @as(usize, @intCast(@min(len_u64, @as(u64, @intCast(size_minus_start)))));
+
+        // This can't overflow because if len > size_minus_start,
+        // then keep_len == size_minus_start and this will be 0.
+        // Alternatively, if len <= size_minus_start, then keep_len will
+        // be equal to len, meaning keep_len <= size_minus_start too,
+        // which in turn means this won't overflow.
+        const drop_end_len = size_minus_start - keep_len;
 
         // Decrement the reference counts of elements before `start`.
         var i: usize = 0;
