@@ -165,7 +165,7 @@ mod solve_expr {
                 Str.fromUtf8
                 "
             ),
-            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]",
+            "List U8 -> Result Str [BadUtf8 Utf8ByteProblem U64]",
         );
     }
 
@@ -3016,7 +3016,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-                partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+                partition : U64, U64, List (Int a) -> [Pair U64 (List (Int a))]
                 partition = \low, high, initialList ->
                     when List.get initialList high is
                         Ok _ ->
@@ -3028,7 +3028,7 @@ mod solve_expr {
                 partition
                             "
             ),
-            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
+            "U64, U64, List (Int a) -> [Pair U64 (List (Int a))]",
         );
     }
 
@@ -3037,7 +3037,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r"
-            swap : Nat, Nat, List a -> List a
+            swap : U64, U64, List a -> List a
             swap = \i, j, list ->
                 when Pair (List.get list i) (List.get list j) is
                     Pair (Ok atI) (Ok atJ) ->
@@ -3048,7 +3048,7 @@ mod solve_expr {
                     _ ->
                         list
 
-            partition : Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]
+            partition : U64, U64, List (Int a) -> [Pair U64 (List (Int a))]
             partition = \low, high, initialList ->
                 when List.get initialList high is
                     Ok pivot ->
@@ -3076,7 +3076,7 @@ mod solve_expr {
             partition
         "
             ),
-            "Nat, Nat, List (Int a) -> [Pair Nat (List (Int a))]",
+            "U64, U64, List (Int a) -> [Pair U64 (List (Int a))]",
         );
     }
 
@@ -3116,7 +3116,7 @@ mod solve_expr {
                     List.get
                 "
             ),
-            "List a, Nat -> Result a [OutOfBounds]",
+            "List a, U64 -> Result a [OutOfBounds]",
         );
     }
 
@@ -3772,7 +3772,7 @@ mod solve_expr {
     fn list_walk_with_index_until() {
         infer_eq_without_problem(
             indoc!(r"List.walkWithIndexUntil"),
-            "List elem, state, (state, elem, Nat -> [Break state, Continue state]) -> state",
+            "List elem, state, (state, elem, U64 -> [Break state, Continue state]) -> state",
         );
     }
 
@@ -3784,7 +3784,7 @@ mod solve_expr {
                 List.dropAt
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -3820,7 +3820,7 @@ mod solve_expr {
                 List.takeFirst
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -3832,7 +3832,7 @@ mod solve_expr {
                 List.takeLast
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -3844,7 +3844,7 @@ mod solve_expr {
                 List.sublist
                 "
             ),
-            "List elem, { len : Nat, start : Nat } -> List elem",
+            "List elem, { len : U64, start : U64 } -> List elem",
         );
     }
 
@@ -3852,7 +3852,7 @@ mod solve_expr {
     fn list_split() {
         infer_eq_without_problem(
             indoc!("List.split"),
-            "List elem, Nat -> { before : List elem, others : List elem }",
+            "List elem, U64 -> { before : List elem, others : List elem }",
         );
     }
 
@@ -3864,7 +3864,7 @@ mod solve_expr {
                 List.dropLast
                 "
             ),
-            "List elem, Nat -> List elem",
+            "List elem, U64 -> List elem",
         );
     }
 
@@ -4400,7 +4400,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [partitionHelp] to "./platform"
 
-                swap : Nat, Nat, List a -> List a
+                swap : U64, U64, List a -> List a
                 swap = \i, j, list ->
                     when Pair (List.get list i) (List.get list j) is
                         Pair (Ok atI) (Ok atJ) ->
@@ -4411,7 +4411,7 @@ mod solve_expr {
                         _ ->
                             []
 
-                partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
+                partitionHelp : U64, U64, List (Num a), U64, (Num a) -> [Pair U64 (List (Num a))]
                 partitionHelp = \i, j, list, high, pivot ->
                     if j < high then
                         when List.get list j is
@@ -4427,7 +4427,7 @@ mod solve_expr {
                         Pair i list
                 "#
             ),
-            "Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]",
+            "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
         );
     }
 
