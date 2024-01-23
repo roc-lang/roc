@@ -1918,8 +1918,8 @@ trait Backend<'a> {
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
-                //    index_1: usize,
-                //    index_2: usize,
+                //    index_1: u64,
+                //    index_2: u64,
                 //    update_mode: UpdateMode,
 
                 self.build_fn_call(
@@ -1937,8 +1937,8 @@ trait Backend<'a> {
                         list_layout,
                         Layout::U32,
                         layout_usize,
-                        layout_usize,
-                        layout_usize,
+                        Layout::U64,
+                        Layout::U64,
                         Layout::U8,
                     ],
                     ret_layout,
