@@ -28,7 +28,7 @@ pub fn highlight(code: &str) -> Vec<String> {
     } else {
         code
     };
-    
+
     for location in roc_parse::highlight::highlight(code) {
         let current_text = &code[offset..location.byte_range().end];
 
