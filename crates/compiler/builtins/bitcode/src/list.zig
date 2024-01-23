@@ -938,7 +938,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
 
 pub fn listReplaceInPlace(
     list: RocList,
-    index: usize,
+    index: u64,
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
@@ -948,14 +948,15 @@ pub fn listReplaceInPlace(
     // at the time of writing, the function is implemented roughly as
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
-    // because inserting into an empty list is always out of bounds
-    return listReplaceInPlaceHelp(list, index, element, element_width, out_element);
+    // because inserting into an empty list is always out of bounds,
+    // and it's always safe to cast index to usize.
+    return listReplaceInPlaceHelp(list, @as(usize, @intCast(index)), element, element_width, out_element);
 }
 
 pub fn listReplace(
     list: RocList,
     alignment: u32,
-    index: usize,
+    index: u64,
     element: Opaque,
     element_width: usize,
     out_element: ?[*]u8,
@@ -965,8 +966,9 @@ pub fn listReplace(
     // at the time of writing, the function is implemented roughly as
     // `if inBounds then LowLevelListReplace input index item else input`
     // so we don't do a bounds check here. Hence, the list is also non-empty,
-    // because inserting into an empty list is always out of bounds
-    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), index, element, element_width, out_element);
+    // because inserting into an empty list is always out of bounds,
+    // and it's always safe to cast index to usize.
+    return listReplaceInPlaceHelp(list.makeUnique(alignment, element_width), @as(usize, @intCast(index)), element, element_width, out_element);
 }
 
 inline fn listReplaceInPlaceHelp(
