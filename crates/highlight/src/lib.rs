@@ -1,5 +1,4 @@
 use roc_parse::highlight::Token;
-use roc_region::all::Loc;
 
 pub fn highlight_roc_code(code: &str) -> String {
     let buf = highlight(code);
