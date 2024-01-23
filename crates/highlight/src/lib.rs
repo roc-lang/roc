@@ -14,7 +14,6 @@ pub fn highlight_roc_code_inline(code: &str) -> String {
 }
 
 pub fn highlight(code: &str) -> Vec<String> {
-    let locations: Vec<Loc<Token>> = roc_parse::highlight::highlight(code);
     let mut buf: Vec<String> = Vec::new();
     let mut offset = 0;
 
@@ -29,8 +28,8 @@ pub fn highlight(code: &str) -> Vec<String> {
     } else {
         code
     };
-
-    for location in locations {
+    
+    for location in roc_parse::highlight::highlight(code) {
         let current_text = &code[offset..location.byte_range().end];
 
         match location.value {
