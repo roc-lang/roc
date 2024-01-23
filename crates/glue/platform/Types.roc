@@ -34,33 +34,33 @@ entryPoints = \@Types { entrypoints } -> entrypoints
 walkShapes : Types, state, (state, Shape, TypeId -> state) -> state
 walkShapes = \@Types { types: shapes }, originalState, update ->
     List.walkWithIndex shapes originalState \state, elem, index ->
-        id = InternalTypeId.fromNat index
+        id = InternalTypeId.fromU64 index
 
         update state elem id
 
 shape : Types, TypeId -> Shape
 shape = \@Types types, id ->
-    when List.get types.types (InternalTypeId.toNat id) is
+    when List.get types.types (InternalTypeId.toU64 id) is
         Ok answer -> answer
         Err OutOfBounds ->
-            idStr = Num.toStr (InternalTypeId.toNat id)
+            idStr = Num.toStr (InternalTypeId.toU64 id)
 
             crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
 
 alignment : Types, TypeId -> U32
 alignment = \@Types types, id ->
-    when List.get types.aligns (InternalTypeId.toNat id) is
+    when List.get types.aligns (InternalTypeId.toU64 id) is
         Ok answer -> answer
         Err OutOfBounds ->
-            idStr = Num.toStr (InternalTypeId.toNat id)
+            idStr = Num.toStr (InternalTypeId.toU64 id)
 
             crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"
 
 size : Types, TypeId -> U32
 size = \@Types types, id ->
-    when List.get types.sizes (InternalTypeId.toNat id) is
+    when List.get types.sizes (InternalTypeId.toU64 id) is
         Ok answer -> answer
         Err OutOfBounds ->
-            idStr = Num.toStr (InternalTypeId.toNat id)
+            idStr = Num.toStr (InternalTypeId.toU64 id)
 
             crash "TypeId #\(idStr) was not found in Types. This should never happen, and means there was a bug in `roc glue`. If you have time, please open an issue at <https://github.com/roc-lang/roc/issues>"

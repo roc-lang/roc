@@ -167,7 +167,7 @@ generateEntryPoint = \buf, types, name, id ->
                 when Types.shape types rocFn.ret is
                     Function _ ->
                         ("(_: *mut u8, \(arguments))", ret, Bool.true)
-                    _ -> 
+                    _ ->
                         ("(_: *mut \(ret), \(arguments))", ret, Bool.false)
 
             _ ->
@@ -1358,7 +1358,7 @@ generateUnionField = \types ->
                 # use unit as the payload
                 Str.concat accum "\(indent)\(escapedFieldName): (),\n"
 
-commaSeparated : Str, List a, (a, Nat -> Str) -> Str
+commaSeparated : Str, List a, (a, U64 -> Str) -> Str
 commaSeparated = \buf, items, step ->
     length = List.len items
     List.walk items { buf, count: 0 } \accum, item ->
@@ -2142,7 +2142,7 @@ isUnit = \shape ->
         Unit -> Bool.true
         _ -> Bool.false
 
-toArgStr : List TypeId, Types, (TypeId, Shape, Nat -> Str) -> Str
+toArgStr : List TypeId, Types, (TypeId, Shape, U64 -> Str) -> Str
 toArgStr = \args, types, fmt ->
     List.walkWithIndex args "" \state, argId, index ->
         shape = Types.shape types argId
