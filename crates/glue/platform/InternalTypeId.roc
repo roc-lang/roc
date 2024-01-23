@@ -1,11 +1,11 @@
 interface InternalTypeId
-    exposes [InternalTypeId, fromNat, toNat]
+    exposes [InternalTypeId, fromU64, toU64]
     imports []
 
-InternalTypeId : Nat
+InternalTypeId : U64
 
-toNat : InternalTypeId -> Nat
-toNat = \x -> x
+toU64 := InternalTypeId -> U64
+toU64 = \@InternalTypeId x -> x
 
-fromNat : Nat -> InternalTypeId
-fromNat = \x -> x
+fromU64 : U64 -> InternalTypeId
+fromU64 = \x -> @InternalTypeId x
