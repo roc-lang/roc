@@ -963,7 +963,7 @@ fn overflow_frees_list() {
             n : I64
             n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
 
-            index : Nat
+            index : U64
             index = Num.intCast n
 
             List.get myList index
@@ -4590,7 +4590,7 @@ fn linked_list_trmc() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            repeat : a, Nat -> LinkedList a
+            repeat : a, U64 -> LinkedList a
             repeat = \value, n ->
                 when n is
                     0 -> Nil

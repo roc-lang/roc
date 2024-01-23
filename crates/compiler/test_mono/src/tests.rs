@@ -244,7 +244,7 @@ fn verify_procedures<'a>(
                 git add -u
                 git commit -S -m "update mono tests"
                 git push origin YOUR_BRANCH_NAME
-                
+
             "#
         ));
     }
@@ -975,7 +975,7 @@ fn rigids() {
         r#"
         app "test" provides [main] to "./platform"
 
-        swap : Nat, Nat, List a -> List a
+        swap : U64, U64, List a -> List a
         swap = \i, j, list ->
             when Pair (List.get list i) (List.get list j) is
                 Pair (Ok atI) (Ok atJ) ->
@@ -2512,8 +2512,8 @@ fn issue_4772_weakened_monomorphic_destructure() {
 #[mono_test]
 fn weakening_avoids_overspecialization() {
     // Without weakening of let-bindings, this program would force two specializations of
-    // `index` - to `Nat` and the default integer type, `I64`. The test is to ensure only one
-    // specialization, that of `Nat`, exists.
+    // `index` - to `U64` and the default integer type, `I64`. The test is to ensure only one
+    // specialization, that of `U64`, exists.
     indoc!(
         r#"
         app "test" provides [main] to "./platform"
