@@ -1867,8 +1867,8 @@ trait Backend<'a> {
                 //    list: RocList,
                 //    alignment: u32,
                 //    element_width: usize,
-                //    start: usize,
-                //    len: usize,
+                //    start: u64,
+                //    len: u64,
                 //    dec: Dec,
 
                 let list = args[0];
@@ -1894,8 +1894,8 @@ trait Backend<'a> {
                     arg_layouts[0],
                     Layout::U32,
                     layout_usize,
-                    arg_layouts[1],
-                    arg_layouts[2],
+                    Layout::U64,
+                    Layout::U64,
                     layout_usize,
                 ];
 
