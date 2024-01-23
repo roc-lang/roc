@@ -169,7 +169,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx>(
     )
 }
 
-/// List.reserve : List elem, Nat -> List elem
+/// List.reserve : List elem, U64 -> List elem
 pub(crate) fn list_reserve<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
