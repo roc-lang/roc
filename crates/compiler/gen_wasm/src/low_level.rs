@@ -361,7 +361,7 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
             ListReplaceUnsafe => {
-                // List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+                // List.replace_unsafe : List elem, U64, elem -> { list: List elem, value: elem }
 
                 let list: Symbol = self.arguments[0];
                 let index: Symbol = self.arguments[1];
@@ -449,7 +449,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE);
             }
             ListWithCapacity => {
-                // List.withCapacity : Nat -> List elem
+                // List.withCapacity : U64 -> List elem
 
                 let capacity: Symbol = self.arguments[0];
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
@@ -500,7 +500,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             ListReserve => {
-                // List.reserve : List elem, Nat -> List elem
+                // List.reserve : List elem, U64 -> List elem
 
                 let list: Symbol = self.arguments[0];
                 let spare: Symbol = self.arguments[1];
@@ -649,7 +649,7 @@ impl<'a> LowLevelCall<'a> {
             }
             ListSublist => {
                 // As a low-level, record is destructured
-                //  List.sublist : List elem, start : Nat, len : Nat -> List elem
+                //  List.sublist : List elem, start : U64, len : U64 -> List elem
 
                 let list: Symbol = self.arguments[0];
                 let start: Symbol = self.arguments[1];
@@ -697,7 +697,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST);
             }
             ListDropAt => {
-                // List.dropAt : List elem, Nat -> List elem
+                // List.dropAt : List elem, U64 -> List elem
                 let list: Symbol = self.arguments[0];
                 let drop_index: Symbol = self.arguments[1];
 

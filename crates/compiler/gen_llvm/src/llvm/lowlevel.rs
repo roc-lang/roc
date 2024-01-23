@@ -468,7 +468,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrRepeat => {
-            // Str.repeat : Str, Nat -> Str
+            // Str.repeat : Str, U64 -> Str
             arguments!(string, count);
 
             call_str_bitcode_fn(
@@ -522,7 +522,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             BasicValueEnum::IntValue(is_zero)
         }
         StrCountUtf8Bytes => {
-            // Str.countUtf8Bytes : Str -> Nat
+            // Str.countUtf8Bytes : Str -> U64
             arguments!(string);
 
             call_str_bitcode_fn(
@@ -534,13 +534,13 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrGetCapacity => {
-            // Str.capacity : Str -> Nat
+            // Str.capacity : Str -> U64
             arguments!(string);
 
             call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
         }
         StrSubstringUnsafe => {
-            // Str.substringUnsafe : Str, Nat, Nat -> Str
+            // Str.substringUnsafe : Str, U64, U64 -> Str
             arguments!(string, start, length);
 
             call_str_bitcode_fn(
@@ -552,7 +552,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrReserve => {
-            // Str.reserve : Str, Nat -> Str
+            // Str.reserve : Str, U64 -> Str
             arguments!(string, capacity);
 
             call_str_bitcode_fn(
@@ -606,7 +606,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrWithCapacity => {
-            // Str.withCapacity : Nat -> Str
+            // Str.withCapacity : U64 -> Str
             arguments!(str_len);
 
             call_str_bitcode_fn(
@@ -629,7 +629,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 .into()
         }
         ListGetCapacity => {
-            // List.capacity: List a -> Nat
+            // List.capacity: List a -> U64
             arguments!(list);
 
             call_list_bitcode_fn(
@@ -641,7 +641,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListWithCapacity => {
-            // List.withCapacity : Nat -> List a
+            // List.withCapacity : U64 -> List a
             arguments!(list_len);
 
             let result_layout = layout;
@@ -714,7 +714,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
         }
         ListSwap => {
-            // List.swap : List elem, Nat, Nat -> List elem
+            // List.swap : List elem, U64, U64 -> List elem
             debug_assert_eq!(args.len(), 3);
 
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
@@ -755,7 +755,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListDropAt => {
-            // List.dropAt : List elem, Nat -> List elem
+            // List.dropAt : List elem, U64 -> List elem
             debug_assert_eq!(args.len(), 2);
 
             let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
@@ -774,7 +774,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrGetUnsafe => {
-            // Str.getUnsafe : Str, Nat -> u8
+            // Str.getUnsafe : Str, U64 -> u8
             arguments!(wrapper_struct, elem_index);
 
             call_str_bitcode_fn(
@@ -786,7 +786,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         ListGetUnsafe => {
-            // List.getUnsafe : List elem, Nat -> elem
+            // List.getUnsafe : List elem, U64 -> elem
             arguments_with_layouts!((wrapper_struct, list_layout), (element_index, _l));
 
             list_get_unsafe(
