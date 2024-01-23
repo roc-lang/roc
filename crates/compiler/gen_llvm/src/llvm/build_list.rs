@@ -322,7 +322,7 @@ pub(crate) fn list_drop_at<'a, 'ctx>(
     )
 }
 
-/// List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+/// List.replace_unsafe : List elem, U64, elem -> { list: List elem, value: elem }
 pub(crate) fn list_replace_unsafe<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
