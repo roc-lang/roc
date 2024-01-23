@@ -2271,13 +2271,6 @@ fn min_f32() {
     assert_evals_to!("Num.minF32", f32::MIN, f32);
 }
 
-#[test]
-#[cfg(all(feature = "gen-llvm", not(feature = "gen-llvm-wasm")))]
-fn to_nat_truncate_wraps() {
-    let input = "Num.toNat 10_000_000_000_000_000_000_000i128";
-    assert_evals_to!(input, 1864712049423024128, u64)
-}
-
 macro_rules! num_conversion_tests {
     ($($fn:expr, $typ:ty, ($($test_name:ident, $input:expr, $output:expr $(, [$($support_gen:literal),*])? )*))*) => {$($(
         #[test]
@@ -2349,11 +2342,6 @@ num_conversion_tests! {
     "Num.toU128", u128, (
         to_u128_same_width, "15i128", 15
         to_u128_extend, "15i8", 15
-    )
-    "Num.toNat", usize, (
-        to_nat_same_width, "15i64", 15, ["gen-wasm", "gen-dev"]
-        to_nat_extend, "15i8", 15, ["gen-wasm", "gen-dev"]
-        to_nat_truncate, "115i128", 115
     )
     "Num.toF32", f32, (
         to_f32_from_i8, "15i8", 15.0
@@ -2515,18 +2503,6 @@ to_int_checked_tests! {
         to_u128_checked_same,                          "15u128",   15
         to_u128_checked_same_width_signed_fits,        "15i128",   15
         to_u128_checked_same_width_signed_oob,         "-1i128",   None
-    )
-    "Num.toNatChecked", usize, (
-        to_nat_checked_smaller_width_pos,              "15i8",     15
-        to_nat_checked_smaller_width_neg_oob,          "-15i8",    None
-        to_nat_checked_same,                           "15u64",    15
-        to_nat_checked_same_width_signed_fits,         "15i64",    15
-        to_nat_checked_same_width_signed_oob,          "-1i64",    None
-        to_nat_checked_larger_width_signed_fits_pos,   "15i128",   15
-        to_nat_checked_larger_width_signed_oob_pos,    "18446744073709551616i128", None
-        to_nat_checked_larger_width_signed_oob_neg,    "-1i128",   None
-        to_nat_checked_larger_width_unsigned_fits_pos, "15u128",   15
-        to_nat_checked_larger_width_unsigned_oob_pos,  "18446744073709551616u128", None
     )
 }
 
