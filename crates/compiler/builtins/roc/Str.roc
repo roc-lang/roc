@@ -1,4 +1,4 @@
-## Roc strings represent text. For example, `"Hi!"` is a string.
+## Strings represent text. For example, `"Hi!"` is a string.
 ##
 ## This guide starts at a high level and works down to the in-memory representation of strings and their [performance characteristics](#performance). For reasons that will be explained later in this guide, some string operations are in the `Str` module while others (notably [capitalization](#capitalization), [code points](#code-points), [graphemes](#graphemes), and sorting) are in separate packages. There's also a list of recommendations for [when to use code points, graphemes, and UTF-8](#when-to-use).
 ##
@@ -15,9 +15,11 @@
 ## ```
 ## text =
 ##     """
-##     In memory, this string will not have any whitespace at the beginning.
-##     That's because the first line starts at the same indentation level as
-##     the opening quotation mark. Actually, none of these lines will be indented.
+##     In memory, this string will not have any spaces
+##     at its start. That's because the first line
+##     starts at the same indentation level as the
+##     opening quotation mark. Actually, none of these
+##     lines will be indented.
 ##
 ##         However, this line will be indented!
 ##     """
@@ -197,7 +199,7 @@
 ##
 ## As you can imagine, this can be a source of bugs. Not only are they considered unequal, they also hash differently, meaning `"caf\u(e9)"` and `"cafe\u(301)"` can both be separate entries in the same [`Set`](https://www.roc-lang.org/builtins/Set).
 ##
-##  One way to prevent problems like these is to perform [Unicode normalization](https://www.unicode.org/reports/tr15/), a process which converts conceptually equivalent strings (like "caf\u(e9)" "cafe\u(301)") into one canonical in-memory representation. This makes equality checks on them pass, among other benefits.
+##  One way to prevent problems like these is to perform [Unicode normalization](https://www.unicode.org/reports/tr15/), a process which converts conceptually equivalent strings (like `"caf\u(e9)"` and `"cafe\u(301)"`) into one canonical in-memory representation. This makes equality checks on them pass, among other benefits.
 ##
 ## It would be technically possible for Roc to perform string normalization automatically on every equality check. Unfortunately, although some programs might want to treat `"caf\u(e9)"` and `"cafe\u(301)"` as equivalent, for other programs it might actually be important to be able to tell them apart. If these equality checks always passed, then there would be no way to tell them apart!
 ##
@@ -205,7 +207,7 @@
 ##
 ## ### Capitalization
 ##
-## We've already seen two examples of Unicode definitions that can change with new Unicode releases: graphemes and normalization. Another is capitalization; these rules can change with new Unicode relases (most often in the form of additions of new languages, but breaking changes to capitalization rules for existing languages are also possible), and so they are not included in builtin [`Str`](https://www.roc-lang.org/builtins/Str).
+## We've already seen two examples of Unicode definitions that can change with new Unicode releases: graphemes and normalization. Another is capitalization; these rules can change with new Unicode releases (most often in the form of additions of new languages, but breaking changes to capitalization rules for existing languages are also possible), and so they are not included in builtin [`Str`](https://www.roc-lang.org/builtins/Str).
 ##
 ## This might seem particularly surprising, since capitalization functions are commonly included in standard libraries. However, it turns out that "capitalizing an arbitrary string" is impossible to do correctly without additional information.
 ##
