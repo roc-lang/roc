@@ -90,11 +90,6 @@ const FLOATS = [_]type{ f32, f64 };
 const NUMBERS = INTEGERS ++ FLOATS;
 
 comptime {
-    exportNumFn(num.bytesToU16C, "bytes_to_u16");
-    exportNumFn(num.bytesToU32C, "bytes_to_u32");
-    exportNumFn(num.bytesToU64C, "bytes_to_u64");
-    exportNumFn(num.bytesToU128C, "bytes_to_u128");
-
     exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
     exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
 

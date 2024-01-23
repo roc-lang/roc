@@ -88,10 +88,6 @@ pub enum LowLevel {
     NumAtan,
     NumAcos,
     NumAsin,
-    NumBytesToU16,
-    NumBytesToU32,
-    NumBytesToU64,
-    NumBytesToU128,
     NumBitwiseAnd,
     NumBitwiseXor,
     NumBitwiseOr,
@@ -330,10 +326,6 @@ map_symbol_to_lowlevel! {
     NumAtan <= NUM_ATAN;
     NumAcos <= NUM_ACOS;
     NumAsin <= NUM_ASIN;
-    NumBytesToU16 <= NUM_BYTES_TO_U16_LOWLEVEL;
-    NumBytesToU32 <= NUM_BYTES_TO_U32_LOWLEVEL;
-    NumBytesToU64 <= NUM_BYTES_TO_U64_LOWLEVEL;
-    NumBytesToU128 <= NUM_BYTES_TO_U128_LOWLEVEL;
     NumBitwiseAnd <= NUM_BITWISE_AND;
     NumBitwiseXor <= NUM_BITWISE_XOR;
     NumBitwiseOr <= NUM_BITWISE_OR;

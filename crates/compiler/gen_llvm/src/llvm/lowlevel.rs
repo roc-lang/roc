@@ -950,59 +950,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
         }
-        NumBytesToU16 => {
-            arguments!(list, position);
-
-            call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U16,
-            )
-        }
-        NumBytesToU32 => {
-            arguments!(list, position);
-
-            call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U32,
-            )
-        }
-        NumBytesToU64 => {
-            arguments!(list, position);
-
-            call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U64,
-            )
-        }
-        NumBytesToU128 => {
-            arguments!(list, position);
-
-            let ret = call_list_bitcode_fn(
-                env,
-                &[list.into_struct_value()],
-                &[position],
-                BitcodeReturns::Basic,
-                bitcode::NUM_BYTES_TO_U128,
-            );
-
-            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
-                // On windows the return type is not a i128, likely due to alignment
-                env.builder
-                    .build_bitcast(ret, env.context.i128_type(), "empty_string")
-                    .unwrap()
-            } else {
-                ret
-            }
-        }
         NumCompare => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 

@@ -1593,10 +1593,6 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         | NumCountLeadingZeroBits
         | NumCountTrailingZeroBits
         | NumCountOneBits => RC::NoRc,
-        NumBytesToU16 => RC::NoRc,
-        NumBytesToU32 => RC::NoRc,
-        NumBytesToU64 => RC::NoRc,
-        NumBytesToU128 => RC::NoRc,
         I128OfDec => RC::NoRc,
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,

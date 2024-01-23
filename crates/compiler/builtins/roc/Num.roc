@@ -97,10 +97,6 @@ interface Num
         mulSaturated,
         mulChecked,
         intCast,
-        bytesToU16,
-        bytesToU32,
-        bytesToU64,
-        bytesToU128,
         divCeil,
         divCeilChecked,
         divTrunc,
@@ -550,51 +546,6 @@ tau = 2 * pi
 ##
 toStr : Num * -> Str
 intCast : Int a -> Int b
-
-bytesToU16Lowlevel : List U8, Nat -> U16
-bytesToU32Lowlevel : List U8, Nat -> U32
-bytesToU64Lowlevel : List U8, Nat -> U64
-bytesToU128Lowlevel : List U8, Nat -> U128
-
-bytesToU16 : List U8, Nat -> Result U16 [OutOfBounds]
-bytesToU16 = \bytes, index ->
-    # we need at least 1 more byte
-    offset = 1
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU16Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU32 : List U8, Nat -> Result U32 [OutOfBounds]
-bytesToU32 = \bytes, index ->
-    # we need at least 3 more bytes
-    offset = 3
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU32Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU64 : List U8, Nat -> Result U64 [OutOfBounds]
-bytesToU64 = \bytes, index ->
-    # we need at least 7 more bytes
-    offset = 7
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU64Lowlevel bytes index)
-    else
-        Err OutOfBounds
-
-bytesToU128 : List U8, Nat -> Result U128 [OutOfBounds]
-bytesToU128 = \bytes, index ->
-    # we need at least 15 more bytes
-    offset = 15
-
-    if Num.addSaturated index offset < List.len bytes then
-        Ok (bytesToU128Lowlevel bytes index)
-    else
-        Err OutOfBounds
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
