@@ -583,13 +583,13 @@ pub fn listSwap(
     list: RocList,
     alignment: u32,
     element_width: usize,
-    index_1: usize,
-    index_2: usize,
+    index_1: u64,
+    index_2: u64,
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
-    const size = list.len();
+    const size = @as(u64, @intCast(list.len()));
     if (index_1 == index_2 or index_1 >= size or index_2 >= size) {
-        // Either index out of bounds so we just return
+        // Either one index was out of bounds, or both indices were the same; just return
         return list;
     }
 
@@ -602,7 +602,11 @@ pub fn listSwap(
     };
 
     const source_ptr = @as([*]u8, @ptrCast(newList.bytes));
-    swapElements(source_ptr, element_width, index_1, index_2);
+
+    swapElements(source_ptr, element_width, @as(usize,
+    // We already verified that both indices are less than the stored list length,
+    // which is usize, so casting them to usize will definitely be lossless.
+    @intCast(index_1)), @as(usize, @intCast(index_2)));
 
     return newList;
 }
