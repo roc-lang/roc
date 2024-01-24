@@ -1,24 +1,26 @@
 [package]
 name = "roc_gen_llvm"
 description = "The LLVM backend for the Roc compiler"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-roc_alias_analysis = { path = "../alias_analysis" }
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
-roc_builtins = { path = "../builtins" }
-roc_error_macros = { path = "../../error_macros" }
-roc_mono = { path = "../mono" }
-roc_target = { path = "../roc_target" }
-roc_std = { path = "../../roc_std" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_region = { path = "../region" }
 morphic_lib = { path = "../../vendor/morphic_lib" }
+roc_alias_analysis = { path = "../alias_analysis" }
+roc_bitcode_bc = { path = "../builtins/bitcode/bc" }
+roc_builtins = { path = "../builtins" }
+roc_collections = { path = "../collections" }
+roc_debug_flags = { path = "../debug_flags" }
+roc_error_macros = { path = "../../error_macros" }
+roc_module = { path = "../module" }
+roc_mono = { path = "../mono" }
+roc_region = { path = "../region" }
+roc_std = { path = "../../roc_std" }
+roc_target = { path = "../roc_target" }
 
 bumpalo.workspace = true
+inkwell.workspace = true
 target-lexicon.workspace = true
-inkwell.workspace = true 

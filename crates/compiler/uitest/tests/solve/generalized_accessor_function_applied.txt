@@ -1,0 +1,9 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    returnFoo = .foo
+
+    returnFoo { foo: "foo" }
+
+main = entry
+#      ^^^^^ Str

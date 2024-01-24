@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Id n := [Id U32 n]
+
+    v : Id a -> a
+    v = \@Id (Id _ n) -> n
+
+    v
+
+main = entry
+#      ^^^^^ Id a -[[v(3)]]-> a

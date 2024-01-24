@@ -2,11 +2,13 @@ use std::path::PathBuf;
 
 use roc_collections::MutMap;
 use roc_module::symbol::{Interns, ModuleId};
+use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
 use roc_solve_problem::TypeError;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Problems {
+    pub fatally_errored: bool,
     pub errors: usize,
     pub warnings: usize,
 }
@@ -16,8 +18,10 @@ impl Problems {
         // 0 means no problems, 1 means errors, 2 means warnings
         if self.errors > 0 {
             1
+        } else if self.warnings > 0 {
+            2
         } else {
-            self.warnings.min(1) as i32
+            0
         }
     }
 
@@ -45,13 +49,12 @@ impl Problems {
                 1 => "warning",
                 _ => "warnings",
             },
-            total_time.as_millis(),
+            total_time.as_millis()
         );
     }
 }
 
 pub fn report_problems(
-    total_problems: usize,
     sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
     interns: &Interns,
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
@@ -59,12 +62,23 @@ pub fn report_problems(
 ) -> Problems {
     use crate::report::{can_problem, type_problem, Report, RocDocAllocator, DEFAULT_PALETTE};
     use roc_problem::Severity::*;
+
     let palette = DEFAULT_PALETTE;
+    let mut total_problems = 0;
+
+    for problems in can_problems.values() {
+        total_problems += problems.len();
+    }
+
+    for problems in type_problems.values() {
+        total_problems += problems.len();
+    }
 
     // This will often over-allocate total memory, but it means we definitely
     // never need to re-allocate either the warnings or the errors vec!
     let mut warnings = Vec::with_capacity(total_problems);
     let mut errors = Vec::with_capacity(total_problems);
+    let mut fatally_errored = false;
 
     for (home, (module_path, src)) in sources.iter() {
         let mut src_lines: Vec<&str> = Vec::new();
@@ -75,25 +89,6 @@ pub fn report_problems(
 
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
-
-        let problems = can_problems.remove(home).unwrap_or_default();
-
-        for problem in problems.into_iter() {
-            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            match severity {
-                Warning => {
-                    warnings.push(buf);
-                }
-                RuntimeError => {
-                    errors.push(buf);
-                }
-            }
-        }
 
         let problems = type_problems.remove(home).unwrap_or_default();
 
@@ -111,10 +106,54 @@ pub fn report_problems(
                     RuntimeError => {
                         errors.push(buf);
                     }
+                    Fatal => {
+                        fatally_errored = true;
+                        errors.push(buf);
+                    }
+                }
+            }
+        }
+
+        // Shadowing errors often cause cryptic type errors. To make it easy to spot the root cause,
+        // we print the shadowing errors last.
+        let problems = can_problems.remove(home).unwrap_or_default();
+        let (shadowing_errs, mut ordered): (Vec<Problem>, Vec<Problem>) =
+            problems.into_iter().partition(|p| {
+                matches!(
+                    p,
+                    Problem::Shadowing {
+                        original_region: _,
+                        shadow: _,
+                        kind: _,
+                    }
+                )
+            });
+        ordered.extend(shadowing_errs);
+
+        for problem in ordered.into_iter() {
+            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
+            let severity = report.severity;
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            match severity {
+                Warning => {
+                    warnings.push(buf);
+                }
+                RuntimeError => {
+                    errors.push(buf);
+                }
+                Fatal => {
+                    fatally_errored = true;
+                    errors.push(buf);
                 }
             }
         }
     }
+
+    debug_assert!(can_problems.is_empty() && type_problems.is_empty(), "After reporting problems, there were {:?} can_problems and {:?} type_problems that could not be reported because they did not have corresponding entries in `sources`.", can_problems.len(), type_problems.len());
+    debug_assert_eq!(errors.len() + warnings.len(), total_problems);
 
     let problems_reported;
 
@@ -123,13 +162,13 @@ pub fn report_problems(
         problems_reported = warnings.len();
 
         for warning in warnings.iter() {
-            println!("\n{}\n", warning);
+            println!("\n{warning}\n");
         }
     } else {
         problems_reported = errors.len();
 
         for error in errors.iter() {
-            println!("\n{}\n", error);
+            println!("\n{error}\n");
         }
     }
 
@@ -144,6 +183,7 @@ pub fn report_problems(
     }
 
     Problems {
+        fatally_errored,
         errors: errors.len(),
         warnings: warnings.len(),
     }

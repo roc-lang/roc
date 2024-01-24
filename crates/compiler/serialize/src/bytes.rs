@@ -194,7 +194,7 @@ where
 
 unsafe fn slice_as_bytes<T>(slice: &[T]) -> &[u8] {
     let ptr = slice.as_ptr();
-    let byte_length = std::mem::size_of::<T>() * slice.len();
+    let byte_length = std::mem::size_of_val(slice);
 
     std::slice::from_raw_parts(ptr as *const u8, byte_length)
 }

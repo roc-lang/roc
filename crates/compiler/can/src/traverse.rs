@@ -1,32 +1,84 @@
 //! Traversals over the can ast.
 
 use roc_module::{ident::Lowercase, symbol::Symbol};
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 use roc_types::{subs::Variable, types::MemberImpl};
 
 use crate::{
     abilities::AbilitiesStore,
-    def::{Annotation, Declaration, Def},
+    def::{Annotation, Def},
     expr::{
-        self, AccessorData, AnnotatedMark, ClosureData, Declarations, Expr, Field,
-        OpaqueWrapFunctionData,
+        self, AnnotatedMark, ClosureData, Declarations, Expr, Field, OpaqueWrapFunctionData,
+        StructAccessorData,
     },
-    pattern::{DestructType, Pattern, RecordDestruct},
+    pattern::{DestructType, Pattern, RecordDestruct, TupleDestruct},
 };
 
-macro_rules! visit_list {
-    ($visitor:ident, $walk:ident, $list:expr) => {
-        for elem in $list {
-            $visitor.$walk(elem)
+pub enum DeclarationInfo<'a> {
+    Value {
+        loc_symbol: Loc<Symbol>,
+        loc_expr: &'a Loc<Expr>,
+        expr_var: Variable,
+        pattern: Pattern,
+        annotation: Option<&'a Annotation>,
+    },
+    Expectation {
+        loc_condition: &'a Loc<Expr>,
+    },
+    Function {
+        loc_symbol: Loc<Symbol>,
+        loc_body: &'a Loc<Expr>,
+        expr_var: Variable,
+        pattern: Pattern,
+        function: &'a Loc<expr::FunctionDef>,
+    },
+    Destructure {
+        loc_pattern: &'a Loc<Pattern>,
+        opt_pattern_var: Option<Variable>,
+        loc_expr: &'a Loc<Expr>,
+        expr_var: Variable,
+        annotation: Option<&'a Annotation>,
+    },
+}
+
+impl<'a> DeclarationInfo<'a> {
+    pub fn region(&self) -> Region {
+        use DeclarationInfo::*;
+        match self {
+            Value {
+                loc_symbol,
+                loc_expr,
+                ..
+            } => Region::span_across(&loc_symbol.region, &loc_expr.region),
+            Expectation { loc_condition } => loc_condition.region,
+            Function {
+                loc_symbol,
+                function,
+                ..
+            } => Region::span_across(&loc_symbol.region, &function.region),
+            Destructure {
+                loc_pattern,
+                loc_expr,
+                ..
+            } => Region::span_across(&loc_pattern.region, &loc_expr.region),
         }
-    };
+    }
+
+    fn var(&self) -> Variable {
+        match self {
+            DeclarationInfo::Value { expr_var, .. } => *expr_var,
+            DeclarationInfo::Expectation { .. } => Variable::BOOL,
+            DeclarationInfo::Function { expr_var, .. } => *expr_var,
+            DeclarationInfo::Destructure { expr_var, .. } => *expr_var,
+        }
+    }
 }
 
 pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
     use crate::expr::DeclarationTag::*;
 
     for (index, tag) in decls.declarations.iter().enumerate() {
-        match tag {
+        let info = match tag {
             Value => {
                 let loc_expr = &decls.expressions[index];
 
@@ -40,22 +92,19 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     },
                     None => Pattern::Identifier(loc_symbol.value),
                 };
-                visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
 
-                visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
-                if let Some(annot) = &decls.annotations[index] {
-                    visitor.visit_annotation(annot);
+                DeclarationInfo::Value {
+                    loc_symbol,
+                    loc_expr,
+                    expr_var,
+                    pattern,
+                    annotation: decls.annotations[index].as_ref(),
                 }
             }
-            Expectation => {
+            Expectation | ExpectationFx => {
                 let loc_condition = &decls.expressions[index];
 
-                visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
-            }
-            ExpectationFx => {
-                let loc_condition = &decls.expressions[index];
-
-                visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+                DeclarationInfo::Expectation { loc_condition }
             }
             Function(function_index)
             | Recursive(function_index)
@@ -72,69 +121,101 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     },
                     None => Pattern::Identifier(loc_symbol.value),
                 };
-                visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
 
-                let function_def = &decls.function_bodies[function_index.index() as usize];
+                let function_def = &decls.function_bodies[function_index.index()];
 
-                walk_closure_help(
-                    visitor,
-                    &function_def.value.arguments,
+                DeclarationInfo::Function {
+                    loc_symbol,
                     loc_body,
-                    function_def.value.return_type,
-                )
+                    expr_var,
+                    pattern,
+                    function: function_def,
+                }
             }
             Destructure(destructure_index) => {
-                let destructure = &decls.destructs[destructure_index.index() as usize];
+                let destructure = &decls.destructs[destructure_index.index()];
                 let loc_pattern = &destructure.loc_pattern;
 
                 let loc_expr = &decls.expressions[index];
                 let expr_var = decls.variables[index];
 
-                let opt_var = match loc_pattern.value {
+                let opt_pattern_var = match loc_pattern.value {
                     Pattern::Identifier(..) | Pattern::AbilityMemberSpecialization { .. } => {
                         Some(expr_var)
                     }
                     _ => loc_pattern.value.opt_var(),
                 };
 
-                visitor.visit_pattern(&loc_pattern.value, loc_pattern.region, opt_var);
-                visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
-
-                if let Some(annot) = &decls.annotations[index] {
-                    visitor.visit_annotation(annot);
+                DeclarationInfo::Destructure {
+                    loc_pattern,
+                    opt_pattern_var,
+                    loc_expr,
+                    expr_var,
+                    annotation: decls.annotations[index].as_ref(),
                 }
             }
-            MutualRecursion { .. } => { /* ignore */ }
-        }
+            MutualRecursion { .. } => {
+                // The actual declarations involved in the mutual recursion will come next.
+                continue;
+            }
+        };
+
+        visitor.visit_decl(info);
     }
 }
 
-fn walk_decl<V: Visitor>(visitor: &mut V, decl: &Declaration) {
-    match decl {
-        Declaration::Declare(def) => {
-            visitor.visit_def(def);
-        }
-        Declaration::DeclareRec(defs, _cycle_mark) => {
-            visit_list!(visitor, visit_def, defs)
-        }
+fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
+    use DeclarationInfo::*;
 
-        Declaration::Expects(expects) => {
-            let it = expects.regions.iter().zip(expects.conditions.iter());
-            for (region, condition) in it {
-                visitor.visit_expr(condition, *region, Variable::BOOL);
+    match decl {
+        Value {
+            loc_symbol,
+            loc_expr,
+            expr_var,
+            pattern,
+            annotation,
+        } => {
+            visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
+
+            visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
+            if let Some(annot) = annotation {
+                visitor.visit_annotation(annot);
             }
         }
-        Declaration::ExpectsFx(expects) => {
-            let it = expects.regions.iter().zip(expects.conditions.iter());
-            for (region, condition) in it {
-                visitor.visit_expr(condition, *region, Variable::BOOL);
+        Expectation { loc_condition } => {
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+        }
+        Function {
+            loc_symbol,
+            loc_body,
+            expr_var,
+            pattern,
+            function,
+        } => {
+            visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
+
+            walk_closure_help(
+                visitor,
+                &function.value.arguments,
+                loc_body,
+                function.value.return_type,
+            )
+        }
+        Destructure {
+            loc_pattern,
+            opt_pattern_var,
+            loc_expr,
+            expr_var,
+            annotation,
+        } => {
+            visitor.visit_pattern(&loc_pattern.value, loc_pattern.region, opt_pattern_var);
+            visitor.visit_expr(&loc_expr.value, loc_expr.region, expr_var);
+
+            if let Some(annot) = annotation {
+                visitor.visit_annotation(annot);
             }
         }
-        Declaration::Builtin(def) => visitor.visit_def(def),
-        Declaration::InvalidCycle(_cycles) => {
-            // ignore
-        }
-    }
+    };
 }
 
 pub fn walk_def<V: Visitor>(visitor: &mut V, def: &Def) {
@@ -176,6 +257,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         Expr::Int(..) => { /* terminal */ }
         Expr::Float(..) => { /* terminal */ }
         Expr::Str(..) => { /* terminal */ }
+        Expr::IngestedFile(..) => { /* terminal */ }
         Expr::SingleQuote(..) => { /* terminal */ }
         Expr::List {
             elem_var,
@@ -228,17 +310,30 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         } => {
             walk_record_fields(visitor, fields.iter());
         }
+        Expr::Tuple {
+            tuple_var: _,
+            elems,
+        } => elems
+            .iter()
+            .for_each(|(var, elem)| visitor.visit_expr(&elem.value, elem.region, *var)),
         Expr::EmptyRecord => { /* terminal */ }
-        Expr::Access {
+        Expr::RecordAccess {
             field_var,
             loc_expr,
             field: _,
             record_var: _,
             ext_var: _,
         } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *field_var),
-        Expr::Accessor(AccessorData { .. }) => { /* terminal */ }
+        Expr::RecordAccessor(StructAccessorData { .. }) => { /* terminal */ }
+        Expr::TupleAccess {
+            elem_var,
+            loc_expr,
+            index: _,
+            tuple_var: _,
+            ext_var: _,
+        } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *elem_var),
         Expr::OpaqueWrapFunction(OpaqueWrapFunctionData { .. }) => { /* terminal */ }
-        Expr::Update {
+        Expr::RecordUpdate {
             record_var: _,
             ext_var: _,
             symbol: _,
@@ -292,11 +387,13 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         }
         Expr::Dbg {
             variable,
-            loc_condition,
+            source: _,
+            source_location: _,
+            loc_message,
             loc_continuation,
             symbol: _,
         } => {
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, *variable);
+            visitor.visit_expr(&loc_message.value, loc_message.region, *variable);
             visitor.visit_expr(
                 &loc_continuation.value,
                 loc_continuation.region,
@@ -436,7 +533,7 @@ pub trait Visitor: Sized {
         walk_decls(self, decls);
     }
 
-    fn visit_decl(&mut self, decl: &Declaration) {
+    fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
         if self.should_visit(decl.region()) {
             walk_decl(self, decl);
         }
@@ -469,6 +566,16 @@ pub trait Visitor: Sized {
             walk_record_destruct(self, destruct);
         }
     }
+
+    fn visit_tuple_destruct(&mut self, destruct: &TupleDestruct, region: Region) {
+        if self.should_visit(region) {
+            self.visit_pattern(
+                &destruct.typ.1.value,
+                destruct.typ.1.region,
+                Some(destruct.typ.0),
+            )
+        }
+    }
 }
 
 pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
@@ -489,6 +596,9 @@ pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
         RecordDestructure { destructs, .. } => destructs
             .iter()
             .for_each(|d| visitor.visit_record_destruct(&d.value, d.region)),
+        TupleDestructure { destructs, .. } => destructs
+            .iter()
+            .for_each(|d| visitor.visit_tuple_destruct(&d.value, d.region)),
         List {
             patterns, elem_var, ..
         } => patterns
@@ -549,6 +659,35 @@ impl Visitor for TypeAtVisitor {
     }
 }
 
+struct TypeAtPositionVisitor {
+    position: Position,
+    region_typ: Option<(Region, Variable)>,
+}
+
+impl Visitor for TypeAtPositionVisitor {
+    fn should_visit(&mut self, region: Region) -> bool {
+        region.contains_pos(self.position)
+    }
+
+    fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
+        if region.contains_pos(self.position) {
+            self.region_typ = Some((region, var));
+
+            walk_expr(self, expr, var);
+        }
+    }
+
+    fn visit_pattern(&mut self, pat: &Pattern, region: Region, opt_var: Option<Variable>) {
+        if region.contains_pos(self.position) {
+            if let Some(var) = opt_var {
+                self.region_typ = Some((region, var));
+            }
+
+            walk_pattern(self, pat);
+        }
+    }
+}
+
 /// Attempts to find the type of an expression at `region`, if it exists.
 pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
     let mut visitor = TypeAtVisitor { region, typ: None };
@@ -556,18 +695,73 @@ pub fn find_type_at(region: Region, decls: &Declarations) -> Option<Variable> {
     visitor.typ
 }
 
+#[derive(Debug)]
+pub enum FoundSymbol {
+    /// Specialization(T, foo1) is the specialization of foo for T.
+    Specialization(Symbol, Symbol),
+    /// AbilityMember(Foo, foo) is the ability member foo of Foo.
+    AbilityMember(Symbol, Symbol),
+    /// Raw symbol, not specialized to anything.
+    Symbol(Symbol),
+}
+
+impl FoundSymbol {
+    pub fn implementation_symbol(&self) -> Symbol {
+        match self {
+            FoundSymbol::Specialization(_, sym)
+            | FoundSymbol::AbilityMember(_, sym)
+            | FoundSymbol::Symbol(sym) => *sym,
+        }
+    }
+}
+
+/// Given an ability Foo implements foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// Like [find_type_at], but descends into the narrowest node containing [position].
+pub fn find_closest_type_at(
+    position: Position,
+    decls: &Declarations,
+) -> Option<(Region, Variable)> {
+    let mut visitor = TypeAtPositionVisitor {
+        position,
+        region_typ: None,
+    };
+    visitor.visit_decls(decls);
+    visitor.region_typ
+}
+
 /// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
 /// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
 /// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
-pub fn find_ability_member_and_owning_type_at(
+pub fn find_closest_symbol_at(
+    position: Position,
+    decls: &Declarations,
+    abilities_store: &AbilitiesStore,
+) -> Option<FoundSymbol> {
+    find_symbol_at_impl(Region::from_pos(position), decls, abilities_store, true)
+}
+
+/// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// symbol foo1 that specializes foo for T. Otherwise if the symbol is foo but the specialization
+/// is unknown, (Foo, foo) is returned. Otherwise [None] is returned.
+pub fn find_symbol_at(
     region: Region,
     decls: &Declarations,
     abilities_store: &AbilitiesStore,
-) -> Option<(Symbol, Symbol)> {
+) -> Option<FoundSymbol> {
+    find_symbol_at_impl(region, decls, abilities_store, false)
+}
+
+pub fn find_symbol_at_impl(
+    region: Region,
+    decls: &Declarations,
+    abilities_store: &AbilitiesStore,
+    allow_subregion: bool,
+) -> Option<FoundSymbol> {
     let mut visitor = Finder {
         region,
         found: None,
         abilities_store,
+        allow_subregion,
     };
     visitor.visit_decls(decls);
     return visitor.found;
@@ -575,7 +769,18 @@ pub fn find_ability_member_and_owning_type_at(
     struct Finder<'a> {
         region: Region,
         abilities_store: &'a AbilitiesStore,
-        found: Option<(Symbol, Symbol)>,
+        found: Option<FoundSymbol>,
+        allow_subregion: bool,
+    }
+
+    impl<'a> Finder<'a> {
+        fn is_at_wanted_region(&self, region: Region) -> bool {
+            if self.allow_subregion {
+                region.contains(&self.region)
+            } else {
+                region == self.region
+            }
+        }
     }
 
     impl Visitor for Finder<'_> {
@@ -584,17 +789,20 @@ pub fn find_ability_member_and_owning_type_at(
         }
 
         fn visit_pattern(&mut self, pattern: &Pattern, region: Region, _opt_var: Option<Variable>) {
-            if region == self.region {
-                if let Pattern::AbilityMemberSpecialization {
-                    ident: spec_symbol,
-                    specializes: _,
-                } = pattern
-                {
-                    debug_assert!(self.found.is_none());
-                    let spec_type =
-                        find_specialization_type_of_symbol(*spec_symbol, self.abilities_store)
-                            .unwrap();
-                    self.found = Some((spec_type, *spec_symbol))
+            if self.is_at_wanted_region(region) {
+                match pattern {
+                    Pattern::AbilityMemberSpecialization {
+                        ident: spec_symbol,
+                        specializes: _,
+                    } => {
+                        debug_assert!(self.found.is_none());
+                        let spec_type =
+                            find_specialization_type_of_symbol(*spec_symbol, self.abilities_store)
+                                .unwrap();
+                        self.found = Some(FoundSymbol::Specialization(spec_type, *spec_symbol))
+                    }
+                    Pattern::Identifier(symbol) => self.found = Some(FoundSymbol::Symbol(*symbol)),
+                    _ => {}
                 }
             }
 
@@ -602,30 +810,34 @@ pub fn find_ability_member_and_owning_type_at(
         }
 
         fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
-            if region == self.region {
-                if let &Expr::AbilityMember(member_symbol, specialization_id, _var) = expr {
-                    debug_assert!(self.found.is_none());
-                    self.found = match specialization_id
-                        .and_then(|id| self.abilities_store.get_resolved(id))
-                    {
-                        Some(spec_symbol) => {
-                            let spec_type = find_specialization_type_of_symbol(
-                                spec_symbol,
-                                self.abilities_store,
-                            )
-                            .unwrap();
-                            Some((spec_type, spec_symbol))
-                        }
-                        None => {
-                            let parent_ability = self
-                                .abilities_store
-                                .member_def(member_symbol)
-                                .unwrap()
-                                .parent_ability;
-                            Some((parent_ability, member_symbol))
-                        }
-                    };
-                    return;
+            if self.is_at_wanted_region(region) {
+                match expr {
+                    &Expr::AbilityMember(member_symbol, specialization_id, _var) => {
+                        debug_assert!(self.found.is_none());
+                        self.found = match specialization_id
+                            .and_then(|id| self.abilities_store.get_resolved(id))
+                        {
+                            Some(spec_symbol) => {
+                                let spec_type = find_specialization_type_of_symbol(
+                                    spec_symbol,
+                                    self.abilities_store,
+                                )
+                                .unwrap();
+                                Some(FoundSymbol::Specialization(spec_type, spec_symbol))
+                            }
+                            None => {
+                                let parent_ability = self
+                                    .abilities_store
+                                    .member_def(member_symbol)
+                                    .unwrap()
+                                    .parent_ability;
+                                Some(FoundSymbol::AbilityMember(parent_ability, member_symbol))
+                            }
+                        };
+                        return;
+                    }
+                    Expr::Var(symbol, _var) => self.found = Some(FoundSymbol::Symbol(*symbol)),
+                    _ => {}
                 }
             }
 
@@ -676,6 +888,78 @@ pub fn symbols_introduced_from_pattern(
             } else {
                 self.symbols.push(Loc::at(region, destruct.symbol));
             }
+        }
+    }
+}
+
+pub enum FoundDeclaration<'a> {
+    Decl(DeclarationInfo<'a>),
+    Def(&'a Def),
+}
+
+impl<'a> FoundDeclaration<'a> {
+    pub fn region(&self) -> Region {
+        match self {
+            FoundDeclaration::Decl(decl) => decl.region(),
+            FoundDeclaration::Def(def) => def.region(),
+        }
+    }
+
+    pub fn var(&self) -> Variable {
+        match self {
+            FoundDeclaration::Decl(decl) => decl.var(),
+            FoundDeclaration::Def(def) => def.expr_var,
+        }
+    }
+}
+
+/// Finds the declaration of `symbol`.
+pub fn find_declaration(symbol: Symbol, decls: &'_ Declarations) -> Option<FoundDeclaration<'_>> {
+    let mut visitor = Finder {
+        symbol,
+        found: None,
+    };
+    visitor.visit_decls(decls);
+    return visitor.found;
+
+    struct Finder<'a> {
+        symbol: Symbol,
+        found: Option<FoundDeclaration<'a>>,
+    }
+
+    impl Visitor for Finder<'_> {
+        fn should_visit(&mut self, _region: Region) -> bool {
+            true
+        }
+
+        fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
+            match decl {
+                DeclarationInfo::Value { loc_symbol, .. }
+                | DeclarationInfo::Function { loc_symbol, .. }
+                    if loc_symbol.value == self.symbol =>
+                {
+                    self.found = Some(FoundDeclaration::Decl(unsafe { std::mem::transmute(decl) }));
+                }
+                DeclarationInfo::Destructure { .. } => {
+                    // TODO destructures
+                    walk_decl(self, decl);
+                }
+                _ => {
+                    walk_decl(self, decl);
+                }
+            }
+        }
+
+        fn visit_def(&mut self, def: &Def) {
+            if matches!(def.loc_pattern.value, Pattern::Identifier(s) if s == self.symbol) {
+                debug_assert!(self.found.is_none());
+                // Safety: the def can't escape the passed in `decls`, and the visitor does not
+                // synthesize defs.
+                self.found = Some(FoundDeclaration::Def(unsafe { std::mem::transmute(def) }));
+                return;
+            }
+
+            walk_def(self, def)
         }
     }
 }

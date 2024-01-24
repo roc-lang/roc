@@ -1,6 +1,8 @@
 use roc_can::{abilities::SpecializationLambdaSets, module::ExposedByModule};
+use roc_checkmate::with_checkmate;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{IdentIds, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{instantiate_rigids, Subs, Variable},
     types::Polarity,
@@ -18,19 +20,20 @@ pub(crate) struct Env<'a> {
 }
 
 impl Env<'_> {
-    pub fn new_symbol(&mut self, name_hint: &str) -> Symbol {
+    pub fn new_symbol(&mut self, name_hint: impl std::string::ToString) -> Symbol {
         if cfg!(any(
             debug_assertions,
             test,
             feature = "debug-derived-symbols"
         )) {
             let mut i = 0;
+            let hint = name_hint.to_string();
             let debug_name = loop {
                 i += 1;
                 let name = if i == 1 {
-                    name_hint.to_owned()
+                    hint.clone()
                 } else {
-                    format!("{}{}", name_hint, i)
+                    format!("{hint}{i}")
                 };
                 if self.derived_ident_ids.get_id(&name).is_none() {
                     break name;
@@ -70,13 +73,20 @@ impl Env<'_> {
     }
 
     pub fn unify(&mut self, left: Variable, right: Variable) {
-        use roc_unify::unify::{unify, Env, Mode, Unified};
+        use roc_unify::{
+            unify::{unify, Unified},
+            Env,
+        };
 
         let unified = unify(
-            &mut Env::new(self.subs),
+            // TODO(checkmate): pass checkmate through
+            &mut with_checkmate!({
+                on => Env::new(self.subs, None),
+                off => Env::new(self.subs),
+            }),
             left,
             right,
-            Mode::EQ,
+            UnificationMode::EQ,
             Polarity::OF_PATTERN,
         );
 
@@ -102,15 +112,22 @@ impl Env<'_> {
         specialization_type: Variable,
         ability_member: Symbol,
     ) -> SpecializationLambdaSets {
-        use roc_unify::unify::{unify_introduced_ability_specialization, Env, Mode, Unified};
+        use roc_unify::{
+            unify::{unify_introduced_ability_specialization, Unified},
+            Env,
+        };
 
         let member_signature = self.import_builtin_symbol_var(ability_member);
 
         let unified = unify_introduced_ability_specialization(
-            &mut Env::new(self.subs),
+            // TODO(checkmate): pass checkmate through
+            &mut with_checkmate!({
+                on => Env::new(self.subs, None),
+                off => Env::new(self.subs),
+            }),
             member_signature,
             specialization_type,
-            Mode::EQ,
+            UnificationMode::EQ,
         );
 
         match unified {
@@ -129,7 +146,7 @@ impl Env<'_> {
                     })
                     .collect();
 
-                // Since we're doing `{foo} ~ a | a has Encoding`, we may see "lambda sets to
+                // Since we're doing `{foo} ~ a where a implements Encoding`, we may see "lambda sets to
                 // specialize" for e.g. `{foo}:toEncoder:1`, but these are actually just the
                 // specialization lambda sets, so we don't need to do any extra work!
                 //
@@ -150,7 +167,7 @@ impl Env<'_> {
                                         == self.subs.get_root_key_without_compacting(lambda_set)
                                 });
                             debug_assert!(belongs_to_specialized_lambda_sets,
-                                "Did not expect derivers to need to specialize unspecialized lambda sets, but we got one: {:?} for {:?}", lambda_set, spec_var)
+                                "Did not expect derivers to need to specialize unspecialized lambda sets, but we got one: {lambda_set:?} for {spec_var:?}")
                         }
                     }
                 }

@@ -5,7 +5,7 @@ interface Html.Internal.Server
     ]
     imports [
         Html.Internal.Shared.{ Html, Attribute, App, translateStatic, text, element },
-        Json,
+        TotallyNotJson,
     ]
 
 # -------------------------------
@@ -57,7 +57,7 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] where initData implements Encoding
 initServerApp = \app, initData, hostJavaScript ->
     initData
     |> Ok
@@ -66,22 +66,22 @@ initServerApp = \app, initData, hostJavaScript ->
     |> translateStatic
     |> insertRocScript initData app.wasmUrl hostJavaScript
 
-insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] where initData implements Encoding
 insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
+    encode =
+        \value ->
+            value
+            |> Encode.toBytes TotallyNotJson.json
+            |> Str.fromUtf8
+            |> Result.withDefault ""
+
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
-        initData
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.withDefault ""
+        initData |> encode |> encode
+
     jsWasmUrl =
-        wasmUrl
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.withDefault ""
+        encode wasmUrl
 
     script : Html []
     script = (element "script") [] [

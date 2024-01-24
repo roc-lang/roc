@@ -26,7 +26,7 @@ Check [Building from source](BUILDING_FROM_SOURCE.md) for instructions.
 Most contributors execute the following commands before pushing their code:
 
 ```sh
-cargo test
+cargo test --release
 cargo fmt --all -- --check
 cargo clippy --workspace --tests -- --deny warnings
 ```
@@ -38,7 +38,7 @@ Execute `cargo fmt --all` to fix the formatting.
 If you make changes to [Roc's Standard Library](https://www.roc-lang.org/builtins/Str), you can add comments to the code following [the CommonMark Spec](https://spec.commonmark.org/current/) to further explain your intentions. You can view these changes locally with:
 
 ```sh
-cargo run docs crates/compiler/builtins/roc
+cargo run docs crates/compiler/builtins/roc/main.roc
 ```
 
 This command will generate the documentation in the [`generated-docs`](generated-docs) directory.
@@ -50,17 +50,21 @@ This command will generate the documentation in the [`generated-docs`](generated
 - You can find good first issues [here][good-first-issues]. Once you have gained some experience you can take a look at the [intermediate issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22intermediate+issue%22).
 - [Fork](https://github.com/roc-lang/roc/fork) the repo so that you can apply your changes first on your own copy of the roc repo.
 - It's a good idea to open a draft pull request as you begin working on something. This way, others can see that you're working on it, which avoids duplicate effort, and others can give feedback sooner rather than later if they notice a problem in the direction things are going. Click the button "ready for review" when it's ready.
-- All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g):
-  - If you don't have signing set up on your device and you only want to change a single file, it will be easier to use [github's edit button](https://docs.github.com/en/repositories/working-with-files/managing-files/editing-files). This will sign your commit automatically.
-  - For multi-file or complex changes you will want to set up signing on your device:
-    1. If you have a Yubikey, follow [guide 1](https://dev.to/paulmicheli/using-your-yubikey-to-get-started-with-gpg-3h4k), [guide 2](https://dev.to/paulmicheli/using-your-yubikey-for-signed-git-commits-4l73) and skip the steps below.
-    2. [Make a key to sign your commits.](https://docs.github.com/en/authentication/managing-commit-signature-verification/generating-a-new-gpg-key)
-    3. [Configure git to use your key.](https://docs.github.com/en/authentication/managing-commit-signature-verification/telling-git-about-your-signing-key)
-    4. Make git sign your commits automatically:
 
-     ```sh
-     git config --global commit.gpgsign true
-     ```
+### Commit signing
+
+All your commits need to be signed [to prevent impersonation](https://dev.to/martiliones/how-i-got-linus-torvalds-in-my-contributors-on-github-3k4g). Check out [our guide for commit signing](devtools/signing.md).
+
+#### Commit signing on NixOS
+
+On NixOS pinentry can cause problems, the following setup works well for those with a KDE desktop. From `/etc/nixos/configuration.nix`:
+```
+programs.gnupg.agent = {
+    enable = true;
+    pinentryFlavor = "qt";
+    enableSSHSupport = true;
+  };
+```
 
 ### Forgot to sign commits?
 
@@ -82,7 +86,7 @@ In case you have multiple commits, you can sign them in two ways:
        - Find the oldest commit you want to sign, using the `git log --show-signature` command. 
        - Run the command `git rebase --exec 'git commit --amend --no-edit -n -S' -i HASH` which would sign all commits up to commit `HASH`.
 
-If you already pushed unsigned commits, you mmay have to do a force push with `git push origin -f <branch_name>`.
+If you already pushed unsigned commits, you may have to do a force push with `git push origin -f <branch_name>`.
 
 ## Can we do better?
 

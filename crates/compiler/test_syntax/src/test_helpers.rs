@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_fmt::{annotation::Formattable, module::fmt_module};
 use roc_parse::{
-    ast::{Defs, Expr, Module},
+    ast::{Defs, Expr, Malformed, Module},
     module::module_defs,
     parser::{Parser, SyntaxError},
     state::State,
@@ -96,10 +96,24 @@ impl<'a> Output<'a> {
 
     pub fn debug_format_inner(&self) -> String {
         match self {
-            Output::Header(header) => format!("{:#?}\n", header),
-            Output::ModuleDefs(defs) => format!("{:#?}\n", defs),
-            Output::Expr(expr) => format!("{:#?}\n", expr),
-            Output::Full { .. } => format!("{:#?}\n", self),
+            Output::Header(header) => format!("{header:#?}\n"),
+            Output::ModuleDefs(defs) => format!("{defs:#?}\n"),
+            Output::Expr(expr) => format!("{expr:#?}\n"),
+            Output::Full { .. } => format!("{self:#?}\n"),
+        }
+    }
+}
+
+impl<'a> Malformed for Output<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Output::Header(header) => header.is_malformed(),
+            Output::ModuleDefs(defs) => defs.is_malformed(),
+            Output::Expr(expr) => expr.is_malformed(),
+            Output::Full {
+                header,
+                module_defs,
+            } => header.is_malformed() || module_defs.is_malformed(),
         }
     }
 }
@@ -210,7 +224,7 @@ impl<'a> Input<'a> {
         // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
         // I don't have the patience to debug this right now, so let's leave it for another day...
         // TODO: fix PartialEq impl on ast types
-        if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
+        if format!("{ast_normalized:?}") != format!("{reparsed_ast_normalized:?}") {
             panic!(
                 "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
                 * * * Source code before formatting:\n{}\n\n\
@@ -219,7 +233,7 @@ impl<'a> Input<'a> {
                 * * * AST after formatting:\n{:#?}\n\n",
                 self.as_str(),
                 output.as_ref().as_str(),
-                ast_normalized,
+                actual,
                 reparsed_ast_normalized
             );
         }
@@ -229,7 +243,11 @@ impl<'a> Input<'a> {
             let reformatted = reparsed_ast.format();
 
             if output != reformatted {
-                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\n", self.as_str(), output.as_ref().as_str());
+                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\nReparsed AST:\n{:#?}\n\n",
+                    self.as_str(),
+                    output.as_ref().as_str(),
+                    actual,
+                    reparsed_ast);
                 eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());

@@ -1,0 +1,13 @@
+[package]
+name = "roc_error_utils"
+description = "Utility functions used all over the code base adding better errors to calls."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+snafu.workspace = true
+
+[dev-dependencies]

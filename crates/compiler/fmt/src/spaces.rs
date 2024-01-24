@@ -3,9 +3,10 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
-        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        AbilityImpls, AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr,
+        Header, Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Module,
+        Pattern, PatternAs, RecordBuilderField, Spaced, Spaces, StrLiteral, StrSegment, Tag,
+        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
@@ -21,22 +22,14 @@ use crate::{Ast, Buf};
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
 
-pub fn fmt_default_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) {
     if spaces.is_empty() {
         buf.spaces(1);
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
 }
-pub fn fmt_default_newline<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    indent: u16,
-) {
+pub fn fmt_default_newline(buf: &mut Buf, spaces: &[CommentOrNewline], indent: u16) {
     if spaces.is_empty() {
         buf.newline();
     } else {
@@ -72,12 +65,11 @@ fn fmt_spaces_max_consecutive_newlines<'a, 'buf, I>(
     // Only ever print two newlines back to back.
     // (Two newlines renders as one blank line.)
     let mut consecutive_newlines = 0;
-    let mut encountered_comment = false;
 
     for space in spaces {
         match space {
             Newline => {
-                if !encountered_comment && (consecutive_newlines < max_consecutive_newlines) {
+                if consecutive_newlines < max_consecutive_newlines {
                     buf.newline();
 
                     // Don't bother incrementing it if we're already over the limit.
@@ -90,14 +82,14 @@ fn fmt_spaces_max_consecutive_newlines<'a, 'buf, I>(
                 fmt_comment(buf, comment);
                 buf.newline();
 
-                encountered_comment = true;
+                consecutive_newlines = 1;
             }
             DocComment(docs) => {
                 buf.indent(indent);
                 fmt_docs(buf, docs);
                 buf.newline();
 
-                encountered_comment = true;
+                consecutive_newlines = 1;
             }
         }
     }
@@ -154,7 +146,7 @@ pub fn fmt_comments_only<'a, 'buf, I>(
     }
 }
 
-fn fmt_comment<'buf>(buf: &mut Buf<'buf>, comment: &str) {
+fn fmt_comment(buf: &mut Buf, comment: &str) {
     // The '#' in a comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -193,7 +185,7 @@ where
     count
 }
 
-fn fmt_docs<'buf>(buf: &mut Buf<'buf>, docs: &str) {
+fn fmt_docs(buf: &mut Buf, docs: &str) {
     // The "##" in a doc comment should always be preceded by a newline or a space,
     // unless it's the very beginning of the buffer.
     if !buf.is_empty() && !buf.ends_with_space() && !buf.ends_with_newline() {
@@ -421,6 +413,9 @@ impl<'a> RemoveSpaces<'a> for ImportsEntry<'a> {
         match *self {
             ImportsEntry::Module(a, b) => ImportsEntry::Module(a, b.remove_spaces(arena)),
             ImportsEntry::Package(a, b, c) => ImportsEntry::Package(a, b, c.remove_spaces(arena)),
+            ImportsEntry::IngestedFile(a, b) => {
+                ImportsEntry::IngestedFile(a, b.remove_spaces(arena))
+            }
         }
     }
 }
@@ -512,14 +507,14 @@ impl<'a> RemoveSpaces<'a> for TypeDef<'a> {
             },
             Ability {
                 header: TypeHeader { name, vars },
-                loc_has,
+                loc_implements: loc_has,
                 members,
             } => Ability {
                 header: TypeHeader {
                     name: name.remove_spaces(arena),
                     vars: vars.remove_spaces(arena),
                 },
-                loc_has: loc_has.remove_spaces(arena),
+                loc_implements: loc_has.remove_spaces(arena),
                 members: members.remove_spaces(arena),
             },
         }
@@ -574,9 +569,9 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Has<'a> {
+impl<'a> RemoveSpaces<'a> for Implements<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
-        Has::Has
+        Implements::Implements
     }
 }
 
@@ -620,6 +615,30 @@ impl<'a, T: RemoveSpaces<'a> + Copy + std::fmt::Debug> RemoveSpaces<'a> for Assi
     }
 }
 
+impl<'a> RemoveSpaces<'a> for RecordBuilderField<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        match *self {
+            RecordBuilderField::Value(a, _, c) => RecordBuilderField::Value(
+                a.remove_spaces(arena),
+                &[],
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::ApplyValue(a, _, _, c) => RecordBuilderField::ApplyValue(
+                a.remove_spaces(arena),
+                &[],
+                &[],
+                arena.alloc(c.remove_spaces(arena)),
+            ),
+            RecordBuilderField::LabelOnly(a) => {
+                RecordBuilderField::LabelOnly(a.remove_spaces(arena))
+            }
+            RecordBuilderField::Malformed(a) => RecordBuilderField::Malformed(a),
+            RecordBuilderField::SpaceBefore(a, _) => a.remove_spaces(arena),
+            RecordBuilderField::SpaceAfter(a, _) => a.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for StrLiteral<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
@@ -637,6 +656,9 @@ impl<'a> RemoveSpaces<'a> for StrSegment<'a> {
             StrSegment::Unicode(t) => StrSegment::Unicode(t.remove_spaces(arena)),
             StrSegment::EscapedChar(c) => StrSegment::EscapedChar(c),
             StrSegment::Interpolated(t) => StrSegment::Interpolated(t.remove_spaces(arena)),
+            StrSegment::DeprecatedInterpolated(t) => {
+                StrSegment::DeprecatedInterpolated(t.remove_spaces(arena))
+            }
         }
     }
 }
@@ -656,16 +678,17 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
+            Expr::IngestedFile(a, b) => Expr::IngestedFile(a, b),
             Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
-            Expr::RecordAccessorFunction(a) => Expr::RecordAccessorFunction(a),
+            Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
-            Expr::TupleAccessorFunction(a) => Expr::TupleAccessorFunction(a),
             Expr::List(a) => Expr::List(a.remove_spaces(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.remove_spaces(arena)),
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::RecordBuilder(a) => Expr::RecordBuilder(a.remove_spaces(arena)),
             Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
@@ -706,6 +729,9 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
             ),
+            Expr::LowLevelDbg(_, _, _) => unreachable!(
+                "LowLevelDbg should only exist after desugaring, not during formatting"
+            ),
             Expr::Apply(a, b, c) => Expr::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 b.remove_spaces(arena),
@@ -728,6 +754,8 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
+            Expr::MultipleRecordBuilders(a) => Expr::MultipleRecordBuilders(a),
+            Expr::UnappliedRecordBuilder(a) => Expr::UnappliedRecordBuilder(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
@@ -739,13 +767,22 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
     match ident {
         BadIdent::Start(_) => BadIdent::Start(Position::zero()),
         BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
-        BadIdent::Underscore(_) => BadIdent::Underscore(Position::zero()),
+        BadIdent::UnderscoreAlone(_) => BadIdent::UnderscoreAlone(Position::zero()),
+        BadIdent::UnderscoreInMiddle(_) => BadIdent::UnderscoreInMiddle(Position::zero()),
+        BadIdent::UnderscoreAtStart {
+            position: _,
+            declaration_region,
+        } => BadIdent::UnderscoreAtStart {
+            position: Position::zero(),
+            declaration_region,
+        },
         BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
         BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
         BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
         BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
         BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
         BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
+        BadIdent::QualifiedTupleAccessor(_) => BadIdent::QualifiedTupleAccessor(Position::zero()),
     }
 }
 
@@ -766,9 +803,10 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::OptionalField(a, b) => {
                 Pattern::OptionalField(a, arena.alloc(b.remove_spaces(arena)))
             }
-            Pattern::As(pattern, pattern_as) => {
-                Pattern::As(arena.alloc(pattern.remove_spaces(arena)), pattern_as)
-            }
+            Pattern::As(pattern, pattern_as) => Pattern::As(
+                arena.alloc(pattern.remove_spaces(arena)),
+                pattern_as.remove_spaces(arena),
+            ),
             Pattern::NumLiteral(a) => Pattern::NumLiteral(a),
             Pattern::NonBase10Literal {
                 string,
@@ -792,7 +830,10 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
             Pattern::List(pats) => Pattern::List(pats.remove_spaces(arena)),
             Pattern::Tuple(pats) => Pattern::Tuple(pats.remove_spaces(arena)),
-            Pattern::ListRest(opt_pattern_as) => Pattern::ListRest(opt_pattern_as),
+            Pattern::ListRest(opt_pattern_as) => Pattern::ListRest(
+                opt_pattern_as
+                    .map(|(_, pattern_as)| ([].as_ref(), pattern_as.remove_spaces(arena))),
+            ),
         }
     }
 }
@@ -814,8 +855,8 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
                     vars: vars.remove_spaces(arena),
                 },
             ),
-            TypeAnnotation::Tuple { fields, ext } => TypeAnnotation::Tuple {
-                fields: fields.remove_spaces(arena),
+            TypeAnnotation::Tuple { elems: fields, ext } => TypeAnnotation::Tuple {
+                elems: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),
             },
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
@@ -839,9 +880,9 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasClause<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsClause<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        HasClause {
+        ImplementsClause {
             var: self.var.remove_spaces(arena),
             abilities: self.abilities.remove_spaces(arena),
         }
@@ -862,38 +903,52 @@ impl<'a> RemoveSpaces<'a> for Tag<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasImpls<'a> {
+impl<'a> RemoveSpaces<'a> for AbilityImpls<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasImpls::HasImpls(impls) => HasImpls::HasImpls(impls.remove_spaces(arena)),
-            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => {
+            AbilityImpls::AbilityImpls(impls) => {
+                AbilityImpls::AbilityImpls(impls.remove_spaces(arena))
+            }
+            AbilityImpls::SpaceBefore(has, _) | AbilityImpls::SpaceAfter(has, _) => {
                 has.remove_spaces(arena)
             }
         }
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasAbility<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsAbility<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasAbility::HasAbility { ability, impls } => HasAbility::HasAbility {
-                ability: ability.remove_spaces(arena),
-                impls: impls.remove_spaces(arena),
-            },
-            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
+                ImplementsAbility::ImplementsAbility {
+                    ability: ability.remove_spaces(arena),
+                    impls: impls.remove_spaces(arena),
+                }
+            }
+            ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
                 has.remove_spaces(arena)
             }
         }
     }
 }
 
-impl<'a> RemoveSpaces<'a> for HasAbilities<'a> {
+impl<'a> RemoveSpaces<'a> for ImplementsAbilities<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         match *self {
-            HasAbilities::Has(derived) => HasAbilities::Has(derived.remove_spaces(arena)),
-            HasAbilities::SpaceBefore(derived, _) | HasAbilities::SpaceAfter(derived, _) => {
-                derived.remove_spaces(arena)
+            ImplementsAbilities::Implements(derived) => {
+                ImplementsAbilities::Implements(derived.remove_spaces(arena))
             }
+            ImplementsAbilities::SpaceBefore(derived, _)
+            | ImplementsAbilities::SpaceAfter(derived, _) => derived.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for PatternAs<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        PatternAs {
+            spaces_before: &[],
+            identifier: self.identifier.remove_spaces(arena),
         }
     }
 }

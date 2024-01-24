@@ -1,0 +1,11 @@
+# +opt infer:print_only_under_alias
+app "test" provides [job] to "./platform"
+
+F : [Bar, FromG G]
+G : [G {lst : List F}]
+
+job : { lst : List F } -> G
+job = \config -> G config
+#^^^{-1} { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
+#                ^^^^^^^^ [G { lst : List [Bar, FromG a] }] as a
+#      ^^^^^^ { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }

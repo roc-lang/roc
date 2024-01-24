@@ -4,17 +4,17 @@ procedure Bool.11 (#Attr.2, #Attr.3):
 
 procedure Test.1 (Test.3):
     let Test.6 : I64 = 10i64;
-    joinpoint Test.8 Test.12:
-        if Test.12 then
+    joinpoint Test.10 Test.9:
+        if Test.9 then
             let Test.7 : I64 = 0i64;
             ret Test.7;
         else
-            let Test.11 : I64 = 42i64;
-            ret Test.11;
+            let Test.8 : I64 = 42i64;
+            ret Test.8;
     in
-    let Test.10 : I64 = 5i64;
-    let Test.9 : Int1 = CallByName Bool.11 Test.6 Test.10;
-    jump Test.8 Test.9;
+    let Test.12 : I64 = 5i64;
+    let Test.11 : Int1 = CallByName Bool.11 Test.6 Test.12;
+    jump Test.10 Test.11;
 
 procedure Test.0 ():
     let Test.5 : {} = Struct {};

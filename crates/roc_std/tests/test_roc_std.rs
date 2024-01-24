@@ -1,7 +1,8 @@
+#![allow(clippy::missing_safety_doc, clippy::redundant_clone)]
+// TODO try removing allow clippy::redundant_clone if we're on rust 1.71 or later
+
 #[macro_use]
 extern crate pretty_assertions;
-// #[macro_use]
-// extern crate indoc;
 extern crate quickcheck;
 extern crate roc_std;
 
@@ -31,24 +32,18 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 
 #[cfg(test)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
-    use std::ffi::CStr;
-    use std::os::raw::c_char;
-
-    match tag_id {
-        0 => {
-            let c_str = CStr::from_ptr(c_ptr as *const c_char);
-            let string = c_str.to_str().unwrap();
-            panic!("roc_panic during test: {}", string);
-        }
-        _ => todo!(),
-    }
+pub unsafe extern "C" fn roc_panic(msg: *mut roc_std::RocStr, _tag_id: u32) {
+    panic!("roc_panic during test: {}", &*msg);
 }
 
 #[cfg(test)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
+pub unsafe extern "C" fn roc_dbg(
+    loc: *mut roc_std::RocStr,
+    msg: *mut roc_std::RocStr,
+    src: *mut roc_std::RocStr,
+) {
+    eprintln!("[{}] {} = {}", &*loc, &*src, &*msg);
 }
 
 #[cfg(test)]
@@ -59,7 +54,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[cfg(test)]
 mod test_roc_std {
-    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr, SendSafeRocList, SendSafeRocStr};
+    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr, SendSafeRocStr};
 
     fn roc_str_byte_representation(string: &RocStr) -> [u8; RocStr::SIZE] {
         unsafe { core::mem::transmute_copy(string) }
@@ -284,17 +279,27 @@ mod test_roc_std {
     fn roc_dec_fmt() {
         assert_eq!(
             format!("{}", RocDec::MIN),
-            "-1701411834604692317316.87303715884105728"
+            "-170141183460469231731.687303715884105728"
         );
 
         let half = RocDec::from_str("0.5").unwrap();
-        assert_eq!(format!("{}", half), "0.5");
+        assert_eq!(format!("{half}"), "0.5");
 
         let ten = RocDec::from_str("10").unwrap();
-        assert_eq!(format!("{}", ten), "10");
+        assert_eq!(format!("{ten}"), "10");
 
         let example = RocDec::from_str("1234.5678").unwrap();
-        assert_eq!(format!("{}", example), "1234.5678");
+        assert_eq!(format!("{example}"), "1234.5678");
+
+        let example = RocDec::from_str("1_000.5678").unwrap();
+        assert_eq!(format!("{example}"), "1000.5678");
+
+        let sample_negative = "-1.234";
+        let example = RocDec::from_str(sample_negative).unwrap();
+        assert_eq!(format!("{example}"), sample_negative);
+
+        let example = RocDec::from_str("1000.000").unwrap();
+        assert_eq!(format!("{example}"), "1000");
     }
 
     #[test]
@@ -336,39 +341,95 @@ mod test_roc_std {
         let x = RocStr::from("short");
         let y = x.clone();
         let z = y.clone();
-        assert_eq!(x.is_unique(), true);
-        assert_eq!(y.is_unique(), true);
-        assert_eq!(z.is_unique(), true);
+        assert!(x.is_unique());
+        assert!(y.is_unique());
+        assert!(z.is_unique());
 
         let safe_x = SendSafeRocStr::from(x);
         let new_x = RocStr::from(safe_x);
-        assert_eq!(new_x.is_unique(), true);
-        assert_eq!(y.is_unique(), true);
-        assert_eq!(z.is_unique(), true);
+        assert!(new_x.is_unique());
+        assert!(y.is_unique(),);
+        assert!(z.is_unique(),);
         assert_eq!(new_x.as_str(), "short");
     }
 
     #[test]
     fn empty_list_is_unique() {
         let roc_list = RocList::<RocStr>::empty();
-        assert_eq!(roc_list.is_unique(), true);
+        assert!(roc_list.is_unique());
     }
 
     #[test]
-    fn readonly_list_is_sendsafe() {
-        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
-        unsafe { x.set_readonly() };
-        assert_eq!(x.is_readonly(), true);
+    fn slicing_and_dicing_list() {
+        let example = RocList::from_slice(b"chaos is a ladder");
 
-        let y = x.clone();
-        let z = y.clone();
+        // basic slice from the start
+        assert_eq!(example.slice_range(0..5).as_slice(), b"chaos");
 
-        let safe_x = SendSafeRocList::from(x);
-        let new_x = RocList::from(safe_x);
-        assert_eq!(new_x.is_readonly(), true);
-        assert_eq!(y.is_readonly(), true);
-        assert_eq!(z.is_readonly(), true);
-        assert_eq!(new_x.as_slice(), &[1, 2, 3, 4, 5]);
+        // slice in the middle
+        assert_eq!(example.slice_range(6..10).as_slice(), b"is a");
+
+        // slice of slice
+        let first = example.slice_range(0..5);
+        assert_eq!(first.slice_range(0..3).as_slice(), b"cha");
+    }
+
+    #[test]
+    fn slicing_and_dicing_str() {
+        let example = RocStr::from("chaos is a ladder");
+
+        // basic slice from the start
+        assert_eq!(example.slice_range(0..5).as_str(), "chaos");
+
+        // slice in the middle
+        assert_eq!(example.slice_range(6..10).as_str(), "is a");
+
+        // slice of slice
+        let first = example.slice_range(0..5);
+        assert_eq!(first.slice_range(0..3).as_str(), "cha");
+    }
+
+    #[test]
+    fn roc_list_push() {
+        let mut example = RocList::from_slice(&[1, 2, 3]);
+
+        // basic slice from the start
+        example.push(4);
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        // slice in the middle
+        let mut sliced = example.slice_range(0..3);
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+
+        // original did not change
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        drop(sliced);
+
+        let mut sliced = example.slice_range(0..3);
+        // make the slice unique
+        drop(example);
+
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn split_whitespace() {
+        let example = RocStr::from("chaos is a ladder");
+
+        let split: Vec<_> = example.split_whitespace().collect();
+
+        assert_eq!(
+            split,
+            vec![
+                RocStr::from("chaos"),
+                RocStr::from("is"),
+                RocStr::from("a"),
+                RocStr::from("ladder"),
+            ]
+        );
     }
 }
 
@@ -408,12 +469,18 @@ mod with_terminator {
         // utf16_nul_terminated
         {
             let answer = roc_str.utf16_nul_terminated(|ptr, len| {
-                let bytes: &[u16] = unsafe { slice::from_raw_parts(ptr.cast(), len + 1) };
+                let bytes: &[u8] = unsafe { slice::from_raw_parts(ptr as *mut u8, 2 * (len + 1)) };
+
+                let items: Vec<u16> = bytes
+                    .chunks(2)
+                    .map(|c| c.try_into().unwrap())
+                    .map(u16::from_ne_bytes)
+                    .collect();
 
                 // Verify that it's nul-terminated
-                assert_eq!(bytes[len], 0);
+                assert_eq!(items[len], 0);
 
-                let string = String::from_utf16(&bytes[0..len]).unwrap();
+                let string = String::from_utf16(&items[0..len]).unwrap();
 
                 assert_eq!(string.as_str(), string);
 

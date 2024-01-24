@@ -18,14 +18,19 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, StrLiteral};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
+use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
+use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
+use std::fs::File;
+use std::io::Read;
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::{char, u32};
 
 /// Derives that an opaque type has claimed, to checked and recorded after solving.
@@ -99,6 +104,9 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
+    // An ingested files, it's bytes, and the type variable.
+    IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
+
     // Lookups
     Var(Symbol, Variable),
     AbilityMember(
@@ -166,6 +174,11 @@ pub enum Expr {
     /// Empty record constant
     EmptyRecord,
 
+    Tuple {
+        tuple_var: Variable,
+        elems: Vec<(Variable, Box<Loc<Expr>>)>,
+    },
+
     /// The "crash" keyword
     Crash {
         msg: Box<Loc<Expr>>,
@@ -173,17 +186,26 @@ pub enum Expr {
     },
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
-    Access {
+    RecordAccess {
         record_var: Variable,
         ext_var: Variable,
         field_var: Variable,
         loc_expr: Box<Loc<Expr>>,
         field: Lowercase,
     },
-    /// field accessor as a function, e.g. (.foo) expr
-    Accessor(AccessorData),
 
-    Update {
+    /// tuple or field accessor as a function, e.g. (.foo) expr or (.1) expr
+    RecordAccessor(StructAccessorData),
+
+    TupleAccess {
+        tuple_var: Variable,
+        ext_var: Variable,
+        elem_var: Variable,
+        loc_expr: Box<Loc<Expr>>,
+        index: usize,
+    },
+
+    RecordUpdate {
         record_var: Variable,
         ext_var: Variable,
         symbol: Symbol,
@@ -247,7 +269,9 @@ pub enum Expr {
     },
 
     Dbg {
-        loc_condition: Box<Loc<Expr>>,
+        source_location: Box<str>,
+        source: Box<str>,
+        loc_message: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
         variable: Variable,
         symbol: Symbol,
@@ -282,6 +306,7 @@ impl Expr {
             Self::Int(..) => Category::Int,
             Self::Float(..) => Category::Frac,
             Self::Str(..) => Category::Str,
+            Self::IngestedFile(file_path, _, _) => Category::IngestedFile(file_path.clone()),
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
@@ -294,11 +319,13 @@ impl Expr {
             &Self::RunLowLevel { op, .. } => Category::LowLevelOpResult(op),
             Self::ForeignCall { .. } => Category::ForeignCall,
             Self::Closure(..) => Category::Lambda,
+            Self::Tuple { .. } => Category::Tuple,
             Self::Record { .. } => Category::Record,
             Self::EmptyRecord => Category::Record,
-            Self::Access { field, .. } => Category::Access(field.clone()),
-            Self::Accessor(data) => Category::Accessor(data.field.clone()),
-            Self::Update { .. } => Category::Record,
+            Self::RecordAccess { field, .. } => Category::RecordAccess(field.clone()),
+            Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
+            Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
+            Self::RecordUpdate { .. } => Category::Record,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -363,26 +390,30 @@ pub struct ClosureData {
     pub loc_body: Box<Loc<Expr>>,
 }
 
-/// A record accessor like `.foo`, which is equivalent to `\r -> r.foo`
-/// Accessors are desugared to closures; they need to have a name
+/// A record or tuple accessor like `.foo` or `.0`, which is equivalent to `\r -> r.foo`
+/// Struct accessors are desugared to closures; they need to have a name
 /// so the closure can have a correct lambda set.
 ///
 /// We distinguish them from closures so we can have better error messages
 /// during constraint generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AccessorData {
+pub struct StructAccessorData {
     pub name: Symbol,
     pub function_var: Variable,
     pub record_var: Variable,
     pub closure_var: Variable,
     pub ext_var: Variable,
     pub field_var: Variable,
-    pub field: Lowercase,
+
+    /// Note that the `field` field is an `IndexOrField` in order to represent both
+    /// record and tuple accessors. This is different from `TupleAccess` and
+    /// `RecordAccess` (and RecordFields/TupleElems), which share less of their implementation.
+    pub field: IndexOrField,
 }
 
-impl AccessorData {
+impl StructAccessorData {
     pub fn to_closure_data(self, record_symbol: Symbol) -> ClosureData {
-        let AccessorData {
+        let StructAccessorData {
             name,
             function_var,
             record_var,
@@ -399,12 +430,21 @@ impl AccessorData {
         // into
         //
         // (\r -> r.foo)
-        let body = Expr::Access {
-            record_var,
-            ext_var,
-            field_var,
-            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
-            field,
+        let body = match field {
+            IndexOrField::Index(index) => Expr::TupleAccess {
+                tuple_var: record_var,
+                ext_var,
+                elem_var: field_var,
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
+                index,
+            },
+            IndexOrField::Field(field) => Expr::RecordAccess {
+                record_var,
+                ext_var,
+                field_var,
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
+                field,
+            },
         };
 
         let loc_body = Loc::at_zero(body);
@@ -620,9 +660,7 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
-        ast::Expr::Tuple(_fields) => {
-            todo!("canonicalize tuple");
-        }
+
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -634,7 +672,7 @@ pub fn canonicalize_expr<'a>(
                     Ok((can_fields, mut output)) => {
                         output.references.union_mut(&update_out.references);
 
-                        let answer = Update {
+                        let answer = RecordUpdate {
                             record_var: var_store.fresh(),
                             ext_var: var_store.fresh(),
                             symbol: *symbol,
@@ -670,7 +708,78 @@ pub fn canonicalize_expr<'a>(
                 (answer, Output::default())
             }
         }
+
+        ast::Expr::Tuple(fields) => {
+            let mut can_elems = Vec::with_capacity(fields.len());
+            let mut references = References::new();
+
+            for loc_elem in fields.iter() {
+                let (can_expr, elem_out) =
+                    canonicalize_expr(env, var_store, scope, loc_elem.region, &loc_elem.value);
+
+                references.union_mut(&elem_out.references);
+
+                can_elems.push((var_store.fresh(), Box::new(can_expr)));
+            }
+
+            let output = Output {
+                references,
+                tail_call: None,
+                ..Default::default()
+            };
+
+            (
+                Tuple {
+                    tuple_var: var_store.fresh(),
+                    elems: can_elems,
+                },
+                output,
+            )
+        }
+
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
+
+        ast::Expr::IngestedFile(file_path, _) => match File::open(file_path) {
+            Ok(mut file) => {
+                let mut bytes = vec![];
+                match file.read_to_end(&mut bytes) {
+                    Ok(_) => (
+                        Expr::IngestedFile(
+                            file_path.to_path_buf().into(),
+                            Arc::new(bytes),
+                            var_store.fresh(),
+                        ),
+                        Output::default(),
+                    ),
+                    Err(e) => {
+                        env.problems.push(Problem::FileProblem {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                        });
+
+                        // This will not manifest as a real runtime error and is just returned to have a value here.
+                        // The pushed FileProblem will be fatal to compilation.
+                        (
+                            Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                            Output::default(),
+                        )
+                    }
+                }
+            }
+            Err(e) => {
+                env.problems.push(Problem::FileProblem {
+                    filename: file_path.to_path_buf(),
+                    error: e.kind(),
+                });
+
+                // This will not manifest as a real runtime error and is just returned to have a value here.
+                // The pushed FileProblem will be fatal to compilation.
+                (
+                    Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
+                    Output::default(),
+                )
+            }
+        },
 
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();
@@ -912,9 +1021,18 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Underscore(name) => {
             // we parse underscores, but they are not valid expression syntax
+
             let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
                 (*name).into(),
-                roc_parse::ident::BadIdent::Underscore(region.start()),
+                if name.is_empty() {
+                    roc_parse::ident::BadIdent::UnderscoreAlone(region.start())
+                } else {
+                    roc_parse::ident::BadIdent::UnderscoreAtStart {
+                        position: region.start(),
+                        // Check if there's an ignored identifier with this name in scope (for better error messages)
+                        declaration_region: scope.lookup_ignored_local(name),
+                    }
+                },
                 region,
             );
 
@@ -945,8 +1063,11 @@ pub fn canonicalize_expr<'a>(
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
+        ast::Expr::RecordBuilder(_) => {
+            internal_error!("RecordBuilder should have been desugared by now")
+        }
         ast::Expr::Backpassing(_, _, _) => {
-            unreachable!("Backpassing should have been desugared by now")
+            internal_error!("Backpassing should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
@@ -1006,7 +1127,7 @@ pub fn canonicalize_expr<'a>(
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, record_expr);
 
             (
-                Access {
+                RecordAccess {
                     record_var: var_store.fresh(),
                     field_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
@@ -1016,20 +1137,35 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::RecordAccessorFunction(field) => (
-            Accessor(AccessorData {
+        ast::Expr::AccessorFunction(field) => (
+            RecordAccessor(StructAccessorData {
                 name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
                 record_var: var_store.fresh(),
                 ext_var: var_store.fresh(),
                 closure_var: var_store.fresh(),
                 field_var: var_store.fresh(),
-                field: (*field).into(),
+                field: match field {
+                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
+                },
             }),
             Output::default(),
         ),
-        ast::Expr::TupleAccess(_record_expr, _field) => todo!("handle TupleAccess"),
-        ast::Expr::TupleAccessorFunction(_) => todo!("handle TupleAccessorFunction"),
+        ast::Expr::TupleAccess(tuple_expr, field) => {
+            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, tuple_expr);
+
+            (
+                TupleAccess {
+                    tuple_var: var_store.fresh(),
+                    ext_var: var_store.fresh(),
+                    elem_var: var_store.fresh(),
+                    loc_expr: Box::new(loc_expr),
+                    index: field.parse().unwrap(),
+                },
+                output,
+            )
+        }
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1112,11 +1248,14 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::Dbg(condition, continuation) => {
+        ast::Expr::Dbg(_, _) => {
+            internal_error!("Dbg should have been desugared by now")
+        }
+        ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
             let mut output = Output::default();
 
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let (loc_message, output1) =
+                canonicalize_expr(env, var_store, scope, message.region, &message.value);
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1129,17 +1268,19 @@ pub fn canonicalize_expr<'a>(
             output.union(output1);
             output.union(output2);
 
-            // the symbol is used to bind the condition `x = condition`, and identify this `dbg`.
+            // the symbol is used to bind the message `x = message`, and identify this `dbg`.
             // That would cause issues if we dbg a variable, like `dbg y`, because in the IR we
             // cannot alias variables. Hence, we make the dbg use that same variable `y`
-            let symbol = match &loc_condition.value {
+            let symbol = match &loc_message.value {
                 Expr::Var(symbol, _) => *symbol,
                 _ => scope.gen_unique_symbol(),
             };
 
             (
                 Dbg {
-                    loc_condition: Box::new(loc_condition),
+                    source_location: (*source_location).into(),
+                    source: (*source).into(),
+                    loc_message: Box::new(loc_message),
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
                     symbol,
@@ -1234,6 +1375,22 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
+        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = MultipleRecordBuilders(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::UnappliedRecordBuilder(sub_expr) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let problem = UnappliedRecordBuilder(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
         &ast::Expr::NonBase10Int {
             string,
             base,
@@ -1253,34 +1410,33 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
+        &ast::Expr::ParensAround(sub_expr) => {
+            let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, sub_expr);
+
+            (loc_expr.value, output)
+        }
         // Below this point, we shouln't see any of these nodes anymore because
         // operator desugaring should have removed them!
-        bad_expr @ ast::Expr::ParensAround(_) => {
-            panic!(
-                "A ParensAround did not get removed during operator desugaring somehow: {:#?}",
-                bad_expr
-            );
-        }
         bad_expr @ ast::Expr::SpaceBefore(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceBefore did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::SpaceAfter(_, _) => {
-            panic!(
+            internal_error!(
                 "A SpaceAfter did not get removed during operator desugaring somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::BinOps { .. } => {
-            panic!(
+            internal_error!(
                 "A binary operator chain did not get desugared somehow: {:#?}",
                 bad_expr
             );
         }
         bad_expr @ ast::Expr::UnaryOp(_, _) => {
-            panic!(
+            internal_error!(
                 "A unary operator did not get desugared somehow: {:#?}",
                 bad_expr
             );
@@ -1692,7 +1848,7 @@ fn canonicalize_field<'a>(
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
-            panic!("Somehow a LabelOnly record field was not desugared!");
+            internal_error!("Somehow a LabelOnly record field was not desugared!");
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
@@ -1700,7 +1856,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            panic!("TODO canonicalize malformed record field");
+            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }
@@ -1782,11 +1938,12 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
+        | other @ IngestedFile(..)
         | other @ SingleQuote(..)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
-        | other @ Accessor { .. }
-        | other @ Update { .. }
+        | other @ RecordAccessor { .. }
+        | other @ RecordUpdate { .. }
         | other @ Var(..)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
@@ -1944,14 +2101,16 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Dbg {
-            loc_condition,
+            source_location,
+            source,
+            loc_message,
             loc_continuation,
             variable,
             symbol,
         } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
+            let loc_message = Loc {
+                region: loc_message.region,
+                value: inline_calls(var_store, loc_message.value),
             };
 
             let loc_continuation = Loc {
@@ -1960,7 +2119,9 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             };
 
             Dbg {
-                loc_condition: Box::new(loc_condition),
+                source_location,
+                source,
+                loc_message: Box::new(loc_message),
                 loc_continuation: Box::new(loc_continuation),
                 variable,
                 symbol,
@@ -2047,14 +2208,32 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             );
         }
 
-        Access {
+        RecordAccess {
             record_var,
             ext_var,
             field_var,
             loc_expr,
             field,
         } => {
-            todo!("Inlining for Access with record_var {:?}, ext_var {:?}, field_var {:?}, loc_expr {:?}, field {:?}", record_var, ext_var, field_var, loc_expr, field);
+            todo!("Inlining for RecordAccess with record_var {:?}, ext_var {:?}, field_var {:?}, loc_expr {:?}, field {:?}", record_var, ext_var, field_var, loc_expr, field);
+        }
+
+        Tuple { tuple_var, elems } => {
+            todo!(
+                "Inlining for Tuple with tuple_var {:?} and elems {:?}",
+                tuple_var,
+                elems
+            );
+        }
+
+        TupleAccess {
+            tuple_var,
+            ext_var,
+            elem_var,
+            loc_expr,
+            index,
+        } => {
+            todo!("Inlining for TupleAccess with tuple_var {:?}, ext_var {:?}, elem_var {:?}, loc_expr {:?}, index {:?}", tuple_var, ext_var, elem_var, loc_expr, index);
         }
 
         Tag {
@@ -2170,10 +2349,10 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                             loc_answer.value
                         }
                         Some(_) => {
-                            unreachable!("Tried to inline a non-function");
+                            internal_error!("Tried to inline a non-function");
                         }
                         None => {
-                            unreachable!(
+                            internal_error!(
                                 "Tried to inline a builtin that wasn't registered: {:?}",
                                 symbol
                             );
@@ -2208,11 +2387,118 @@ fn flatten_str_literal<'a>(
     }
 }
 
+/// Comments, newlines, and nested interpolation are disallowed inside interpolation
 pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
-        ast::Expr::Var { .. } => true,
-        ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
-        _ => false,
+        // These definitely contain neither comments nor newlines, so they are valid
+        ast::Expr::Var { .. }
+        | ast::Expr::SingleQuote(_)
+        | ast::Expr::Str(StrLiteral::PlainLine(_))
+        | ast::Expr::Float(_)
+        | ast::Expr::Num(_)
+        | ast::Expr::NonBase10Int { .. }
+        | ast::Expr::AccessorFunction(_)
+        | ast::Expr::Crash
+        | ast::Expr::Underscore(_)
+        | ast::Expr::MalformedIdent(_, _)
+        | ast::Expr::Tag(_)
+        | ast::Expr::OpaqueRef(_)
+        | ast::Expr::MalformedClosure => true,
+        // Newlines are disallowed inside interpolation, and these all require newlines
+        ast::Expr::Dbg(_, _)
+        | ast::Expr::LowLevelDbg(_, _, _)
+        | ast::Expr::Defs(_, _)
+        | ast::Expr::Expect(_, _)
+        | ast::Expr::When(_, _)
+        | ast::Expr::Backpassing(_, _, _)
+        | ast::Expr::IngestedFile(_, _)
+        | ast::Expr::SpaceBefore(_, _)
+        | ast::Expr::Str(StrLiteral::Block(_))
+        | ast::Expr::SpaceAfter(_, _) => false,
+        // These can contain subexpressions, so we need to recursively check those
+        ast::Expr::Str(StrLiteral::Line(segments)) => {
+            segments.iter().all(|segment| match segment {
+                ast::StrSegment::EscapedChar(_)
+                | ast::StrSegment::Unicode(_)
+                | ast::StrSegment::Plaintext(_) => true,
+                // Disallow nested interpolation. Alternatively, we could allow it but require
+                // a comment above it apologizing to the next person who has to read the code.
+                ast::StrSegment::Interpolated(_) | ast::StrSegment::DeprecatedInterpolated(_) => {
+                    false
+                }
+            })
+        }
+        ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
+            ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+            }
+            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
+        }),
+        ast::Expr::Tuple(fields) => fields
+            .iter()
+            .all(|loc_field| is_valid_interpolation(&loc_field.value)),
+        ast::Expr::MultipleRecordBuilders(loc_expr)
+        | ast::Expr::UnappliedRecordBuilder(loc_expr)
+        | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
+        | ast::Expr::UnaryOp(loc_expr, _)
+        | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
+        ast::Expr::TupleAccess(sub_expr, _)
+        | ast::Expr::ParensAround(sub_expr)
+        | ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
+        ast::Expr::Apply(loc_expr, args, _called_via) => {
+            is_valid_interpolation(&loc_expr.value)
+                && args
+                    .iter()
+                    .all(|loc_arg| is_valid_interpolation(&loc_arg.value))
+        }
+        ast::Expr::BinOps(loc_exprs, loc_expr) => {
+            is_valid_interpolation(&loc_expr.value)
+                && loc_exprs
+                    .iter()
+                    .all(|(loc_expr, _binop)| is_valid_interpolation(&loc_expr.value))
+        }
+        ast::Expr::If(branches, final_branch) => {
+            is_valid_interpolation(&final_branch.value)
+                && branches.iter().all(|(loc_before, loc_after)| {
+                    is_valid_interpolation(&loc_before.value)
+                        && is_valid_interpolation(&loc_after.value)
+                })
+        }
+        ast::Expr::List(elems) => elems
+            .iter()
+            .all(|loc_expr| is_valid_interpolation(&loc_expr.value)),
+        ast::Expr::RecordUpdate { update, fields } => {
+            is_valid_interpolation(&update.value)
+                && fields.iter().all(|loc_field| match loc_field.value {
+                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+                    }
+                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::SpaceBefore(_, _)
+                    | ast::AssignedField::SpaceAfter(_, _) => false,
+                })
+        }
+        ast::Expr::RecordBuilder(fields) => fields.iter().all(|loc_field| match loc_field.value {
+            ast::RecordBuilderField::Value(_label, comments, loc_expr) => {
+                comments.is_empty() && is_valid_interpolation(&loc_expr.value)
+            }
+            ast::RecordBuilderField::ApplyValue(
+                _label,
+                comments_before,
+                comments_after,
+                loc_expr,
+            ) => {
+                comments_before.is_empty()
+                    && comments_after.is_empty()
+                    && is_valid_interpolation(&loc_expr.value)
+            }
+            ast::RecordBuilderField::Malformed(_) | ast::RecordBuilderField::LabelOnly(_) => true,
+            ast::RecordBuilderField::SpaceBefore(_, _)
+            | ast::RecordBuilderField::SpaceAfter(_, _) => false,
+        }),
     }
 }
 
@@ -2266,7 +2552,7 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 },
-                Interpolated(loc_expr) => {
+                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
                         // Interpolations desugar to Str.concat calls
                         output.references.insert_call(Symbol::STR_CONCAT);
@@ -2367,6 +2653,8 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
+
     pub function_bodies: Vec<Loc<FunctionDef>>,
     pub expressions: Vec<Loc<Expr>>,
     pub destructs: Vec<DestructureDef>,
@@ -2388,6 +2676,7 @@ impl Declarations {
             variables: Vec::with_capacity(capacity),
             symbols: Vec::with_capacity(capacity),
             annotations: Vec::with_capacity(capacity),
+            host_exposed_annotations: VecMap::new(),
             function_bodies: Vec::with_capacity(capacity),
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
@@ -2418,6 +2707,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2440,6 +2730,11 @@ impl Declarations {
             Recursive::TailRecursive => DeclarationTag::TailRecursive(function_def_index),
         };
 
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
+
         self.declarations.push(tag);
         self.variables.push(expr_var);
         self.symbols.push(symbol);
@@ -2460,6 +2755,7 @@ impl Declarations {
         loc_closure_data: Loc<ClosureData>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
@@ -2474,6 +2770,11 @@ impl Declarations {
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
         let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
 
         self.declarations
             .push(DeclarationTag::Function(function_def_index));
@@ -2532,9 +2833,15 @@ impl Declarations {
         loc_expr: Loc<Expr>,
         expr_var: Variable,
         annotation: Option<Annotation>,
+        host_annotation: Option<(Variable, Annotation)>,
         specializes: Option<Symbol>,
     ) -> usize {
         let index = self.declarations.len();
+
+        if let Some(annotation) = host_annotation {
+            self.host_exposed_annotations
+                .insert(self.declarations.len(), annotation);
+        }
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -2590,6 +2897,7 @@ impl Declarations {
                             def.expr_var,
                             def.annotation,
                             None,
+                            None,
                         );
                     }
 
@@ -2600,6 +2908,7 @@ impl Declarations {
                             def.expr_var,
                             def.annotation,
                             None,
+                            None,
                         );
                     }
                 },
@@ -2609,6 +2918,7 @@ impl Declarations {
                         def.loc_expr,
                         def.expr_var,
                         def.annotation,
+                        None,
                         None,
                     );
                 }
@@ -2772,7 +3082,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Var(symbol, var)
-            | Expr::Update {
+            | Expr::RecordUpdate {
                 symbol,
                 record_var: var,
                 ..
@@ -2863,7 +3173,8 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::OpaqueRef { argument, .. } => {
                 stack.push(&argument.1.value);
             }
-            Expr::Access { loc_expr, .. }
+            Expr::RecordAccess { loc_expr, .. }
+            | Expr::TupleAccess { loc_expr, .. }
             | Expr::Closure(ClosureData {
                 loc_body: loc_expr, ..
             }) => {
@@ -2871,6 +3182,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             }
             Expr::Record { fields, .. } => {
                 stack.extend(fields.iter().map(|(_, field)| &field.loc_expr.value));
+            }
+            Expr::Tuple { elems, .. } => {
+                stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
             Expr::Expect {
                 loc_continuation, ..
@@ -2891,8 +3205,9 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::Float(_, _, _, _, _)
             | Expr::Int(_, _, _, _, _)
             | Expr::Str(_)
+            | Expr::IngestedFile(..)
             | Expr::ZeroArgumentTag { .. }
-            | Expr::Accessor(_)
+            | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
@@ -3027,7 +3342,7 @@ impl crate::traverse::Visitor for ExpectCollector {
                     .insert(loc_condition.region, lookups_in_cond.to_vec());
             }
             Expr::Dbg {
-                loc_condition,
+                loc_message,
                 variable,
                 symbol,
                 ..
@@ -3035,7 +3350,7 @@ impl crate::traverse::Visitor for ExpectCollector {
                 let lookup = DbgLookup {
                     symbol: *symbol,
                     var: *variable,
-                    region: loc_condition.region,
+                    region: loc_message.region,
                     ability_info: None,
                 };
 

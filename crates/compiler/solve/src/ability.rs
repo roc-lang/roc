@@ -1,27 +1,31 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
+use roc_checkmate::with_checkmate;
 use roc_collections::{VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_UNDERIVABLE;
+use roc_derive_key::{DeriveError, Derived};
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
-    Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
+    UnderivableReason, Unfulfilled,
 };
+use roc_solve_schema::UnificationMode;
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
-    Variable,
+    TupleElems, Variable,
 };
 use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity, Types};
-use roc_unify::unify::{Env, MustImplementConstraints};
+use roc_unify::unify::MustImplementConstraints;
 use roc_unify::unify::{MustImplementAbility, Obligated};
+use roc_unify::Env as UEnv;
 
-use crate::solve::type_to_var;
-use crate::solve::{Aliases, Pools};
+use crate::env::InferenceEnv;
+use crate::{aliases::Aliases, to_var::type_to_var};
 
 #[derive(Debug, Clone)]
 pub enum AbilityImplError {
@@ -55,7 +59,7 @@ pub struct PendingDerivesTable(
 
 impl PendingDerivesTable {
     pub fn new(
-        subs: &mut Subs,
+        env: &mut InferenceEnv,
         types: &mut Types,
         aliases: &mut Aliases,
         pending_derives: PendingDerives,
@@ -80,17 +84,16 @@ impl PendingDerivesTable {
                 // Neither rank nor pools should matter here.
                 let typ = types.from_old_type(&typ);
                 let opaque_var = type_to_var(
-                    subs,
+                    env,
                     Rank::toplevel(),
                     problems,
                     abilities_store,
                     obligation_cache,
-                    &mut Pools::default(),
                     types,
                     aliases,
                     typ,
                 );
-                let real_var = match subs.get_content_without_compacting(opaque_var) {
+                let real_var = match env.subs.get_content_without_compacting(opaque_var) {
                     Content::Alias(_, _, real_var, AliasKind::Opaque) => real_var,
                     _ => internal_error!("Non-opaque in derives table"),
                 };
@@ -301,6 +304,13 @@ impl ObligationCache {
 
             Symbol::BOOL_EQ => Some(DeriveEq::is_derivable(self, abilities_store, subs, var)),
 
+            Symbol::INSPECT_INSPECT_ABILITY => Some(DeriveInspect::is_derivable(
+                self,
+                abilities_store,
+                subs,
+                var,
+            )),
+
             _ => None,
         };
 
@@ -369,15 +379,30 @@ impl ObligationCache {
         }
 
         let ImplKey { opaque, ability } = impl_key;
-        let has_declared_impl = abilities_store.has_declared_implementation(opaque, ability);
 
-        let obligation_result = if !has_declared_impl {
+        // Every type has the Inspect ability automatically, even opaques with no `implements` declaration.
+        let is_inspect = ability == Symbol::INSPECT_INSPECT_ABILITY;
+        let has_known_impl =
+            is_inspect || abilities_store.has_declared_implementation(opaque, ability);
+
+        // Some builtins, like Float32 and Bool, would have a cyclic dependency on Encode/Decode/etc.
+        // if their Roc implementations explicitly defined some abilities they support.
+        let builtin_opaque_impl_ok = || match ability {
+            DeriveEncoding::ABILITY => DeriveEncoding::is_derivable_builtin_opaque(opaque),
+            DeriveDecoding::ABILITY => DeriveDecoding::is_derivable_builtin_opaque(opaque),
+            DeriveEq::ABILITY => DeriveEq::is_derivable_builtin_opaque(opaque),
+            DeriveHash::ABILITY => DeriveHash::is_derivable_builtin_opaque(opaque),
+            DeriveInspect::ABILITY => DeriveInspect::is_derivable_builtin_opaque(opaque),
+            _ => false,
+        };
+
+        let obligation_result = if has_known_impl || builtin_opaque_impl_ok() {
+            Ok(())
+        } else {
             Err(Unfulfilled::OpaqueDoesNotImplement {
                 typ: opaque,
                 ability,
             })
-        } else {
-            Ok(())
         };
 
         self.impl_cache.insert(impl_key, obligation_result);
@@ -451,9 +476,9 @@ impl ObligationCache {
 
 #[inline(always)]
 #[rustfmt::skip]
-fn is_builtin_int_alias(symbol: Symbol) -> bool {
+fn is_builtin_fixed_int_alias(symbol: Symbol) -> bool {
     matches!(symbol,
-          Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
+        | Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
         | Symbol::NUM_U16  | Symbol::NUM_UNSIGNED16
         | Symbol::NUM_U32  | Symbol::NUM_UNSIGNED32
         | Symbol::NUM_U64  | Symbol::NUM_UNSIGNED64
@@ -463,8 +488,12 @@ fn is_builtin_int_alias(symbol: Symbol) -> bool {
         | Symbol::NUM_I32  | Symbol::NUM_SIGNED32
         | Symbol::NUM_I64  | Symbol::NUM_SIGNED64
         | Symbol::NUM_I128 | Symbol::NUM_SIGNED128
-        | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
     )
+}
+
+#[inline(always)]
+fn is_builtin_nat_alias(symbol: Symbol) -> bool {
+    matches!(symbol, Symbol::NUM_NAT | Symbol::NUM_NATURAL)
 }
 
 #[inline(always)]
@@ -477,17 +506,21 @@ fn is_builtin_float_alias(symbol: Symbol) -> bool {
 }
 
 #[inline(always)]
-#[rustfmt::skip]
 fn is_builtin_dec_alias(symbol: Symbol) -> bool {
-    matches!(symbol,
-        | Symbol::NUM_DEC  | Symbol::NUM_DECIMAL,
-    )
+    matches!(symbol, Symbol::NUM_DEC | Symbol::NUM_DECIMAL,)
 }
 
 #[inline(always)]
-#[rustfmt::skip]
 fn is_builtin_number_alias(symbol: Symbol) -> bool {
-    is_builtin_int_alias(symbol) || is_builtin_float_alias(symbol) || is_builtin_dec_alias(symbol)
+    is_builtin_fixed_int_alias(symbol)
+        || is_builtin_nat_alias(symbol)
+        || is_builtin_float_alias(symbol)
+        || is_builtin_dec_alias(symbol)
+}
+
+#[inline(always)]
+fn is_builtin_bool_alias(symbol: Symbol) -> bool {
+    matches!(symbol, Symbol::BOOL_BOOL)
 }
 
 struct NotDerivable {
@@ -543,6 +576,18 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
     fn visit_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
         Err(NotDerivable {
             var,
@@ -568,6 +613,14 @@ trait DerivableVisitor {
 
     #[inline(always)]
     fn visit_empty_record(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_empty_tuple(var: Variable) -> Result<(), NotDerivable> {
         Err(NotDerivable {
             var,
             context: NotDerivableContext::NoContext,
@@ -697,7 +750,19 @@ trait DerivableVisitor {
                             ) {
                                 // TODO: currently, just we suppose the presence of a flex var may
                                 // include more or less things which we can derive. But, we should
-                                // instead recurse here, and add a `t ~ u | u has Decode` constraint as needed.
+                                // instead recurse here, and add a `t ~ u where u implements Decode` constraint as needed.
+                                stack.push(ext);
+                            }
+                        }
+                    }
+                    Tuple(elems, ext) => {
+                        let descend = Self::visit_tuple(subs, var, elems)?;
+                        if descend.0 {
+                            push_var_slice!(elems.variables());
+                            if !matches!(
+                                subs.get_content_without_compacting(ext),
+                                Content::FlexVar(_) | Content::RigidVar(_)
+                            ) {
                                 stack.push(ext);
                             }
                         }
@@ -708,13 +773,13 @@ trait DerivableVisitor {
                             for i in tags.variables() {
                                 push_var_slice!(subs[i]);
                             }
-                            stack.push(ext);
+                            stack.push(ext.var());
                         }
                     }
                     FunctionOrTagUnion(_tag_name, _fn_name, ext) => {
                         let descend = Self::visit_function_or_tag_union(var)?;
                         if descend.0 {
-                            stack.push(ext);
+                            stack.push(ext.var());
                         }
                     }
                     RecursiveTagUnion(rec, tags, ext) => {
@@ -724,10 +789,11 @@ trait DerivableVisitor {
                             for i in tags.variables() {
                                 push_var_slice!(subs[i]);
                             }
-                            stack.push(ext);
+                            stack.push(ext.var());
                         }
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,
+                    EmptyTuple => Self::visit_empty_tuple(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
                 },
                 Alias(
@@ -773,6 +839,12 @@ trait DerivableVisitor {
                         context: NotDerivableContext::NoContext,
                     })
                 }
+                ErasedLambda => {
+                    return Err(NotDerivable {
+                        var,
+                        context: NotDerivableContext::NoContext,
+                    })
+                }
                 Error => {
                     return Err(NotDerivable {
                         var,
@@ -786,6 +858,93 @@ trait DerivableVisitor {
     }
 }
 
+struct DeriveInspect;
+impl DerivableVisitor for DeriveInspect {
+    const ABILITY: Symbol = Symbol::INSPECT_INSPECT_ABILITY;
+    const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_INSPECT;
+
+    #[inline(always)]
+    fn is_derivable_builtin_opaque(_: Symbol) -> bool {
+        true
+    }
+
+    #[inline(always)]
+    fn visit_recursion(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_apply(_: Variable, _: Symbol) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_record(
+        _subs: &Subs,
+        _var: Variable,
+        _fields: RecordFields,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_recursive_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_function_or_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_empty_record(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_empty_tag_union(_var: Variable) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+        if is_builtin_number_alias(symbol) {
+            Ok(Descend(false))
+        } else {
+            Ok(Descend(true))
+        }
+    }
+
+    #[inline(always)]
+    fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
+    }
+}
+
 struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
@@ -793,7 +952,8 @@ impl DerivableVisitor for DeriveEncoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -826,6 +986,15 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
     fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
@@ -851,9 +1020,16 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
-    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
-            Ok(Descend(false))
+            if is_builtin_nat_alias(symbol) {
+                Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Encode(NotDerivableEncode::Nat),
+                })
+            } else {
+                Ok(Descend(false))
+            }
         } else {
             Ok(Descend(true))
         }
@@ -881,7 +1057,8 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        (is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol))
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -921,6 +1098,15 @@ impl DerivableVisitor for DeriveDecoding {
             }
         }
 
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
@@ -950,9 +1136,16 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
-    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
-            Ok(Descend(false))
+            if is_builtin_nat_alias(symbol) {
+                Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::Nat),
+                })
+            } else {
+                Ok(Descend(false))
+            }
         } else {
             Ok(Descend(true))
         }
@@ -980,7 +1173,7 @@ impl DerivableVisitor for DeriveHash {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        is_builtin_number_alias(symbol) || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1020,6 +1213,15 @@ impl DerivableVisitor for DeriveHash {
             }
         }
 
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
 
@@ -1079,7 +1281,10 @@ impl DerivableVisitor for DeriveEq {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_int_alias(symbol) || is_builtin_dec_alias(symbol)
+        is_builtin_fixed_int_alias(symbol)
+            || is_builtin_nat_alias(symbol)
+            || is_builtin_dec_alias(symbol)
+            || is_builtin_bool_alias(symbol)
     }
 
     #[inline(always)]
@@ -1127,6 +1332,15 @@ impl DerivableVisitor for DeriveEq {
     }
 
     #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        _var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(true))
+    }
+
+    #[inline(always)]
     fn visit_tag_union(_var: Variable) -> Result<Descend, NotDerivable> {
         Ok(Descend(true))
     }
@@ -1170,16 +1384,19 @@ impl DerivableVisitor for DeriveEq {
         subs: &mut Subs,
         content_var: Variable,
     ) -> Result<Descend, NotDerivable> {
-        use roc_unify::unify::{unify, Mode};
+        use roc_unify::unify::unify;
 
         // Of the floating-point types,
         // only Dec implements Eq.
-        let mut env = Env::new(subs);
+        // TODO(checkmate): pass checkmate through
         let unified = unify(
-            &mut env,
+            &mut with_checkmate!({
+                on => UEnv::new(subs, None),
+                off => UEnv::new(subs),
+            }),
             content_var,
             Variable::DECIMAL,
-            Mode::EQ,
+            UnificationMode::EQ,
             Polarity::Pos,
         );
         match unified {
@@ -1213,8 +1430,7 @@ pub fn type_implementing_specialization(
                 .filter(|mia| mia.ability == ability)
                 .count()
         } < 2,
-        "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {:?}",
-        specialization_must_implement_constraints
+        "Multiple variables bound to an ability - this is ambiguous and should have been caught in canonicalization: {specialization_must_implement_constraints:?}"
     );
 
     specialization_must_implement_constraints
@@ -1224,12 +1440,12 @@ pub fn type_implementing_specialization(
 }
 
 /// Result of trying to resolve an ability specialization.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Resolved {
     /// A user-defined specialization should be used.
     Specialization(Symbol),
-    /// A specialization must be generated for the given type variable.
-    NeedsGenerated(Variable),
+    /// A specialization must be generated with the given derive key.
+    Derive(Derived),
 }
 
 /// An [`AbilityResolver`] is a shell of an abilities store that answers questions needed for
@@ -1272,13 +1488,33 @@ impl AbilityResolver for AbilitiesStore {
     }
 }
 
+/// Whether this is a module whose types' ability implementations should be checked via derive_key,
+/// because they do not explicitly list ability implementations due to circular dependencies.
+#[inline]
+pub(crate) fn builtin_module_with_unlisted_ability_impl(module_id: ModuleId) -> bool {
+    matches!(module_id, ModuleId::NUM | ModuleId::BOOL)
+}
+
+#[derive(Debug)]
+pub enum ResolveError {
+    NonDerivableAbility(Symbol),
+    DeriveError(DeriveError),
+    NoTypeImplementingSpecialization,
+}
+
+impl From<DeriveError> for ResolveError {
+    fn from(e: DeriveError) -> Self {
+        Self::DeriveError(e)
+    }
+}
+
 pub fn resolve_ability_specialization<R: AbilityResolver>(
     subs: &mut Subs,
     resolver: &R,
     ability_member: Symbol,
     specialization_var: Variable,
-) -> Option<Resolved> {
-    use roc_unify::unify::{unify, Mode};
+) -> Result<Resolved, ResolveError> {
+    use roc_unify::unify::unify;
 
     let (parent_ability, signature_var) = resolver
         .member_parent_and_signature_var(ability_member, subs)
@@ -1289,10 +1525,14 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     instantiate_rigids(subs, signature_var);
     let (_vars, must_implement_ability, _lambda_sets_to_specialize, _meta) = unify(
-        &mut Env::new(subs),
+        // TODO(checkmate): pass checkmate through
+        &mut with_checkmate!({
+            on => UEnv::new(subs, None),
+            off => UEnv::new(subs),
+        }),
         specialization_var,
         signature_var,
-        Mode::EQ,
+        UnificationMode::EQ,
         Polarity::Pos,
     )
     .expect_success(
@@ -1301,29 +1541,51 @@ pub fn resolve_ability_specialization<R: AbilityResolver>(
 
     subs.rollback_to(snapshot);
 
-    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)?;
+    use ResolveError::*;
+
+    let obligated = type_implementing_specialization(&must_implement_ability, parent_ability)
+        .ok_or(NoTypeImplementingSpecialization)?;
 
     let resolved = match obligated {
         Obligated::Opaque(symbol) => {
-            let impl_key = roc_can::abilities::ImplKey {
-                opaque: symbol,
-                ability_member,
-            };
+            if builtin_module_with_unlisted_ability_impl(symbol.module_id()) {
+                let derive_key = roc_derive_key::Derived::builtin_with_builtin_symbol(
+                    ability_member.try_into().map_err(NonDerivableAbility)?,
+                    symbol,
+                )?;
 
-            match resolver.get_implementation(impl_key)? {
-                roc_types::types::MemberImpl::Impl(spec_symbol) => {
-                    Resolved::Specialization(spec_symbol)
+                Resolved::Derive(derive_key)
+            } else {
+                let impl_key = roc_can::abilities::ImplKey {
+                    opaque: symbol,
+                    ability_member,
+                };
+
+                match resolver
+                    .get_implementation(impl_key)
+                    .ok_or(NoTypeImplementingSpecialization)?
+                {
+                    roc_types::types::MemberImpl::Impl(spec_symbol) => {
+                        Resolved::Specialization(spec_symbol)
+                    }
+                    // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
+                    // which will make this simpler.
+                    roc_types::types::MemberImpl::Error => {
+                        Resolved::Specialization(Symbol::UNDERSCORE)
+                    }
                 }
-                // TODO this is not correct. We can replace `Resolved` with `MemberImpl` entirely,
-                // which will make this simpler.
-                roc_types::types::MemberImpl::Error => Resolved::Specialization(Symbol::UNDERSCORE),
             }
         }
         Obligated::Adhoc(variable) => {
-            // TODO: more rules need to be validated here, like is this a builtin ability?
-            Resolved::NeedsGenerated(variable)
+            let derive_key = roc_derive_key::Derived::builtin(
+                ability_member.try_into().map_err(NonDerivableAbility)?,
+                subs,
+                variable,
+            )?;
+
+            Resolved::Derive(derive_key)
         }
     };
 
-    Some(resolved)
+    Ok(resolved)
 }

@@ -5,5 +5,5 @@ platform "false-interpreter"
     imports [Task.{ Task }]
     provides [mainForHost]
 
-mainForHost : Str -> Task {} [] as Fx
+mainForHost : Str -> Task {} []
 mainForHost = \file -> main file

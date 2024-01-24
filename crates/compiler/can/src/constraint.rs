@@ -1,4 +1,6 @@
 use std::cell::Cell;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
@@ -174,7 +176,7 @@ impl Constraints {
 
         let mut buf = String::new();
 
-        writeln!(buf, "Constraints statistics for module {:?}:", module_id)?;
+        writeln!(buf, "Constraints statistics for module {module_id:?}:")?;
 
         writeln!(buf, "   constraints length: {}:", self.constraints.len())?;
         writeln!(
@@ -599,6 +601,7 @@ impl Constraints {
             | Constraint::PatternPresence(_, _, _, _)
             | Constraint::Exhaustive { .. }
             | Constraint::Resolve(..)
+            | Constraint::IngestedFile(..)
             | Constraint::CheckCycle(..) => false,
         }
     }
@@ -673,6 +676,15 @@ impl Constraints {
 
         Constraint::CheckCycle(cycle_index, cycle_mark)
     }
+
+    pub fn ingested_file(
+        &mut self,
+        type_index: TypeOrVar,
+        file_path: Box<PathBuf>,
+        bytes: Arc<Vec<u8>>,
+    ) -> Constraint {
+        Constraint::IngestedFile(type_index, file_path, bytes)
+    }
 }
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
@@ -734,7 +746,7 @@ pub struct OpportunisticResolve {
     pub specialization_id: SpecializationId,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Constraint {
     Eq(Eq),
     Store(TypeOrVar, Variable, Index<&'static str>, u32),
@@ -773,6 +785,8 @@ pub enum Constraint {
     /// Attempt to resolve a specialization.
     Resolve(OpportunisticResolve),
     CheckCycle(Index<Cycle>, IllegalCycleMark),
+
+    IngestedFile(TypeOrVar, Box<PathBuf>, Arc<Vec<u8>>),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -819,16 +833,16 @@ impl std::fmt::Debug for Constraint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Eq(Eq(arg0, arg1, arg2, arg3)) => {
-                write!(f, "Eq({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+                write!(f, "Eq({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Store(arg0, arg1, arg2, arg3) => {
-                write!(f, "Store({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+                write!(f, "Store({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Lookup(arg0, arg1, arg2) => {
-                write!(f, "Lookup({:?}, {:?}, {:?})", arg0, arg1, arg2)
+                write!(f, "Lookup({arg0:?}, {arg1:?}, {arg2:?})")
             }
             Self::Pattern(arg0, arg1, arg2, arg3) => {
-                write!(f, "Pattern({:?}, {:?}, {:?}, {:?})", arg0, arg1, arg2, arg3)
+                write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
@@ -837,24 +851,19 @@ impl std::fmt::Debug for Constraint {
             Self::IsOpenType(arg0) => f.debug_tuple("IsOpenType").field(arg0).finish(),
             Self::IncludesTag(arg0) => f.debug_tuple("IncludesTag").field(arg0).finish(),
             Self::PatternPresence(arg0, arg1, arg2, arg3) => {
-                write!(
-                    f,
-                    "PatternPresence({:?}, {:?}, {:?}, {:?})",
-                    arg0, arg1, arg2, arg3
-                )
+                write!(f, "PatternPresence({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Exhaustive(arg0, arg1, arg2, arg3) => {
-                write!(
-                    f,
-                    "Exhaustive({:?}, {:?}, {:?}, {:?})",
-                    arg0, arg1, arg2, arg3
-                )
+                write!(f, "Exhaustive({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
             }
             Self::Resolve(arg0) => {
-                write!(f, "Resolve({:?})", arg0)
+                write!(f, "Resolve({arg0:?})")
             }
             Self::CheckCycle(arg0, arg1) => {
-                write!(f, "CheckCycle({:?}, {:?})", arg0, arg1)
+                write!(f, "CheckCycle({arg0:?}, {arg1:?})")
+            }
+            Self::IngestedFile(arg0, arg1, arg2) => {
+                write!(f, "IngestedFile({arg0:?}, {arg1:?}, {arg2:?})")
             }
         }
     }

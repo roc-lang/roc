@@ -12,6 +12,8 @@ use roc_std::RocList;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::RocStr;
 
+use crate::helpers::with_larger_debug_stack;
+
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn hash_specialization() {
@@ -20,10 +22,10 @@ fn hash_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -43,14 +45,14 @@ fn hash_specialization_multiple_add() {
             r#"
             app "test" provides [main] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
-            Id := U64 has [ MHash {hash: hashId} ]
+            Id := U64 implements [ MHash {hash: hashId} ]
 
             hashId = \@Id n -> n
 
-            One := {} has [ MHash {hash: hashOne} ]
+            One := {} implements [ MHash {hash: hashOne} ]
 
             hashOne = \@One _ -> 1
 
@@ -70,10 +72,10 @@ fn alias_member_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
 
             hash = \@Id n -> n
 
@@ -95,13 +97,13 @@ fn ability_constrained_in_non_member_usage() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
-            mulMHashes : a, a -> U64 | a has MHash
+            mulMHashes : a, a -> U64 where a implements MHash
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
             result = mulMHashes (@Id 5) (@Id 7)
@@ -120,12 +122,12 @@ fn ability_constrained_in_non_member_usage_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash {hash}]
+            Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
             result = mulMHashes (@Id 5) (@Id 7)
@@ -144,16 +146,16 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
-            mulMHashes : a, b -> U64 | a has MHash, b has MHash
+            mulMHashes : a, b -> U64 where a implements MHash, b implements MHash
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash { hash: hashId }]
+            Id := U64 implements [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash { hash: hashThree }]
+            Three := {} implements [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -172,15 +174,15 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash { hash: hashId }]
+            Id := U64 implements [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash { hash: hashThree }]
+            Three := {} implements [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -199,16 +201,16 @@ fn ability_used_as_type_still_compiles() {
             r#"
             app "test" provides [result] to "./platform"
 
-            MHash has
-                hash : a -> U64 | a has MHash
+            MHash implements
+                hash : a -> U64 where a implements MHash
 
             mulMHashes : MHash, MHash -> U64
             mulMHashes = \x, y -> hash x * hash y
 
-            Id := U64 has [MHash { hash: hashId }]
+            Id := U64 implements [MHash { hash: hashId }]
             hashId = \@Id n -> n
 
-            Three := {} has [MHash { hash: hashThree }]
+            Three := {} implements [MHash { hash: hashThree }]
             hashThree = \@Three _ -> 3
 
             result = mulMHashes (@Id 100) (@Three {})
@@ -227,15 +229,15 @@ fn bounds_to_multiple_abilities() {
             r#"
             app "test" provides [main] to "./platform"
 
-            Idempot has idempot : a -> a | a has Idempot
-            Consume has consume : a -> Str | a has Consume
+            Idempot implements idempot : a -> a where a implements Idempot
+            Consume implements consume : a -> Str where a implements Consume
 
-            Hello := Str has [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
+            Hello := Str implements [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
 
             idempotHello = \@Hello msg -> @Hello msg
             consumeHello = \@Hello msg -> msg
 
-            lifecycle : a -> Str | a has Idempot & Consume
+            lifecycle : a -> Str where a implements Idempot & Consume
             lifecycle = \x -> idempot x |> consume
 
             main = lifecycle (@Hello "hello world")
@@ -254,26 +256,26 @@ fn encode() {
             r#"
             app "test" provides [myU8Bytes] to "./platform"
 
-            MEncoder fmt := List U8, fmt -> List U8 | fmt has Format
+            MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
-            MEncoding has
-              toEncoder : val -> MEncoder fmt | val has MEncoding, fmt has Format
+            MEncoding implements
+              toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
-            Format has
-              u8 : U8 -> MEncoder fmt | fmt has Format
+            Format implements
+              u8 : U8 -> MEncoder fmt where fmt implements Format
 
-            appendWith : List U8, MEncoder fmt, fmt -> List U8 | fmt has Format
+            appendWith : List U8, MEncoder fmt, fmt -> List U8 where fmt implements Format
             appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
 
-            toBytes : val, fmt -> List U8 | val has MEncoding, fmt has Format
+            toBytes : val, fmt -> List U8 where val implements MEncoding, fmt implements Format
             toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
 
 
-            Linear := {} has [Format {u8}]
+            Linear := {} implements [Format {u8}]
 
             u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-            Rgba := { r : U8, g : U8, b : U8, a : U8 } has [MEncoding {toEncoder}]
+            Rgba := { r : U8, g : U8, b : U8, a : U8 } implements [MEncoding {toEncoder}]
 
             toEncoder = \@Rgba {r, g, b, a} ->
                 @MEncoder \lst, fmt -> lst
@@ -301,19 +303,19 @@ fn decode() {
 
             MDecodeError : [TooShort, Leftover (List U8)]
 
-            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+            MDecoder val fmt := List U8, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
 
-            MDecoding has
-                decoder : MDecoder val fmt | val has MDecoding, fmt has MDecoderFormatting
+            MDecoding implements
+                decoder : MDecoder val fmt where val implements MDecoding, fmt implements MDecoderFormatting
 
-            MDecoderFormatting has
-                u8 : MDecoder U8 fmt | fmt has MDecoderFormatting
+            MDecoderFormatting implements
+                u8 : MDecoder U8 fmt where fmt implements MDecoderFormatting
 
-            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } | fmt has MDecoderFormatting
+            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
             decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
             fromBytes : List U8, fmt -> Result val MDecodeError
-                        | fmt has MDecoderFormatting, val has MDecoding
+                        where fmt implements MDecoderFormatting, val implements MDecoding
             fromBytes = \lst, fmt ->
                 when decodeWith lst decoder fmt is
                     { result, rest } ->
@@ -323,14 +325,14 @@ fn decode() {
                             else Err (Leftover rest)
 
 
-            Linear := {} has [MDecoderFormatting {u8}]
+            Linear := {} implements [MDecoderFormatting {u8}]
 
             u8 = @MDecoder \lst, @Linear {} ->
                     when List.first lst is
-                        Ok n -> { result: Ok n, rest: List.dropFirst lst }
+                        Ok n -> { result: Ok n, rest: List.dropFirst lst 1 }
                         Err _ -> { result: Err TooShort, rest: [] }
 
-            MyU8 := U8 has [MDecoding {decoder}]
+            MyU8 := U8 implements [MDecoding {decoder}]
 
             # impl MDecoding for MyU8
             decoder = @MDecoder \lst, fmt ->
@@ -355,23 +357,23 @@ fn encode_use_stdlib() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
-            HelloWorld := {} has [Encoding {toEncoder}]
+            HelloWorld := {} implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} ->
                 Encode.custom \bytes, fmt ->
                     bytes
                         |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -383,38 +385,39 @@ fn encode_use_stdlib_without_wrapping_custom() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
-            HelloWorld := {} has [Encoding {toEncoder}]
+            HelloWorld := {} implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld {} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {}) TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derive_to_encoder_for_opaque() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
-            HelloWorld := { a: Str } has [Encoding]
+            HelloWorld := { a: Str } implements [Encoding]
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld { a: "Hello, World!" }) TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -432,23 +435,23 @@ fn to_encoder_encode_custom_has_capture() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
-            HelloWorld := Str has [Encoding {toEncoder}]
+            HelloWorld := Str implements [Encoding {toEncoder}]
             toEncoder = \@HelloWorld s1 ->
                 Encode.custom \bytes, fmt ->
                     bytes
                         |> Encode.appendWith (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
             "#
         ),
-        RocStr::from("\"Hello, World!\n\""),
+        RocStr::from("\"Hello, World!\\n\""),
         RocStr
     )
 }
@@ -472,15 +475,53 @@ mod encode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Encode, Json] provides [main] to "./platform"
+                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" Json.toUtf8) is
+                    when Str.fromUtf8 (Encode.toBytes "foo" TotallyNotJson.json) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
             ),
             RocStr::from("\"foo\""),
+            RocStr
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn ranged_number() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] TotallyNotJson.json) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from(r"[1,2,3]"),
+            RocStr
+        )
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
+
+                main =
+                    when Str.fromUtf8 (Encode.toBytes Bool.false TotallyNotJson.json) is
+                        Ok s -> s
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from(r"false"),
             RocStr
         )
     }
@@ -493,15 +534,15 @@ mod encode_immediate {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Encode, Json] provides [main] to "./platform"
+                        app "test" imports [Encode, TotallyNotJson] provides [main] to "./platform"
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} Json.toUtf8) is
+                            when Str.fromUtf8 (Encode.toBytes {}{} TotallyNotJson.json) is
                                 Ok s -> s
                                 _ -> "<bad>"
                         "#
                     ), $num, stringify!($typ)),
-                    RocStr::from(format!(r#"{}"#, $num).as_str()),
+                    RocStr::from(format!(r"{}", $num).as_str()),
                     RocStr
                 )
             }
@@ -526,17 +567,18 @@ mod encode_immediate {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_one_field_string() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes {a: "foo"} TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -548,18 +590,19 @@ fn encode_derived_record_one_field_string() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_two_fields_strings() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 rcd = {a: "foo", b: "bar"}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes rcd TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -571,18 +614,19 @@ fn encode_derived_record_two_fields_strings() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_string() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 rcd = {a: {b: "bar"}}
-                encoded = Encode.toBytes rcd Json.toUtf8
+                encoded = Encode.toBytes rcd TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -601,12 +645,12 @@ fn encode_derived_tag_one_payload_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -624,12 +668,12 @@ fn encode_derived_tag_two_payloads_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes x TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -647,12 +691,12 @@ fn encode_derived_nested_tag_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x Json.toUtf8
+                encoded = Encode.toBytes x TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -665,18 +709,19 @@ fn encode_derived_nested_tag_string() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_nested_record_tag_record() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 x = {a: (B ({c: "foo"}))}
-                encoded = Encode.toBytes x Json.toUtf8
+                encoded = Encode.toBytes x TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -695,12 +740,12 @@ fn encode_derived_list_string() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 lst = ["foo", "bar", "baz"]
-                encoded = Encode.toBytes lst Json.toUtf8
+                encoded = Encode.toBytes lst TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -713,18 +758,19 @@ fn encode_derived_list_string() {
 }
 
 #[test]
+#[cfg(not(debug_assertions))]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_list_of_records() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 lst = [{a: "foo"}, {a: "bar"}, {a: "baz"}]
-                encoded = Encode.toBytes lst Json.toUtf8
+                encoded = Encode.toBytes lst TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -743,12 +789,12 @@ fn encode_derived_list_of_lists_of_strings() {
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 lst = [["a", "b"], ["c", "d", "e"], ["f"]]
-                encoded = Encode.toBytes lst Json.toUtf8
+                encoded = Encode.toBytes lst TotallyNotJson.json
                 result = Str.fromUtf8 encoded
                 when result is
                     Ok s -> s
@@ -761,20 +807,21 @@ fn encode_derived_list_of_lists_of_strings() {
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(not(debug_assertions))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_derived_record_with_many_types() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Encode, Json]
+                imports [Encode, TotallyNotJson]
                 provides [main] to "./platform"
 
             main =
                 fresh : [Fresh Str, Rotten Str]
                 fresh = Fresh "tomatoes"
                 rcd = {actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}
-                result = Str.fromUtf8 (Encode.toBytes rcd Json.toUtf8)
+                result = Str.fromUtf8 (Encode.toBytes rcd TotallyNotJson.json)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -789,15 +836,140 @@ fn encode_derived_record_with_many_types() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_tuple_two_fields() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, TotallyNotJson]
+                provides [main] to "./platform"
+
+            main =
+                tup = ("foo", 10u8)
+                result = Str.fromUtf8 (Encode.toBytes tup TotallyNotJson.json)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"["foo",10]"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_tuple_of_tuples() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, TotallyNotJson]
+                provides [main] to "./platform"
+
+            main =
+                tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
+                result = Str.fromUtf8 (Encode.toBytes tup TotallyNotJson.json)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"[["foo",10],[23,"bar",15]]"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(not(debug_assertions))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_generic_record_with_different_field_types() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, TotallyNotJson]
+                provides [main] to "./platform"
+
+            Q a b := {a: a, b: b} implements [Encoding]
+
+            q = @Q {a: 10u32, b: "fieldb"}
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes q TotallyNotJson.json)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"a":10,"b":"fieldb"}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn encode_derived_generic_tag_with_different_field_types() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test"
+                imports [Encode, TotallyNotJson]
+                provides [main] to "./platform"
+
+            Q a b := [A a, B b] implements [Encoding]
+
+            q : Q Str U32
+            q = @Q (B 67)
+
+            main =
+                result = Str.fromUtf8 (Encode.toBytes q TotallyNotJson.json)
+                when result is
+                    Ok s -> s
+                    _ -> "<bad>"
+            "#
+        ),
+        RocStr::from(r#"{"B":[67]}"#),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn specialize_unique_newtype_records() {
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test"
+                imports [Encode, TotallyNotJson]
+                provides [main] to "./platform"
+
+            main =
+                when Str.fromUtf8 (Encode.toBytes {a: Bool.true} TotallyNotJson.json) is
+                    Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} TotallyNotJson.json) is
+                        Ok t -> "\(s)\(t)"
+                        _ -> "<bad>"
+                    _ -> "<bad>"
+            "#
+            ),
+            RocStr::from(r#"{"a":true}{"b":true}"#),
+            RocStr
+        )
+    });
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_use_stdlib() {
     assert_evals_to!(
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
-            MyNum := U8 has [Decoding {decoder: myDecoder}]
+            MyNum := U8 implements [Decoding {decoder: myDecoder}]
 
             myDecoder =
                 Decode.custom \bytes, fmt ->
@@ -808,7 +980,7 @@ fn decode_use_stdlib() {
                                 Err e -> {result: Err e, rest}
 
             main =
-                when Decode.fromBytes [49, 53] Json.fromUtf8 is
+                when Decode.fromBytes [49, 53] TotallyNotJson.json is
                     Ok (@MyNum n) -> n
                     _ -> 101
             "#
@@ -828,18 +1000,18 @@ fn decode_derive_decoder_for_opaque() {
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
-            HelloWorld := { a: Str } has [Decoding]
+            HelloWorld := { a: Str } implements [Decoding]
 
             main =
-                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 """{"a":"Hello, World!"}""" |> Decode.fromBytes TotallyNotJson.json is
                     Ok (@HelloWorld {a}) -> a
                     _ -> "FAIL"
             "#
         ),
-        RocStr::from(r#"Hello, World!"#),
+        RocStr::from(r"Hello, World!"),
         RocStr
     )
 }
@@ -851,10 +1023,10 @@ fn decode_use_stdlib_json_list() {
         indoc!(
             r#"
             app "test"
-                imports [Json]
+                imports [TotallyNotJson]
                 provides [main] to "./platform"
 
-            MyNumList := List U8 has [Decoding {decoder: myDecoder}]
+            MyNumList := List U8 implements [Decoding {decoder: myDecoder}]
 
             myDecoder =
                 Decode.custom \bytes, fmt ->
@@ -865,7 +1037,7 @@ fn decode_use_stdlib_json_list() {
                                 Err e -> {result: Err e, rest}
 
             main =
-                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "[1,2,3]" |> Decode.fromBytes TotallyNotJson.json is
                     Ok (@MyNumList lst) -> lst
                     _ -> []
             "#
@@ -885,40 +1057,85 @@ mod decode_immediate {
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use indoc::indoc;
 
-    #[cfg(all(test, any(feature = "gen-llvm")))]
+    #[cfg(all(test, feature = "gen-llvm"))]
     use roc_std::RocStr;
 
+    use crate::helpers::with_larger_debug_stack;
+
     #[test]
-    #[cfg(any(feature = "gen-llvm"))]
+    #[cfg(feature = "gen-llvm")]
     fn string() {
+        with_larger_debug_stack(|| {
+            assert_evals_to!(
+                indoc!(
+                    r#"
+                    app "test" imports [TotallyNotJson] provides [main] to "./platform"
+
+                    main =
+                        when Str.toUtf8 "\"foo\"" |> Decode.fromBytes TotallyNotJson.json is
+                            Ok s -> s
+                            _ -> "<bad>"
+                    "#
+                ),
+                RocStr::from("foo"),
+                RocStr
+            )
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "gen-llvm")]
+    fn ranged_number() {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Json] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Str.toUtf8 "\"foo\"" |> Decode.fromBytes Json.fromUtf8 is
-                        Ok s -> s
-                        _ -> "<bad>"
+                    input = Str.toUtf8 "[1,2,3]"
+                    expected = [1,2,3]
+
+                    actual = Decode.fromBytes input TotallyNotJson.json |> Result.withDefault []
+
+                    actual == expected
                 "#
             ),
-            RocStr::from("foo"),
-            RocStr
+            true,
+            bool
+        )
+    }
+
+    #[test]
+    #[cfg(feature = "gen-llvm")]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
+
+                main =
+                    when Str.toUtf8 "false" |> Decode.fromBytes TotallyNotJson.json is
+                        Ok s -> s
+                        _ -> Bool.true
+                "#
+            ),
+            false,
+            bool
         )
     }
 
     macro_rules! num_immediate {
         ($($num:expr, $typ:ident)*) => {$(
             #[test]
-            #[cfg(any(feature = "gen-llvm"))]
+            #[cfg(feature = "gen-llvm")]
             fn $typ() {
                 assert_evals_to!(
                     &format!(indoc!(
                         r#"
-                        app "test" imports [Json] provides [main] to "./platform"
+                        app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                         main =
-                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                            when Num.toStr {}{} |> Str.toUtf8 |> Decode.fromBytes TotallyNotJson.json is
                                 Ok n -> n
                                 _ -> 101{}
                         "#
@@ -953,10 +1170,10 @@ mod decode_immediate {
         assert_evals_to!(
             indoc!(
                 r#"
-                app "test" imports [Json] provides [main] to "./platform"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
                 main =
-                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes Json.fromUtf8 is
+                    when Num.toStr 17.23dec |> Str.toUtf8 |> Decode.fromBytes TotallyNotJson.json is
                         Ok n -> n
                         _ -> 101dec
                 "#
@@ -970,59 +1187,65 @@ mod decode_immediate {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn decode_list_of_strings() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" imports [Json] provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-            main =
-                when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes Json.fromUtf8 is
-                    Ok l -> Str.joinWith l ","
-                    _ -> "<bad>"
-            "#
-        ),
-        RocStr::from("a,b,c"),
-        RocStr
-    )
+                main =
+                    when Str.toUtf8 "[\"a\",\"b\",\"c\"]" |> Decode.fromBytes TotallyNotJson.json is
+                        Ok l -> Str.joinWith l ","
+                        _ -> "<bad>"
+                "#
+            ),
+            RocStr::from("a,b,c"),
+            RocStr
+        )
+    });
 }
 
 #[test]
-#[cfg(all(any(feature = "gen-llvm", feature = "gen-wasm")))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn encode_then_decode_list_of_strings() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" imports [Json] provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-            main =
-                when Encode.toBytes ["a", "b", "c"] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
-                    Ok l -> Str.joinWith l ","
-                    _ -> "something went wrong"
-            "#
-        ),
-        RocStr::from("a,b,c"),
-        RocStr
-    )
+                main =
+                    when Encode.toBytes ["a", "b", "c"] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
+                        Ok l -> Str.joinWith l ","
+                        _ -> "something went wrong"
+                "#
+            ),
+            RocStr::from("a,b,c"),
+            RocStr
+        )
+    });
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(feature = "gen-llvm")]
 #[ignore = "#3696: Currently hits some weird panic in borrow checking, not sure if it's directly related to abilities."]
 fn encode_then_decode_list_of_lists_of_strings() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" imports [Json] provides [main] to "./platform"
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
-            main =
-                when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] Json.fromUtf8 |> Decode.fromBytes Json.fromUtf8 is
-                    Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
-                    _ -> "something went wrong"
-            "#
-        ),
-        RocStr::from("a,b;c,d,e;f"),
-        RocStr
-    )
+                main =
+                    when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] TotallyNotJson.json |> Decode.fromBytes TotallyNotJson.json is
+                        Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith l ";"
+                        _ -> "something went wrong"
+                "#
+            ),
+            RocStr::from("a,b;c,d,e;f"),
+            RocStr
+        )
+    })
 }
 
 #[test]
@@ -1034,10 +1257,10 @@ fn decode_record_two_fields() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {first: "ab", second: "cd"} -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1056,10 +1279,10 @@ fn decode_record_two_fields_string_and_int() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":10}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {first: "ab", second: 10u8} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1078,10 +1301,10 @@ fn decode_record_two_fields_string_and_string_infer() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {first, second} -> Str.concat first second
                     _ -> "something went wrong"
             "#
@@ -1100,10 +1323,10 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok rcd -> Str.concat rcd.first rcd.second
                     _ -> "something went wrong"
@@ -1123,10 +1346,10 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes Json.fromUtf8
+                decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
                 when decoded is
                     Ok {first, second} -> Str.concat first second
                     _ -> "something went wrong"
@@ -1144,10 +1367,10 @@ fn decode_empty_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {} -> "empty"
                     _ -> "something went wrong"
             "#
@@ -1167,15 +1390,59 @@ fn decode_record_of_record() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" imports [Json] provides [main] to "./platform"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
 
             main =
-                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes Json.fromUtf8 is
+                when Str.toUtf8 "{\"outer\":{\"inner\":\"a\"},\"other\":{\"one\":\"b\",\"two\":10}}" |> Decode.fromBytes TotallyNotJson.json is
                     Ok {outer: {inner: "a"}, other: {one: "b", two: 10u8}} -> "ab10"
                     _ -> "something went wrong"
             "#
         ),
         RocStr::from("ab10"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_tuple_two_elements() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[\"ab\",10]" |> Decode.fromBytes TotallyNotJson.json is
+                    Ok ("ab", 10u8) -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
+        RocStr
+    )
+}
+
+#[test]
+#[cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
+fn decode_tuple_of_tuples() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+
+            main =
+                when Str.toUtf8 "[[\"ab\",10],[\"cd\",25]]" |> Decode.fromBytes TotallyNotJson.json is
+                    Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
+                    _ -> "something went wrong"
+            "#
+        ),
+        RocStr::from("abcd"),
         RocStr
     )
 }
@@ -1191,8 +1458,8 @@ mod hash {
     use indoc::indoc;
 
     const TEST_HASHER: &str = indoc!(
-        r#"
-        THasher := List U8 has [Hasher {
+        r"
+        THasher := List U8 implements [Hasher {
             addBytes: tAddBytes,
             addU8: tAddU8,
             addU16: tAddU16,
@@ -1240,7 +1507,7 @@ mod hash {
         tComplete = \@THasher _ -> Num.maxU64
 
         tRead = \@THasher bytes -> bytes
-        "#
+        "
     );
 
     fn build_test(input: &str) -> String {
@@ -1264,6 +1531,24 @@ mod hash {
     mod immediate {
         use super::{assert_evals_to, build_test};
         use roc_std::RocList;
+
+        #[test]
+        fn bool_false() {
+            assert_evals_to!(
+                &build_test("Bool.false"),
+                RocList::from_slice(&[0]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn bool_true() {
+            assert_evals_to!(
+                &build_test("Bool.true"),
+                RocList::from_slice(&[1]),
+                RocList<u8>
+            )
+        }
 
         #[test]
         fn i8() {
@@ -1362,6 +1647,16 @@ mod hash {
         }
 
         #[test]
+        #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
+        fn dec() {
+            assert_evals_to!(
+                &build_test("1.1dec"),
+                RocList::from_slice(&[0, 0, 238, 4, 44, 252, 67, 15, 0, 0, 0, 0, 0, 0, 0, 0]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
         fn string() {
             assert_evals_to!(
                 &build_test(r#""ab☃AB""#),
@@ -1373,7 +1668,7 @@ mod hash {
         #[test]
         fn list_u8() {
             assert_evals_to!(
-                &build_test(r#"[15u8, 23u8, 37u8]"#),
+                &build_test(r"[15u8, 23u8, 37u8]"),
                 RocList::from_slice(&[15, 23, 37]),
                 RocList<u8>
             )
@@ -1405,7 +1700,7 @@ mod hash {
         #[test]
         fn empty_record() {
             assert_evals_to!(
-                &build_test(r#"{}"#),
+                &build_test(r"{}"),
                 RocList::from_slice(&[] as &[u8]),
                 RocList<u8>
             )
@@ -1433,9 +1728,38 @@ mod hash {
         fn record_of_list_of_records() {
             assert_evals_to!(
                 &build_test(
-                    r#"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"#
+                    r"{ a: [ { b: 15u8 }, { b: 23u8 } ], b: [ { c: 45u8 }, { c: 73u8 } ] }"
                 ),
                 RocList::from_slice(&[15, 23, 45, 73]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_u8_and_str() {
+            assert_evals_to!(
+                &build_test(r#"(15u8, "bc")"#),
+                RocList::from_slice(&[15, 98, 99]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_tuples() {
+            assert_evals_to!(
+                &build_test(r#"( (15u8, "bc"), (23u8, "ef") )"#),
+                RocList::from_slice(&[15, 98, 99, 23, 101, 102]),
+                RocList<u8>
+            )
+        }
+
+        #[test]
+        fn tuple_of_list_of_tuples() {
+            assert_evals_to!(
+                &build_test(
+                    r"( [ ( 15u8, 32u8 ), ( 23u8, 41u8 ) ], [ (45u8, 63u8), (58u8, 73u8) ] )"
+                ),
+                RocList::from_slice(&[15, 32, 23, 41, 45, 63, 58, 73]),
                 RocList<u8>
             )
         }
@@ -1678,7 +2002,7 @@ mod hash {
 
                         {}
 
-                        Q := {{ a: U8, b: U8, c: U8 }} has [Hash]
+                        Q := {{ a: U8, b: U8, c: U8 }} implements [Hash]
 
                         q = @Q {{ a: 15, b: 27, c: 31 }}
 
@@ -1709,13 +2033,29 @@ mod eq {
     use roc_std::RocStr;
 
     #[test]
+    fn eq_tuple() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    ("a", "b") == ("a", "b")
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
     fn custom_eq_impl() {
         assert_evals_to!(
             indoc!(
                 r#"
                 app "test" provides [main] to "./platform"
 
-                LyingEq := U8 has [Eq {isEq}]
+                LyingEq := U8 implements [Eq {isEq}]
 
                 isEq = \@LyingEq m, @LyingEq n -> m != n
 
@@ -1741,7 +2081,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+                Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
                 isEqQ = \@Q _, @Q _ -> Bool.true
 
@@ -1761,7 +2101,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+                Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
 
                 isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
 
@@ -1795,7 +2135,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := U8 has [Eq]
+                Q := U8 implements [Eq]
 
                 main = (@Q 15) == (@Q 15)
                 "#
@@ -1803,5 +2143,187 @@ mod eq {
             true,
             bool
         )
+    }
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4772_weakened_monomorphic_destructure() {
+    with_larger_debug_stack(|| {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test"
+                        imports [TotallyNotJson]
+                        provides [main] to "./platform"
+
+                getNumber =
+                    { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "\"1234\"") TotallyNotJson.json
+
+                    when result is
+                        Ok val ->
+                            when Str.toI64 val is
+                                Ok number ->
+                                    Ok {val : number, input : rest}
+                                Err InvalidNumStr ->
+                                    Err (ParsingFailure "not a number")
+
+                        Err _ ->
+                            Err (ParsingFailure "not a number")
+
+                main =
+                    getNumber |> Result.map .val |> Result.withDefault 0
+                "#
+            ),
+            1234i64,
+            i64
+        )
+    })
+}
+
+mod inspect {
+    #[cfg(feature = "gen-llvm")]
+    use crate::helpers::llvm::assert_evals_to;
+
+    #[cfg(feature = "gen-wasm")]
+    use crate::helpers::wasm::assert_evals_to;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use indoc::indoc;
+
+    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    use roc_std::RocStr;
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn bool() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.toStr Bool.true,
+                Inspect.toStr Bool.false,
+            ] |> Str.joinWith ", "
+            "#
+            ),
+            RocStr::from("Bool.true, Bool.false"),
+            RocStr
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn num() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.toStr 0,              # Num a
+                Inspect.toStr 1u8,            # U8
+                Inspect.toStr 2i8,            # I8
+                Inspect.toStr 3u16,           # U16
+                Inspect.toStr 4i16,           # I16
+                Inspect.toStr 5u32,           # U32
+                Inspect.toStr 6i32,           # I32
+                Inspect.toStr 7u64,           # U64
+                Inspect.toStr 8i64,           # I64
+                Inspect.toStr 9u128,          # U128
+                Inspect.toStr 10i128,         # I128
+                Inspect.toStr 0.5,            # Frac a
+                Inspect.toStr 1.5f32,         # F32
+                Inspect.toStr 2.2f64,         # F64
+                Inspect.toStr (1.1dec + 2.2), # Dec
+            ] |> Str.joinWith ", "
+            "#
+            ),
+            RocStr::from("0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0.5, 1.5, 2.2, 3.3"),
+            RocStr
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn list() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.toStr [0, 1, 2],        # List (Num *)
+                Inspect.toStr [1, 0x2, 3],      # List (Int *)
+                Inspect.toStr [0.1 + 0.2, 0.4], # List (Frac *)
+                Inspect.toStr [1u8, 2u8],       # List U8
+                Inspect.toStr ["foo"],          # List Str
+            ] |> Str.joinWith ", "
+            "#
+            ),
+            RocStr::from("[0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
+            RocStr
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn str() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            main = [
+                Inspect.toStr "",
+                Inspect.toStr "a small string",
+                Inspect.toStr "an extraordinarily long string - so long it's on the heap!",
+            ] |> Str.joinWith ", "
+            "#
+            ),
+            RocStr::from(
+                r#""", "a small string", "an extraordinarily long string - so long it's on the heap!""#
+            ),
+            RocStr
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn opaque_automatic() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            Op := {}
+
+            main = Inspect.toStr (@Op {})
+            "#
+            ),
+            RocStr::from(r"<opaque>"),
+            RocStr
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+    fn opaque_automatic_with_polymorphic_call() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+            app "test" provides [main] to "./platform"
+
+            Op := {}
+
+            late = \a -> Inspect.toStr a
+
+            main = late (@Op {})
+            "#
+            ),
+            RocStr::from(r"<opaque>"),
+            RocStr
+        );
     }
 }

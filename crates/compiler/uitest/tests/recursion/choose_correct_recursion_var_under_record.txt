@@ -1,0 +1,25 @@
+# +opt infer:print_only_under_alias
+app "test" provides [main] to "./platform"
+
+main =
+    Parser : [
+        Specialize Parser,
+        Record (List {parser: Parser}),
+    ]
+
+    printCombinatorParser : Parser -> Str
+    printCombinatorParser = \parser ->
+        when parser is
+    #        ^^^^^^ [Record (List { parser : a }), Specialize a] as a
+            Specialize p ->
+                printed = printCombinatorParser p
+                if Bool.false then printed else "foo"
+            Record fields ->
+                fields
+                    |> List.map \f ->
+                        printed = printCombinatorParser f.parser
+                        if Bool.false then printed else "foo"
+                    |> List.first
+                    |> Result.withDefault ("foo")
+
+    printCombinatorParser (Record [])

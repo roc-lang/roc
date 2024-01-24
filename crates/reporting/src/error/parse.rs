@@ -300,6 +300,15 @@ fn to_expr_report<'a>(
                     alloc.parser_suggestion("!"),
                     alloc.reflow(" and the expression after it."),
                 ],
+                "<|" => vec![
+                    alloc.reflow("Roc doesn't have a "),
+                    alloc.parser_suggestion("<|"),
+                    alloc.reflow(" operator. Please use parentheses "),
+                    alloc.parser_suggestion("()"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("|>"),
+                    alloc.reflow(" instead."),
+                ],
                 _ => vec![
                     alloc.reflow("I have no specific suggestion for this operator, "),
                     alloc.reflow("see TODO for the full list of operators in Roc."),
@@ -549,6 +558,46 @@ fn to_expr_report<'a>(
             }
         }
 
+        EExpr::OptionalValueInRecordBuilder(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a record builder, and I found an optional field:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("Optional fields can only appear when you destructure a record."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD RECORD BUILDER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EExpr::RecordUpdateBuilder(region) => {
+            let surroundings = Region::new(start, region.end());
+            let region = lines.convert_region(*region);
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a record update, and I found a record builder field:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("Record builders cannot be updated like records."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "BAD RECORD UPDATE".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         EExpr::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),
 
         &EExpr::Number(ENumber::End, pos) => {
@@ -620,6 +669,23 @@ fn to_expr_report<'a>(
         }
         EExpr::Dbg(e_expect, _position) => {
             to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
+        }
+        EExpr::TrailingOperator(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("TODO provide more context.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "TRAILING OPERATOR".to_string(),
+                severity: Severity::RuntimeError,
+            }
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -3156,21 +3222,31 @@ fn to_header_report<'a>(
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
-            let doc = alloc.stack([
-                alloc.reflow(r"I am expecting a header, but got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([
-                    alloc.reflow("I am expecting a module keyword next, one of "),
-                    alloc.keyword("interface"),
-                    alloc.reflow(", "),
-                    alloc.keyword("app"),
-                    alloc.reflow(", "),
-                    alloc.keyword("package"),
-                    alloc.reflow(" or "),
-                    alloc.keyword("platform"),
-                    alloc.reflow("."),
-                ]),
-            ]);
+            let is_utf8 = alloc
+                .src_lines
+                .iter()
+                .all(|line| std::str::from_utf8(line.as_bytes()).is_ok());
+
+            let preamble = if is_utf8 {
+                vec![
+                    alloc.reflow(r"I am expecting a header, but got stuck here:"),
+                    alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                ]
+            } else {
+                vec![alloc.reflow(r"I am expecting a header, but the file is not UTF-8 encoded.")]
+            };
+
+            let doc = alloc.stack(preamble.into_iter().chain([alloc.concat([
+                alloc.reflow("I am expecting a module keyword next, one of "),
+                alloc.keyword("interface"),
+                alloc.reflow(", "),
+                alloc.keyword("app"),
+                alloc.reflow(", "),
+                alloc.keyword("package"),
+                alloc.reflow(" or "),
+                alloc.keyword("platform"),
+                alloc.reflow("."),
+            ])]));
 
             Report {
                 filename,
@@ -3429,7 +3505,7 @@ fn to_provides_report<'a>(
             }
         }
 
-        EProvides::Provides(pos) => {
+        EProvides::Provides(pos) | EProvides::IndentProvides(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -3455,6 +3531,52 @@ fn to_provides_report<'a>(
         }
 
         EProvides::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+
+        EProvides::IndentTo(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting the "),
+                    alloc.keyword("to"),
+                    alloc.reflow(" keyword next, like:"),
+                ]),
+                alloc
+                    .parser_suggestion("to pf")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PROVIDES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        EProvides::IndentListStart(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.reflow("I am expecting the platform name next, like:"),
+                alloc
+                    .parser_suggestion("to pf")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PROVIDES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
 
         _ => todo!("unhandled parse error {:?}", parse_problem),
     }
@@ -3809,15 +3931,49 @@ fn to_space_report<'a>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I encountered a tab character"),
+                alloc.reflow("I encountered a tab character:"),
                 alloc.region(region),
-                alloc.concat([alloc.reflow("Tab characters are not allowed.")]),
+                alloc.reflow("Tab characters are not allowed, use spaces instead."),
             ]);
 
             Report {
                 filename,
                 doc,
                 title: "TAB CHARACTER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        BadInputError::HasAsciiControl => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow("I encountered an ASCII control character:"),
+                alloc.region(region),
+                alloc.reflow("ASCII control characters are not allowed."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ASCII CONTROL CHARACTER".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        BadInputError::HasMisplacedCarriageReturn => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I encountered a stray carriage return (\r):"),
+                alloc.region(region),
+                alloc.reflow(r"A carriage return (\r) has to be followed by a newline (\n)."),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISPLACED CARRIAGE RETURN".to_string(),
                 severity: Severity::RuntimeError,
             }
         }

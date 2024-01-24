@@ -1,3 +1,3 @@
-f : a -> (b -> c) | a has Hash, b has Eq, c has Ord
+f : a -> (b -> c) where a implements Hash, b implements Eq, c implements Ord
 
 f

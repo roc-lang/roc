@@ -1,0 +1,16 @@
+# +opt can:allow_errors
+# +opt infer:print_only_under_alias
+app "test" provides [single] to "./platform"
+
+LL a : [Nil, Cons a (LL a)]
+
+LinkedList a := LL a
+
+single = \item -> @LinkedList (Cons item Nil)
+#^^^^^^{-1} a -[[single(0)]]-> [Cons a b, Nil] as b
+
+walk = \@LinkedList list, state, fn ->
+#^^^^{-1} [Cons a b, Nil] as b, c, (c, a -[[]]-> c) -[[walk(3)]]-> c
+    when list is
+        Nil -> state
+        Cons first rest -> walk (@LinkedList rest) (fn state first) fn

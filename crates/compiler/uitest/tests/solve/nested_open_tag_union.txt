@@ -1,0 +1,17 @@
+app "test" provides [go] to "./platform"
+
+Expr : [
+    Wrap Expr,
+    Val I64,
+]
+
+go : Expr -> Expr
+go = \e ->
+#^^{-1} Expr -[[go(0)]]-> Expr
+        when P e is
+            P (Wrap (Val _)) -> Wrap e
+
+            # This branch should force the first argument to `P` and
+            # the first argument to `Wrap` to be an open tag union.
+            # This tests checks that we don't regress on that.
+            P y1 -> Wrap y1

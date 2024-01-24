@@ -1,4 +1,4 @@
-const str = @import("str");
+const str = @import("glue").str;
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
 
@@ -8,10 +8,10 @@ comptime {
     }
 }
 
-const Align = extern struct { a: usize, b: usize };
-extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) anyopaque;
-extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*anyopaque;
-extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+const Align = 2 * @alignOf(usize);
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dest: *anyopaque, src: *anyopaque, count: usize) *anyopaque;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
@@ -24,20 +24,16 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
     _ = old_size;
     _ = alignment;
 
-    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
 
-    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
-export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
-    _ = memcpy(dest, src, count);
-}
-
-// NOTE roc_panic is provided in the JS file, so it can throw an exception
+// NOTE roc_panic and roc_dbg is provided in the JS file, so it can throw an exception
 
 extern fn roc__mainForHost_1_exposed(*RocStr) void;
 
@@ -49,9 +45,9 @@ pub fn main() u8 {
     roc__mainForHost_1_exposed(&callresult);
 
     // display the result using JavaScript
-    js_display_roc_string(callresult.asU8ptr(), callresult.len());
+    js_display_roc_string(callresult.asU8ptrMut(), callresult.len());
 
-    callresult.deinit();
+    callresult.decref();
 
     return 0;
 }

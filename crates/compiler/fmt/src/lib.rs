@@ -106,9 +106,17 @@ impl<'a> Buf<'a> {
         self.spaces_to_flush += count;
     }
 
-    pub fn newline(&mut self) {
+    /// Only for use in emitting newlines in block strings, which don't follow the rule of
+    /// having at most two newlines in a row.
+    pub fn push_newline_literal(&mut self) {
         self.spaces_to_flush = 0;
         self.newlines_to_flush += 1;
+        self.beginning_of_line = true;
+    }
+
+    pub fn newline(&mut self) {
+        self.spaces_to_flush = 0;
+        self.newlines_to_flush = std::cmp::min(self.newlines_to_flush + 1, 2);
         self.beginning_of_line = true;
     }
 

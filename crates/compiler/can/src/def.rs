@@ -15,6 +15,7 @@ use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
+use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -35,6 +36,7 @@ use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
+use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
@@ -44,6 +46,7 @@ use roc_types::subs::{VarStore, Variable};
 use roc_types::types::AliasCommon;
 use roc_types::types::AliasKind;
 use roc_types::types::AliasVar;
+use roc_types::types::IndexOrField;
 use roc_types::types::LambdaSet;
 use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
@@ -83,6 +86,23 @@ pub struct Annotation {
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub region: Region,
+}
+
+impl Annotation {
+    fn freshen(mut self, var_store: &mut VarStore) -> Self {
+        let mut substitutions = MutMap::default();
+
+        for v in self.introduced_variables.lambda_sets.iter_mut() {
+            let new = var_store.fresh();
+            substitutions.insert(*v, new);
+
+            *v = new;
+        }
+
+        self.signature.substitute_variables(&substitutions);
+
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -171,7 +191,7 @@ enum PendingTypeDef<'a> {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
+        derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
     },
 
     Ability {
@@ -477,7 +497,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             //
             //               interface F imports [] exposes []
             //
-            //               Hello := {} has [Encoding.{ toEncoder }]
+            //               Hello := {} implements [Encoding.{ toEncoder }]
             //
             //               toEncoder = \@Hello {} -> ...
             //
@@ -489,7 +509,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             //
             //               interface F imports [Encoding.{ toEncoder }] exposes []
             //
-            //               Hello := {} has [Encoding.{ toEncoder }]
+            //               Hello := {} implements [Encoding.{ toEncoder }]
             //
             //               toEncoder = \@Hello {} -> ...
             //
@@ -507,9 +527,9 @@ fn canonicalize_claimed_ability_impl<'a>(
                 // definition symbol, for example when the ability is defined in the same
                 // module as an implementer:
                 //
-                //   Eq has eq : a, a -> U64 | a has Eq
+                //   Eq implements eq : a, a -> U64 where a implements Eq
                 //
-                //   A := U8 has [Eq {eq}]
+                //   A := U8 implements [Eq {eq}]
                 //
                 // So, do a final check that the implementation symbol is not resolved directly
                 // to the member.
@@ -669,7 +689,7 @@ fn canonicalize_opaque<'a>(
     name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
-    has_abilities: Option<&'a Loc<ast::HasAbilities<'a>>>,
+    has_abilities: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
 ) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
@@ -692,12 +712,13 @@ fn canonicalize_opaque<'a>(
         for has_ability in has_abilities.items {
             let region = has_ability.region;
             let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
-                ast::HasAbility::HasAbility { ability, impls } => (ability, impls),
+                ast::ImplementsAbility::ImplementsAbility { ability, impls } => (ability, impls),
                 _ => internal_error!("spaces not extracted"),
             };
 
             let ability_region = ability.region;
 
+            // Op := {} has [Eq]
             let (ability, members) = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
                     match make_apply_symbol(env, region, scope, module_name, ident) {
@@ -746,8 +767,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A has [Hash {hash: myHash}]
-                    //   B has [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: myHash}]
+                    //   B implements [Hash {hash: myHash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
@@ -1047,9 +1068,7 @@ fn canonicalize_value_defs<'a>(
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern())
-            .into_iter()
-            .peekable();
+        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern()).peekable();
 
         if new_bindings.peek().is_none() {
             env.problem(Problem::NoIdentifiersIntroduced(
@@ -1068,8 +1087,7 @@ fn canonicalize_value_defs<'a>(
             debug_assert_eq!(env.home, s.module_id());
             debug_assert!(
                 !symbol_to_index.iter().any(|(id, _)| *id == s.ident_id()),
-                "{:?}",
-                s
+                "{s:?}"
             );
 
             symbol_to_index.push((s.ident_id(), def_index as u32));
@@ -1181,7 +1199,7 @@ fn canonicalize_type_defs<'a>(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            Option<&'a Loc<ast::HasAbilities<'a>>>,
+            Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
         ),
         Ability(Loc<Symbol>, Vec<PendingAbilityMember<'a>>),
     }
@@ -1336,8 +1354,8 @@ fn canonicalize_type_defs<'a>(
 
 /// Resolve all pending abilities, to add them to scope.
 #[allow(clippy::too_many_arguments)]
-fn resolve_abilities<'a>(
-    env: &mut Env<'a>,
+fn resolve_abilities(
+    env: &mut Env,
     output: &mut Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
@@ -1387,7 +1405,7 @@ fn resolve_abilities<'a>(
                 [] => {
                     // There are no variables bound to the parent ability - then this member doesn't
                     // need to be a part of the ability.
-                    env.problem(Problem::AbilityMemberMissingHasClause {
+                    env.problem(Problem::AbilityMemberMissingImplementsClause {
                         member: member_sym,
                         ability,
                         region: member_name_region,
@@ -1397,7 +1415,7 @@ fn resolve_abilities<'a>(
                 }
                 [..] => {
                     // There is more than one variable bound to the member signature, so something like
-                    //   Eq has eq : a, b -> Bool | a has Eq, b has Eq
+                    //   Eq implements eq : a, b -> Bool where a implements Eq, b implements Eq
                     // We have no way of telling what type implements a particular instance of Eq in
                     // this case (a or b?), so disallow it.
                     let span_has_clauses = Region::across_all(
@@ -1410,7 +1428,7 @@ fn resolve_abilities<'a>(
                     env.problem(Problem::AbilityMemberMultipleBoundVars {
                         member: member_sym,
                         ability,
-                        span_has_clauses,
+                        span_implements_clauses: span_has_clauses,
                         bound_var_names,
                     });
                     // Pretend the member isn't a part of the ability
@@ -1638,6 +1656,14 @@ pub(crate) fn sort_can_defs_new(
                         }
                     };
 
+                    let host_annotation = if exposed_symbols.contains(&symbol) {
+                        def.annotation
+                            .clone()
+                            .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                    } else {
+                        None
+                    };
+
                     if is_initial && !exposed_symbols.contains(&symbol) {
                         env.problem(Problem::DefsOnlyUsedInRecursion(1, def.region()));
                     }
@@ -1649,6 +1675,7 @@ pub(crate) fn sort_can_defs_new(
                                 Loc::at(def.loc_expr.region, closure_data),
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
@@ -1658,55 +1685,80 @@ pub(crate) fn sort_can_defs_new(
                                 def.loc_expr,
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
                     }
                 } else {
                     match def.loc_pattern.value {
-                        Pattern::Identifier(symbol) => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_function_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
+                        Pattern::Identifier(symbol) => {
+                            let host_annotation = if exposed_symbols.contains(&symbol) {
+                                def.annotation
+                                    .clone()
+                                    .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                            } else {
+                                None
+                            };
+
+                            match def.loc_expr.value {
+                                Closure(closure_data) => {
+                                    declarations.push_function_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        Loc::at(def.loc_expr.region, closure_data),
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        None,
+                                    );
+                                }
+                                _ => {
+                                    declarations.push_value_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        def.loc_expr,
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        None,
+                                    );
+                                }
                             }
-                            _ => {
-                                declarations.push_value_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    def.loc_expr,
-                                    def.expr_var,
-                                    def.annotation,
-                                    None,
-                                );
-                            }
-                        },
+                        }
                         Pattern::AbilityMemberSpecialization {
                             ident: symbol,
                             specializes,
-                        } => match def.loc_expr.value {
-                            Closure(closure_data) => {
-                                declarations.push_function_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    Loc::at(def.loc_expr.region, closure_data),
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
+                        } => {
+                            let host_annotation = if exposed_symbols.contains(&symbol) {
+                                def.annotation
+                                    .clone()
+                                    .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                            } else {
+                                None
+                            };
+
+                            match def.loc_expr.value {
+                                Closure(closure_data) => {
+                                    declarations.push_function_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        Loc::at(def.loc_expr.region, closure_data),
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        Some(specializes),
+                                    );
+                                }
+                                _ => {
+                                    declarations.push_value_def(
+                                        Loc::at(def.loc_pattern.region, symbol),
+                                        def.loc_expr,
+                                        def.expr_var,
+                                        def.annotation,
+                                        host_annotation,
+                                        Some(specializes),
+                                    );
+                                }
                             }
-                            _ => {
-                                declarations.push_value_def(
-                                    Loc::at(def.loc_pattern.region, symbol),
-                                    def.loc_expr,
-                                    def.expr_var,
-                                    def.annotation,
-                                    Some(specializes),
-                                );
-                            }
-                        },
+                        }
                         _ => {
                             declarations.push_destructure_def(
                                 def.loc_pattern,
@@ -1749,6 +1801,14 @@ pub(crate) fn sort_can_defs_new(
                         Some(r) => Some(Region::span_across(&r, &def.region())),
                     };
 
+                    let host_annotation = if exposed_symbols.contains(&symbol) {
+                        def.annotation
+                            .clone()
+                            .map(|a| (var_store.fresh(), a.freshen(var_store)))
+                    } else {
+                        None
+                    };
+
                     match def.loc_expr.value {
                         Closure(closure_data) => {
                             declarations.push_recursive_def(
@@ -1756,6 +1816,7 @@ pub(crate) fn sort_can_defs_new(
                                 Loc::at(def.loc_expr.region, closure_data),
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
@@ -1765,6 +1826,7 @@ pub(crate) fn sort_can_defs_new(
                                 def.loc_expr,
                                 def.expr_var,
                                 def.annotation,
+                                host_annotation,
                                 specializes,
                             );
                         }
@@ -1837,7 +1899,7 @@ pub(crate) fn sort_can_defs(
             );
 
             let declaration = if def_ordering.references.get_row_col(index, index) {
-                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
+                debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {def:?} now, that's a bug!");
 
                 if is_initial
                     && !def
@@ -1992,6 +2054,16 @@ fn pattern_to_vars_by_symbol(
             let (var, nested) = &**argument;
             pattern_to_vars_by_symbol(vars_by_symbol, &nested.value, *var);
             vars_by_symbol.insert(*opaque, expr_var);
+        }
+
+        TupleDestructure { destructs, .. } => {
+            for destruct in destructs {
+                pattern_to_vars_by_symbol(
+                    vars_by_symbol,
+                    &destruct.value.typ.1.value,
+                    destruct.value.typ.0,
+                );
+            }
         }
 
         RecordDestructure { destructs, .. } => {
@@ -2261,12 +2333,18 @@ fn canonicalize_pending_body<'a>(
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
 ) -> DefOutput {
+    let mut loc_value = &loc_expr.value;
+
+    while let ast::Expr::ParensAround(value) = loc_value {
+        loc_value = value;
+    }
+
     // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
     //
     // Only defs of the form `foo = ...` can be closure declarations or self tail calls.
     let (loc_can_expr, def_references) = {
-        match (&loc_can_pattern.value, &loc_expr.value) {
+        match (&loc_can_pattern.value, &loc_value) {
             (
                 Pattern::Identifier(defined_symbol)
                 | Pattern::AbilityMemberSpecialization {
@@ -2303,6 +2381,40 @@ fn canonicalize_pending_body<'a>(
                 let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
 
                 let def_references = DefReferences::Function(can_output.references.clone());
+                output.union(can_output);
+
+                (loc_can_expr, def_references)
+            }
+
+            // Turn f = .foo into f = \rcd -[f]-> rcd.foo
+            (
+                Pattern::Identifier(defined_symbol)
+                | Pattern::AbilityMemberSpecialization {
+                    ident: defined_symbol,
+                    ..
+                },
+                ast::Expr::AccessorFunction(field),
+            ) => {
+                let field = match field {
+                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
+                };
+                let (loc_can_expr, can_output) = (
+                    Loc::at(
+                        loc_expr.region,
+                        RecordAccessor(StructAccessorData {
+                            name: *defined_symbol,
+                            function_var: var_store.fresh(),
+                            record_var: var_store.fresh(),
+                            ext_var: var_store.fresh(),
+                            closure_var: var_store.fresh(),
+                            field_var: var_store.fresh(),
+                            field,
+                        }),
+                    ),
+                    Output::default(),
+                );
+                let def_references = DefReferences::Value(can_output.references.clone());
                 output.union(can_output);
 
                 (loc_can_expr, def_references)
@@ -2447,7 +2559,7 @@ fn to_pending_alias_or_opaque<'a>(
     name: &'a Loc<&'a str>,
     vars: &'a [Loc<ast::Pattern<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    opt_derived: Option<&'a Loc<ast::HasAbilities<'a>>>,
+    opt_derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
     let region = Region::span_across(&name.region, &ann.region);
@@ -2566,7 +2678,7 @@ fn to_pending_type_def<'a>(
         Ability {
             header: TypeHeader { name, vars },
             members,
-            loc_has: _,
+            loc_implements: _,
         } => {
             let name = match scope
                 .introduce_without_shadow_symbol(&Ident::from(name.value), name.region)
@@ -2766,8 +2878,8 @@ fn to_pending_value_def<'a>(
 }
 
 /// Make aliases recursive
-fn correct_mutual_recursive_type_alias<'a>(
-    env: &mut Env<'a>,
+fn correct_mutual_recursive_type_alias(
+    env: &mut Env,
     original_aliases: VecMap<Symbol, Alias>,
     var_store: &mut VarStore,
 ) -> VecMap<Symbol, Alias> {
@@ -2878,12 +2990,14 @@ fn correct_mutual_recursive_type_alias<'a>(
             };
 
             let mut new_lambda_sets = ImSet::default();
+            let mut new_recursion_variables = ImSet::default();
             let mut new_infer_ext_vars = ImSet::default();
             alias_type.instantiate_aliases(
                 alias_region,
                 &can_instantiate_symbol,
                 var_store,
                 &mut new_lambda_sets,
+                &mut new_recursion_variables,
                 &mut new_infer_ext_vars,
             );
 
@@ -2905,6 +3019,9 @@ fn correct_mutual_recursive_type_alias<'a>(
                     .iter()
                     .map(|var| LambdaSet(Type::Variable(*var))),
             );
+
+            // add any new recursion variables
+            alias.recursion_variables.extend(new_recursion_variables);
 
             // add any new infer-in-output extension variables that the instantiation created to the current alias
             alias
@@ -2970,8 +3087,8 @@ fn correct_mutual_recursive_type_alias<'a>(
     unsafe { VecMap::zip(symbols_introduced, aliases) }
 }
 
-fn make_tag_union_of_alias_recursive<'a>(
-    env: &mut Env<'a>,
+fn make_tag_union_of_alias_recursive(
+    env: &mut Env,
     alias_name: Symbol,
     alias: &mut Alias,
     others: Vec<Symbol>,
@@ -3163,8 +3280,8 @@ fn make_tag_union_recursive_help<'a, 'b>(
     }
 }
 
-fn mark_cyclic_alias<'a>(
-    env: &mut Env<'a>,
+fn mark_cyclic_alias(
+    env: &mut Env,
     typ: &mut Type,
     symbol: Symbol,
     alias_kind: AliasKind,

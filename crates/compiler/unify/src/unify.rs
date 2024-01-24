@@ -1,21 +1,25 @@
-use bitflags::bitflags;
-use roc_collections::{VecMap, VecSet};
+use roc_collections::VecMap;
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_RECURSION};
-use roc_error_macros::internal_error;
+use roc_debug_flags::{
+    ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_ONE_RECURSION,
+};
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
+use roc_solve_schema::UnificationMode;
 use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
-    UnionTags, Variable, VariableSubsSlice,
+    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UlsOfVar,
+    UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, Polarity, RecordField, Uls,
 };
+
+use crate::env::Env;
 
 macro_rules! mismatch {
     () => {{
@@ -97,63 +101,13 @@ macro_rules! mismatch {
 
 type Pool = Vec<Variable>;
 
-bitflags! {
-    pub struct Mode : u8 {
-        /// Instructs the unifier to solve two types for equality.
-        ///
-        /// For example, { n : Str }a ~ { n: Str, m : Str } will solve "a" to "{ m : Str }".
-        const EQ = 1 << 0;
-        /// Instructs the unifier to treat the right-hand-side of a constraint as
-        /// present in the left-hand-side, rather than strictly equal.
-        ///
-        /// For example, t1 += [A Str] says we should "add" the tag "A Str" to the type of "t1".
-        const PRESENT = 1 << 1;
-        /// Like [`Mode::EQ`], but also instructs the unifier that the ambient lambda set
-        /// specialization algorithm is running. This has implications for the unification of
-        /// unspecialized lambda sets; see [`unify_unspecialized_lambdas`].
-        const LAMBDA_SET_SPECIALIZATION = Mode::EQ.bits | (1 << 2);
-    }
-}
-
-impl Mode {
-    fn is_eq(&self) -> bool {
-        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
-        self.contains(Mode::EQ)
-    }
-
-    fn is_present(&self) -> bool {
-        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
-        self.contains(Mode::PRESENT)
-    }
-
-    fn is_lambda_set_specialization(&self) -> bool {
-        debug_assert!(!self.contains(Mode::EQ | Mode::PRESENT));
-        self.contains(Mode::LAMBDA_SET_SPECIALIZATION)
-    }
-
-    fn as_eq(self) -> Self {
-        (self - Mode::PRESENT) | Mode::EQ
-    }
-
-    #[cfg(debug_assertions)]
-    fn pretty_print(&self) -> &str {
-        if self.contains(Mode::EQ) {
-            "~"
-        } else if self.contains(Mode::PRESENT) {
-            "+="
-        } else {
-            unreachable!("Bad mode!")
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Context {
     first: Variable,
     first_desc: Descriptor,
     second: Variable,
     second_desc: Descriptor,
-    mode: Mode,
+    mode: UnificationMode,
 }
 
 pub trait MetaCollector: Default + std::fmt::Debug {
@@ -304,80 +258,32 @@ pub struct Outcome<M: MetaCollector> {
     /// We defer resolution of these lambda sets to the caller of [unify].
     /// See also [merge_flex_able_with_concrete].
     lambda_sets_to_specialize: UlsOfVar,
+    /// Whether any variable in the path has changed (been merged with new content).
+    has_changed: bool,
     extra_metadata: M,
 }
 
 impl<M: MetaCollector> Outcome<M> {
     fn union(&mut self, other: Self) {
-        self.mismatches.extend(other.mismatches);
-        self.must_implement_ability
-            .extend(other.must_implement_ability);
+        let Self {
+            mismatches,
+            must_implement_ability,
+            lambda_sets_to_specialize,
+            has_changed,
+            extra_metadata,
+        } = other;
+
+        self.mismatches.extend(mismatches);
+        self.must_implement_ability.extend(must_implement_ability);
         self.lambda_sets_to_specialize
-            .union(other.lambda_sets_to_specialize);
-        self.extra_metadata.union(other.extra_metadata);
-    }
-}
-
-pub struct Env<'a> {
-    pub subs: &'a mut Subs,
-    seen_recursion: VecSet<(Variable, Variable)>,
-    fixed_variables: VecSet<Variable>,
-}
-
-impl<'a> Env<'a> {
-    pub fn new(subs: &'a mut Subs) -> Self {
-        Self {
-            subs,
-            seen_recursion: Default::default(),
-            fixed_variables: Default::default(),
-        }
-    }
-
-    fn add_recursion_pair(&mut self, var1: Variable, var2: Variable) {
-        let pair = (
-            self.subs.get_root_key_without_compacting(var1),
-            self.subs.get_root_key_without_compacting(var2),
-        );
-
-        let already_seen = self.seen_recursion.insert(pair);
-        debug_assert!(!already_seen);
-    }
-
-    fn remove_recursion_pair(&mut self, var1: Variable, var2: Variable) {
-        #[cfg(debug_assertions)]
-        let size_before = self.seen_recursion.len();
-
-        self.seen_recursion.retain(|(v1, v2)| {
-            let is_recursion_pair = self.subs.equivalent_without_compacting(*v1, var1)
-                && self.subs.equivalent_without_compacting(*v2, var2);
-            !is_recursion_pair
-        });
-
-        #[cfg(debug_assertions)]
-        let size_after = self.seen_recursion.len();
-
-        #[cfg(debug_assertions)]
-        debug_assert!(size_after < size_before, "nothing was removed");
-    }
-
-    fn seen_recursion_pair(&mut self, var1: Variable, var2: Variable) -> bool {
-        let (var1, var2) = (
-            self.subs.get_root_key_without_compacting(var1),
-            self.subs.get_root_key_without_compacting(var2),
-        );
-
-        self.seen_recursion.contains(&(var1, var2))
-    }
-
-    fn was_fixed(&self, var: Variable) -> bool {
-        self.fixed_variables
-            .iter()
-            .any(|fixed_var| self.subs.equivalent_without_compacting(*fixed_var, var))
+            .union(lambda_sets_to_specialize);
+        self.has_changed = self.has_changed || has_changed;
+        self.extra_metadata.union(extra_metadata);
     }
 }
 
 /// Unifies two types.
-/// The [mode][Mode] enables or disables certain extensional features of unification.
+/// The [mode][UnificationMode] enables or disables certain extensional features of unification.
 ///
 /// `observed_pol` describes the [polarity][Polarity] of the type observed to be under unification.
 /// This is only relevant for producing error types, and is not material to the unification
@@ -387,7 +293,7 @@ pub fn unify(
     env: &mut Env,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
     observed_pol: Polarity,
 ) -> Unified {
     unify_help(env, var1, var2, mode, observed_pol)
@@ -399,7 +305,7 @@ pub fn unify_introduced_ability_specialization(
     env: &mut Env,
     ability_member_signature: Variable,
     specialization_var: Variable,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Unified<SpecializationLsetCollector> {
     unify_help(
         env,
@@ -416,7 +322,7 @@ pub fn unify_with_collector<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
     observed_pol: Polarity,
 ) -> Unified<M> {
     unify_help(env, var1, var2, mode, observed_pol)
@@ -428,7 +334,7 @@ fn unify_help<M: MetaCollector>(
     env: &mut Env,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
     observed_pol: Polarity,
 ) -> Unified<M> {
     let mut vars = Vec::new();
@@ -437,6 +343,7 @@ fn unify_help<M: MetaCollector>(
         must_implement_ability,
         lambda_sets_to_specialize,
         extra_metadata,
+        has_changed: _,
     } = unify_pool(env, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
@@ -453,22 +360,17 @@ fn unify_help<M: MetaCollector>(
             ErrorTypeContext::None
         };
 
-        let type1 = env
-            .subs
-            .var_to_error_type_contextual(var1, error_context, observed_pol);
-        let type2 = env
-            .subs
-            .var_to_error_type_contextual(var2, error_context, observed_pol);
+        let type1 = env.var_to_error_type_contextual(var1, error_context, observed_pol);
+        let type2 = env.var_to_error_type_contextual(var2, error_context, observed_pol);
 
-        env.subs.union(var1, var2, Content::Error.into());
+        env.union(var1, var2, Content::Error.into());
 
         let do_not_implement_ability = mismatches
             .into_iter()
             .filter_map(|mismatch| match mismatch {
                 Mismatch::DoesNotImplementAbiity(var, ab) => {
                     let err_type =
-                        env.subs
-                            .var_to_error_type_contextual(var, error_context, observed_pol);
+                        env.var_to_error_type_contextual(var, error_context, observed_pol);
                     Some((err_type, ab))
                 }
                 _ => None,
@@ -486,16 +388,16 @@ pub fn unify_pool<M: MetaCollector>(
     pool: &mut Pool,
     var1: Variable,
     var2: Variable,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Outcome<M> {
-    if env.subs.equivalent(var1, var2) {
+    if env.equivalent(var1, var2) {
         Outcome::default()
     } else {
         let ctx = Context {
             first: var1,
-            first_desc: env.subs.get(var1),
+            first_desc: env.get(var1),
             second: var2,
-            second_desc: env.subs.get(var2),
+            second_desc: env.get(var2),
             mode,
         };
 
@@ -515,6 +417,14 @@ fn debug_print_unified_types<M: MetaCollector>(
     use roc_types::subs::SubsFmtContent;
 
     static mut UNIFICATION_DEPTH: usize = 0;
+
+    match opt_outcome {
+        None => env.debug_start_unification(ctx.first, ctx.second, ctx.mode),
+        Some(outcome) => {
+            let success = outcome.mismatches.is_empty();
+            env.debug_end_unification(ctx.first, ctx.second, success);
+        }
+    }
 
     dbg_do!(ROC_PRINT_UNIFICATIONS, {
         let prefix = match opt_outcome {
@@ -541,20 +451,20 @@ fn debug_print_unified_types<M: MetaCollector>(
         //        println!("\n --- \n");
         //        dbg!(ctx.second, type2);
         //        println!("\n --------------- \n");
-        let content_1 = env.subs.get(ctx.first).content;
-        let content_2 = env.subs.get(ctx.second).content;
+        let content_1 = env.get(ctx.first).content;
+        let content_2 = env.get(ctx.second).content;
         let mode = ctx.mode.pretty_print();
         eprintln!(
             "{}{}({:?}-{:?}): {:?} {:?} {} {:?} {:?}",
             " ".repeat(use_depth),
             prefix,
-            env.subs.get_root_key_without_compacting(ctx.first),
-            env.subs.get_root_key_without_compacting(ctx.second),
+            env.get_root_key_without_compacting(ctx.first),
+            env.get_root_key_without_compacting(ctx.second),
             ctx.first,
-            SubsFmtContent(&content_1, env.subs),
+            SubsFmtContent(&content_1, env),
             mode,
             ctx.second,
-            SubsFmtContent(&content_2, env.subs),
+            SubsFmtContent(&content_2, env),
         );
 
         unsafe { UNIFICATION_DEPTH = new_depth };
@@ -568,7 +478,7 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
 
     // This #[allow] is needed in release builds, where `result` is no longer used.
     #[allow(clippy::let_and_return)]
-    let result = match &ctx.first_desc.content {
+    let mut result: Outcome<M> = match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(env, &ctx, opt_name, &ctx.second_desc.content),
         FlexAbleVar(opt_name, abilities) => {
             unify_flex_able(env, &ctx, opt_name, *abilities, &ctx.second_desc.content)
@@ -598,12 +508,22 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
             unify_opaque(env, pool, &ctx, *symbol, *args, *real_var)
         }
         LambdaSet(lset) => unify_lambda_set(env, pool, &ctx, *lset, &ctx.second_desc.content),
+        ErasedLambda => unify_erased_lambda(env, pool, &ctx, &ctx.second_desc.content),
         &RangedNumber(range_vars) => unify_ranged_number(env, pool, &ctx, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
             merge(env, &ctx, Error)
         }
     };
+
+    if result.has_changed {
+        result
+            .extra_metadata
+            .record_changed_variable(env, ctx.first);
+        result
+            .extra_metadata
+            .record_changed_variable(env, ctx.second);
+    }
 
     #[cfg(debug_assertions)]
     debug_print_unified_types(env, &ctx, Some(&result));
@@ -616,6 +536,7 @@ fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
         mismatches: vec![Mismatch::TypeNotInRange],
         must_implement_ability: Default::default(),
         lambda_sets_to_specialize: Default::default(),
+        has_changed: false,
         extra_metadata: Default::default(),
     }
 }
@@ -657,7 +578,7 @@ fn unify_ranged_number<M: MetaCollector>(
             Some(range) => merge(env, ctx, RangedNumber(range)),
             None => not_in_range_mismatch(),
         },
-        LambdaSet(..) => mismatch!(),
+        LambdaSet(..) | ErasedLambda => mismatch!(),
         Error => merge(env, ctx, Error),
     }
 }
@@ -671,7 +592,7 @@ fn check_and_merge_valid_range<M: MetaCollector>(
     var: Variable,
 ) -> Outcome<M> {
     use Content::*;
-    let content = *env.subs.get_content_without_compacting(var);
+    let content = *env.get_content_without_compacting(var);
 
     macro_rules! merge_if {
         ($cond:expr) => {
@@ -744,20 +665,20 @@ fn check_and_merge_valid_range<M: MetaCollector>(
                 }
                 NumericRange::NumAtLeastSigned(_) | NumericRange::NumAtLeastEitherSign(_) => {
                     debug_assert_eq!(args.len(), 1);
-                    let arg = env.subs.get_subs_slice(args.all_variables())[0];
+                    let arg = env.get_subs_slice(args.all_variables())[0];
                     let new_range_var = wrap_range_var(env, symbol, range_var, kind);
                     unify_pool(env, pool, new_range_var, arg, ctx.mode)
                 }
             },
             Symbol::NUM_NUM => {
                 debug_assert_eq!(args.len(), 1);
-                let arg = env.subs.get_subs_slice(args.all_variables())[0];
+                let arg = env.get_subs_slice(args.all_variables())[0];
                 let new_range_var = wrap_range_var(env, symbol, range_var, kind);
                 unify_pool(env, pool, new_range_var, arg, ctx.mode)
             }
             Symbol::NUM_INT | Symbol::NUM_INTEGER => {
                 debug_assert_eq!(args.len(), 1);
-                let arg = env.subs.get_subs_slice(args.all_variables())[0];
+                let arg = env.get_subs_slice(args.all_variables())[0];
                 let new_range_var = wrap_range_var(env, symbol, range_var, kind);
                 unify_pool(env, pool, new_range_var, arg, ctx.mode)
             }
@@ -780,10 +701,10 @@ fn wrap_range_var(
     range_var: Variable,
     alias_kind: AliasKind,
 ) -> Variable {
-    let range_desc = env.subs.get(range_var);
-    let new_range_var = env.subs.fresh(range_desc);
-    let var_slice = AliasVariables::insert_into_subs(env.subs, [new_range_var], [], []);
-    env.subs.set_content(
+    let range_desc = env.get(range_var);
+    let new_range_var = env.fresh(range_desc);
+    let var_slice = AliasVariables::insert_into_subs(env, [new_range_var], [], []);
+    env.set_content(
         range_var,
         Alias(symbol, var_slice, new_range_var, alias_kind),
     );
@@ -810,15 +731,15 @@ fn unify_two_aliases<M: MetaCollector>(
         let args_it = args
             .type_variables()
             .into_iter()
-            .zip(other_args.type_variables().into_iter());
+            .zip(other_args.type_variables());
 
         let lambda_set_it = args
             .lambda_set_variables()
             .into_iter()
-            .zip(other_args.lambda_set_variables().into_iter());
+            .zip(other_args.lambda_set_variables());
 
         let infer_ext_in_output_vars_it = (args.infer_ext_in_output_variables().into_iter())
-            .zip(other_args.infer_ext_in_output_variables().into_iter());
+            .zip(other_args.infer_ext_in_output_variables());
 
         let mut merged_args = Vec::with_capacity(args.type_variables().len());
         let mut merged_lambda_set_args = Vec::with_capacity(args.lambda_set_variables().len());
@@ -828,80 +749,89 @@ fn unify_two_aliases<M: MetaCollector>(
             merged_args.capacity()
                 + merged_lambda_set_args.capacity()
                 + merged_infer_ext_in_output_vars.capacity(),
-            args.all_variables_len as _,
+            args.all_variables_len as usize,
         );
 
         for (l, r) in args_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
+            let l_var = env[l];
+            let r_var = env[r];
             outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
 
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
+            let merged_var = choose_merged_var(env, l_var, r_var);
             merged_args.push(merged_var);
         }
 
-        for (l, r) in lambda_set_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
-            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
-
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
-            merged_lambda_set_args.push(merged_var);
+        if !outcome.mismatches.is_empty() {
+            return outcome;
         }
 
-        for (l, r) in infer_ext_in_output_vars_it {
-            let l_var = env.subs[l];
-            let r_var = env.subs[r];
-            outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+        // Even if there are no changes to alias arguments, and no new variables were
+        // introduced, we may still need to unify the "actual types" of the alias or opaque!
+        //
+        // The unification is not necessary from a types perspective (and in fact, we may want
+        // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
+        // which expects identical types to be reflected in the same variable.
+        //
+        // As a concrete example, consider the unification of two opaques
+        //
+        //   P := [Zero, Succ P]
+        //
+        //   (@P (Succ n)) ~ (@P (Succ o))
+        //
+        // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
+        // But if we do not unify the types of `n` and `o`, which are recursion variables, they
+        // will remain disjoint! Currently, the implication of this is that they will be seen
+        // to have separate recursive memory layouts in the monomorphizer - which is no good
+        // for our compilation model.
+        //
+        // As such, always unify the real vars.
 
-            let merged_var = choose_merged_var(env.subs, l_var, r_var);
-            merged_infer_ext_in_output_vars.push(merged_var);
+        // Don't report real_var mismatches, because they must always be surfaced higher, from
+        // the argument types.
+        let mut real_var_outcome = unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
+        let _ = real_var_outcome.mismatches.drain(..);
+        outcome.union(real_var_outcome);
+
+        let merged_real_var = choose_merged_var(env, real_var, other_real_var);
+
+        // Now, we need to unify the lambda set and IOIOP variables of both aliases.
+        //
+        // We wait to do this until after we have unified the real vars, because the real vars
+        // should contain the lambda set and IOIOP variables of the aliases, so most of these
+        // should be short-circuits.
+        {
+            for (l, r) in lambda_set_it {
+                let l_var = env[l];
+                let r_var = env[r];
+                outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+                let merged_var = choose_merged_var(env, l_var, r_var);
+                merged_lambda_set_args.push(merged_var);
+            }
+
+            for (l, r) in infer_ext_in_output_vars_it {
+                let l_var = env[l];
+                let r_var = env[r];
+                outcome.union(unify_pool(env, pool, l_var, r_var, ctx.mode));
+
+                let merged_var = choose_merged_var(env, l_var, r_var);
+                merged_infer_ext_in_output_vars.push(merged_var);
+            }
         }
 
-        if outcome.mismatches.is_empty() {
-            // Even if there are no changes to alias arguments, and no new variables were
-            // introduced, we may still need to unify the "actual types" of the alias or opaque!
-            //
-            // The unification is not necessary from a types perspective (and in fact, we may want
-            // to disable it for `roc check` later on), but it is necessary for the monomorphizer,
-            // which expects identical types to be reflected in the same variable.
-            //
-            // As a concrete example, consider the unification of two opaques
-            //
-            //   P := [Zero, Succ P]
-            //
-            //   (@P (Succ n)) ~ (@P (Succ o))
-            //
-            // `P` has no arguments, and unification of the surface of `P` introduces nothing new.
-            // But if we do not unify the types of `n` and `o`, which are recursion variables, they
-            // will remain disjoint! Currently, the implication of this is that they will be seen
-            // to have separate recursive memory layouts in the monomorphizer - which is no good
-            // for our compilation model.
-            //
-            // As such, always unify the real vars.
+        // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
+        // the merged vars are all left, avoid re-insertion. Is checking for argument slice
+        // equality faster than re-inserting?
+        let merged_variables = AliasVariables::insert_into_subs(
+            env,
+            merged_args,
+            merged_lambda_set_args,
+            merged_infer_ext_in_output_vars,
+        );
 
-            // Don't report real_var mismatches, because they must always be surfaced higher, from
-            // the argument types.
-            let mut real_var_outcome =
-                unify_pool::<M>(env, pool, real_var, other_real_var, ctx.mode);
-            let _ = real_var_outcome.mismatches.drain(..);
-            outcome.union(real_var_outcome);
+        let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
 
-            let merged_real_var = choose_merged_var(env.subs, real_var, other_real_var);
-
-            // POSSIBLE OPT: choose_merged_var chooses the left when the choice is arbitrary. If
-            // the merged vars are all left, avoid re-insertion. Is checking for argument slice
-            // equality faster than re-inserting?
-            let merged_variables = AliasVariables::insert_into_subs(
-                env.subs,
-                merged_args,
-                merged_lambda_set_args,
-                merged_infer_ext_in_output_vars,
-            );
-            let merged_content = Content::Alias(symbol, merged_variables, merged_real_var, kind);
-
-            outcome.union(merge(env, ctx, merged_content));
-        }
+        outcome.union(merge(env, ctx, merged_content));
 
         outcome
     } else {
@@ -910,8 +840,8 @@ fn unify_two_aliases<M: MetaCollector>(
 }
 
 fn fix_fixpoint<M: MetaCollector>(env: &mut Env, ctx: &Context) -> Outcome<M> {
-    let fixed_variables = crate::fix::fix_fixpoint(env.subs, ctx.first, ctx.second);
-    env.fixed_variables.extend(fixed_variables);
+    let fixed_variables = crate::fix::fix_fixpoint(env, ctx.first, ctx.second);
+    env.extend_fixed_variables(fixed_variables);
     Default::default()
 }
 
@@ -972,6 +902,7 @@ fn unify_alias<M: MetaCollector>(
             check_and_merge_valid_range(env, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
         LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
+        ErasedLambda => mismatch!("cannot unify alias {:?} with an erased lambda!", ctx.first),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1096,7 +1027,7 @@ fn unify_structure<M: MetaCollector>(
         }
         RigidAbleVar(_, _abilities) => {
             mismatch!(
-                %not_able, ctx.first, env.subs.get_subs_slice(*_abilities),
+                %not_able, ctx.first, env.get_subs_slice(*_abilities),
                 "trying to unify {:?} with RigidAble {:?}",
                 &flat_type,
                 &other
@@ -1116,11 +1047,11 @@ fn unify_structure<M: MetaCollector>(
                 }
                 FlatType::RecursiveTagUnion(rec, _, _) => {
                     debug_assert!(
-                        is_recursion_var(env.subs, *rec),
+                        is_recursion_var(env, *rec),
                         "{:?}",
                         roc_types::subs::SubsFmtContent(
-                            env.subs.get_content_without_compacting(*rec),
-                            env.subs
+                            env.get_content_without_compacting(*rec),
+                            env
                         )
                     );
                     // unify the structure with this recursive tag union
@@ -1164,15 +1095,48 @@ fn unify_structure<M: MetaCollector>(
         LambdaSet(..) => {
             mismatch!(
                 "Cannot unify structure \n{:?} \nwith lambda set\n {:?}",
-                roc_types::subs::SubsFmtContent(&Content::Structure(*flat_type), env.subs),
-                roc_types::subs::SubsFmtContent(other, env.subs),
+                roc_types::subs::SubsFmtContent(&Content::Structure(*flat_type), env),
+                roc_types::subs::SubsFmtContent(other, env),
                 // &flat_type,
                 // other
             )
         }
+        ErasedLambda => mismatch!(),
         RangedNumber(other_range_vars) => {
             check_and_merge_valid_range(env, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
+        Error => merge(env, ctx, Error),
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_erased_lambda<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    other: &Content,
+) -> Outcome<M> {
+    match other {
+        FlexVar(_) => {
+            if M::UNIFYING_SPECIALIZATION {
+                todo_lambda_erasure!()
+            }
+            merge(env, ctx, Content::ErasedLambda)
+        }
+        Content::LambdaSet(..) => {
+            if M::UNIFYING_SPECIALIZATION {
+                todo_lambda_erasure!()
+            }
+            merge(env, ctx, Content::ErasedLambda)
+        }
+        ErasedLambda => merge(env, ctx, Content::ErasedLambda),
+        RecursionVar { structure, .. } => unify_pool(env, pool, ctx.first, *structure, ctx.mode),
+        RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
+        FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
+        Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
+        RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
+        Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1195,7 +1159,7 @@ fn unify_lambda_set<M: MetaCollector>(
                     solved: UnionLabels::default(),
                     recursion_var: OptVariable::NONE,
                     unspecialized: SubsSlice::default(),
-                    ambient_function: env.subs.fresh_unnamed_flex_var(),
+                    ambient_function: env.fresh_unnamed_flex_var(),
                 };
 
                 extract_specialization_lambda_set(env, ctx, lambda_set, zero_lambda_set)
@@ -1222,6 +1186,7 @@ fn unify_lambda_set<M: MetaCollector>(
             env.remove_recursion_pair(ctx.first, ctx.second);
             outcome
         }
+        ErasedLambda => merge(env, ctx, ErasedLambda),
         RigidVar(..) | RigidAbleVar(..) => mismatch!("Lambda sets never unify with rigid"),
         FlexAbleVar(..) => mismatch!("Lambda sets should never have abilities attached to them"),
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
@@ -1258,7 +1223,7 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
     );
     debug_assert!(member_rec_var.is_none());
 
-    let member_uls = env.subs.get_subs_slice(member_uls_slice);
+    let member_uls = env.get_subs_slice(member_uls_slice);
     debug_assert!(
         member_uls.len() <= 1,
         "member signature lambda sets should contain at most one unspecialized lambda set"
@@ -1270,14 +1235,14 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
         // lambda set does not line up with one required by the ability member prototype.
         // As an example, consider
         //
-        //   Q := [ F (Str -> Str) ] has [Eq {isEq}]
+        //   Q := [ F (Str -> Str) ] implements [Eq {isEq}]
         //
         //   isEq = \@Q _, @Q _ -> Bool.false
         //
         // here the lambda set of `F`'s payload is part of the specialization signature, but it is
         // irrelevant to the specialization. As such, I believe it is safe to drop the
         // empty specialization lambda set.
-        roc_tracing::info!(ambient_function=?env.subs.get_root_key_without_compacting(specialization_lset.ambient_function), "ambient function in a specialization has a zero-lambda set");
+        roc_tracing::info!(ambient_function=?env.get_root_key_without_compacting(specialization_lset.ambient_function), "ambient function in a specialization has a zero-lambda set");
 
         return merge(env, ctx, Content::LambdaSet(specialization_lset));
     }
@@ -1317,19 +1282,19 @@ struct SeparatedUnionLambdas {
 fn separate_union_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    mode: Mode,
+    mode: UnificationMode,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
 ) -> Result<(Outcome<M>, SeparatedUnionLambdas), Outcome<M>> {
     debug_assert!(
-        fields1.is_sorted_allow_duplicates(env.subs),
+        fields1.is_sorted_allow_duplicates(env),
         "not sorted: {:?}",
-        fields1.iter_from_subs(env.subs).collect::<Vec<_>>()
+        fields1.iter_from_subs(env).collect::<Vec<_>>()
     );
     debug_assert!(
-        fields2.is_sorted_allow_duplicates(env.subs),
+        fields2.is_sorted_allow_duplicates(env),
         "not sorted: {:?}",
-        fields2.iter_from_subs(env.subs).collect::<Vec<_>>()
+        fields2.iter_from_subs(env).collect::<Vec<_>>()
     );
 
     // lambda names -> (the captures for that lambda on the left side, the captures for that lambda on the right side)
@@ -1338,16 +1303,14 @@ fn separate_union_lambdas<M: MetaCollector>(
     //   F2 -> { left: [ [a] ],         right: [ [Str] ] }
     let mut buckets: VecMap<Symbol, Sides> = VecMap::with_capacity(fields1.len() + fields2.len());
 
-    let (mut fields_left, mut fields_right) = (
-        fields1.iter_all().into_iter().peekable(),
-        fields2.iter_all().into_iter().peekable(),
-    );
+    let (mut fields_left, mut fields_right) =
+        (fields1.iter_all().peekable(), fields2.iter_all().peekable());
 
     loop {
         use std::cmp::Ordering;
 
         let ord = match (fields_left.peek(), fields_right.peek()) {
-            (Some((l, _)), Some((r, _))) => Some((env.subs[*l]).cmp(&env.subs[*r])),
+            (Some((l, _)), Some((r, _))) => Some((env[*l]).cmp(&env[*r])),
             (Some(_), None) => Some(Ordering::Less),
             (None, Some(_)) => Some(Ordering::Greater),
             (None, None) => None,
@@ -1356,22 +1319,22 @@ fn separate_union_lambdas<M: MetaCollector>(
         match ord {
             Some(Ordering::Less) => {
                 let (sym, vars) = fields_left.next().unwrap();
-                let bucket = buckets.get_or_insert(env.subs[sym], Sides::default);
-                bucket.left.push((env.subs[sym], env.subs[vars]));
+                let bucket = buckets.get_or_insert(env[sym], Sides::default);
+                bucket.left.push((env[sym], env[vars]));
             }
             Some(Ordering::Greater) => {
                 let (sym, vars) = fields_right.next().unwrap();
-                let bucket = buckets.get_or_insert(env.subs[sym], Sides::default);
-                bucket.right.push((env.subs[sym], env.subs[vars]));
+                let bucket = buckets.get_or_insert(env[sym], Sides::default);
+                bucket.right.push((env[sym], env[vars]));
             }
             Some(Ordering::Equal) => {
                 let (sym, left_vars) = fields_left.next().unwrap();
                 let (_sym, right_vars) = fields_right.next().unwrap();
-                debug_assert_eq!(env.subs[sym], env.subs[_sym]);
+                debug_assert_eq!(env[sym], env[_sym]);
 
-                let bucket = buckets.get_or_insert(env.subs[sym], Sides::default);
-                bucket.left.push((env.subs[sym], env.subs[left_vars]));
-                bucket.right.push((env.subs[sym], env.subs[right_vars]));
+                let bucket = buckets.get_or_insert(env[sym], Sides::default);
+                bucket.left.push((env[sym], env[left_vars]));
+                bucket.right.push((env[sym], env[right_vars]));
             }
             None => break,
         }
@@ -1413,7 +1376,7 @@ fn separate_union_lambdas<M: MetaCollector>(
                         }
 
                         for (var1, var2) in (left_slice.into_iter()).zip(right_slice.into_iter()) {
-                            let (var1, var2) = (env.subs[var1], env.subs[var2]);
+                            let (var1, var2) = (env[var1], env[var2]);
 
                             if M::IS_LATE {
                                 // Lambda sets are effectively tags under another name, and their usage can also result
@@ -1430,8 +1393,8 @@ fn separate_union_lambdas<M: MetaCollector>(
                                 // code generator, we have not yet observed a case where they must
                                 // collapsed to the type checker of the surface syntax.
                                 // It is possible this assumption will be invalidated!
-                                maybe_mark_union_recursive(env, var1);
-                                maybe_mark_union_recursive(env, var2);
+                                maybe_mark_union_recursive(env, pool, var1);
+                                maybe_mark_union_recursive(env, pool, var2);
                             }
 
                             // Check whether the two type variables in the closure set are
@@ -1475,14 +1438,14 @@ fn separate_union_lambdas<M: MetaCollector>(
                             // v1 ~ v2
                             // => {} -[ foo ({} -[ bar Str ]-> {}),
                             //          foo ({} -[ bar U64 ]-> {}) ] -> {}
-                            let subs_snapshot = env.subs.snapshot();
+                            let subs_snapshot = env.snapshot();
                             let pool_snapshot = pool.len();
                             let outcome: Outcome<M> = unify_pool(env, pool, var1, var2, mode);
 
                             if !outcome.mismatches.is_empty() {
                                 // Rolling back will also pull apart any nested lambdas that
                                 // were joined into the same set.
-                                env.subs.rollback_to(subs_snapshot);
+                                env.rollback_to(subs_snapshot);
                                 pool.truncate(pool_snapshot);
                                 continue 'try_next_right;
                             } else {
@@ -1547,8 +1510,10 @@ fn unspecialized_lambda_set_sorter(subs: &Subs, uls1: Uls, uls2: Uls) -> std::cm
                 }
                 (FlexAbleVar(..), _) => Greater,
                 (_, FlexAbleVar(..)) => Less,
-                // For everything else, the order is irrelevant
-                (_, _) => Less,
+                // For everything else, sort by the root key
+                (_, _) => subs
+                    .get_root_key_without_compacting(var1)
+                    .cmp(&subs.get_root_key_without_compacting(var2)),
             }
         }
         ord => ord,
@@ -1570,7 +1535,7 @@ fn is_sorted_unspecialized_lamba_set_list(subs: &Subs, uls: &[Uls]) -> bool {
 fn unify_unspecialized_lambdas<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    mode: Mode,
+    mode: UnificationMode,
     uls_left: SubsSlice<Uls>,
     uls_right: SubsSlice<Uls>,
 ) -> Result<(SubsSlice<Uls>, Outcome<M>), Outcome<M>> {
@@ -1583,8 +1548,8 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
         (false, true) => return Ok((uls_left, Default::default())),
         (true, false) => return Ok((uls_right, Default::default())),
         (false, false) => (
-            env.subs.get_subs_slice(uls_left).to_vec(),
-            env.subs.get_subs_slice(uls_right).to_vec(),
+            env.get_subs_slice(uls_left).to_vec(),
+            env.get_subs_slice(uls_right).to_vec(),
         ),
     };
 
@@ -1596,8 +1561,8 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     // considers.
     //
     // As such, we must sort beforehand. In practice these sets are very, very small (<5 elements).
-    let uls_left = sort_unspecialized_lambda_sets(env.subs, uls_left);
-    let uls_right = sort_unspecialized_lambda_sets(env.subs, uls_right);
+    let uls_left = sort_unspecialized_lambda_sets(env, uls_left);
+    let uls_right = sort_unspecialized_lambda_sets(env, uls_right);
 
     let (mut uls_left, mut uls_right) = (uls_left.iter().peekable(), uls_right.iter().peekable());
     let mut merged_uls = Vec::with_capacity(uls_left.len() + uls_right.len());
@@ -1634,8 +1599,8 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                 // The interesting case - both point to the same specialization.
                 use Content::*;
                 match (
-                    env.subs.get_content_without_compacting(var_l),
-                    env.subs.get_content_without_compacting(var_r),
+                    env.get_content_without_compacting(var_l),
+                    env.get_content_without_compacting(var_r),
                 ) {
                     (FlexAbleVar(..) | RigidAbleVar(..), FlexAbleVar(..) | RigidAbleVar(..)) => {
                         // If the types are root-equivalent, de-duplicate them.
@@ -1646,7 +1611,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         // For more information, see "A Property that’s lost, and how we can hold on to it"
                         // in solve/docs/ambient_lambda_set_specialization.md.
 
-                        if env.subs.equivalent_without_compacting(var_l, var_r) {
+                        if env.equivalent_without_compacting(var_l, var_r) {
                             //     ... a1    ...
                             //     ... b1=a1 ...
                             // =>  ... a1    ...
@@ -1704,12 +1669,14 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             }
                             whole_outcome.union(outcome);
 
-                            debug_assert!(env.subs.equivalent_without_compacting(var_l, var_r));
+                            debug_assert!(env.equivalent_without_compacting(var_l, var_r));
 
                             let _dropped = uls_right.next().unwrap();
                             let kept = uls_left.next().unwrap();
                             merged_uls.push(*kept);
                         } else {
+                            // CASE: disjoint_flex_specializations
+                            //
                             //     ... a1     ...
                             //     ... b1     ...
                             // =>  ... a1, b1 ...
@@ -1739,7 +1706,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                             //     ... 670 ...
                             //
                             // In the above case, we certainly only want to advance the left side!
-                            if env.subs.get_root_key(var_l) < env.subs.get_root_key(var_r) {
+                            if env.get_root_key(var_l) < env.get_root_key(var_r) {
                                 let kept = uls_left.next().unwrap();
                                 merged_uls.push(*kept);
                             } else {
@@ -1779,20 +1746,38 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
                         let _dropped = uls_left.next().unwrap();
                     }
                     (_, _) => {
-                        //     ... {foo: _} ...
-                        //     ... {foo: _} ...
-                        // =>  ... {foo: _} ...
-                        //
-                        // Unify them, then advance one.
-                        // (the choice is arbitrary, so we choose the left)
-
-                        let outcome = unify_pool(env, pool, var_l, var_r, mode);
-                        if !outcome.mismatches.is_empty() {
-                            return Err(outcome);
+                        if env.equivalent_without_compacting(var_l, var_r) {
+                            //     ... a1    ...
+                            //     ... b1=a1 ...
+                            // =>  ... a1    ...
+                            //
+                            // Keep the one on the left, drop the one on the right. Then progress
+                            // both, because the next variable on the left must be disjoint from
+                            // the current on the right (resp. next variable on the right vs.
+                            // current left) - if they aren't, then the invariant was broken.
+                            //
+                            // Then progress both, because the invariant tells us they must be
+                            // disjoint, and if there were any concrete variables, they would have
+                            // appeared earlier.
+                            let _dropped = uls_right.next().unwrap();
+                            let kept = uls_left.next().unwrap();
+                            merged_uls.push(*kept);
+                        } else {
+                            // Even if these two variables unify, since they are not equivalent,
+                            // they correspond to different specializations! As such we must not
+                            // merge them.
+                            //
+                            // Instead, keep both, but do so by adding and advancing the side with
+                            // the lower root. See CASE disjoint_flex_specializations for
+                            // reasoning.
+                            if env.get_root_key(var_l) < env.get_root_key(var_r) {
+                                let kept = uls_left.next().unwrap();
+                                merged_uls.push(*kept);
+                            } else {
+                                let kept = uls_right.next().unwrap();
+                                merged_uls.push(*kept);
+                            }
                         }
-                        whole_outcome.union(outcome);
-
-                        let _dropped = uls_left.next().unwrap();
                     }
                 }
             }
@@ -1800,13 +1785,12 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     }
 
     debug_assert!(
-        is_sorted_unspecialized_lamba_set_list(env.subs, &merged_uls),
-        "merging of unspecialized lambda sets does not preserve sort! {:?}",
-        merged_uls
+        is_sorted_unspecialized_lamba_set_list(env, &merged_uls),
+        "merging of unspecialized lambda sets does not preserve sort! {merged_uls:?}"
     );
 
     Ok((
-        SubsSlice::extend_new(&mut env.subs.unspecialized_lambda_sets, merged_uls),
+        SubsSlice::extend_new(&mut env.unspecialized_lambda_sets, merged_uls),
         whole_outcome,
     ))
 }
@@ -1843,7 +1827,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
     debug_assert!(
         (rec1.into_variable().into_iter())
             .chain(rec2.into_variable().into_iter())
-            .all(|v| is_recursion_var(env.subs, v)),
+            .all(|v| is_recursion_var(env, v)),
         "Recursion var is present, but it doesn't have a recursive content!"
     );
 
@@ -1861,19 +1845,19 @@ fn unify_lambda_set_help<M: MetaCollector>(
 
     let all_lambdas = joined
         .into_iter()
-        .map(|(name, slice)| (name, env.subs.get_subs_slice(slice).to_vec()));
+        .map(|(name, slice)| (name, env.get_subs_slice(slice).to_vec()));
 
     let all_lambdas = merge_sorted_preserving_duplicates(
         all_lambdas,
         only_in_left.into_iter().map(|(name, subs_slice)| {
-            let vec = env.subs.get_subs_slice(subs_slice).to_vec();
+            let vec = env.get_subs_slice(subs_slice).to_vec();
             (name, vec)
         }),
     );
     let all_lambdas = merge_sorted_preserving_duplicates(
         all_lambdas,
         only_in_right.into_iter().map(|(name, subs_slice)| {
-            let vec = env.subs.get_subs_slice(subs_slice).to_vec();
+            let vec = env.get_subs_slice(subs_slice).to_vec();
             (name, vec)
         }),
     );
@@ -1895,7 +1879,7 @@ fn unify_lambda_set_help<M: MetaCollector>(
         }
     };
 
-    let new_solved = UnionLabels::insert_into_subs(env.subs, all_lambdas);
+    let new_solved = UnionLabels::insert_into_subs(env, all_lambdas);
     let new_lambda_set = Content::LambdaSet(LambdaSet {
         solved: new_solved,
         recursion_var,
@@ -1918,9 +1902,7 @@ fn unify_record<M: MetaCollector>(
     fields2: RecordFields,
     ext2: Variable,
 ) -> Outcome<M> {
-    let subs = &mut env.subs;
-
-    let (separate, ext1, ext2) = separate_record_fields(subs, fields1, ext1, fields2, ext2);
+    let (separate, ext1, ext2) = separate_record_fields(env, fields1, ext1, fields2, ext2);
 
     let shared_fields = separate.in_both;
 
@@ -1940,7 +1922,7 @@ fn unify_record<M: MetaCollector>(
 
             field_outcome
         } else {
-            let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
+            let only_in_2 = RecordFields::insert_into_subs(env, separate.only_in_2);
             let flat_type = FlatType::Record(only_in_2, ext2);
             let sub_record = fresh(env, pool, ctx, Structure(flat_type));
             let ext_outcome = unify_pool(env, pool, ext1, sub_record, ctx.mode);
@@ -1957,7 +1939,7 @@ fn unify_record<M: MetaCollector>(
             field_outcome
         }
     } else if separate.only_in_2.is_empty() {
-        let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
+        let only_in_1 = RecordFields::insert_into_subs(env, separate.only_in_1);
         let flat_type = FlatType::Record(only_in_1, ext1);
         let sub_record = fresh(env, pool, ctx, Structure(flat_type));
         let ext_outcome = unify_pool(env, pool, sub_record, ext2, ctx.mode);
@@ -1973,8 +1955,8 @@ fn unify_record<M: MetaCollector>(
 
         field_outcome
     } else {
-        let only_in_1 = RecordFields::insert_into_subs(subs, separate.only_in_1);
-        let only_in_2 = RecordFields::insert_into_subs(subs, separate.only_in_2);
+        let only_in_1 = RecordFields::insert_into_subs(env, separate.only_in_1);
+        let only_in_2 = RecordFields::insert_into_subs(env, separate.only_in_2);
 
         let other_fields = OtherFields::Other(only_in_1, only_in_2);
 
@@ -1997,6 +1979,116 @@ fn unify_record<M: MetaCollector>(
 
         let mut field_outcome =
             unify_shared_fields(env, pool, ctx, shared_fields, other_fields, ext);
+
+        field_outcome
+            .mismatches
+            .reserve(rec1_outcome.mismatches.len() + rec2_outcome.mismatches.len());
+        field_outcome.union(rec1_outcome);
+        field_outcome.union(rec2_outcome);
+
+        field_outcome
+    }
+}
+
+#[must_use]
+fn unify_tuple<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    elems1: TupleElems,
+    ext1: Variable,
+    elems2: TupleElems,
+    ext2: Variable,
+) -> Outcome<M> {
+    let (separate, ext1, ext2) = separate_tuple_elems(env, elems1, ext1, elems2, ext2);
+
+    let shared_elems = separate.in_both;
+
+    if separate.only_in_1.is_empty() {
+        if separate.only_in_2.is_empty() {
+            // these variable will be the empty tuple, but we must still unify them
+            let ext_outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);
+
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
+            }
+
+            let mut field_outcome =
+                unify_shared_tuple_elems(env, pool, ctx, shared_elems, OtherTupleElems::None, ext1);
+
+            field_outcome.union(ext_outcome);
+
+            field_outcome
+        } else {
+            let only_in_2 = TupleElems::insert_into_subs(env, separate.only_in_2);
+            let flat_type = FlatType::Tuple(only_in_2, ext2);
+            let sub_record = fresh(env, pool, ctx, Structure(flat_type));
+            let ext_outcome = unify_pool(env, pool, ext1, sub_record, ctx.mode);
+
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
+            }
+
+            let mut field_outcome = unify_shared_tuple_elems(
+                env,
+                pool,
+                ctx,
+                shared_elems,
+                OtherTupleElems::None,
+                sub_record,
+            );
+
+            field_outcome.union(ext_outcome);
+
+            field_outcome
+        }
+    } else if separate.only_in_2.is_empty() {
+        let only_in_1 = TupleElems::insert_into_subs(env, separate.only_in_1);
+        let flat_type = FlatType::Tuple(only_in_1, ext1);
+        let sub_record = fresh(env, pool, ctx, Structure(flat_type));
+        let ext_outcome = unify_pool(env, pool, sub_record, ext2, ctx.mode);
+
+        if !ext_outcome.mismatches.is_empty() {
+            return ext_outcome;
+        }
+
+        let mut field_outcome = unify_shared_tuple_elems(
+            env,
+            pool,
+            ctx,
+            shared_elems,
+            OtherTupleElems::None,
+            sub_record,
+        );
+
+        field_outcome.union(ext_outcome);
+
+        field_outcome
+    } else {
+        let only_in_1 = TupleElems::insert_into_subs(env, separate.only_in_1);
+        let only_in_2 = TupleElems::insert_into_subs(env, separate.only_in_2);
+
+        let other_fields = OtherTupleElems::Other(only_in_1, only_in_2);
+
+        let ext = fresh(env, pool, ctx, Content::FlexVar(None));
+        let flat_type1 = FlatType::Tuple(only_in_1, ext);
+        let flat_type2 = FlatType::Tuple(only_in_2, ext);
+
+        let sub1 = fresh(env, pool, ctx, Structure(flat_type1));
+        let sub2 = fresh(env, pool, ctx, Structure(flat_type2));
+
+        let rec1_outcome = unify_pool(env, pool, ext1, sub2, ctx.mode);
+        if !rec1_outcome.mismatches.is_empty() {
+            return rec1_outcome;
+        }
+
+        let rec2_outcome = unify_pool(env, pool, sub1, ext2, ctx.mode);
+        if !rec2_outcome.mismatches.is_empty() {
+            return rec2_outcome;
+        }
+
+        let mut field_outcome =
+            unify_shared_tuple_elems(env, pool, ctx, shared_elems, other_fields, ext);
 
         field_outcome
             .mismatches
@@ -2058,20 +2150,18 @@ fn unify_shared_fields<M: MetaCollector>(
 
                 (Demanded(a), Required(b))
                 | (Required(a), Demanded(b))
-                | (Demanded(a), Demanded(b)) => Demanded(choose_merged_var(env.subs, a, b)),
+                | (Demanded(a), Demanded(b)) => Demanded(choose_merged_var(env, a, b)),
                 (Required(a), Required(b))
                 | (Required(a), Optional(b))
-                | (Optional(a), Required(b)) => Required(choose_merged_var(env.subs, a, b)),
+                | (Optional(a), Required(b)) => Required(choose_merged_var(env, a, b)),
 
-                (Optional(a), Optional(b)) => Optional(choose_merged_var(env.subs, a, b)),
+                (Optional(a), Optional(b)) => Optional(choose_merged_var(env, a, b)),
 
                 // rigid optional
                 (RigidOptional(a), Optional(b)) | (Optional(b), RigidOptional(a)) => {
-                    RigidOptional(choose_merged_var(env.subs, a, b))
+                    RigidOptional(choose_merged_var(env, a, b))
                 }
-                (RigidOptional(a), RigidOptional(b)) => {
-                    RigidOptional(choose_merged_var(env.subs, a, b))
-                }
+                (RigidOptional(a), RigidOptional(b)) => RigidOptional(choose_merged_var(env, a, b)),
                 (RigidOptional(_), Demanded(_) | Required(_) | RigidRequired(_))
                 | (Demanded(_) | Required(_) | RigidRequired(_), RigidOptional(_)) => {
                     // this is an error, but we continue to give better error messages
@@ -2085,11 +2175,9 @@ fn unify_shared_fields<M: MetaCollector>(
                 }
                 (RigidRequired(a), Demanded(b) | Required(b))
                 | (Demanded(b) | Required(b), RigidRequired(a)) => {
-                    RigidRequired(choose_merged_var(env.subs, a, b))
+                    RigidRequired(choose_merged_var(env, a, b))
                 }
-                (RigidRequired(a), RigidRequired(b)) => {
-                    RigidRequired(choose_merged_var(env.subs, a, b))
-                }
+                (RigidRequired(a), RigidRequired(b)) => RigidRequired(choose_merged_var(env, a, b)),
             };
 
             matching_fields.push((name, actual));
@@ -2100,17 +2188,16 @@ fn unify_shared_fields<M: MetaCollector>(
     if num_shared_fields == matching_fields.len() {
         // pull fields in from the ext_var
 
-        let (ext_fields, new_ext_var) =
-            RecordFields::empty().sorted_iterator_and_ext(env.subs, ext);
+        let (ext_fields, new_ext_var) = RecordFields::empty().sorted_iterator_and_ext(env, ext);
         let ext_fields: Vec<_> = ext_fields.into_iter().collect();
 
         let fields: RecordFields = match other_fields {
             OtherFields::None => {
                 if ext_fields.is_empty() {
-                    RecordFields::insert_into_subs(env.subs, matching_fields)
+                    RecordFields::insert_into_subs(env, matching_fields)
                 } else {
                     let all_fields = merge_sorted(matching_fields, ext_fields);
-                    RecordFields::insert_into_subs(env.subs, all_fields)
+                    RecordFields::insert_into_subs(env, all_fields)
                 }
             }
             OtherFields::Other(other1, other2) => {
@@ -2118,9 +2205,9 @@ fn unify_shared_fields<M: MetaCollector>(
                 all_fields = merge_sorted(
                     all_fields,
                     other1.iter_all().map(|(i1, i2, i3)| {
-                        let field_name: Lowercase = env.subs[i1].clone();
-                        let variable = env.subs[i2];
-                        let record_field: RecordField<Variable> = env.subs[i3].map(|_| variable);
+                        let field_name: Lowercase = env[i1].clone();
+                        let variable = env[i2];
+                        let record_field: RecordField<Variable> = env[i3].map(|_| variable);
 
                         (field_name, record_field)
                     }),
@@ -2129,15 +2216,15 @@ fn unify_shared_fields<M: MetaCollector>(
                 all_fields = merge_sorted(
                     all_fields,
                     other2.iter_all().map(|(i1, i2, i3)| {
-                        let field_name: Lowercase = env.subs[i1].clone();
-                        let variable = env.subs[i2];
-                        let record_field: RecordField<Variable> = env.subs[i3].map(|_| variable);
+                        let field_name: Lowercase = env[i1].clone();
+                        let variable = env[i2];
+                        let record_field: RecordField<Variable> = env[i3].map(|_| variable);
 
                         (field_name, record_field)
                     }),
                 );
 
-                RecordFields::insert_into_subs(env.subs, all_fields)
+                RecordFields::insert_into_subs(env, all_fields)
             }
         };
 
@@ -2148,6 +2235,89 @@ fn unify_shared_fields<M: MetaCollector>(
         whole_outcome
     } else {
         mismatch!("in unify_shared_fields")
+    }
+}
+
+enum OtherTupleElems {
+    None,
+    Other(TupleElems, TupleElems),
+}
+
+type SharedTupleElems = Vec<(usize, (Variable, Variable))>;
+
+#[must_use]
+fn unify_shared_tuple_elems<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    shared_elems: SharedTupleElems,
+    other_elems: OtherTupleElems,
+    ext: Variable,
+) -> Outcome<M> {
+    let mut matching_elems = Vec::with_capacity(shared_elems.len());
+    let num_shared_elems = shared_elems.len();
+
+    let mut whole_outcome = Outcome::default();
+
+    for (name, (actual, expected)) in shared_elems {
+        let local_outcome = unify_pool(env, pool, actual, expected, ctx.mode);
+
+        if local_outcome.mismatches.is_empty() {
+            let actual = choose_merged_var(env, actual, expected);
+
+            matching_elems.push((name, actual));
+            whole_outcome.union(local_outcome);
+        }
+    }
+
+    if num_shared_elems == matching_elems.len() {
+        // pull elems in from the ext_var
+
+        let (ext_elems, new_ext_var) = TupleElems::empty().sorted_iterator_and_ext(env, ext);
+        let ext_elems: Vec<_> = ext_elems.into_iter().collect();
+
+        let elems: TupleElems = match other_elems {
+            OtherTupleElems::None => {
+                if ext_elems.is_empty() {
+                    TupleElems::insert_into_subs(env, matching_elems)
+                } else {
+                    let all_elems = merge_sorted(matching_elems, ext_elems);
+                    TupleElems::insert_into_subs(env, all_elems)
+                }
+            }
+            OtherTupleElems::Other(other1, other2) => {
+                let mut all_elems = merge_sorted(matching_elems, ext_elems);
+                all_elems = merge_sorted(
+                    all_elems,
+                    other1.iter_all().map(|(i1, i2)| {
+                        let elem_index: usize = env[i1];
+                        let variable = env[i2];
+
+                        (elem_index, variable)
+                    }),
+                );
+
+                all_elems = merge_sorted(
+                    all_elems,
+                    other2.iter_all().map(|(i1, i2)| {
+                        let elem_index: usize = env[i1];
+                        let variable = env[i2];
+
+                        (elem_index, variable)
+                    }),
+                );
+
+                TupleElems::insert_into_subs(env, all_elems)
+            }
+        };
+
+        let flat_type = FlatType::Tuple(elems, new_ext_var);
+
+        let merge_outcome = merge(env, ctx, Structure(flat_type));
+        whole_outcome.union(merge_outcome);
+        whole_outcome
+    } else {
+        mismatch!("in unify_shared_tuple_elems")
     }
 }
 
@@ -2164,6 +2334,22 @@ fn separate_record_fields(
 ) {
     let (it1, new_ext1) = fields1.sorted_iterator_and_ext(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_iterator_and_ext(subs, ext2);
+
+    let it1 = it1.collect::<Vec<_>>();
+    let it2 = it2.collect::<Vec<_>>();
+
+    (separate(it1, it2), new_ext1, new_ext2)
+}
+
+fn separate_tuple_elems(
+    subs: &Subs,
+    elems1: TupleElems,
+    ext1: Variable,
+    elems2: TupleElems,
+    ext2: Variable,
+) -> (Separate<usize, Variable>, Variable, Variable) {
+    let (it1, new_ext1) = elems1.sorted_iterator_and_ext(subs, ext1);
+    let (it2, new_ext2) = elems2.sorted_iterator_and_ext(subs, ext2);
 
     let it1 = it1.collect::<Vec<_>>();
     let it2 = it2.collect::<Vec<_>>();
@@ -2335,10 +2521,10 @@ where
 fn separate_union_tags(
     subs: &Subs,
     fields1: UnionTags,
-    ext1: Variable,
+    ext1: TagExt,
     fields2: UnionTags,
-    ext2: Variable,
-) -> (Separate<TagName, VariableSubsSlice>, Variable, Variable) {
+    ext2: TagExt,
+) -> (Separate<TagName, VariableSubsSlice>, TagExt, TagExt) {
     let (it1, new_ext1) = fields1.sorted_slices_iterator_and_ext(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_slices_iterator_and_ext(subs, ext2);
 
@@ -2375,11 +2561,11 @@ enum Rec {
 /// of the variables under unification
 fn should_extend_ext_with_uninhabited_type(
     subs: &Subs,
-    ext1: Variable,
+    ext1: TagExt,
     candidate_type: Variable,
 ) -> bool {
     matches!(
-        subs.get_content_without_compacting(ext1),
+        subs.get_content_without_compacting(ext1.var()),
         Content::Structure(FlatType::EmptyTagUnion)
     ) && !subs.is_inhabited(candidate_type)
 }
@@ -2398,10 +2584,64 @@ fn close_uninhabited_extended_union(subs: &mut Subs, mut var: Variable) {
             }
             Structure(FlatType::TagUnion(_, ext))
             | Structure(FlatType::RecursiveTagUnion(_, _, ext)) => {
-                var = *ext;
+                var = ext.var();
             }
             _ => internal_error!("not a tag union"),
         }
+    }
+}
+
+enum UnifySides<T, U> {
+    Left(T, U),
+    Right(U, T),
+}
+
+#[must_use]
+fn unify_tag_ext<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    vars: UnifySides<TagExt, Variable>,
+    mode: UnificationMode,
+) -> Outcome<M> {
+    let (ext, var, flip_for_unify) = match vars {
+        UnifySides::Left(ext, var) => (ext, var, false),
+        UnifySides::Right(var, ext) => (ext, var, true),
+    };
+    let legal_unification = match ext {
+        TagExt::Openness(_) => {
+            // Openness extensions can only unify with flex/rigids.
+            // Anything else is a change in the monomorphic size of the tag and not
+            // a reflection of the polymorphism of the tag, an error.
+            matches!(
+                env.get_content_without_compacting(var),
+                FlexVar(..)
+                    | RigidVar(..)
+                    | FlexAbleVar(..)
+                    | RigidAbleVar(..)
+                    // errors propagate
+                    | Error,
+            )
+        }
+        TagExt::Any(_) => true,
+    }
+    // Tag unions are always extendable during specialization
+    || M::IS_LATE;
+    if legal_unification {
+        if flip_for_unify {
+            unify_pool(env, pool, var, ext.var(), mode)
+        } else {
+            unify_pool(env, pool, ext.var(), var, mode)
+        }
+    } else {
+        mismatch!()
+    }
+}
+
+#[must_use]
+fn merge_tag_exts(ext1: TagExt, ext2: TagExt) -> TagExt {
+    match (ext1, ext2) {
+        (_, TagExt::Openness(v)) | (TagExt::Openness(v), _) => TagExt::Openness(v),
+        (TagExt::Any(v), TagExt::Any(_)) => TagExt::Any(v),
     }
 }
 
@@ -2412,18 +2652,17 @@ fn unify_tag_unions<M: MetaCollector>(
     pool: &mut Pool,
     ctx: &Context,
     tags1: UnionTags,
-    initial_ext1: Variable,
+    initial_ext1: TagExt,
     tags2: UnionTags,
-    initial_ext2: Variable,
-    recursion_var: Rec,
+    initial_ext2: TagExt,
 ) -> Outcome<M> {
     let (separate, mut ext1, mut ext2) =
-        separate_union_tags(env.subs, tags1, initial_ext1, tags2, initial_ext2);
+        separate_union_tags(env, tags1, initial_ext1, tags2, initial_ext2);
 
     let shared_tags = separate.in_both;
 
     if let (true, Content::Structure(FlatType::EmptyTagUnion)) =
-        (ctx.mode.is_present(), env.subs.get(ext1).content)
+        (ctx.mode.is_present(), env.get(ext1.var()).content)
     {
         if !separate.only_in_2.is_empty() {
             // Create a new extension variable that we'll fill in with the
@@ -2440,11 +2679,12 @@ fn unify_tag_unions<M: MetaCollector>(
             //    [A M, B] += [A N]
             // the nested tag `A` **will** grow, but we don't need to modify
             // the top level extension variable for that!
-            let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+            debug_assert!(ext1.is_any());
+            let new_ext = TagExt::Any(fresh(env, pool, ctx, Content::FlexVar(None)));
             let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
             let mut new_desc = ctx.first_desc;
             new_desc.content = new_union;
-            env.subs.set(ctx.first, new_desc);
+            env.set(ctx.first, new_desc);
 
             ext1 = new_ext;
         }
@@ -2453,7 +2693,11 @@ fn unify_tag_unions<M: MetaCollector>(
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
             let ext_outcome = if ctx.mode.is_eq() {
-                unify_pool(env, pool, ext1, ext2, ctx.mode)
+                // Neither extension can grow in monomorphic tag sizes,
+                // so the extension must either be [] or a polymorphic extension variable like `a`.
+                // As such we can always unify directly even if the extensions are measuring
+                // openness.
+                unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
                 Outcome::default()
@@ -2463,14 +2707,13 @@ fn unify_tag_unions<M: MetaCollector>(
                 return ext_outcome;
             }
 
-            let mut shared_tags_outcome = unify_shared_tags_new(
+            let mut shared_tags_outcome = unify_shared_tags(
                 env,
                 pool,
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                ext1,
-                recursion_var,
+                merge_tag_exts(ext1, ext2),
             );
 
             shared_tags_outcome.union(ext_outcome);
@@ -2478,7 +2721,7 @@ fn unify_tag_unions<M: MetaCollector>(
             shared_tags_outcome
         } else {
             let extra_tags_in_2 = {
-                let unique_tags2 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_2);
+                let unique_tags2 = UnionTags::insert_slices_into_subs(env, separate.only_in_2);
                 let flat_type = FlatType::TagUnion(unique_tags2, ext2);
                 fresh(env, pool, ctx, Structure(flat_type))
             };
@@ -2486,44 +2729,41 @@ fn unify_tag_unions<M: MetaCollector>(
             // SPECIAL-CASE: if we can grow empty extensions with uninhabited types,
             // patch `ext1` to grow accordingly.
             let extend_ext_with_uninhabited =
-                should_extend_ext_with_uninhabited_type(env.subs, ext1, extra_tags_in_2);
+                should_extend_ext_with_uninhabited_type(env, ext1, extra_tags_in_2);
             if extend_ext_with_uninhabited {
-                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                debug_assert!(ext1.is_any());
+                let new_ext = TagExt::Any(fresh(env, pool, ctx, Content::FlexVar(None)));
                 let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
                 let mut new_desc = ctx.first_desc;
                 new_desc.content = new_union;
-                env.subs.set(ctx.first, new_desc);
+                env.set(ctx.first, new_desc);
 
                 ext1 = new_ext;
             }
 
-            let ext_outcome = unify_pool(env, pool, ext1, extra_tags_in_2, ctx.mode);
+            let ext_outcome =
+                unify_tag_ext(env, pool, UnifySides::Left(ext1, extra_tags_in_2), ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
             }
 
-            let mut shared_tags_outcome = unify_shared_tags_new(
-                env,
-                pool,
-                ctx,
-                shared_tags,
-                OtherTags2::Empty,
-                extra_tags_in_2,
-                recursion_var,
-            );
+            let combined_ext = ext1.map(|_| extra_tags_in_2);
+
+            let mut shared_tags_outcome =
+                unify_shared_tags(env, pool, ctx, shared_tags, OtherTags2::Empty, combined_ext);
 
             shared_tags_outcome.union(ext_outcome);
 
             if extend_ext_with_uninhabited {
-                close_uninhabited_extended_union(env.subs, ctx.first);
+                close_uninhabited_extended_union(env, ctx.first);
             }
 
             shared_tags_outcome
         }
     } else if separate.only_in_2.is_empty() {
         let extra_tags_in_1 = {
-            let unique_tags1 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_1);
+            let unique_tags1 = UnionTags::insert_slices_into_subs(env, separate.only_in_1);
             let flat_type = FlatType::TagUnion(unique_tags1, ext1);
             fresh(env, pool, ctx, Structure(flat_type))
         };
@@ -2535,18 +2775,24 @@ fn unify_tag_unions<M: MetaCollector>(
             // SPECIAL-CASE: if we can grow empty extensions with uninhabited types,
             // patch `ext2` to grow accordingly.
             let extend_ext_with_uninhabited =
-                should_extend_ext_with_uninhabited_type(env.subs, ext2, extra_tags_in_1);
+                should_extend_ext_with_uninhabited_type(env, ext2, extra_tags_in_1);
             if extend_ext_with_uninhabited {
-                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                debug_assert!(ext2.is_any());
+                let new_ext = TagExt::Any(fresh(env, pool, ctx, Content::FlexVar(None)));
                 let new_union = Structure(FlatType::TagUnion(tags2, new_ext));
                 let mut new_desc = ctx.second_desc;
                 new_desc.content = new_union;
-                env.subs.set(ctx.second, new_desc);
+                env.set(ctx.second, new_desc);
 
                 ext2 = new_ext;
             }
 
-            let ext_outcome = unify_pool(env, pool, extra_tags_in_1, ext2, ctx.mode);
+            let ext_outcome = unify_tag_ext(
+                env,
+                pool,
+                UnifySides::Right(extra_tags_in_1, ext2),
+                ctx.mode,
+            );
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2558,34 +2804,33 @@ fn unify_tag_unions<M: MetaCollector>(
             false
         };
 
-        let shared_tags_outcome = unify_shared_tags_new(
-            env,
-            pool,
-            ctx,
-            shared_tags,
-            OtherTags2::Empty,
-            extra_tags_in_1,
-            recursion_var,
-        );
+        let combined_ext = ext2.map(|_| extra_tags_in_1);
+
+        let shared_tags_outcome =
+            unify_shared_tags(env, pool, ctx, shared_tags, OtherTags2::Empty, combined_ext);
         total_outcome.union(shared_tags_outcome);
 
         if extend_ext_with_uninhabited {
-            close_uninhabited_extended_union(env.subs, ctx.first);
+            close_uninhabited_extended_union(env, ctx.first);
         }
 
         total_outcome
     } else {
         let other_tags = OtherTags2::Union(separate.only_in_1.clone(), separate.only_in_2.clone());
 
-        let unique_tags1 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_1);
-        let unique_tags2 = UnionTags::insert_slices_into_subs(env.subs, separate.only_in_2);
+        let unique_tags1 = UnionTags::insert_slices_into_subs(env, separate.only_in_1);
+        let unique_tags2 = UnionTags::insert_slices_into_subs(env, separate.only_in_2);
 
         let ext_content = if ctx.mode.is_present() {
             Content::Structure(FlatType::EmptyTagUnion)
         } else {
             Content::FlexVar(None)
         };
-        let ext = fresh(env, pool, ctx, ext_content);
+        // If ext1 or ext2 are `Openness`, we will necessarily get an error below when unifying
+        // the separate tags since `Openness` cannot grow in terms of width of tags. As such, the
+        // unified type, when it exists, must always be include an `Any` extension.
+        let ext = TagExt::Any(fresh(env, pool, ctx, ext_content));
+
         let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
         let flat_type2 = FlatType::TagUnion(unique_tags2, ext);
 
@@ -2607,28 +2852,27 @@ fn unify_tag_unions<M: MetaCollector>(
         //  TODO is this also required for the other cases?
 
         let mut total_outcome = Outcome::default();
-        let snapshot = env.subs.snapshot();
+        let snapshot = env.snapshot();
 
-        let ext1_outcome = unify_pool(env, pool, ext1, sub2, ctx.mode);
+        let ext1_outcome = unify_tag_ext(env, pool, UnifySides::Left(ext1, sub2), ctx.mode);
         if !ext1_outcome.mismatches.is_empty() {
-            env.subs.rollback_to(snapshot);
+            env.rollback_to(snapshot);
             return ext1_outcome;
         }
         total_outcome.union(ext1_outcome);
 
         if ctx.mode.is_eq() {
-            let ext2_outcome = unify_pool(env, pool, sub1, ext2, ctx.mode);
+            let ext2_outcome = unify_tag_ext(env, pool, UnifySides::Right(sub1, ext2), ctx.mode);
             if !ext2_outcome.mismatches.is_empty() {
-                env.subs.rollback_to(snapshot);
+                env.rollback_to(snapshot);
                 return ext2_outcome;
             }
             total_outcome.union(ext2_outcome);
         }
 
-        env.subs.commit_snapshot(snapshot);
+        env.commit_snapshot(snapshot);
 
-        let shared_tags_outcome =
-            unify_shared_tags_new(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
+        let shared_tags_outcome = unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext);
         total_outcome.union(shared_tags_outcome);
         total_outcome
     }
@@ -2645,16 +2889,17 @@ enum OtherTags2 {
 
 /// Promotes a non-recursive tag union or lambda set to its recursive variant, if it is found to be
 /// recursive.
-fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
-    let subs = &mut env.subs;
-    'outer: while let Err((_, chain)) = subs.occurs(union_var) {
+fn maybe_mark_union_recursive(env: &mut Env, pool: &mut Pool, union_var: Variable) {
+    'outer: while let Err((_, chain)) = env.occurs(union_var) {
         // walk the chain till we find a tag union or lambda set, starting from the variable that
         // occurred recursively, which is always at the end of the chain.
         for &v in chain.iter().rev() {
-            let description = subs.get(v);
+            let description = env.get(v);
             match description.content {
                 Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                    subs.mark_tag_union_recursive(v, tags, ext_var);
+                    let rec_var = env.mark_tag_union_recursive(v, tags, ext_var);
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 LambdaSet(self::LambdaSet {
@@ -2663,7 +2908,14 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
                     unspecialized,
                     ambient_function: ambient_function_var,
                 }) => {
-                    subs.mark_lambda_set_recursive(v, solved, unspecialized, ambient_function_var);
+                    let rec_var = env.mark_lambda_set_recursive(
+                        v,
+                        solved,
+                        unspecialized,
+                        ambient_function_var,
+                    );
+                    pool.push(rec_var);
+
                     continue 'outer;
                 }
                 _ => { /* fall through */ }
@@ -2673,20 +2925,20 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
         // Might not be any tag union if we only pass through `Apply`s. Otherwise, we have a bug!
         if chain.iter().all(|&v| {
             matches!(
-                subs.get_content_without_compacting(v),
+                env.get_content_without_compacting(v),
                 Content::Structure(FlatType::Apply(..))
             )
         }) {
             return;
         } else {
-            // We may have partially solved a recursive type, but still see an occurs, if the type
-            // has errors inside of it. As such, admit this; however, for well-typed programs, this
-            // case should never be observed. Set ROC_VERIFY_OCCURS_RECURSION to verify this branch
-            // is not reached for well-typed programs.
-            if dbg_set!(ROC_VERIFY_OCCURS_RECURSION)
-                || !chain.iter().any(|&var| {
+            // We may seen an occurs check that passes through another recursion var if the occurs
+            // check is passing through another recursive type.
+            // But, if ROC_VERIFY_OCCURS_ONE_RECURSION is set, we check that we only found a new
+            // recursion.
+            if dbg_set!(ROC_VERIFY_OCCURS_ONE_RECURSION)
+                && !chain.iter().any(|&var| {
                     matches!(
-                        subs.get_content_without_compacting(var),
+                        env.get_content_without_compacting(var),
                         Content::Structure(FlatType::RecursiveTagUnion(..))
                     )
                 })
@@ -2739,15 +2991,32 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
     }
 }
 
+#[inline]
+fn find_union_rec(subs: &Subs, ctx: &Context) -> Rec {
+    match (
+        subs.get_content_without_compacting(ctx.first),
+        subs.get_content_without_compacting(ctx.second),
+    ) {
+        (Structure(s1), Structure(s2)) => match (s1, s2) {
+            (FlatType::RecursiveTagUnion(l, _, _), FlatType::RecursiveTagUnion(r, _, _)) => {
+                Rec::Both(*l, *r)
+            }
+            (FlatType::RecursiveTagUnion(l, _, _), _) => Rec::Left(*l),
+            (_, FlatType::RecursiveTagUnion(r, _, _)) => Rec::Right(*r),
+            _ => Rec::None,
+        },
+        _ => Rec::None,
+    }
+}
+
 #[must_use]
-fn unify_shared_tags_new<M: MetaCollector>(
+fn unify_shared_tags<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
     shared_tags: Vec<(TagName, (VariableSubsSlice, VariableSubsSlice))>,
     other_tags: OtherTags2,
-    ext: Variable,
-    recursion_var: Rec,
+    ext: TagExt,
 ) -> Outcome<M> {
     let mut matching_tags = Vec::default();
     let num_shared_tags = shared_tags.len();
@@ -2762,8 +3031,8 @@ fn unify_shared_tags_new<M: MetaCollector>(
 
         for (actual_index, expected_index) in actual_vars.into_iter().zip(expected_vars.into_iter())
         {
-            let actual = env.subs[actual_index];
-            let expected = env.subs[expected_index];
+            let actual = env[actual_index];
+            let expected = env[expected_index];
             // NOTE the arguments of a tag can be recursive. For instance in the expression
             //
             //  ConsList a : [Nil, Cons a (ConsList a)]
@@ -2792,15 +3061,15 @@ fn unify_shared_tags_new<M: MetaCollector>(
             // since we're expanding tag unions to equal depths as described above,
             // we'll always pass through this branch. So, we promote tag unions to recursive
             // ones here if it turns out they are that.
-            maybe_mark_union_recursive(env, actual);
-            maybe_mark_union_recursive(env, expected);
+            maybe_mark_union_recursive(env, pool, actual);
+            maybe_mark_union_recursive(env, pool, expected);
 
             let mut outcome = Outcome::<M>::default();
 
             outcome.union(unify_pool(env, pool, actual, expected, ctx.mode));
 
             if outcome.mismatches.is_empty() {
-                let merged_var = choose_merged_var(env.subs, actual, expected);
+                let merged_var = choose_merged_var(env, actual, expected);
 
                 matching_vars.push(merged_var);
             }
@@ -2817,7 +3086,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
     if num_shared_tags == matching_tags.len() {
         // pull fields in from the ext_var
 
-        let (ext_fields, new_ext_var) = UnionTags::default().sorted_iterator_and_ext(env.subs, ext);
+        let (ext_fields, new_ext_var) = UnionTags::default().sorted_iterator_and_ext(env, ext);
         let ext_fields: Vec<_> = ext_fields
             .into_iter()
             .map(|(label, variables)| (label, variables.to_vec()))
@@ -2826,10 +3095,10 @@ fn unify_shared_tags_new<M: MetaCollector>(
         let new_tags: UnionTags = match other_tags {
             OtherTags2::Empty => {
                 if ext_fields.is_empty() {
-                    UnionTags::insert_into_subs(env.subs, matching_tags)
+                    UnionTags::insert_into_subs(env, matching_tags)
                 } else {
                     let all_fields = merge_sorted(matching_tags, ext_fields);
-                    UnionTags::insert_into_subs(env.subs, all_fields)
+                    UnionTags::insert_into_subs(env, all_fields)
                 }
             }
             OtherTags2::Union(other1, other2) => {
@@ -2837,7 +3106,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
                 all_fields = merge_sorted(
                     all_fields,
                     other1.into_iter().map(|(field_name, subs_slice)| {
-                        let vec = env.subs.get_subs_slice(subs_slice).to_vec();
+                        let vec = env.get_subs_slice(subs_slice).to_vec();
 
                         (field_name, vec)
                     }),
@@ -2846,18 +3115,24 @@ fn unify_shared_tags_new<M: MetaCollector>(
                 all_fields = merge_sorted(
                     all_fields,
                     other2.into_iter().map(|(field_name, subs_slice)| {
-                        let vec = env.subs.get_subs_slice(subs_slice).to_vec();
+                        let vec = env.get_subs_slice(subs_slice).to_vec();
 
                         (field_name, vec)
                     }),
                 );
 
-                UnionTags::insert_into_subs(env.subs, all_fields)
+                UnionTags::insert_into_subs(env, all_fields)
             }
         };
 
-        let merge_outcome =
-            unify_shared_tags_merge_new(env, ctx, new_tags, new_ext_var, recursion_var);
+        // Look up if either unions are recursive, and if so, what the recursive variable is.
+        //
+        // We wait until we're about to merge the unions to do this, since above, while unifying
+        // payloads, we may have promoted a non-recursive union involved in this unification to
+        // a recursive one.
+        let recursion_var = find_union_rec(env, ctx);
+
+        let merge_outcome = unify_shared_tags_merge(env, ctx, new_tags, new_ext_var, recursion_var);
 
         total_outcome.union(merge_outcome);
         total_outcome
@@ -2871,28 +3146,26 @@ fn unify_shared_tags_new<M: MetaCollector>(
 }
 
 #[must_use]
-fn unify_shared_tags_merge_new<M: MetaCollector>(
+fn unify_shared_tags_merge<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
     new_tags: UnionTags,
-    new_ext_var: Variable,
+    new_ext: TagExt,
     recursion_var: Rec,
 ) -> Outcome<M> {
     if env.was_fixed(ctx.first) && env.was_fixed(ctx.second) {
         // Both of the tags we're looking at were just involved in fixpoint-fixing, so their types
         // should be aligned. As such, do not attempt to unify them and update the recursion
         // pointer again.
-        debug_assert!(env
-            .subs
-            .equivalent_without_compacting(ctx.first, ctx.second));
+        debug_assert!(env.equivalent_without_compacting(ctx.first, ctx.second));
         return Default::default();
     }
 
     let flat_type = match recursion_var {
-        Rec::None => FlatType::TagUnion(new_tags, new_ext_var),
+        Rec::None => FlatType::TagUnion(new_tags, new_ext),
         Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {
-            debug_assert!(is_recursion_var(env.subs, rec), "{:?}", env.subs.dbg(rec));
-            FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
+            debug_assert!(is_recursion_var(env, rec), "{:?}", env.dbg(rec));
+            FlatType::RecursiveTagUnion(rec, new_tags, new_ext)
         }
     };
 
@@ -2913,11 +3186,11 @@ fn unify_flat_type<M: MetaCollector>(
     match (left, right) {
         (EmptyRecord, EmptyRecord) => merge(env, ctx, Structure(*left)),
 
-        (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields(env.subs) => {
+        (Record(fields, ext), EmptyRecord) if fields.has_only_optional_fields(env) => {
             unify_pool(env, pool, *ext, ctx.second, ctx.mode)
         }
 
-        (EmptyRecord, Record(fields, ext)) if fields.has_only_optional_fields(env.subs) => {
+        (EmptyRecord, Record(fields, ext)) if fields.has_only_optional_fields(env) => {
             unify_pool(env, pool, ctx.first, *ext, ctx.mode)
         }
 
@@ -2925,51 +3198,42 @@ fn unify_flat_type<M: MetaCollector>(
             unify_record(env, pool, ctx, *fields1, *ext1, *fields2, *ext2)
         }
 
+        (Tuple(elems1, ext1), Tuple(elems2, ext2)) => {
+            unify_tuple(env, pool, ctx, *elems1, *ext1, *elems2, *ext2)
+        }
+
         (EmptyTagUnion, EmptyTagUnion) => merge(env, ctx, Structure(*left)),
 
         (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
-            unify_pool(env, pool, *ext, ctx.second, ctx.mode)
+            unify_pool(env, pool, ext.var(), ctx.second, ctx.mode)
         }
 
         (EmptyTagUnion, TagUnion(tags, ext)) if tags.is_empty() => {
-            unify_pool(env, pool, ctx.first, *ext, ctx.mode)
+            unify_pool(env, pool, ctx.first, ext.var(), ctx.mode)
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), TagUnion(tags2, ext2)) => {
-            debug_assert!(is_recursion_var(env.subs, *recursion_var));
+            debug_assert!(is_recursion_var(env, *recursion_var));
             // this never happens in type-correct programs, but may happen if there is a type error
 
-            let rec = Rec::Left(*recursion_var);
-
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (TagUnion(tags1, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
-            debug_assert!(is_recursion_var(env.subs, *recursion_var));
+            debug_assert!(is_recursion_var(env, *recursion_var));
 
-            let rec = Rec::Right(*recursion_var);
-
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(rec1, tags1, ext1), RecursiveTagUnion(rec2, tags2, ext2)) => {
-            debug_assert!(
-                is_recursion_var(env.subs, *rec1),
-                "{:?}",
-                env.subs.dbg(*rec1)
-            );
-            debug_assert!(
-                is_recursion_var(env.subs, *rec2),
-                "{:?}",
-                env.subs.dbg(*rec2)
-            );
+            debug_assert!(is_recursion_var(env, *rec1), "{:?}", env.dbg(*rec1));
+            debug_assert!(is_recursion_var(env, *rec2), "{:?}", env.dbg(*rec2));
 
-            let rec = Rec::Both(*rec1, *rec2);
-            let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2, rec);
+            let mut outcome = unify_tag_unions(env, pool, ctx, *tags1, *ext1, *tags2, *ext2);
             outcome.union(unify_pool(env, pool, *rec1, *rec2, ctx.mode));
 
             outcome
@@ -2979,15 +3243,15 @@ fn unify_flat_type<M: MetaCollector>(
             let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
 
             if outcome.mismatches.is_empty() {
-                let chosen_args = SubsSlice::reserve_into_subs(env.subs, l_args.len());
+                let chosen_args = SubsSlice::reserve_into_subs(env, l_args.len());
                 for ((store, var1), var2) in chosen_args
                     .into_iter()
                     .zip(l_args.into_iter())
                     .zip(r_args.into_iter())
                 {
-                    let var1 = env.subs[var1];
-                    let var2 = env.subs[var2];
-                    env.subs[store] = choose_merged_var(env.subs, var1, var2);
+                    let var1 = env[var1];
+                    let var2 = env[var2];
+                    env[store] = choose_merged_var(env, var1, var2);
                 }
 
                 outcome.union(merge(env, ctx, Structure(Apply(*r_symbol, chosen_args))));
@@ -3008,7 +3272,7 @@ fn unify_flat_type<M: MetaCollector>(
             outcome.union(arg_outcome);
 
             if outcome.mismatches.is_empty() {
-                let merged_closure_var = choose_merged_var(env.subs, *l_closure, *r_closure);
+                let merged_closure_var = choose_merged_var(env, *l_closure, *r_closure);
 
                 outcome.union(merge(
                     env,
@@ -3063,48 +3327,46 @@ fn unify_flat_type<M: MetaCollector>(
         ),
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
             let empty_tag_var_slices = SubsSlice::extend_new(
-                &mut env.subs.variable_slices,
+                &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
         (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
             let empty_tag_var_slices = SubsSlice::extend_new(
-                &mut env.subs.variable_slices,
+                &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
 
-            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, Rec::None)
+            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2)
         }
 
         (RecursiveTagUnion(recursion_var, tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
             // this never happens in type-correct programs, but may happen if there is a type error
-            debug_assert!(is_recursion_var(env.subs, *recursion_var));
+            debug_assert!(is_recursion_var(env, *recursion_var));
 
             let empty_tag_var_slices = SubsSlice::extend_new(
-                &mut env.subs.variable_slices,
+                &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags2 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
-            let rec = Rec::Left(*recursion_var);
 
-            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
 
         (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
-            debug_assert!(is_recursion_var(env.subs, *recursion_var));
+            debug_assert!(is_recursion_var(env, *recursion_var));
 
             let empty_tag_var_slices = SubsSlice::extend_new(
-                &mut env.subs.variable_slices,
+                &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
             let tags1 = UnionTags::from_slices(*tag_names, empty_tag_var_slices);
-            let rec = Rec::Right(*recursion_var);
 
-            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2, rec)
+            unify_tag_unions(env, pool, ctx, tags1, *ext1, *tags2, *ext2)
         }
 
         // these have underscores because they're unused in --release builds
@@ -3112,8 +3374,8 @@ fn unify_flat_type<M: MetaCollector>(
             // any other combination is a mismatch
             mismatch!(
                 "Trying to unify two flat types that are incompatible: {:?} ~ {:?}",
-                roc_types::subs::SubsFmtFlatType(_other1, env.subs),
-                roc_types::subs::SubsFmtFlatType(_other2, env.subs)
+                roc_types::subs::SubsFmtFlatType(_other1, env),
+                roc_types::subs::SubsFmtFlatType(_other2, env)
             )
         }
     }
@@ -3125,15 +3387,15 @@ fn unify_zip_slices<M: MetaCollector>(
     pool: &mut Pool,
     left: SubsSlice<Variable>,
     right: SubsSlice<Variable>,
-    mode: Mode,
+    mode: UnificationMode,
 ) -> Outcome<M> {
     let mut outcome = Outcome::default();
 
-    let it = left.into_iter().zip(right.into_iter());
+    let it = left.into_iter().zip(right);
 
     for (l_index, r_index) in it {
-        let l_var = env.subs[l_index];
-        let r_var = env.subs[r_index];
+        let l_var = env[l_index];
+        let r_var = env[r_index];
 
         outcome.union(unify_pool(env, pool, l_var, r_var, mode));
     }
@@ -3158,7 +3420,7 @@ fn unify_rigid<M: MetaCollector>(
             // Mismatch - Rigid can unify with FlexAble only when the Rigid has an ability
             // bound as well, otherwise the user failed to correctly annotate the bound.
             mismatch!(
-                %not_able, ctx.first, env.subs.get_subs_slice(*other_ability),
+                %not_able, ctx.first, env.get_subs_slice(*other_ability),
                 "Rigid {:?} with FlexAble {:?}", ctx.first, other
             )
         }
@@ -3172,7 +3434,8 @@ fn unify_rigid<M: MetaCollector>(
         | RecursionVar { .. }
         | Structure(_)
         | Alias(..)
-        | LambdaSet(..) => {
+        | LambdaSet(..)
+        | ErasedLambda => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3206,8 +3469,8 @@ fn unify_rigid_able<M: MetaCollector>(
         }
         FlexAbleVar(_, other_abilities_slice) => {
             let (abilities, other_abilities) = (
-                env.subs.get_subs_slice(abilities_slice),
-                env.subs.get_subs_slice(*other_abilities_slice),
+                env.get_subs_slice(abilities_slice),
+                env.get_subs_slice(*other_abilities_slice),
             );
 
             if abilities_are_superset(abilities, other_abilities) {
@@ -3232,7 +3495,8 @@ fn unify_rigid_able<M: MetaCollector>(
         | Structure(_)
         | Alias(..)
         | RangedNumber(..)
-        | LambdaSet(..) => {
+        | LambdaSet(..)
+        | ErasedLambda => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3272,7 +3536,8 @@ fn unify_flex<M: MetaCollector>(
         | Structure(_)
         | Alias(_, _, _, _)
         | RangedNumber(..)
-        | LambdaSet(..) => {
+        | LambdaSet(..)
+        | ErasedLambda => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             merge(env, ctx, *other)
@@ -3347,15 +3612,15 @@ fn unify_flex_able<M: MetaCollector>(
             let opt_name = (opt_other_name).or(*opt_name);
 
             let merged_abilities =
-                merged_ability_slices(env.subs, abilities_slice, *other_abilities_slice);
+                merged_ability_slices(env, abilities_slice, *other_abilities_slice);
 
             merge(env, ctx, FlexAbleVar(opt_name, merged_abilities))
         }
 
         RigidAbleVar(_, other_abilities_slice) => {
             let (abilities, other_abilities) = (
-                env.subs.get_subs_slice(abilities_slice),
-                env.subs.get_subs_slice(*other_abilities_slice),
+                env.get_subs_slice(abilities_slice),
+                env.get_subs_slice(*other_abilities_slice),
             );
 
             if abilities_are_superset(other_abilities, abilities) {
@@ -3367,7 +3632,7 @@ fn unify_flex_able<M: MetaCollector>(
         }
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
-        LambdaSet(..) => mismatch!("FlexAble with LambdaSet"),
+        LambdaSet(..) | ErasedLambda => mismatch!("FlexAble with LambdaSet"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
             // Opaque type wins
@@ -3411,7 +3676,7 @@ fn merge_flex_able_with_concrete<M: MetaCollector>(
 ) -> Outcome<M> {
     let mut outcome = merge(env, ctx, concrete_content);
 
-    for &ability in env.subs.get_subs_slice(abilities) {
+    for &ability in env.get_subs_slice(abilities) {
         let must_implement_ability = MustImplementAbility {
             typ: concrete_obligation,
             ability,
@@ -3426,9 +3691,7 @@ fn merge_flex_able_with_concrete<M: MetaCollector>(
     //
     // If we ever organize ability implementations so that they are well-known before any other
     // unification is done, they can be solved in-band here!
-    let uls_of_concrete = env
-        .subs
-        .remove_dependent_unspecialized_lambda_sets(flex_able_var);
+    let uls_of_concrete = env.remove_dependent_unspecialized_lambda_sets(flex_able_var);
     outcome
         .lambda_sets_to_specialize
         .extend(flex_able_var, uls_of_concrete);
@@ -3446,30 +3709,38 @@ fn unify_recursion<M: MetaCollector>(
     structure: Variable,
     other: &Content,
 ) -> Outcome<M> {
-    if !matches!(other, RecursionVar { .. }) {
-        if env.seen_recursion_pair(ctx.first, ctx.second) {
-            return Default::default();
-        }
-
-        env.add_recursion_pair(ctx.first, ctx.second);
+    if env.seen_recursion_pair(ctx.first, ctx.second) {
+        return Default::default();
     }
+
+    env.add_recursion_pair(ctx.first, ctx.second);
 
     let outcome = match other {
         RecursionVar {
             opt_name: other_opt_name,
-            structure: _other_structure,
+            structure: other_structure,
         } => {
-            // NOTE: structure and other_structure may not be unified yet, but will be
-            // we should not do that here, it would create an infinite loop!
+            // We haven't seen these two recursion vars yet, so go and unify their structures.
+            // We need to do this before we merge the two recursion vars, since the unification of
+            // the structures may be material.
+
+            let mut outcome = unify_pool(env, pool, structure, *other_structure, ctx.mode);
+            if !outcome.mismatches.is_empty() {
+                return outcome;
+            }
+
             let name = (*opt_name).or(*other_opt_name);
-            merge(
+            let merge_outcome = merge(
                 env,
                 ctx,
                 RecursionVar {
                     opt_name: name,
                     structure,
                 },
-            )
+            );
+
+            outcome.union(merge_outcome);
+            outcome
         }
 
         Structure(_) => {
@@ -3528,12 +3799,12 @@ fn unify_recursion<M: MetaCollector>(
             unify_pool(env, pool, structure, ctx.second, ctx.mode)
         }
 
+        ErasedLambda => mismatch!(),
+
         Error => merge(env, ctx, Error),
     };
 
-    if !matches!(other, RecursionVar { .. }) {
-        env.remove_recursion_pair(ctx.first, ctx.second);
-    }
+    env.remove_recursion_pair(ctx.first, ctx.second);
 
     outcome
 }
@@ -3550,20 +3821,14 @@ pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -
         copy: OptVariable::NONE,
     };
 
-    outcome
-        .extra_metadata
-        .record_changed_variable(env.subs, ctx.first);
-    outcome
-        .extra_metadata
-        .record_changed_variable(env.subs, ctx.second);
+    env.union(ctx.first, ctx.second, desc);
 
-    env.subs.union(ctx.first, ctx.second, desc);
-
+    outcome.has_changed = true;
     outcome
 }
 
 fn register(env: &mut Env, desc: Descriptor, pool: &mut Pool) -> Variable {
-    let var = env.subs.fresh(desc);
+    let var = env.fresh(desc);
 
     pool.push(var);
 
@@ -3600,16 +3865,16 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     ctx: &Context,
     tag_names_slice: SubsSlice<TagName>,
     tag_fn_lambdas: SubsSlice<Symbol>,
-    tag_ext: Variable,
+    tag_ext: TagExt,
     function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
     left: bool,
 ) -> Outcome<M> {
-    let tag_names = env.subs.get_subs_slice(tag_names_slice).to_vec();
+    let tag_names = env.get_subs_slice(tag_names_slice).to_vec();
 
     let union_tags = UnionTags::insert_slices_into_subs(
-        env.subs,
+        env,
         tag_names.into_iter().map(|tag| (tag, function_arguments)),
     );
     let content = Content::Structure(FlatType::TagUnion(union_tags, tag_ext));
@@ -3623,10 +3888,10 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     };
 
     {
-        let lambda_names = env.subs.get_subs_slice(tag_fn_lambdas).to_vec();
-        let new_lambda_names = SubsSlice::extend_new(&mut env.subs.symbol_names, lambda_names);
+        let lambda_names = env.get_subs_slice(tag_fn_lambdas).to_vec();
+        let new_lambda_names = SubsSlice::extend_new(&mut env.symbol_names, lambda_names);
         let empty_captures_slices = SubsSlice::extend_new(
-            &mut env.subs.variable_slices,
+            &mut env.variable_slices,
             std::iter::repeat(Default::default()).take(new_lambda_names.len()),
         );
         let union_tags = UnionLambdas::from_slices(new_lambda_names, empty_captures_slices);
@@ -3661,9 +3926,9 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
 
     if outcome.mismatches.is_empty() {
         let desc = if left {
-            env.subs.get(ctx.second)
+            env.get(ctx.second)
         } else {
-            env.subs.get(ctx.first)
+            env.get(ctx.first)
         };
 
         outcome.union(merge(env, ctx, desc.content));
@@ -3679,31 +3944,31 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
     ctx: &Context,
     tag_names_1: SubsSlice<TagName>,
     tag_symbols_1: SubsSlice<Symbol>,
-    ext1: Variable,
+    ext1: TagExt,
     tag_names_2: SubsSlice<TagName>,
     tag_symbols_2: SubsSlice<Symbol>,
-    ext2: Variable,
+    ext2: TagExt,
 ) -> Outcome<M> {
     let merged_tags = {
-        let mut all_tags: Vec<_> = (env.subs.get_subs_slice(tag_names_1).iter())
-            .chain(env.subs.get_subs_slice(tag_names_2))
+        let mut all_tags: Vec<_> = (env.get_subs_slice(tag_names_1).iter())
+            .chain(env.get_subs_slice(tag_names_2))
             .cloned()
             .collect();
         all_tags.sort();
         all_tags.dedup();
-        SubsSlice::extend_new(&mut env.subs.tag_names, all_tags)
+        SubsSlice::extend_new(&mut env.tag_names, all_tags)
     };
     let merged_lambdas = {
-        let mut all_lambdas: Vec<_> = (env.subs.get_subs_slice(tag_symbols_1).iter())
-            .chain(env.subs.get_subs_slice(tag_symbols_2))
+        let mut all_lambdas: Vec<_> = (env.get_subs_slice(tag_symbols_1).iter())
+            .chain(env.get_subs_slice(tag_symbols_2))
             .cloned()
             .collect();
         all_lambdas.sort();
         all_lambdas.dedup();
-        SubsSlice::extend_new(&mut env.subs.symbol_names, all_lambdas)
+        SubsSlice::extend_new(&mut env.symbol_names, all_lambdas)
     };
 
-    let mut outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);
+    let mut outcome = unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode);
     if !outcome.mismatches.is_empty() {
         return outcome;
     }

@@ -1,0 +1,14 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    Id n := [Id U32 n]
+
+    strToBool : Str -> Bool
+
+    v : Id Str -> Bool
+    v = \@Id (Id _ n) -> strToBool n
+
+    v
+
+main = entry
+#      ^^^^^ Id Str -[[v(4)]]-> Bool

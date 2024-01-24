@@ -12,6 +12,15 @@ mod render;
 pub use self::render::TermColored;
 pub use self::render::{FmtWrite, IoWrite, Render, RenderAnnotated};
 
+/// Macro to help build a text node with format arguments. It is semantically equivalent to `alloc.text(format(...))`, except
+/// that it may not allocate a string at all.
+#[macro_export]
+macro_rules! text {
+    ($alloc:expr, $($args:tt)*) => {
+        $alloc.as_string(format_args!($($args)*))
+    };
+}
+
 /// The concrete document type. This type is not meant to be used directly. Instead use the static
 /// functions on `Doc` or the methods on an `DocAllocator`.
 ///

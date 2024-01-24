@@ -1,0 +1,8 @@
+app "test" provides [b] to "./platform"
+
+O := {} -> {}
+
+a = @O \{} -> ((\@O f -> f {}) b)
+
+b = a
+#^{-1} O

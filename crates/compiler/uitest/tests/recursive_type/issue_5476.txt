@@ -1,0 +1,19 @@
+interface Test exposes [main] imports []
+
+Term : [
+    Bar Term,
+    Foo,
+]
+
+f = \list ->
+    when list is
+    #    ^^^^ List ([Bar [Bar a]*, Foo]* as a)
+        [] -> Foo
+        [b] -> b
+        [b, ..] -> Bar (Bar b)
+
+whatever : Term -> Str
+whatever = \_ -> "done"
+
+main = whatever (f [])
+#                  ^^ List ([Bar a, Foo] as a)

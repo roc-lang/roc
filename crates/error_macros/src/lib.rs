@@ -24,7 +24,7 @@ macro_rules! internal_error {
 macro_rules! user_error {
     ($($arg:tt)*) => ({
         eprintln!("We ran into an issue while compiling your code.");
-        eprintln!("Sadly, we don't havs a pretty error message for this case yet.");
+        eprintln!("Sadly, we don't have a pretty error message for this case yet.");
         eprintln!("If you can't figure out the problem from the context below, please reach out at: https://roc.zulipchat.com/");
         eprintln!($($arg)*);
         std::process::exit(1);
@@ -113,6 +113,16 @@ macro_rules! todo_abilities {
     };
     ($($arg:tt)+) => {
         $crate::_incomplete_project!("Abilities", 2463, $($arg)+)
+    };
+}
+
+#[macro_export]
+macro_rules! todo_lambda_erasure {
+    () => {
+        $crate::_incomplete_project!("Lambda Erasure", 5575)
+    };
+    ($($arg:tt)+) => {
+        $crate::_incomplete_project!("Lambda Erasure", 5575, $($arg)+)
     };
 }
 

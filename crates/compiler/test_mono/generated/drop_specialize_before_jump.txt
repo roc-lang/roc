@@ -1,0 +1,26 @@
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
+
+procedure Test.2 (Test.5):
+    let Test.6 : Int1 = CallByName Bool.2;
+    let Test.7 : Str = StructAtIndex 0 Test.5;
+    inc 2 Test.7;
+    joinpoint Test.13 Test.8:
+        let Test.11 : {Str, {Str, Str}} = Struct {Test.7, Test.5};
+        let Test.10 : {Str, {Str, {Str, Str}}} = Struct {Test.7, Test.11};
+        ret Test.10;
+    in
+    if Test.6 then
+        let Test.12 : I64 = 1i64;
+        jump Test.13 Test.12;
+    else
+        let Test.12 : I64 = 0i64;
+        jump Test.13 Test.12;
+
+procedure Test.0 ():
+    let Test.3 : Str = "value";
+    inc Test.3;
+    let Test.4 : {Str, Str} = Struct {Test.3, Test.3};
+    let Test.9 : {Str, {Str, {Str, Str}}} = CallByName Test.2 Test.4;
+    ret Test.9;

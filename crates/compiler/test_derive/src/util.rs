@@ -3,6 +3,10 @@ use std::path::PathBuf;
 
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
+use roc_solve::{
+    module::{SolveConfig, SolveOutput},
+    FunctionKind,
+};
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -21,7 +25,8 @@ use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
 use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
-use roc_load_internal::file::{add_imports, LoadedModule, Threading};
+use roc_load_internal::file::{add_imports, Threading};
+use roc_load_internal::module::LoadedModule;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
@@ -63,6 +68,11 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::BOOL),
             builtins_path.join("Bool.roc"),
         ),
+        DeriveBuiltin::ToInspector => (
+            ModuleId::INSPECT,
+            module_source(ModuleId::INSPECT),
+            builtins_path.join("Inspect.roc"),
+        ),
     }
 }
 
@@ -89,8 +99,24 @@ macro_rules! v {
              roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, ext)))
          }
      }};
+     (( $($make_v:expr,)* )$( $($ext:tt)+ )?) => {{
+         #[allow(unused)]
+         use roc_types::subs::{Subs, RecordFields, Content, FlatType, Variable, TupleElems};
+         |subs: &mut Subs| {
+             let elems = [
+                 $($make_v(subs),)*
+             ].into_iter().enumerate();
+             let elems = TupleElems::insert_into_subs(subs, elems);
+
+             #[allow(unused_mut, unused)]
+             let mut ext = Variable::EMPTY_TUPLE;
+             $( ext = $crate::v!($($ext)+)(subs); )?
+
+             roc_derive::synth_var(subs, Content::Structure(FlatType::Tuple(elems, ext)))
+         }
+     }};
      ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {{
-         use roc_types::subs::{Subs, SubsIndex, Variable, Content, FlatType, UnionTags};
+         use roc_types::subs::{Subs, SubsIndex, Variable, Content, FlatType, TagExt, UnionTags};
          use roc_module::ident::TagName;
          |subs: &mut Subs| {
              let $rec_var = subs.fresh_unnamed_flex_var();
@@ -101,7 +127,7 @@ macro_rules! v {
              let $tag = vec![ $( $payload(subs), )* ];
              )*
              let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
-             let tag_union_var = roc_derive::synth_var(subs, Content::Structure(FlatType::RecursiveTagUnion($rec_var, tags, Variable::EMPTY_TAG_UNION)));
+             let tag_union_var = roc_derive::synth_var(subs, Content::Structure(FlatType::RecursiveTagUnion($rec_var, tags, TagExt::Any(Variable::EMPTY_TAG_UNION))));
 
              subs.set_content(
                  $rec_var,
@@ -115,7 +141,7 @@ macro_rules! v {
      }};
      ([ $($tag:ident $($payload:expr)*),* ]$( $($ext:tt)+ )?) => {{
          #[allow(unused)]
-         use roc_types::subs::{Subs, UnionTags, Content, FlatType, Variable};
+         use roc_types::subs::{Subs, UnionTags, Content, FlatType, TagExt, Variable};
          #[allow(unused)]
          use roc_module::ident::TagName;
          |subs: &mut Subs| {
@@ -128,7 +154,7 @@ macro_rules! v {
              let mut ext = Variable::EMPTY_TAG_UNION;
              $( ext = $crate::v!($($ext)+)(subs); )?
 
-             roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, ext)))
+             roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, TagExt::Any(ext))))
          }
      }};
      (Symbol::$sym:ident $($arg:expr)*) => {{
@@ -166,7 +192,7 @@ macro_rules! v {
          use roc_types::subs::{Subs, Content};
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
-     ($name:ident has $ability:path) => {{
+     ($name:ident implements $ability:path) => {{
          use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
          |subs: &mut Subs| {
              let name_index =
@@ -317,7 +343,7 @@ fn assemble_derived_golden(
     specialization_lsets.sort_by_key(|(region, _)| *region);
     for (region, var) in specialization_lsets {
         let pretty_lset = print_var(var, false);
-        let _ = writeln!(pretty_buf, "#   @<{}>: {}", region, pretty_lset);
+        let _ = writeln!(pretty_buf, "#   @<{region}>: {pretty_lset}");
     }
 
     pretty_buf.push_str(derived_source);
@@ -402,18 +428,31 @@ fn check_derived_typechecks_and_golden(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
         std::env::set_var(roc_debug_flags::ROC_PRINT_UNIFICATIONS, "1")
     );
-    let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
-        test_module,
+
+    let solve_config = SolveConfig {
+        home: test_module,
+        constraints: &constraints,
+        root_constraint: constr,
         types,
-        &constraints,
-        constr,
+        function_kind: FunctionKind::LambdaSet,
+        pending_derives: Default::default(),
+        exposed_by_module: &exposed_for_module.exposed_by_module,
+        derived_module: Default::default(),
+
+        #[cfg(debug_assertions)]
+        checkmate: None,
+    };
+
+    let SolveOutput {
+        subs: mut solved_subs,
+        errors: problems,
+        ..
+    } = roc_solve::module::run_solve(
+        solve_config,
         RigidVariables::default(),
         test_subs,
         Default::default(),
         abilities_store,
-        Default::default(),
-        &exposed_for_module.exposed_by_module,
-        Default::default(),
     );
     dbg_do!(
         roc_debug_flags::ROC_PRINT_UNIFICATIONS_DERIVED,
@@ -449,10 +488,7 @@ fn check_derived_typechecks_and_golden(
             .render_raw(80, &mut roc_reporting::report::CiWrite::new(&mut buf))
             .unwrap();
 
-        panic!(
-            "Derived does not typecheck:\n{}\nDerived def:\n{}",
-            buf, derived_program
-        );
+        panic!("Derived does not typecheck:\n{buf}\nDerived def:\n{derived_program}");
     }
 
     let golden = assemble_derived_golden(
@@ -496,6 +532,7 @@ where
         path.parent().unwrap().to_path_buf(),
         Default::default(),
         target_info,
+        FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
         RocCacheDir::Disallowed,

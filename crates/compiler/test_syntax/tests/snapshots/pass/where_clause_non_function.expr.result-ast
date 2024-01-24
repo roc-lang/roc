@@ -4,7 +4,7 @@ Defs(
             Index(2147483648),
         ],
         regions: [
-            @0-15,
+            @0-26,
         ],
         space_before: [
             Slice(start = 0, length = 0),
@@ -19,15 +19,15 @@ Defs(
                 @0-1 Identifier(
                     "f",
                 ),
-                @4-15 Where(
+                @4-26 Where(
                     @4-5 BoundVariable(
                         "a",
                     ),
                     [
-                        @8-15 HasClause {
-                            var: @8-9 "a",
+                        @12-26 ImplementsClause {
+                            var: @12-13 "a",
                             abilities: [
-                                @14-15 Apply(
+                                @25-26 Apply(
                                     "",
                                     "A",
                                     [],
@@ -39,7 +39,7 @@ Defs(
             ),
         ],
     },
-    @17-18 SpaceBefore(
+    @28-29 SpaceBefore(
         Var {
             module_name: "",
             ident: "f",

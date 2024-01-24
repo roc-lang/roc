@@ -30,19 +30,14 @@ pub fn js_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize {
 /// - Synchronous API, to avoid the need to run an async executor across the Wasm/native boundary.
 /// - Uses an extra callback to allocate & copy the input string (in the browser version, wasm_bindgen does this)
 #[no_mangle]
-pub extern "C" fn entrypoint_from_test(src_len: usize) -> bool {
+pub extern "C" fn entrypoint_from_test(src_len: usize) {
     let mut src_buffer = std::vec![0; src_len];
     let src = unsafe {
         test_copy_input_string(src_buffer.as_mut_ptr());
         String::from_utf8_unchecked(src_buffer)
     };
     let result_async = crate::repl::entrypoint_from_js(src);
-    let result = executor::block_on(result_async);
-    let ok = result.is_ok();
-
-    let output = result.unwrap_or_else(|s| s);
+    let output = executor::block_on(result_async);
 
     unsafe { test_copy_output_string(output.as_ptr(), output.len()) }
-
-    ok
 }

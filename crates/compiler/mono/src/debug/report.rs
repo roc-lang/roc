@@ -1,11 +1,11 @@
 use std::fmt::Display;
 
 use roc_module::symbol::{Interns, Symbol};
-use ven_pretty::{Arena, DocAllocator, DocBuilder};
+use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
 use crate::{
-    ir::{Parens, ProcLayout},
-    layout::{Layout, LayoutInterner},
+    ir::{ErasedField, Parens, ProcLayout},
+    layout::LayoutInterner,
 };
 
 use super::{
@@ -62,7 +62,7 @@ where
         .pretty(80)
         .to_string();
 
-    eprintln!("Full source: {}", src);
+    eprintln!("Full source: {src}");
 
     let interpolated_docs = stack(
         f,
@@ -103,11 +103,7 @@ fn format_sourced_doc<'d>(f: &'d Arena<'d>, line: usize, source: &str, doc: Doc<
 
 fn format_header<'d>(f: &'d Arena<'d>, title: &str) -> Doc<'d> {
     let title_width = title.len() + 4;
-    f.text(format!(
-        "── {} {}",
-        title,
-        "─".repeat(HEADER_WIDTH - title_width)
-    ))
+    text!(f, "── {} {}", title, "─".repeat(HEADER_WIDTH - title_width))
 }
 
 fn format_kind<'a, 'd, I>(
@@ -157,7 +153,7 @@ where
                 f.concat([
                     format_symbol(f, interns, symbol),
                     f.reflow(" defined here with layout "),
-                    def_layout.to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc_top(def_layout, f),
                 ]),
             )];
             f.concat([
@@ -165,7 +161,7 @@ where
                 f.reflow(" used as a "),
                 f.reflow(format_use_kind(use_kind)),
                 f.reflow(" here with layout "),
-                use_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc_top(use_layout, f),
             ])
         }
         ProblemKind::SymbolDefMismatch {
@@ -178,9 +174,9 @@ where
             f.concat([
                 format_symbol(f, interns, symbol),
                 f.reflow(" is defined as "),
-                def_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc_top(def_layout, f),
                 f.reflow(" but its initializer is "),
-                expr_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc_top(expr_layout, f),
             ])
         }
         ProblemKind::BadSwitchConditionLayout { found_layout } => {
@@ -188,7 +184,7 @@ where
             docs_before = vec![];
             f.concat([
                 f.reflow("This switch condition is a "),
-                found_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc_top(found_layout, f),
             ])
         }
         ProblemKind::DuplicateSwitchBranch {} => {
@@ -269,6 +265,15 @@ where
             };
             stack(f, [no_spec_doc, similar_doc])
         }
+        ProblemKind::PtrToUndefinedProc { symbol } => {
+            title = "PROC SPECIALIZATION NOT DEFINED";
+            docs_before = vec![];
+            f.concat([
+                f.reflow("The proc "),
+                format_symbol(f, interns, symbol),
+                f.reflow(" is not defined"),
+            ])
+        }
         ProblemKind::DuplicateCallSpecId { old_call_line } => {
             title = "DUPLICATE CALL SPEC ID";
             docs_before = vec![(old_call_line, f.reflow("This call has a specialization ID"))];
@@ -324,7 +329,7 @@ where
                     f.reflow("The union "),
                     format_symbol(f, interns, structure),
                     f.reflow(" defined here has layout "),
-                    Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc_top(union_layout, f),
                 ]),
             )];
             f.concat([f.reflow("which has no tag of id "), f.as_string(tag_id)])
@@ -367,7 +372,7 @@ where
                     f.reflow("The union "),
                     format_symbol(f, interns, structure),
                     f.reflow(" defined here has layout "),
-                    Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc_top(union_layout, f),
                 ]),
             )];
             f.concat([
@@ -394,7 +399,7 @@ where
                 f.reflow("The variant "),
                 f.as_string(tag_id),
                 f.reflow(" is outside the target union layout "),
-                Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc_top(union_layout, f),
             ])
         }
         ProblemKind::CreateTagPayloadMismatch {
@@ -408,6 +413,74 @@ where
                 f.as_string(num_needed),
                 f.reflow(" values, but is only given "),
                 f.as_string(num_given),
+            ])
+        }
+        ProblemKind::ErasedMakeValueNotBoxed {
+            symbol,
+            def_layout,
+            def_line,
+        } => {
+            title = "ERASED VALUE IS NOT BOXED";
+            docs_before = vec![(
+                def_line,
+                f.concat([
+                    f.reflow("The value "),
+                    format_symbol(f, interns, symbol),
+                    f.reflow(" defined here"),
+                ]),
+            )];
+            f.concat([
+                f.reflow("must be boxed in order to be erased, but has layout "),
+                interner.to_doc_top(def_layout, f),
+            ])
+        }
+        ProblemKind::ErasedMakeCalleeNotFunctionPointer {
+            symbol,
+            def_layout,
+            def_line,
+        } => {
+            title = "ERASED CALLEE IS NOT A FUNCTION POINTER";
+            docs_before = vec![(
+                def_line,
+                f.concat([
+                    f.reflow("The value "),
+                    format_symbol(f, interns, symbol),
+                    f.reflow(" defined here"),
+                ]),
+            )];
+            f.concat([
+                f.reflow(
+                    "must be a function pointer in order to be an erasure callee, but has layout ",
+                ),
+                interner.to_doc_top(def_layout, f),
+            ])
+        }
+        ProblemKind::ErasedLoadValueNotBoxed {
+            symbol,
+            target_layout,
+        } => {
+            title = "ERASED VALUE IS NOT BOXED";
+            docs_before = vec![];
+            f.concat([
+                f.reflow("The erased value load "),
+                format_symbol(f, interns, symbol),
+                f.reflow(" has layout "),
+                interner.to_doc_top(target_layout, f),
+                f.reflow(", but should be boxed!"),
+            ])
+        }
+        ProblemKind::ErasedLoadCalleeNotFunctionPointer {
+            symbol,
+            target_layout,
+        } => {
+            title = "ERASED CALLEE IS NOT A FUNCTION POINTER";
+            docs_before = vec![];
+            f.concat([
+                f.reflow("The erased callee load "),
+                format_symbol(f, interns, symbol),
+                f.reflow(" has layout "),
+                interner.to_doc_top(target_layout, f),
+                f.reflow(", but should be a function pointer!"),
             ])
         }
     };
@@ -433,6 +506,14 @@ fn format_use_kind(use_kind: UseKind) -> &'static str {
         UseKind::SwitchCond => "switch condition",
         UseKind::ExpectCond => "expect condition",
         UseKind::ExpectLookup => "lookup for an expect",
+        UseKind::ErasedMake(kind) => match kind {
+            ErasedField::Value => "erased value field",
+            ErasedField::ValuePtr => "erased value pointer",
+            ErasedField::Callee => "erased callee field",
+        },
+        UseKind::Erased => "erasure",
+        UseKind::FunctionPointer => "function pointer",
+        UseKind::Alloca => "alloca initializer",
     }
 }
 
@@ -469,16 +550,16 @@ where
     let args = f.intersperse(
         arguments
             .iter()
-            .map(|a| a.to_doc(f, interner, Parens::InFunction)),
+            .map(|a| interner.to_doc(*a, f, &mut Default::default(), Parens::InFunction)),
         f.reflow(", "),
     );
     let fun = f.concat([
         f.concat([f.reflow("("), args, f.reflow(")")]),
         f.reflow(" -> "),
-        result.to_doc(f, interner, Parens::NotNeeded),
+        interner.to_doc_top(result, f),
     ]);
     let niche = (f.text("("))
-        .append(captures_niche.to_doc(f, interner))
+        .append(captures_niche.to_doc(f, interner, &mut Default::default()))
         .append(f.text(")"));
     f.concat([fun, f.space(), niche])
 }

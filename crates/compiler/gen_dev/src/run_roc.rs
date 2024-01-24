@@ -18,12 +18,16 @@ macro_rules! run_jit_function_raw {
 
             let result = main();
 
-            assert_eq!(
-                $errors,
-                std::vec::Vec::new(),
-                "Encountered errors: {:?}",
-                $errors
-            );
+            if !$errors.is_empty() {
+                dbg!(&$errors);
+
+                assert_eq!(
+                    $errors,
+                    std::vec::Vec::new(),
+                    "Encountered errors: {:?}",
+                    $errors
+                );
+            }
 
             $transform(result)
         }

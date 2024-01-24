@@ -1,0 +1,3 @@
+procedure Test.0 ():
+    let Test.2 : Str = "Erroneous: invalid condition type in if expression";
+    Crash Test.2

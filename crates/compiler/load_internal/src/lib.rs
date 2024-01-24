@@ -6,6 +6,8 @@
 use roc_module::symbol::ModuleId;
 pub mod docs;
 pub mod file;
+pub mod module;
+mod module_cache;
 mod work;
 
 #[cfg(target_family = "wasm")]
@@ -23,5 +25,6 @@ pub const BUILTIN_MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::ENCODE, "Encode"),
     (ModuleId::DECODE, "Decode"),
     (ModuleId::HASH, "Hash"),
-    (ModuleId::JSON, "Json"),
+    (ModuleId::INSPECT, "Inspect"),
+    (ModuleId::JSON, "TotallyNotJson"),
 ];

@@ -1,32 +1,47 @@
 [package]
 name = "roc_load"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Used to load a .roc file and coordinate the compiler pipeline, including parsing, type checking, and code generation."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [dependencies]
-roc_load_internal = { path = "../load_internal" }
-roc_target = { path = "../roc_target" }
 roc_can = { path = "../can" }
-roc_types = { path = "../types" }
-roc_module = { path = "../module" }
 roc_collections = { path = "../collections" }
+roc_load_internal = { path = "../load_internal" }
+roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
+roc_target = { path = "../roc_target" }
+roc_types = { path = "../types" }
 
 bumpalo.workspace = true
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
+roc_can = { path = "../can" }
 roc_module = { path = "../module" }
 roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
+roc_solve = { path = "../solve" }
 roc_target = { path = "../roc_target" }
-roc_can = { path = "../can" }
-
+roc_error_macros = { path = "../../error_macros" }
+roc_load_internal = { path = "../load_internal" }
 bumpalo.workspace = true
 
-[target.'cfg(not(windows))'.build-dependencies]
-roc_load_internal = { path = "../load_internal" }
+[dev-dependencies]
+roc_constrain = { path = "../constrain" }
+roc_derive = { path = "../derive" }
+roc_parse = { path = "../parse" }
+roc_problem = { path = "../problem" }
+roc_region = { path = "../region" }
+roc_solve_problem = { path = "../solve_problem" }
+ven_pretty = { path = "../../vendor/pretty" }
+roc_test_utils = { path = "../../test_utils" }
+
+indoc.workspace = true
+insta.workspace = true
+pretty_assertions.workspace = true

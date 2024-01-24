@@ -279,6 +279,13 @@ where
     }
 }
 
+impl<K, V> Eq for VecMap<K, V>
+where
+    K: Eq,
+    V: Eq,
+{
+}
+
 #[cfg(test)]
 mod test_drain_filter {
     use crate::VecMap;

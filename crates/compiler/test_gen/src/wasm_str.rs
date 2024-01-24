@@ -27,27 +27,6 @@ fn str_split_empty_delimiter() {
     );
 }
 
-// This test produces an app that exposes nothing to the host!
-#[test]
-#[ignore]
-fn str_split_empty_delimiter_broken() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when List.first (Str.split "JJJ" "") is
-                    Ok str ->
-                        Str.countGraphemes str
-
-                    _ ->
-                        -1
-
-            "#
-        ),
-        3,
-        usize
-    );
-}
-
 #[test]
 fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
@@ -57,27 +36,6 @@ fn str_split_bigger_delimiter_small_str() {
             "#
         ),
         1,
-        usize
-    );
-}
-
-// This test produces an app that exposes nothing to the host!
-#[test]
-#[ignore]
-fn str_split_bigger_delimiter_small_str_broken() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                when List.first (Str.split "JJJ" "JJJJ there") is
-                    Ok str ->
-                        Str.countGraphemes str
-
-                    _ ->
-                        -1
-
-            "#
-        ),
-        3,
         usize
     );
 }
@@ -265,7 +223,7 @@ fn str_concat_big_to_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn small_str_literal() {
     assert_evals_to!(
         "\"01234567890\"",
@@ -275,7 +233,7 @@ fn small_str_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn small_str_zeroed_literal() {
     // Verifies that we zero out unused bytes in the string.
     // This is important so that string equality tests don't randomly
@@ -415,43 +373,10 @@ fn str_starts_with() {
 }
 
 #[test]
-fn str_starts_with_scalar() {
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "foobar" {}"#, 'f' as u32),
-        true,
-        bool
-    );
-    assert_evals_to!(
-        &format!(r#"Str.startsWithScalar "zoobar" {}"#, 'f' as u32),
-        false,
-        bool
-    );
-}
-
-#[test]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
     assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
-}
-
-#[test]
-fn str_count_graphemes_small_str() {
-    assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
-}
-
-#[test]
-fn str_count_graphemes_three_js() {
-    assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
-}
-
-#[test]
-fn str_count_graphemes_big_str() {
-    assert_evals_to!(
-        r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
-        45,
-        usize
-    );
 }
 
 #[test]
@@ -989,78 +914,78 @@ fn str_trim_small_to_small_shared() {
 }
 
 #[test]
-fn str_trim_left_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
+fn str_trim_start_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimStart " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-fn str_trim_left_small_to_small() {
+fn str_trim_start_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft "  hello  ""#),
+        indoc!(r#"Str.trimStart "  hello  ""#),
         RocStr::from("hello  "),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_left_large_to_large_unique() {
+fn str_trim_start_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
+        indoc!(r#"Str.trimStart (Str.concat "    " "hello world from a large string ")"#),
         RocStr::from("hello world from a large string "),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_left_large_to_small_unique() {
+fn str_trim_start_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimLeft (Str.concat "  " "hello  ")"#),
+        indoc!(r#"Str.trimStart (Str.concat "  " "hello  ")"#),
         RocStr::from("hello  "),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimRight " ""#), RocStr::from(""), RocStr);
+fn str_trim_end_small_blank_string() {
+    assert_evals_to!(indoc!(r#"Str.trimEnd " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-fn str_trim_right_small_to_small() {
+fn str_trim_end_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight " hello ""#),
+        indoc!(r#"Str.trimEnd " hello ""#),
         RocStr::from(" hello"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_large_to_large_unique() {
+fn str_trim_end_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat " hello world from a large string" "    ")"#),
+        indoc!(r#"Str.trimEnd (Str.concat " hello world from a large string" "    ")"#),
         RocStr::from(" hello world from a large string"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_large_to_small_unique() {
+fn str_trim_end_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimRight (Str.concat "  hello" "  ")"#),
+        indoc!(r#"Str.trimEnd (Str.concat "  hello" "  ")"#),
         RocStr::from("  hello"),
         RocStr
     );
 }
 
 #[test]
-fn str_trim_right_large_to_large_shared() {
+fn str_trim_end_large_to_large_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (
@@ -1072,14 +997,14 @@ fn str_trim_right_large_to_large_shared() {
 }
 
 #[test]
-fn str_trim_right_large_to_small_shared() {
+fn str_trim_end_large_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = "  hello "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (RocStr::from("  hello "), RocStr::from("  hello"),),
@@ -1088,14 +1013,14 @@ fn str_trim_right_large_to_small_shared() {
 }
 
 #[test]
-fn str_trim_right_small_to_small_shared() {
+fn str_trim_end_small_to_small_shared() {
     assert_evals_to!(
         indoc!(
             r#"
                original : Str
                original = " hello "
 
-               { trimmed: Str.trimRight original, original: original }
+               { trimmed: Str.trimEnd original, original: original }
                "#
         ),
         (RocStr::from(" hello "), RocStr::from(" hello"),),
@@ -1312,18 +1237,5 @@ fn str_to_dec() {
         ),
         RocDec::from_str("1.0").unwrap(),
         RocDec
-    );
-}
-
-#[test]
-fn str_walk_scalars() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Str.walkScalars "abcd" [] List.append
-            "#
-        ),
-        RocList::from_slice(&['a', 'b', 'c', 'd']),
-        RocList<char>
     );
 }

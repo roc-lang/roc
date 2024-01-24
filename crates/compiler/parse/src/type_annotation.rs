@@ -1,18 +1,18 @@
 use crate::ast::{
-    AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
-    Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
+    AbilityImpls, AssignedField, CommentOrNewline, Expr, ImplementsAbilities, ImplementsAbility,
+    ImplementsClause, Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
-use crate::expr::record_value_field;
+use crate::expr::{record_field, FoundApplyValue};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
     absolute_column_min_indent, increment_min_indent, then, ERecord, ETypeAbilityImpl,
 };
 use crate::parser::{
-    allocated, backtrackable, fail, optional, specialize, specialize_ref, word1, word2, word3,
+    allocated, backtrackable, fail, optional, specialize, specialize_ref, word, word1, word2,
     EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
     Progress::{self, *},
 };
@@ -250,7 +250,7 @@ fn loc_type_in_parens<'a>(
             if fields.len() > 1 || ext.is_some() {
                 Ok((
                     MadeProgress,
-                    Loc::at(region, TypeAnnotation::Tuple { fields, ext }),
+                    Loc::at(region, TypeAnnotation::Tuple { elems: fields, ext }),
                     state,
                 ))
             } else if fields.len() == 1 {
@@ -426,7 +426,7 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
                 EType::TIndentEnd,
             ),
             zero_or_more!(skip_first!(
-                word1(b'&', EType::THasClause),
+                word1(b'&', EType::TImplementsClause),
                 space0_before_optional_after(
                     specialize(EType::TApply, loc!(concrete_type())),
                     EType::TIndentStart,
@@ -444,9 +444,9 @@ fn ability_chain<'a>() -> impl Parser<'a, Vec<'a, Loc<TypeAnnotation<'a>>>, ETyp
     )
 }
 
-fn has_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
+fn implements_clause<'a>() -> impl Parser<'a, Loc<ImplementsClause<'a>>, EType<'a>> {
     map!(
-        // Suppose we are trying to parse "a has Hash"
+        // Suppose we are trying to parse "a implements Hash"
         and!(
             space0_around_ee(
                 // Parse "a", with appropriate spaces
@@ -458,8 +458,8 @@ fn has_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
                 EType::TIndentEnd
             ),
             skip_first!(
-                // Parse "has"; we don't care about this keyword
-                word3(b'h', b'a', b's', EType::THasClause),
+                // Parse "implements"; we don't care about this keyword
+                word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
                 // Parse "Hash & ..."; this may be qualified from another module like "Hash.Hash"
                 absolute_column_min_indent(ability_chain())
             )
@@ -470,30 +470,34 @@ fn has_clause<'a>() -> impl Parser<'a, Loc<HasClause<'a>>, EType<'a>> {
                 &abilities.last().unwrap().region,
             );
             let region = Region::span_across(&var.region, &abilities_region);
-            let has_clause = HasClause {
+            let implements_clause = ImplementsClause {
                 var,
                 abilities: abilities.into_bump_slice(),
             };
-            Loc::at(region, has_clause)
+            Loc::at(region, implements_clause)
         }
     )
 }
 
-/// Parse a chain of `has` clauses, e.g. " | a has Hash, b has Eq".
-/// Returns the clauses and spaces before the starting "|", if there were any.
-fn has_clause_chain<'a>(
-) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<HasClause<'a>>]), EType<'a>> {
+/// Parse a chain of `implements` clauses, e.g. " where a implements Hash, b implements Eq".
+/// Returns the clauses and spaces before the starting "where", if there were any.
+fn implements_clause_chain<'a>(
+) -> impl Parser<'a, (&'a [CommentOrNewline<'a>], &'a [Loc<ImplementsClause<'a>>]), EType<'a>> {
     move |arena, state: State<'a>, min_indent: u32| {
-        let (_, (spaces_before, ()), state) =
-            and!(space0_e(EType::TIndentStart), word1(b'|', EType::TWhereBar))
-                .parse(arena, state, min_indent)?;
+        let (_, (spaces_before, ()), state) = and!(
+            space0_e(EType::TIndentStart),
+            word(crate::keyword::WHERE, EType::TWhereBar)
+        )
+        .parse(arena, state, min_indent)?;
 
         // Parse the first clause (there must be one), then the rest
-        let (_, first_clause, state) = has_clause().parse(arena, state, min_indent)?;
+        let (_, first_clause, state) = implements_clause().parse(arena, state, min_indent)?;
 
-        let (_, mut clauses, state) =
-            zero_or_more!(skip_first!(word1(b',', EType::THasClause), has_clause()))
-                .parse(arena, state, min_indent)?;
+        let (_, mut clauses, state) = zero_or_more!(skip_first!(
+            word1(b',', EType::TImplementsClause),
+            implements_clause()
+        ))
+        .parse(arena, state, min_indent)?;
 
         // Usually the number of clauses shouldn't be too large, so this is okay
         clauses.insert(0, first_clause);
@@ -506,30 +510,30 @@ fn has_clause_chain<'a>(
     }
 }
 
-/// Parse a has-abilities clause, e.g. `has [Eq, Hash]`.
-pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> {
+/// Parse a implements-abilities clause, e.g. `implements [Eq, Hash]`.
+pub fn implements_abilities<'a>() -> impl Parser<'a, Loc<ImplementsAbilities<'a>>, EType<'a>> {
     increment_min_indent(skip_first!(
-        // Parse "has"; we don't care about this keyword
-        word3(b'h', b'a', b's', EType::THasClause),
+        // Parse "implements"; we don't care about this keyword
+        word(crate::keyword::IMPLEMENTS, EType::TImplementsClause),
         // Parse "Hash"; this may be qualified from another module like "Hash.Hash"
         space0_before_e(
             loc!(map!(
                 collection_trailing_sep_e!(
                     word1(b'[', EType::TStart),
-                    loc!(parse_has_ability()),
+                    loc!(parse_implements_ability()),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
-                    HasAbility::SpaceBefore
+                    ImplementsAbility::SpaceBefore
                 ),
-                HasAbilities::Has
+                ImplementsAbilities::Implements
             )),
             EType::TIndentEnd,
         )
     ))
 }
 
-fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
-    increment_min_indent(record!(HasAbility::HasAbility {
+fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, EType<'a>> {
+    increment_min_indent(record!(ImplementsAbility::ImplementsAbility {
         ability: loc!(specialize(EType::TApply, concrete_type())),
         impls: optional(backtrackable(space0_before_e(
             loc!(map!(
@@ -537,17 +541,26 @@ fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
                     EType::TAbilityImpl,
                     collection_trailing_sep_e!(
                         word1(b'{', ETypeAbilityImpl::Open),
-                        specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
+                        specialize(|e: ERecord<'_>, _| e.into(), loc!(ability_impl_field())),
                         word1(b',', ETypeAbilityImpl::End),
                         word1(b'}', ETypeAbilityImpl::End),
                         AssignedField::SpaceBefore
                     )
                 ),
-                HasImpls::HasImpls
+                AbilityImpls::AbilityImpls
             )),
             EType::TIndentEnd
         )))
     }))
+}
+
+fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
+    then(record_field(), move |arena, state, _, field| {
+        match field.to_assigned_field(arena) {
+            Ok(assigned_field) => Ok((MadeProgress, assigned_field, state)),
+            Err(FoundApplyValue) => Err((MadeProgress, ERecord::Field(state.pos()))),
+        }
+    })
 }
 
 fn expression<'a>(
@@ -633,12 +646,13 @@ fn expression<'a>(
 
         // Finally, try to parse a where clause if there is one.
         // The where clause must be at least as deep as where the type annotation started.
-        match has_clause_chain().parse(arena, state.clone(), min_indent) {
-            Ok((where_progress, (spaces_before, has_chain), state)) => {
-                let region = Region::span_across(&annot.region, &has_chain.last().unwrap().region);
+        match implements_clause_chain().parse(arena, state.clone(), min_indent) {
+            Ok((where_progress, (spaces_before, implements_chain), state)) => {
+                let region =
+                    Region::span_across(&annot.region, &implements_chain.last().unwrap().region);
                 let type_annot = if !spaces_before.is_empty() {
-                    // We're transforming the spaces_before the '|'
-                    // into spaces_after the thing before the '|'
+                    // We're transforming the spaces_before the 'where'
+                    // into spaces_after the thing before the 'where'
                     let spaced = arena
                         .alloc(annot.value)
                         .with_spaces_after(spaces_before, annot.region);
@@ -646,7 +660,7 @@ fn expression<'a>(
                 } else {
                     &*arena.alloc(annot)
                 };
-                let where_annot = TypeAnnotation::Where(type_annot, has_chain);
+                let where_annot = TypeAnnotation::Where(type_annot, implements_chain);
                 Ok((
                     where_progress.or(progress),
                     Loc::at(region, where_annot),
@@ -715,7 +729,9 @@ fn parse_type_variable<'a>(
         min_indent,
     ) {
         Ok((_, name, state)) => {
-            if name == "has" && stop_at_surface_has {
+            if name == crate::keyword::WHERE
+                || (name == crate::keyword::IMPLEMENTS && stop_at_surface_has)
+            {
                 Err((NoProgress, EType::TEnd(state.pos())))
             } else {
                 let answer = TypeAnnotation::BoundVariable(name);

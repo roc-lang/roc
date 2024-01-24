@@ -9,6 +9,9 @@ interface Html.Attributes
         align,
         allow,
         alt,
+        ariaLabel,
+        ariaLabelledBy,
+        ariaHidden,
         async,
         autocapitalize,
         autocomplete,
@@ -150,6 +153,9 @@ action = attribute "action"
 align = attribute "align"
 allow = attribute "allow"
 alt = attribute "alt"
+ariaLabel = attribute "aria-label"
+ariaLabelledBy = attribute "aria-labelledby"
+ariaHidden = attribute "aria-label"
 async = attribute "async"
 autocapitalize = attribute "autocapitalize"
 autocomplete = attribute "autocomplete"

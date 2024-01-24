@@ -1,34 +1,32 @@
-use crate::llvm::build::{
-    get_tag_id, tag_pointer_clear_tag_id, Env, WhenRecursive, FAST_CALL_CONV,
-};
+use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::types::BasicType;
-use inkwell::values::{
-    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
-};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{
-    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+    Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
-use super::build::{load_roc_value, use_roc_value, BuilderExt};
-use super::convert::argument_type_from_union_layout;
+use super::build::{load_roc_value, BuilderExt};
+use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 use super::lowlevel::dec_binop_with_unchecked;
+use super::struct_;
 
-pub fn generic_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn generic_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
-    lhs_layout: &Layout<'a>,
-    rhs_layout: &Layout<'a>,
+    lhs_layout: InLayout<'a>,
+    rhs_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     build_eq(
         env,
@@ -36,20 +34,19 @@ pub fn generic_eq<'a, 'ctx, 'env>(
         layout_ids,
         lhs_val,
         rhs_val,
-        lhs_layout,
-        rhs_layout,
-        WhenRecursive::Unreachable,
+        layout_interner.get_repr(lhs_layout),
+        layout_interner.get_repr(rhs_layout),
     )
 }
 
-pub fn generic_neq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn generic_neq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
-    lhs_layout: &Layout<'a>,
-    rhs_layout: &Layout<'a>,
+    lhs_layout: InLayout<'a>,
+    rhs_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     build_neq(
         env,
@@ -59,21 +56,20 @@ pub fn generic_neq<'a, 'ctx, 'env>(
         rhs_val,
         lhs_layout,
         rhs_layout,
-        WhenRecursive::Unreachable,
     )
 }
 
-fn build_eq_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_eq_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
+    builtin_layout: LayoutRepr<'a>,
     builtin: &Builtin<'a>,
-    when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
     let int_cmp = |pred, label| {
-        let int_val = env.builder.build_int_compare(
+        let int_val = env.builder.new_build_int_compare(
             pred,
             lhs_val.into_int_value(),
             rhs_val.into_int_value(),
@@ -84,7 +80,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
     };
 
     let float_cmp = |pred, label| {
-        let int_val = env.builder.build_float_compare(
+        let int_val = env.builder.new_build_float_compare(
             pred,
             lhs_val.into_float_value(),
             rhs_val.into_float_value(),
@@ -133,126 +129,118 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
             env,
             layout_interner,
             layout_ids,
-            &Layout::Builtin(*builtin),
-            *elem,
+            builtin_layout,
+            layout_interner.get_repr(*elem),
             lhs_val.into_struct_value(),
             rhs_val.into_struct_value(),
-            when_recursive,
         ),
     }
 }
 
-fn build_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
-    lhs_layout: &Layout<'a>,
-    rhs_layout: &Layout<'a>,
-    when_recursive: WhenRecursive<'a>,
+    lhs_layout: LayoutRepr<'a>,
+    _rhs_layout: LayoutRepr<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let lhs_layout = &lhs_layout.runtime_representation(layout_interner);
-    let rhs_layout = &rhs_layout.runtime_representation(layout_interner);
-    if lhs_layout != rhs_layout {
-        panic!(
-            "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
-            lhs_layout, rhs_layout
-        );
-    }
-
     match lhs_layout {
-        Layout::Builtin(builtin) => build_eq_builtin(
+        LayoutRepr::Builtin(builtin) => build_eq_builtin(
             env,
             layout_interner,
             layout_ids,
             lhs_val,
             rhs_val,
-            builtin,
-            when_recursive,
-        ),
-
-        Layout::Struct { field_layouts, .. } => build_struct_eq(
-            env,
-            layout_interner,
-            layout_ids,
-            field_layouts,
-            when_recursive,
-            lhs_val.into_struct_value(),
-            rhs_val.into_struct_value(),
-        ),
-
-        Layout::LambdaSet(_) => unreachable!("cannot compare closures"),
-
-        Layout::Union(union_layout) => build_tag_eq(
-            env,
-            layout_interner,
-            layout_ids,
-            when_recursive,
-            union_layout,
-            lhs_val,
-            rhs_val,
-        ),
-
-        Layout::Boxed(inner_layout) => build_box_eq(
-            env,
-            layout_interner,
-            layout_ids,
-            when_recursive,
             lhs_layout,
-            *inner_layout,
+            &builtin,
+        ),
+
+        LayoutRepr::Struct(field_layouts) => build_struct_eq(
+            env,
+            layout_interner,
+            layout_ids,
+            lhs_layout,
+            field_layouts,
             lhs_val,
             rhs_val,
         ),
 
-        Layout::RecursivePointer => match when_recursive {
-            WhenRecursive::Unreachable => {
-                unreachable!("recursion pointers should never be compared directly")
-            }
+        LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closures"),
+        LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
+        LayoutRepr::Erased(_) => unreachable!("cannot compare erased types"),
 
-            WhenRecursive::Loop(union_layout) => {
-                let layout = Layout::Union(union_layout);
+        LayoutRepr::Union(union_layout) => build_tag_eq(
+            env,
+            layout_interner,
+            layout_ids,
+            lhs_layout,
+            &union_layout,
+            lhs_val,
+            rhs_val,
+        ),
 
-                let bt = basic_type_from_layout(env, layout_interner, &layout);
+        LayoutRepr::Ptr(inner_layout) => build_box_eq(
+            env,
+            layout_interner,
+            layout_ids,
+            lhs_layout,
+            inner_layout,
+            lhs_val,
+            rhs_val,
+        ),
 
-                // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env.builder.build_pointer_cast(
-                    lhs_val.into_pointer_value(),
-                    bt.into_pointer_type(),
-                    "i64_to_opaque",
-                );
+        LayoutRepr::RecursivePointer(rec_layout) => {
+            let layout = rec_layout;
 
-                let field2_cast = env.builder.build_pointer_cast(
-                    rhs_val.into_pointer_value(),
-                    bt.into_pointer_type(),
-                    "i64_to_opaque",
-                );
+            let bt = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
-                build_tag_eq(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    WhenRecursive::Loop(union_layout),
-                    &union_layout,
-                    field1_cast.into(),
-                    field2_cast.into(),
-                )
-            }
-        },
+            // cast the i64 pointer to a pointer to block of memory
+            let field1_cast = env.builder.new_build_pointer_cast(
+                lhs_val.into_pointer_value(),
+                bt.into_pointer_type(),
+                "i64_to_opaque",
+            );
+
+            let field2_cast = env.builder.new_build_pointer_cast(
+                rhs_val.into_pointer_value(),
+                bt.into_pointer_type(),
+                "i64_to_opaque",
+            );
+
+            let union_layout = match layout_interner.get_repr(rec_layout) {
+                LayoutRepr::Union(union_layout) => {
+                    debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
+                    union_layout
+                }
+                _ => internal_error!(),
+            };
+
+            build_tag_eq(
+                env,
+                layout_interner,
+                layout_ids,
+                layout_interner.get_repr(rec_layout),
+                &union_layout,
+                field1_cast.into(),
+                field2_cast.into(),
+            )
+        }
     }
 }
 
-fn build_neq_builtin<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_neq_builtin<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
+    builtin_layout: InLayout<'a>,
     builtin: &Builtin<'a>,
-    when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
     let int_cmp = |pred, label| {
-        let int_val = env.builder.build_int_compare(
+        let int_val = env.builder.new_build_int_compare(
             pred,
             lhs_val.into_int_value(),
             rhs_val.into_int_value(),
@@ -263,7 +251,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
     };
 
     let float_cmp = |pred, label| {
-        let int_val = env.builder.build_float_compare(
+        let int_val = env.builder.new_build_float_compare(
             pred,
             lhs_val.into_float_value(),
             rhs_val.into_float_value(),
@@ -309,7 +297,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
 
         Builtin::Str => {
             let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
@@ -318,124 +306,124 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
-                &Layout::Builtin(*builtin),
-                *elem,
+                layout_interner.get_repr(builtin_layout),
+                layout_interner.get_repr(*elem),
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
-                when_recursive,
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
     }
 }
 
-fn build_neq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_neq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
-    lhs_layout: &Layout<'a>,
-    rhs_layout: &Layout<'a>,
-    when_recursive: WhenRecursive<'a>,
+    lhs_layout: InLayout<'a>,
+    rhs_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     if lhs_layout != rhs_layout {
         panic!(
-            "Inequality of different layouts; did you have a type mismatch?\n{:?} != {:?}",
-            lhs_layout, rhs_layout
+            "Inequality of different layouts; did you have a type mismatch?\n{lhs_layout:?} != {rhs_layout:?}"
         );
     }
 
-    match lhs_layout {
-        Layout::Builtin(builtin) => build_neq_builtin(
+    match layout_interner.get_repr(lhs_layout) {
+        LayoutRepr::Builtin(builtin) => build_neq_builtin(
             env,
             layout_interner,
             layout_ids,
             lhs_val,
             rhs_val,
-            builtin,
-            when_recursive,
+            lhs_layout,
+            &builtin,
         ),
 
-        Layout::Struct { field_layouts, .. } => {
+        LayoutRepr::Struct(field_layouts) => {
             let is_equal = build_struct_eq(
                 env,
                 layout_interner,
                 layout_ids,
+                layout_interner.get_repr(lhs_layout),
                 field_layouts,
-                when_recursive,
-                lhs_val.into_struct_value(),
-                rhs_val.into_struct_value(),
+                lhs_val,
+                rhs_val,
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
 
-        Layout::Union(union_layout) => {
+        LayoutRepr::Union(union_layout) => {
             let is_equal = build_tag_eq(
                 env,
                 layout_interner,
                 layout_ids,
-                when_recursive,
-                union_layout,
+                layout_interner.get_repr(lhs_layout),
+                &union_layout,
                 lhs_val,
                 rhs_val,
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
 
-        Layout::Boxed(inner_layout) => {
+        LayoutRepr::Ptr(inner_layout) => {
             let is_equal = build_box_eq(
                 env,
                 layout_interner,
                 layout_ids,
-                when_recursive,
-                lhs_layout,
-                *inner_layout,
+                layout_interner.get_repr(lhs_layout),
+                inner_layout,
                 lhs_val,
                 rhs_val,
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
 
-        Layout::RecursivePointer => {
+        LayoutRepr::RecursivePointer(_) => {
             unreachable!("recursion pointers should never be compared directly")
         }
-        Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
+        LayoutRepr::LambdaSet(_) => unreachable!("cannot compare closure"),
+        LayoutRepr::FunctionPointer(_) => unreachable!("cannot compare function pointers"),
+        LayoutRepr::Erased(_) => unreachable!("cannot compare erased types"),
     }
 }
 
-fn build_list_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_list_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    list_layout: &Layout<'a>,
-    element_layout: InLayout<'a>,
+    list_layout: LayoutRepr<'a>,
+    element_layout: LayoutRepr<'a>,
     list1: StructValue<'ctx>,
     list2: StructValue<'ctx>,
-    when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::LIST_EQ;
-    let element_layout = layout_interner.get(element_layout);
-    let element_layout = when_recursive.unwrap_recursive_pointer(element_layout);
+    let element_layout = if let LayoutRepr::RecursivePointer(rec) = element_layout {
+        layout_interner.get_repr(rec)
+    } else {
+        element_layout
+    };
     let fn_name = layout_ids
         .get(symbol, &element_layout)
         .to_symbol_string(symbol, &env.interns);
@@ -456,9 +444,8 @@ fn build_list_eq<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
-                when_recursive,
                 function_value,
-                &element_layout,
+                element_layout,
             );
 
             function_value
@@ -466,24 +453,22 @@ fn build_list_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[list1.into(), list2.into()], "list_eq");
+        .new_build_call(function, &[list1.into(), list2.into()], "list_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_list_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_list_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    when_recursive: WhenRecursive<'a>,
     parent: FunctionValue<'ctx>,
-    element_layout: &Layout<'a>,
+    element_layout: LayoutRepr<'a>,
 ) {
     let ctx = env.context;
     let builder = env.builder;
@@ -506,7 +491,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -530,12 +515,12 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
     let length_equal: IntValue =
         env.builder
-            .build_int_compare(IntPredicate::EQ, len1, len2, "bounds_check");
+            .new_build_int_compare(IntPredicate::EQ, len1, len2, "bounds_check");
 
     let then_block = ctx.append_basic_block(parent, "then");
 
     env.builder
-        .build_conditional_branch(length_equal, then_block, return_false);
+        .new_build_conditional_branch(length_equal, then_block, return_false);
 
     {
         // the length is equal; check elements pointwise
@@ -543,7 +528,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, layout_interner, element_layout);
-        let ptr_type = element_type.ptr_type(AddressSpace::Generic);
+        let ptr_type = element_type.ptr_type(AddressSpace::default());
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
 
@@ -551,15 +536,15 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         let end = len1;
 
         // allocate a stack slot for the current index
-        let index_alloca = builder.build_alloca(env.ptr_int(), "index");
-        builder.build_store(index_alloca, env.ptr_int().const_zero());
+        let index_alloca = builder.new_build_alloca(env.ptr_int(), "index");
+        builder.new_build_store(index_alloca, env.ptr_int().const_zero());
 
         let loop_bb = ctx.append_basic_block(parent, "loop");
         let body_bb = ctx.append_basic_block(parent, "body");
         let increment_bb = ctx.append_basic_block(parent, "increment");
 
         // the "top" of the loop
-        builder.build_unconditional_branch(loop_bb);
+        builder.new_build_unconditional_branch(loop_bb);
         builder.position_at_end(loop_bb);
 
         let curr_index = builder
@@ -568,11 +553,11 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         // #index < end
         let loop_end_cond =
-            builder.build_int_compare(IntPredicate::ULT, curr_index, end, "bounds_check");
+            builder.new_build_int_compare(IntPredicate::ULT, curr_index, end, "bounds_check");
 
         // if we're at the end, and all elements were equal so far, return true
         // otherwise check the current elements for equality
-        builder.build_conditional_branch(loop_end_cond, body_bb, return_true);
+        builder.new_build_conditional_branch(loop_end_cond, body_bb, return_true);
 
         {
             // loop body
@@ -582,14 +567,14 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
                 let elem_ptr = unsafe {
                     builder.new_build_in_bounds_gep(element_type, ptr1, &[curr_index], "load_index")
                 };
-                load_roc_value(env, layout_interner, *element_layout, elem_ptr, "get_elem")
+                load_roc_value(env, layout_interner, element_layout, elem_ptr, "get_elem")
             };
 
             let elem2 = {
                 let elem_ptr = unsafe {
                     builder.new_build_in_bounds_gep(element_type, ptr2, &[curr_index], "load_index")
                 };
-                load_roc_value(env, layout_interner, *element_layout, elem_ptr, "get_elem")
+                load_roc_value(env, layout_interner, element_layout, elem_ptr, "get_elem")
             };
 
             let are_equal = build_eq(
@@ -600,13 +585,12 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
                 elem2,
                 element_layout,
                 element_layout,
-                when_recursive,
             )
             .into_int_value();
 
             // if the elements are equal, increment the index and check the next element
             // otherwise, return false
-            builder.build_conditional_branch(are_equal, increment_bb, return_false);
+            builder.new_build_conditional_branch(are_equal, increment_bb, return_false);
         }
 
         {
@@ -615,41 +599,39 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             // constant 1isize
             let one = env.ptr_int().const_int(1, false);
 
-            let next_index = builder.build_int_add(curr_index, one, "nextindex");
+            let next_index = builder.new_build_int_add(curr_index, one, "nextindex");
 
-            builder.build_store(index_alloca, next_index);
+            builder.new_build_store(index_alloca, next_index);
 
             // jump back to the top of the loop
-            builder.build_unconditional_branch(loop_bb);
+            builder.new_build_unconditional_branch(loop_bb);
         }
     }
 
     {
         env.builder.position_at_end(return_true);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(1, false)));
     }
 
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 }
 
-fn build_struct_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_struct_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    field_layouts: &'a [Layout<'a>],
-    when_recursive: WhenRecursive<'a>,
-    struct1: StructValue<'ctx>,
-    struct2: StructValue<'ctx>,
+    struct_layout: LayoutRepr<'a>,
+    field_layouts: &'a [InLayout<'a>],
+    struct1: BasicValueEnum<'ctx>,
+    struct2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let struct_layout = Layout::struct_no_name_order(field_layouts);
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
@@ -659,7 +641,7 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = basic_type_from_layout(env, layout_interner, &struct_layout);
+            let arg_type = argument_type_from_layout(env, layout_interner, struct_layout);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -673,7 +655,7 @@ fn build_struct_eq<'a, 'ctx, 'env>(
                 layout_interner,
                 layout_ids,
                 function_value,
-                when_recursive,
+                struct_layout,
                 field_layouts,
             );
 
@@ -682,24 +664,23 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
+        .new_build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_struct_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_struct_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     parent: FunctionValue<'ctx>,
-    when_recursive: WhenRecursive<'a>,
-    field_layouts: &[Layout<'a>],
+    struct_layout: LayoutRepr<'a>,
+    field_layouts: &[InLayout<'a>],
 ) {
     let ctx = env.context;
     let builder = env.builder;
@@ -722,13 +703,13 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
     let mut it = parent.get_param_iter();
-    let struct1 = it.next().unwrap().into_struct_value();
-    let struct2 = it.next().unwrap().into_struct_value();
+    let struct1 = it.next().unwrap();
+    let struct2 = it.next().unwrap();
 
     struct1.set_name(Symbol::ARG_1.as_str(&env.interns));
     struct2.set_name(Symbol::ARG_2.as_str(&env.interns));
@@ -736,7 +717,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     let entry = ctx.append_basic_block(parent, "entry");
     let start = ctx.append_basic_block(parent, "start");
     env.builder.position_at_end(entry);
-    env.builder.build_unconditional_branch(start);
+    env.builder.new_build_unconditional_branch(start);
 
     let return_true = ctx.append_basic_block(parent, "return_true");
     let return_false = ctx.append_basic_block(parent, "return_false");
@@ -746,95 +727,98 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
     for (index, field_layout) in field_layouts.iter().enumerate() {
         env.builder.position_at_end(current);
 
-        let field1 = env
-            .builder
-            .build_extract_value(struct1, index as u32, "eq_field")
-            .unwrap();
+        let field1 = struct_::RocStruct::from(struct1).load_at_index(
+            env,
+            layout_interner,
+            struct_layout,
+            index as _,
+        );
 
-        let field2 = env
-            .builder
-            .build_extract_value(struct2, index as u32, "eq_field")
-            .unwrap();
+        let field2 = struct_::RocStruct::from(struct2).load_at_index(
+            env,
+            layout_interner,
+            struct_layout,
+            index as _,
+        );
 
-        let are_equal = if let Layout::RecursivePointer = field_layout {
-            match &when_recursive {
-                WhenRecursive::Unreachable => {
-                    unreachable!("The current layout should not be recursive, but is")
-                }
-                WhenRecursive::Loop(union_layout) => {
-                    let field_layout = Layout::Union(*union_layout);
+        let are_equal = if let LayoutRepr::RecursivePointer(rec_layout) =
+            layout_interner.get_repr(*field_layout)
+        {
+            debug_assert!(
+                matches!(layout_interner.get_repr(rec_layout), LayoutRepr::Union(union_layout) if !matches!(union_layout, UnionLayout::NonRecursive(..)))
+            );
 
-                    let bt = basic_type_from_layout(env, layout_interner, &field_layout);
+            let field_layout = rec_layout;
 
-                    // cast the i64 pointer to a pointer to block of memory
-                    let field1_cast = env.builder.build_pointer_cast(
-                        field1.into_pointer_value(),
-                        bt.into_pointer_type(),
-                        "i64_to_opaque",
-                    );
+            let bt = basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(field_layout),
+            );
 
-                    let field2_cast = env.builder.build_pointer_cast(
-                        field2.into_pointer_value(),
-                        bt.into_pointer_type(),
-                        "i64_to_opaque",
-                    );
+            // cast the i64 pointer to a pointer to block of memory
+            let field1_cast = env.builder.new_build_pointer_cast(
+                field1.into_pointer_value(),
+                bt.into_pointer_type(),
+                "i64_to_opaque",
+            );
 
-                    build_eq(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        field1_cast.into(),
-                        field2_cast.into(),
-                        &field_layout,
-                        &field_layout,
-                        WhenRecursive::Loop(*union_layout),
-                    )
-                    .into_int_value()
-                }
-            }
-        } else {
-            let lhs = use_roc_value(env, layout_interner, *field_layout, field1, "field1");
-            let rhs = use_roc_value(env, layout_interner, *field_layout, field2, "field2");
+            let field2_cast = env.builder.new_build_pointer_cast(
+                field2.into_pointer_value(),
+                bt.into_pointer_type(),
+                "i64_to_opaque",
+            );
+
             build_eq(
                 env,
                 layout_interner,
                 layout_ids,
-                lhs,
-                rhs,
-                field_layout,
-                field_layout,
-                when_recursive,
+                field1_cast.into(),
+                field2_cast.into(),
+                layout_interner.get_repr(field_layout),
+                layout_interner.get_repr(field_layout),
+            )
+            .into_int_value()
+        } else {
+            build_eq(
+                env,
+                layout_interner,
+                layout_ids,
+                field1,
+                field2,
+                layout_interner.get_repr(*field_layout),
+                layout_interner.get_repr(*field_layout),
             )
             .into_int_value()
         };
 
-        current = ctx.append_basic_block(parent, &format!("eq_step_{}", index));
+        current = ctx.append_basic_block(parent, &format!("eq_step_{index}"));
 
         env.builder
-            .build_conditional_branch(are_equal, current, return_false);
+            .new_build_conditional_branch(are_equal, current, return_false);
     }
 
     env.builder.position_at_end(current);
-    env.builder.build_unconditional_branch(return_true);
+    env.builder.new_build_unconditional_branch(return_true);
 
     {
         env.builder.position_at_end(return_true);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(1, false)));
     }
 
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 }
 
-fn build_tag_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_tag_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    when_recursive: WhenRecursive<'a>,
+    tag_layout: LayoutRepr<'a>,
     union_layout: &UnionLayout<'a>,
     tag1: BasicValueEnum<'ctx>,
     tag2: BasicValueEnum<'ctx>,
@@ -842,7 +826,6 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let tag_layout = Layout::Union(*union_layout);
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
         .get(symbol, &tag_layout)
@@ -864,7 +847,6 @@ fn build_tag_eq<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
-                when_recursive,
                 function_value,
                 union_layout,
             );
@@ -874,22 +856,20 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+        .new_build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_tag_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_tag_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    when_recursive: WhenRecursive<'a>,
     parent: FunctionValue<'ctx>,
     union_layout: &UnionLayout<'a>,
 ) {
@@ -914,7 +894,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -933,13 +913,13 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 
     {
         env.builder.position_at_end(return_true);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(1, false)));
     }
 
     env.builder.position_at_end(entry);
@@ -949,22 +929,22 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
     match union_layout {
         NonRecursive(&[]) => {
             // we're comparing empty tag unions; this code is effectively unreachable
-            env.builder.build_unreachable();
+            env.builder.new_build_unreachable();
         }
         NonRecursive(tags) => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
             let compare_tag_ids = ctx.append_basic_block(parent, "compare_tag_ids");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
+                .new_build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
 
             env.builder.position_at_end(compare_tag_ids);
 
@@ -979,10 +959,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let same_tag =
                 env.builder
-                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+                    .new_build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
 
             env.builder
-                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+                .new_build_conditional_branch(same_tag, compare_tag_fields, return_false);
 
             env.builder.position_at_end(compare_tag_fields);
 
@@ -994,18 +974,19 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
+                let struct_layout = LayoutRepr::struct_(field_layouts);
+
                 let answer = eq_ptr_to_struct(
                     env,
                     layout_interner,
                     layout_ids,
-                    union_layout,
-                    Some(when_recursive),
+                    struct_layout,
                     field_layouts,
                     tag1,
                     tag2,
                 );
 
-                env.builder.build_return(Some(&answer));
+                env.builder.new_build_return(Some(&answer));
 
                 cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
@@ -1014,28 +995,28 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             match cases.pop() {
                 Some((_, default)) => {
-                    env.builder.build_switch(id1, default, &cases);
+                    env.builder.new_build_switch(id1, default, &cases);
                 }
                 None => {
                     // we're comparing empty tag unions; this code is effectively unreachable
-                    env.builder.build_unreachable();
+                    env.builder.new_build_unreachable();
                 }
             }
         }
         Recursive(tags) => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
             let compare_tag_ids = ctx.append_basic_block(parent, "compare_tag_ids");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
+                .new_build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
 
             env.builder.position_at_end(compare_tag_ids);
 
@@ -1050,10 +1031,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let same_tag =
                 env.builder
-                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+                    .new_build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
 
             env.builder
-                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+                .new_build_conditional_branch(same_tag, compare_tag_fields, return_false);
 
             env.builder.position_at_end(compare_tag_fields);
 
@@ -1065,18 +1046,19 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
+                let struct_layout = LayoutRepr::struct_(field_layouts);
+
                 let answer = eq_ptr_to_struct(
                     env,
                     layout_interner,
                     layout_ids,
-                    union_layout,
-                    None,
+                    struct_layout,
                     field_layouts,
                     tag1,
                     tag2,
                 );
 
-                env.builder.build_return(Some(&answer));
+                env.builder.new_build_return(Some(&answer));
 
                 cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
@@ -1085,15 +1067,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(id1, default, &cases);
+            env.builder.new_build_switch(id1, default, &cases);
         }
         NullableUnwrapped { other_fields, .. } => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
@@ -1101,7 +1083,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let compare_other = ctx.append_basic_block(parent, "compare_other");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, check_for_null);
+                .new_build_conditional_branch(ptr_equal, return_true, check_for_null);
 
             // check for NULL
 
@@ -1109,43 +1091,49 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let is_null_1 = env
                 .builder
-                .build_is_null(tag1.into_pointer_value(), "is_null");
+                .new_build_is_null(tag1.into_pointer_value(), "is_null");
 
             let is_null_2 = env
                 .builder
-                .build_is_null(tag2.into_pointer_value(), "is_null");
+                .new_build_is_null(tag2.into_pointer_value(), "is_null");
 
-            let either_null = env.builder.build_or(is_null_1, is_null_2, "either_null");
+            let either_null = env
+                .builder
+                .new_build_or(is_null_1, is_null_2, "either_null");
 
             // logic: the pointers are not the same, if one is NULL, the other one is not
             // therefore the two tags are not equal
             env.builder
-                .build_conditional_branch(either_null, return_false, compare_other);
+                .new_build_conditional_branch(either_null, return_false, compare_other);
 
             // compare the non-null case
 
             env.builder.position_at_end(compare_other);
 
+            let struct_layout = LayoutRepr::struct_(other_fields);
+
             let answer = eq_ptr_to_struct(
                 env,
                 layout_interner,
                 layout_ids,
-                union_layout,
-                None,
+                struct_layout,
                 other_fields,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
             );
 
-            env.builder.build_return(Some(&answer));
+            env.builder.new_build_return(Some(&answer));
         }
-        NullableWrapped { other_tags, .. } => {
-            let ptr_equal = env.builder.build_int_compare(
+        NullableWrapped {
+            other_tags,
+            nullable_id,
+        } => {
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
@@ -1153,7 +1141,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let compare_other = ctx.append_basic_block(parent, "compare_other");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, check_for_null);
+                .new_build_conditional_branch(ptr_equal, return_true, check_for_null);
 
             // check for NULL
 
@@ -1161,11 +1149,11 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let is_null_1 = env
                 .builder
-                .build_is_null(tag1.into_pointer_value(), "is_null");
+                .new_build_is_null(tag1.into_pointer_value(), "is_null");
 
             let is_null_2 = env
                 .builder
-                .build_is_null(tag2.into_pointer_value(), "is_null");
+                .new_build_is_null(tag2.into_pointer_value(), "is_null");
 
             // Logic:
             //
@@ -1176,15 +1164,15 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let i8_type = env.context.i8_type();
 
-            let sum = env.builder.build_int_add(
+            let sum = env.builder.new_build_int_add(
                 env.builder
-                    .build_int_cast_sign_flag(is_null_1, i8_type, false, "to_u8"),
+                    .new_build_int_cast_sign_flag(is_null_1, i8_type, false, "to_u8"),
                 env.builder
-                    .build_int_cast_sign_flag(is_null_2, i8_type, false, "to_u8"),
+                    .new_build_int_cast_sign_flag(is_null_2, i8_type, false, "to_u8"),
                 "sum_is_null",
             );
 
-            env.builder.build_switch(
+            env.builder.new_build_switch(
                 sum,
                 compare_other,
                 &[
@@ -1208,10 +1196,10 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let same_tag =
                 env.builder
-                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+                    .new_build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
 
             env.builder
-                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+                .new_build_conditional_branch(same_tag, compare_tag_fields, return_false);
 
             env.builder.position_at_end(compare_tag_fields);
 
@@ -1220,22 +1208,25 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             let tags = other_tags;
             let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
-            for (tag_id, field_layouts) in tags.iter().enumerate() {
+            for (i, field_layouts) in tags.iter().enumerate() {
+                let tag_id = if i >= (*nullable_id as _) { i + 1 } else { i };
+
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
+
+                let struct_layout = LayoutRepr::struct_(field_layouts);
 
                 let answer = eq_ptr_to_struct(
                     env,
                     layout_interner,
                     layout_ids,
-                    union_layout,
-                    None,
+                    struct_layout,
                     field_layouts,
                     tag1,
                     tag2,
                 );
 
-                env.builder.build_return(Some(&answer));
+                env.builder.new_build_return(Some(&answer));
 
                 cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
@@ -1244,85 +1235,88 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(id1, default, &cases);
+            env.builder.new_build_switch(id1, default, &cases);
         }
         NonNullableUnwrapped(field_layouts) => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
             let compare_fields = ctx.append_basic_block(parent, "compare_fields");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, compare_fields);
+                .new_build_conditional_branch(ptr_equal, return_true, compare_fields);
 
             env.builder.position_at_end(compare_fields);
+
+            let struct_layout = LayoutRepr::struct_(field_layouts);
 
             let answer = eq_ptr_to_struct(
                 env,
                 layout_interner,
                 layout_ids,
-                union_layout,
-                None,
+                struct_layout,
                 field_layouts,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
             );
 
-            env.builder.build_return(Some(&answer));
+            env.builder.new_build_return(Some(&answer));
         }
     }
 }
 
-fn eq_ptr_to_struct<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn eq_ptr_to_struct<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    union_layout: &UnionLayout<'a>,
-    opt_when_recursive: Option<WhenRecursive<'a>>,
-    field_layouts: &'a [Layout<'a>],
+    struct_layout: LayoutRepr<'a>,
+    field_layouts: &'a [InLayout<'a>],
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let struct_layout = Layout::struct_no_name_order(field_layouts);
-
-    let wrapper_type = basic_type_from_layout(env, layout_interner, &struct_layout);
+    let wrapper_type = basic_type_from_layout(env, layout_interner, struct_layout);
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
-    let struct1_ptr = env.builder.build_pointer_cast(
+    let struct1_ptr = env.builder.new_build_pointer_cast(
         tag1,
-        wrapper_type.ptr_type(AddressSpace::Generic),
+        wrapper_type.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
-    let struct2_ptr = env.builder.build_pointer_cast(
+    let struct2_ptr = env.builder.new_build_pointer_cast(
         tag2,
-        wrapper_type.ptr_type(AddressSpace::Generic),
+        wrapper_type.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
-    let struct1 = env
-        .builder
-        .new_build_load(wrapper_type, struct1_ptr, "load_struct1")
-        .into_struct_value();
-
-    let struct2 = env
-        .builder
-        .new_build_load(wrapper_type, struct2_ptr, "load_struct2")
-        .into_struct_value();
+    let struct1 = load_roc_value(
+        env,
+        layout_interner,
+        struct_layout,
+        struct1_ptr,
+        "load_struct1",
+    );
+    let struct2 = load_roc_value(
+        env,
+        layout_interner,
+        struct_layout,
+        struct2_ptr,
+        "load_struct2",
+    );
 
     build_struct_eq(
         env,
         layout_interner,
         layout_ids,
+        struct_layout,
         field_layouts,
-        opt_when_recursive.unwrap_or(WhenRecursive::Loop(*union_layout)),
         struct1,
         struct2,
     )
@@ -1331,12 +1325,11 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 
 /// ----
 
-fn build_box_eq<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_box_eq<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    when_recursive: WhenRecursive<'a>,
-    box_layout: &Layout<'a>,
+    box_layout: LayoutRepr<'a>,
     inner_layout: InLayout<'a>,
     tag1: BasicValueEnum<'ctx>,
     tag2: BasicValueEnum<'ctx>,
@@ -1346,7 +1339,7 @@ fn build_box_eq<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
-        .get(symbol, box_layout)
+        .get(symbol, &box_layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -1365,7 +1358,6 @@ fn build_box_eq<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
-                when_recursive,
                 function_value,
                 inner_layout,
             );
@@ -1375,22 +1367,20 @@ fn build_box_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+        .new_build_call(function, &[tag1.into(), tag2.into()], "box_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
     call.try_as_basic_value().left().unwrap()
 }
 
-fn build_box_eq_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_box_eq_help<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    when_recursive: WhenRecursive<'a>,
     parent: FunctionValue<'ctx>,
     inner_layout: InLayout<'a>,
 ) {
@@ -1415,7 +1405,7 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -1432,34 +1422,79 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
     let return_true = ctx.append_basic_block(parent, "return_true");
     env.builder.position_at_end(return_true);
     env.builder
-        .build_return(Some(&env.context.bool_type().const_all_ones()));
+        .new_build_return(Some(&env.context.bool_type().const_all_ones()));
 
     env.builder.position_at_end(entry);
 
-    let ptr_equal = env.builder.build_int_compare(
+    let ptr_equal = env.builder.new_build_int_compare(
         IntPredicate::EQ,
         env.builder
-            .build_ptr_to_int(box1.into_pointer_value(), env.ptr_int(), "pti"),
+            .new_build_ptr_to_int(box1.into_pointer_value(), env.ptr_int(), "pti"),
         env.builder
-            .build_ptr_to_int(box2.into_pointer_value(), env.ptr_int(), "pti"),
+            .new_build_ptr_to_int(box2.into_pointer_value(), env.ptr_int(), "pti"),
         "compare_pointers",
     );
 
-    let compare_inner_value = ctx.append_basic_block(parent, "compare_inner_value");
+    let check_null_then_compare_inner_values =
+        ctx.append_basic_block(parent, "check_null_then_compare_inner_values");
+
+    env.builder.new_build_conditional_branch(
+        ptr_equal,
+        return_true,
+        check_null_then_compare_inner_values,
+    );
 
     env.builder
-        .build_conditional_branch(ptr_equal, return_true, compare_inner_value);
+        .position_at_end(check_null_then_compare_inner_values);
 
-    env.builder.position_at_end(compare_inner_value);
+    // Check for nullability, then compare inner values
+
+    let box1_is_null = env
+        .builder
+        .new_build_is_null(box1.into_pointer_value(), "box1_is_null");
+    let check_box2_is_null = ctx.append_basic_block(parent, "check_if_box2_is_null");
+    let return_false = ctx.append_basic_block(parent, "return_false");
+    let compare_inner_values = ctx.append_basic_block(parent, "compare_inner_values");
+
+    env.builder
+        .new_build_conditional_branch(box1_is_null, return_false, check_box2_is_null);
+
+    {
+        env.builder.position_at_end(check_box2_is_null);
+        let box2_is_null = env
+            .builder
+            .new_build_is_null(box2.into_pointer_value(), "box2_is_null");
+        env.builder
+            .new_build_conditional_branch(box2_is_null, return_false, compare_inner_values);
+    }
+
+    {
+        env.builder.position_at_end(return_false);
+        env.builder
+            .new_build_return(Some(&env.context.bool_type().const_zero()));
+    }
+
+    // Compare the inner values.
+    env.builder.position_at_end(compare_inner_values);
 
     // clear the tag_id so we get a pointer to the actual data
     let box1 = box1.into_pointer_value();
     let box2 = box2.into_pointer_value();
 
-    let inner_layout = layout_interner.get(inner_layout);
-
-    let value1 = load_roc_value(env, layout_interner, inner_layout, box1, "load_box1");
-    let value2 = load_roc_value(env, layout_interner, inner_layout, box2, "load_box2");
+    let value1 = load_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(inner_layout),
+        box1,
+        "load_box1",
+    );
+    let value2 = load_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(inner_layout),
+        box2,
+        "load_box2",
+    );
 
     let is_equal = build_eq(
         env,
@@ -1467,10 +1502,9 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
         layout_ids,
         value1,
         value2,
-        &inner_layout,
-        &inner_layout,
-        when_recursive,
+        layout_interner.get_repr(inner_layout),
+        layout_interner.get_repr(inner_layout),
     );
 
-    env.builder.build_return(Some(&is_equal));
+    env.builder.new_build_return(Some(&is_equal));
 }

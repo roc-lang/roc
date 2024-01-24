@@ -1,10 +1,11 @@
 use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
+    ImplementsAbilities, Pattern, RecordBuilderField, Spaceable, Spaces, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
-    space0_e, spaces, spaces_around, spaces_before,
+    space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -14,13 +15,14 @@ use crate::parser::{
     word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
     EType, EWhen, Either, ParseResult, Parser,
 };
-use crate::pattern::{closure_param, loc_has_parser};
+use crate::pattern::{closure_param, loc_implements_parser};
 use crate::state::State;
 use crate::string_literal::StrLikeLiteral;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::soa::Slice;
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
@@ -42,7 +44,7 @@ pub fn test_parse_expr<'a>(
     state: State<'a>,
 ) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
     let parser = skip_second!(
-        space0_before_e(loc_expr(true), EExpr::IndentStart,),
+        space0_before_optional_after(loc_expr(true), EExpr::IndentStart, EExpr::IndentEnd),
         expr_end()
     );
 
@@ -255,7 +257,10 @@ fn loc_possibly_negative_or_negated_term<'a>(
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
-            and!(loc!(word1(b'!', EExpr::Start)), loc_term(options)),
+            and!(
+                loc!(word1(b'!', EExpr::Start)),
+                space0_before_e(loc_term(options), EExpr::IndentStart)
+            ),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), Loc::at(loc_op.region, UnaryOp::Not))
             }
@@ -544,6 +549,9 @@ pub fn parse_single_def<'a>(
     let spaces_before_current_start = state.pos();
 
     let state = match space0_e(EExpr::IndentStart).parse(arena, state, min_indent) {
+        Err((MadeProgress, bad_input @ EExpr::Space(_, _))) => {
+            return Err((MadeProgress, bad_input));
+        }
         Err((MadeProgress, _)) => {
             return Err((MadeProgress, EExpr::DefMissingFinalExpr(initial.pos())));
         }
@@ -612,14 +620,14 @@ pub fn parse_single_def<'a>(
             };
 
             if let Some((name, name_region, args)) = opt_tag_and_args {
-                if let Ok((_, loc_has, state)) =
-                    loc_has_parser().parse(arena, state.clone(), min_indent)
+                if let Ok((_, loc_implements, state)) =
+                    loc_implements_parser().parse(arena, state.clone(), min_indent)
                 {
                     let (_, (type_def, def_region), state) = finish_parsing_ability_def_help(
                         min_indent,
                         Loc::at(name_region, name),
                         args,
-                        loc_has,
+                        loc_implements,
                         arena,
                         state,
                     )?;
@@ -668,7 +676,7 @@ pub fn parse_single_def<'a>(
                     let (_, ann_type, state) = parser.parse(arena, state, min_indent)?;
                     let region = Region::span_across(&loc_pattern.region, &ann_type.region);
 
-                    match &loc_pattern.value {
+                    match &loc_pattern.value.extract_spaces().item {
                         Pattern::Apply(
                             Loc {
                                 value: Pattern::Tag(name),
@@ -740,7 +748,7 @@ pub fn parse_single_def<'a>(
                         opaque_signature_with_space_before().parse(arena, state, min_indent + 1)?;
                     let region = Region::span_across(&loc_pattern.region, &signature.region);
 
-                    match &loc_pattern.value {
+                    match &loc_pattern.value.extract_spaces().item {
                         Pattern::Apply(
                             Loc {
                                 value: Pattern::Tag(name),
@@ -921,7 +929,7 @@ macro_rules! join_alias_to_body {
 }
 
 fn parse_defs_end<'a>(
-    _options: ExprParseOptions,
+    options: ExprParseOptions,
     min_indent: u32,
     mut defs: Defs<'a>,
     arena: &'a Bump,
@@ -932,7 +940,7 @@ fn parse_defs_end<'a>(
     loop {
         let state = global_state;
 
-        global_state = match parse_single_def(_options, min_indent, arena, state) {
+        global_state = match parse_single_def(options, min_indent, arena, state) {
             Ok((_, Some(single_def), next_state)) => {
                 let region = single_def.region;
                 let spaces_before_current = single_def.spaces_before;
@@ -1059,8 +1067,14 @@ fn alias_signature_with_space_before<'a>() -> impl Parser<'a, Loc<TypeAnnotation
     ))
 }
 
-fn opaque_signature_with_space_before<'a>(
-) -> impl Parser<'a, (Loc<TypeAnnotation<'a>>, Option<Loc<HasAbilities<'a>>>), EExpr<'a>> {
+fn opaque_signature_with_space_before<'a>() -> impl Parser<
+    'a,
+    (
+        Loc<TypeAnnotation<'a>>,
+        Option<Loc<ImplementsAbilities<'a>>>,
+    ),
+    EExpr<'a>,
+> {
     and!(
         specialize(
             EExpr::Type,
@@ -1071,7 +1085,7 @@ fn opaque_signature_with_space_before<'a>(
         ),
         optional(backtrackable(specialize(
             EExpr::Type,
-            space0_before_e(type_annotation::has_abilities(), EType::TIndentStart,),
+            space0_before_e(type_annotation::implements_abilities(), EType::TIndentStart,),
         )))
     )
 }
@@ -1080,6 +1094,29 @@ fn opaque_signature_with_space_before<'a>(
 enum AliasOrOpaque {
     Alias,
     Opaque,
+}
+
+fn extract_tag_and_spaces<'a>(arena: &'a Bump, expr: Expr<'a>) -> Option<Spaces<'a, &'a str>> {
+    let mut expr = expr.extract_spaces();
+
+    loop {
+        match &expr.item {
+            Expr::ParensAround(inner_expr) => {
+                let inner_expr = inner_expr.extract_spaces();
+                expr.item = inner_expr.item;
+                expr.before = merge_spaces(arena, expr.before, inner_expr.before);
+                expr.after = merge_spaces(arena, inner_expr.after, expr.after);
+            }
+            Expr::Tag(tag) => {
+                return Some(Spaces {
+                    before: expr.before,
+                    item: tag,
+                    after: expr.after,
+                });
+            }
+            _ => return None,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1102,117 +1139,113 @@ fn finish_parsing_alias_or_opaque<'a>(
 
     let mut defs = Defs::default();
 
-    let state = match &expr.value.extract_spaces().item {
-        Expr::Tag(name) => {
-            let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
+    let state = if let Some(tag) = extract_tag_and_spaces(arena, expr.value) {
+        let name = tag.item;
+        let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
-            for argument in arguments {
-                match expr_to_pattern_help(arena, &argument.value) {
-                    Ok(good) => {
-                        type_arguments.push(Loc::at(argument.region, good));
-                    }
-                    Err(()) => {
-                        return Err((
-                            MadeProgress,
-                            EExpr::Pattern(
-                                arena.alloc(EPattern::NotAPattern(state.pos())),
-                                state.pos(),
-                            ),
-                        ));
-                    }
+        for argument in arguments {
+            match expr_to_pattern_help(arena, &argument.value) {
+                Ok(good) => {
+                    type_arguments.push(Loc::at(argument.region, good));
                 }
-            }
-
-            match kind {
-                AliasOrOpaque::Alias => {
-                    let (_, signature, state) =
-                        alias_signature_with_space_before().parse(arena, state, min_indent)?;
-
-                    let def_region = Region::span_across(&expr.region, &signature.region);
-
-                    let header = TypeHeader {
-                        name: Loc::at(expr.region, name),
-                        vars: type_arguments.into_bump_slice(),
-                    };
-
-                    let def = TypeDef::Alias {
-                        header,
-                        ann: signature,
-                    };
-
-                    defs.push_type_def(def, def_region, &[], &[]);
-
-                    state
-                }
-
-                AliasOrOpaque::Opaque => {
-                    let (_, (signature, derived), state) =
-                        opaque_signature_with_space_before().parse(arena, state, indented_more)?;
-
-                    let def_region = Region::span_across(&expr.region, &signature.region);
-
-                    let header = TypeHeader {
-                        name: Loc::at(expr.region, name),
-                        vars: type_arguments.into_bump_slice(),
-                    };
-
-                    let def = TypeDef::Opaque {
-                        header,
-                        typ: signature,
-                        derived,
-                    };
-
-                    defs.push_type_def(def, def_region, &[], &[]);
-
-                    state
+                Err(()) => {
+                    return Err((
+                        MadeProgress,
+                        EExpr::Pattern(
+                            arena.alloc(EPattern::NotAPattern(state.pos())),
+                            state.pos(),
+                        ),
+                    ));
                 }
             }
         }
 
-        _ => {
-            let call = to_call(arena, arguments, expr);
+        match kind {
+            AliasOrOpaque::Alias => {
+                let (_, signature, state) =
+                    alias_signature_with_space_before().parse(arena, state, min_indent)?;
 
-            match expr_to_pattern_help(arena, &call.value) {
-                Ok(good) => {
-                    let parser = specialize(
-                        EExpr::Type,
-                        space0_before_e(
-                            set_min_indent(indented_more, type_annotation::located(false)),
-                            EType::TIndentStart,
-                        ),
-                    );
+                let def_region = Region::span_across(&expr.region, &signature.region);
 
-                    match parser.parse(arena, state.clone(), min_indent) {
-                        Err((_, fail)) => return Err((MadeProgress, fail)),
-                        Ok((_, mut ann_type, state)) => {
-                            // put the spaces from after the operator in front of the call
-                            if !spaces_after_operator.is_empty() {
-                                ann_type = arena
-                                    .alloc(ann_type.value)
-                                    .with_spaces_before(spaces_after_operator, ann_type.region);
-                            }
+                let header = TypeHeader {
+                    name: Loc::at(expr.region, name),
+                    vars: type_arguments.into_bump_slice(),
+                };
 
-                            let def_region = Region::span_across(&call.region, &ann_type.region);
+                let def = TypeDef::Alias {
+                    header,
+                    ann: signature,
+                };
 
-                            let value_def =
-                                ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
+                defs.push_type_def(def, def_region, &[], &[]);
 
-                            defs.push_value_def(value_def, def_region, &[], &[]);
+                state
+            }
 
-                            state
+            AliasOrOpaque::Opaque => {
+                let (_, (signature, derived), state) =
+                    opaque_signature_with_space_before().parse(arena, state, indented_more)?;
+
+                let def_region = Region::span_across(&expr.region, &signature.region);
+
+                let header = TypeHeader {
+                    name: Loc::at(expr.region, name),
+                    vars: type_arguments.into_bump_slice(),
+                };
+
+                let def = TypeDef::Opaque {
+                    header,
+                    typ: signature,
+                    derived,
+                };
+
+                defs.push_type_def(def, def_region, &[], &[]);
+
+                state
+            }
+        }
+    } else {
+        let call = to_call(arena, arguments, expr);
+
+        match expr_to_pattern_help(arena, &call.value) {
+            Ok(good) => {
+                let parser = specialize(
+                    EExpr::Type,
+                    space0_before_e(
+                        set_min_indent(indented_more, type_annotation::located(false)),
+                        EType::TIndentStart,
+                    ),
+                );
+
+                match parser.parse(arena, state.clone(), min_indent) {
+                    Err((_, fail)) => return Err((MadeProgress, fail)),
+                    Ok((_, mut ann_type, state)) => {
+                        // put the spaces from after the operator in front of the call
+                        if !spaces_after_operator.is_empty() {
+                            ann_type = arena
+                                .alloc(ann_type.value)
+                                .with_spaces_before(spaces_after_operator, ann_type.region);
                         }
+
+                        let def_region = Region::span_across(&call.region, &ann_type.region);
+
+                        let value_def = ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
+
+                        defs.push_value_def(value_def, def_region, &[], &[]);
+
+                        state
                     }
                 }
-                Err(_) => {
-                    // this `:`/`:=` likely occurred inline; treat it as an invalid operator
-                    let op = match kind {
-                        AliasOrOpaque::Alias => ":",
-                        AliasOrOpaque::Opaque => ":=",
-                    };
-                    let fail = EExpr::BadOperator(op, loc_op.region.start());
+            }
+            Err(_) => {
+                // this `:`/`:=` likely occurred inline; treat it as an invalid operator
+                let op = match kind {
+                    AliasOrOpaque::Alias => ":",
+                    AliasOrOpaque::Opaque => ":=",
+                };
+                let fail = EExpr::BadOperator(op, loc_op.region.start());
 
-                    return Err((MadeProgress, fail));
-                }
+                return Err((MadeProgress, fail));
             }
         }
     };
@@ -1256,7 +1289,7 @@ mod ability {
         Exact(u32),
     }
 
-    /// Parses an ability demand like `hash : a -> U64 | a has Hash`, in the context of a larger
+    /// Parses an ability demand like `hash : a -> U64 where a implements Hash`, in the context of a larger
     /// ability definition.
     /// This is basically the same as parsing a free-floating annotation, but with stricter rules.
     pub fn parse_demand<'a>(
@@ -1340,7 +1373,7 @@ fn finish_parsing_ability_def_help<'a>(
     start_column: u32,
     name: Loc<&'a str>,
     args: &'a [Loc<Pattern<'a>>],
-    loc_has: Loc<Has<'a>>,
+    loc_implements: Loc<Implements<'a>>,
     arena: &'a Bump,
     state: State<'a>,
 ) -> ParseResult<'a, (TypeDef<'a>, Region), EExpr<'a>> {
@@ -1378,7 +1411,7 @@ fn finish_parsing_ability_def_help<'a>(
     let def_region = Region::span_across(&name.region, &demands.last().unwrap().typ.region);
     let type_def = TypeDef::Ability {
         header: TypeHeader { name, vars: args },
-        loc_has,
+        loc_implements,
         members: demands.into_bump_slice(),
     };
 
@@ -1611,13 +1644,13 @@ fn parse_expr_end<'a>(
                 value:
                     Expr::Var {
                         module_name: "",
-                        ident: "has",
+                        ident: crate::keyword::IMPLEMENTS,
                     },
                 ..
             },
             state,
         )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
-            // This is an ability definition, `Ability arg1 ... has ...`.
+            // This is an ability definition, `Ability arg1 ... implements ...`.
 
             let name = expr_state.expr.map_owned(|e| match e {
                 Expr::Tag(name) => name,
@@ -1638,13 +1671,13 @@ fn parse_expr_end<'a>(
                 }
             }
 
-            // Attach any spaces to the `has` keyword
+            // Attach any spaces to the `implements` keyword
             let has = if !expr_state.spaces_after.is_empty() {
                 arena
-                    .alloc(Has::Has)
+                    .alloc(Implements::Implements)
                     .with_spaces_before(expr_state.spaces_after, has.region)
             } else {
-                Loc::at(has.region, Has::Has)
+                Loc::at(has.region, Implements::Implements)
             };
 
             let args = arguments.into_bump_slice();
@@ -1793,20 +1826,47 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
     })
 }
 
+pub fn merge_spaces<'a>(
+    arena: &'a Bump,
+    a: &'a [CommentOrNewline<'a>],
+    b: &'a [CommentOrNewline<'a>],
+) -> &'a [CommentOrNewline<'a>] {
+    if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        let mut merged = Vec::with_capacity_in(a.len() + b.len(), arena);
+        merged.extend_from_slice(a);
+        merged.extend_from_slice(b);
+        merged.into_bump_slice()
+    }
+}
+
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
-    match expr {
+    let mut expr = expr.extract_spaces();
+
+    if let Expr::ParensAround(loc_expr) = &expr.item {
+        let expr_inner = loc_expr.extract_spaces();
+
+        expr.before = merge_spaces(arena, expr.before, expr_inner.before);
+        expr.after = merge_spaces(arena, expr_inner.after, expr.after);
+        expr.item = expr_inner.item;
+    }
+
+    let mut pat = match expr.item {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
-                Ok(Pattern::Identifier(ident))
+                Pattern::Identifier(ident)
             } else {
-                Ok(Pattern::QualifiedIdentifier { module_name, ident })
+                Pattern::QualifiedIdentifier { module_name, ident }
             }
         }
-        Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
-        Expr::Tag(value) => Ok(Pattern::Tag(value)),
-        Expr::OpaqueRef(value) => Ok(Pattern::OpaqueRef(value)),
+        Expr::Underscore(opt_name) => Pattern::Underscore(opt_name),
+        Expr::Tag(value) => Pattern::Tag(value),
+        Expr::OpaqueRef(value) => Pattern::OpaqueRef(value),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern_help(arena, &loc_val.value)?;
@@ -1823,19 +1883,13 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
             let pattern = Pattern::Apply(val_pattern, arg_patterns.into_bump_slice());
 
-            Ok(pattern)
+            pattern
         }
 
-        Expr::SpaceBefore(sub_expr, spaces) => Ok(Pattern::SpaceBefore(
-            arena.alloc(expr_to_pattern_help(arena, sub_expr)?),
-            spaces,
-        )),
-        Expr::SpaceAfter(sub_expr, spaces) => Ok(Pattern::SpaceAfter(
-            arena.alloc(expr_to_pattern_help(arena, sub_expr)?),
-            spaces,
-        )),
-
-        Expr::ParensAround(sub_expr) => expr_to_pattern_help(arena, sub_expr),
+        Expr::SpaceBefore(..)
+        | Expr::SpaceAfter(..)
+        | Expr::ParensAround(..)
+        | Expr::RecordBuilder(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -1844,34 +1898,31 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
                 Ok(Loc { region, value })
             })?;
 
-            Ok(Pattern::RecordDestructure(patterns))
+            Pattern::RecordDestructure(patterns)
         }
 
-        Expr::Tuple(fields) => Ok(Pattern::Tuple(fields.map_items_result(
-            arena,
-            |loc_expr| {
-                Ok(Loc {
-                    region: loc_expr.region,
-                    value: expr_to_pattern_help(arena, &loc_expr.value)?,
-                })
-            },
-        )?)),
+        Expr::Tuple(fields) => Pattern::Tuple(fields.map_items_result(arena, |loc_expr| {
+            Ok(Loc {
+                region: loc_expr.region,
+                value: expr_to_pattern_help(arena, &loc_expr.value)?,
+            })
+        })?),
 
-        &Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
-        &Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
+        Expr::Float(string) => Pattern::FloatLiteral(string),
+        Expr::Num(string) => Pattern::NumLiteral(string),
         Expr::NonBase10Int {
             string,
             base,
             is_negative,
-        } => Ok(Pattern::NonBase10Literal {
+        } => Pattern::NonBase10Literal {
             string,
-            base: *base,
-            is_negative: *is_negative,
-        }),
+            base,
+            is_negative,
+        },
         // These would not have parsed as patterns
-        Expr::RecordAccessorFunction(_)
+        Expr::IngestedFile(_, _)
+        | Expr::AccessorFunction(_)
         | Expr::RecordAccess(_, _)
-        | Expr::TupleAccessorFunction(_)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
         | Expr::Closure(_, _)
@@ -1882,16 +1933,30 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::When(_, _)
         | Expr::Expect(_, _)
         | Expr::Dbg(_, _)
+        | Expr::LowLevelDbg(_, _, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
+        | Expr::MultipleRecordBuilders { .. }
+        | Expr::UnappliedRecordBuilder { .. }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
-        | Expr::Crash => Err(()),
+        | Expr::Crash => return Err(()),
 
-        Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
-        Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(string)),
-        Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
+        Expr::Str(string) => Pattern::StrLiteral(string),
+        Expr::SingleQuote(string) => Pattern::SingleQuote(string),
+        Expr::MalformedIdent(string, problem) => Pattern::MalformedIdent(string, problem),
+    };
+
+    // Now we re-add the spaces
+
+    if !expr.before.is_empty() {
+        pat = Pattern::SpaceBefore(arena.alloc(pat), expr.before);
     }
+    if !expr.after.is_empty() {
+        pat = Pattern::SpaceAfter(arena.alloc(pat), expr.after);
+    }
+
+    Ok(pat)
 }
 
 fn assigned_expr_field_to_pattern_help<'a>(
@@ -1950,7 +2015,7 @@ pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
         let start_column = state.column();
 
         let options = ExprParseOptions {
-            accept_multi_backpassing: false,
+            accept_multi_backpassing: true,
             check_for_arrow: true,
         };
 
@@ -2426,9 +2491,15 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(ident) => Expr::Var { module_name, ident },
+                Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
+                Some(Accessor::TupleIndex(_)) => {
+                    // TODO: make this state impossible to represent in Ident::Access,
+                    // by splitting out parts[0] into a separate field with a type of `&'a str`,
+                    // rather than a `&'a [Accessor<'a>]`.
+                    internal_error!("Parsed an Ident::Access with a first part of a tuple index");
+                }
                 None => {
-                    panic!("Parsed an Ident::Access with no parts");
+                    internal_error!("Parsed an Ident::Access with no parts");
                 }
             };
 
@@ -2438,13 +2509,19 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::RecordAccess(arena.alloc(answer), field);
+                match field {
+                    Accessor::RecordField(field) => {
+                        answer = Expr::RecordAccess(arena.alloc(answer), field);
+                    }
+                    Accessor::TupleIndex(index) => {
+                        answer = Expr::TupleAccess(arena.alloc(answer), index);
+                    }
+                }
             }
 
             answer
         }
-        Ident::RecordAccessorFunction(string) => Expr::RecordAccessorFunction(string),
-        Ident::TupleAccessorFunction(string) => Expr::TupleAccessorFunction(string),
+        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
@@ -2466,30 +2543,146 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
     .trace("list_literal")
 }
 
-pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
-    use AssignedField::*;
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecordField<'a> {
+    RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+    LabelOnly(Loc<&'a str>),
+    SpaceBefore(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
+    ApplyValue(
+        Loc<&'a str>,
+        &'a [CommentOrNewline<'a>],
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<Expr<'a>>,
+    ),
+}
+
+#[derive(Debug)]
+pub struct FoundApplyValue;
+
+#[derive(Debug)]
+struct FoundOptionalValue;
+
+impl<'a> RecordField<'a> {
+    fn is_apply_value(&self) -> bool {
+        let mut current = self;
+
+        loop {
+            match current {
+                RecordField::ApplyValue(_, _, _, _) => break true,
+                RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
+                    current = *field;
+                }
+                _ => break false,
+            }
+        }
+    }
+
+    pub fn to_assigned_field(
+        self,
+        arena: &'a Bump,
+    ) -> Result<AssignedField<'a, Expr<'a>>, FoundApplyValue> {
+        use AssignedField::*;
+
+        match self {
+            RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
+                Ok(RequiredValue(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::OptionalValue(loc_label, spaces, loc_expr) => {
+                Ok(OptionalValue(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
+
+            RecordField::ApplyValue(_, _, _, _) => Err(FoundApplyValue),
+
+            RecordField::SpaceBefore(field, spaces) => {
+                let assigned_field = field.to_assigned_field(arena)?;
+
+                Ok(SpaceBefore(arena.alloc(assigned_field), spaces))
+            }
+
+            RecordField::SpaceAfter(field, spaces) => {
+                let assigned_field = field.to_assigned_field(arena)?;
+
+                Ok(SpaceAfter(arena.alloc(assigned_field), spaces))
+            }
+        }
+    }
+
+    fn to_builder_field(
+        self,
+        arena: &'a Bump,
+    ) -> Result<RecordBuilderField<'a>, FoundOptionalValue> {
+        use RecordBuilderField::*;
+
+        match self {
+            RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
+                Ok(Value(loc_label, spaces, loc_expr))
+            }
+
+            RecordField::OptionalValue(_, _, _) => Err(FoundOptionalValue),
+
+            RecordField::LabelOnly(loc_label) => Ok(LabelOnly(loc_label)),
+
+            RecordField::ApplyValue(loc_label, colon_spaces, arrow_spaces, loc_expr) => {
+                Ok(ApplyValue(loc_label, colon_spaces, arrow_spaces, loc_expr))
+            }
+
+            RecordField::SpaceBefore(field, spaces) => {
+                let builder_field = field.to_builder_field(arena)?;
+
+                Ok(SpaceBefore(arena.alloc(builder_field), spaces))
+            }
+
+            RecordField::SpaceAfter(field, spaces) => {
+                let builder_field = field.to_builder_field(arena)?;
+
+                Ok(SpaceAfter(arena.alloc(builder_field), spaces))
+            }
+        }
+    }
+}
+
+impl<'a> Spaceable<'a> for RecordField<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordField::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordField::SpaceAfter(self, spaces)
+    }
+}
+
+pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
+    use RecordField::*;
 
     map_with_arena!(
         and!(
             specialize(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
             and!(
                 spaces(),
-                optional(and!(
-                    either!(
-                        word1(b':', ERecord::Colon),
-                        word1(b'?', ERecord::QuestionMark)
-                    ),
-                    spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                optional(either!(
+                    and!(word1(b':', ERecord::Colon), record_field_expr()),
+                    and!(
+                        word1(b'?', ERecord::QuestionMark),
+                        spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                    )
                 ))
             )
         ),
         |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
             match opt_loc_val {
-                Some((Either::First(_), loc_val)) => {
+                Some(Either::First((_, RecordFieldExpr::Value(loc_val)))) => {
                     RequiredValue(loc_label, spaces, arena.alloc(loc_val))
                 }
 
-                Some((Either::Second(_), loc_val)) => {
+                Some(Either::First((_, RecordFieldExpr::Apply(arrow_spaces, loc_val)))) => {
+                    ApplyValue(loc_label, spaces, arrow_spaces, arena.alloc(loc_val))
+                }
+
+                Some(Either::Second((_, loc_val))) => {
                     OptionalValue(loc_label, spaces, arena.alloc(loc_val))
                 }
 
@@ -2507,6 +2700,40 @@ pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, 
     )
 }
 
+enum RecordFieldExpr<'a> {
+    Apply(&'a [CommentOrNewline<'a>], Loc<Expr<'a>>),
+    Value(Loc<Expr<'a>>),
+}
+
+fn record_field_expr<'a>() -> impl Parser<'a, RecordFieldExpr<'a>, ERecord<'a>> {
+    map_with_arena!(
+        and!(
+            spaces(),
+            either!(
+                and!(
+                    word2(b'<', b'-', ERecord::Arrow),
+                    spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                ),
+                specialize_ref(ERecord::Expr, loc_expr(false))
+            )
+        ),
+        |arena: &'a bumpalo::Bump, (spaces, either)| {
+            match either {
+                Either::First((_, loc_expr)) => RecordFieldExpr::Apply(spaces, loc_expr),
+                Either::Second(loc_expr) => RecordFieldExpr::Value({
+                    if spaces.is_empty() {
+                        loc_expr
+                    } else {
+                        arena
+                            .alloc(loc_expr.value)
+                            .with_spaces_before(spaces, loc_expr.region)
+                    }
+                }),
+            }
+        }
+    )
+}
+
 fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
     specialize(
         |_, pos| ERecord::Updateable(pos),
@@ -2516,7 +2743,7 @@ fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> 
 
 struct RecordHelp<'a> {
     update: Option<Loc<Expr<'a>>>,
-    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    fields: Collection<'a, Loc<RecordField<'a>>>,
 }
 
 fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
@@ -2536,9 +2763,9 @@ fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
                 word1(b'&', ERecord::Ampersand)
             ))),
             fields: collection_inner!(
-                loc!(record_value_field()),
+                loc!(record_field()),
                 word1(b',', ERecord::End),
-                AssignedField::SpaceBefore
+                RecordField::SpaceBefore
             ),
         })),
         word1(b'}', ERecord::End)
@@ -2553,20 +2780,74 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             record_field_access_chain()
         ),
         move |arena, state, _, (record, accessors)| {
-            // This is a record literal, not a destructure.
-            let value = match record.update {
-                Some(update) => Expr::RecordUpdate {
-                    update: &*arena.alloc(update),
-                    fields: record.fields,
-                },
-                None => Expr::Record(record.fields),
+            let expr_result = match record.update {
+                Some(update) => record_update_help(arena, update, record.fields),
+                None => {
+                    let is_record_builder = record
+                        .fields
+                        .iter()
+                        .any(|field| field.value.is_apply_value());
+
+                    if is_record_builder {
+                        record_builder_help(arena, record.fields)
+                    } else {
+                        let fields = record.fields.map_items(arena, |loc_field| {
+                            loc_field.map(|field| field.to_assigned_field(arena).unwrap())
+                        });
+
+                        Ok(Expr::Record(fields))
+                    }
+                }
             };
 
-            let value = apply_expr_access_chain(arena, value, accessors);
+            match expr_result {
+                Ok(expr) => {
+                    let value = apply_expr_access_chain(arena, expr, accessors);
 
-            Ok((MadeProgress, value, state))
+                    Ok((MadeProgress, value, state))
+                }
+                Err(err) => Err((MadeProgress, err)),
+            }
         },
     )
+}
+
+fn record_update_help<'a>(
+    arena: &'a Bump,
+    update: Loc<Expr<'a>>,
+    fields: Collection<'a, Loc<RecordField<'a>>>,
+) -> Result<Expr<'a>, EExpr<'a>> {
+    let result = fields.map_items_result(arena, |loc_field| {
+        match loc_field.value.to_assigned_field(arena) {
+            Ok(builder_field) => Ok(Loc {
+                region: loc_field.region,
+                value: builder_field,
+            }),
+            Err(FoundApplyValue) => Err(EExpr::RecordUpdateBuilder(loc_field.region)),
+        }
+    });
+
+    result.map(|fields| Expr::RecordUpdate {
+        update: &*arena.alloc(update),
+        fields,
+    })
+}
+
+fn record_builder_help<'a>(
+    arena: &'a Bump,
+    fields: Collection<'a, Loc<RecordField<'a>>>,
+) -> Result<Expr<'a>, EExpr<'a>> {
+    let result = fields.map_items_result(arena, |loc_field| {
+        match loc_field.value.to_builder_field(arena) {
+            Ok(builder_field) => Ok(Loc {
+                region: loc_field.region,
+                value: builder_field,
+            }),
+            Err(FoundOptionalValue) => Err(EExpr::OptionalValueInRecordBuilder(loc_field.region)),
+        }
+    });
+
+    result.map(Expr::RecordBuilder)
 }
 
 fn apply_expr_access_chain<'a>(

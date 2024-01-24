@@ -7,6 +7,7 @@ use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
+use roc_solve::FunctionKind;
 use roc_std::RocStr;
 use roc_wasm_interp::{wasi, ImportDispatcher, Instance, WasiDispatcher};
 use roc_wasm_module::{Export, ExportType, Value, WasmModule};
@@ -92,6 +93,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         palette: DEFAULT_PALETTE_HTML,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
+        function_kind: FunctionKind::LambdaSet,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
@@ -114,10 +116,10 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         ..
     } = loaded;
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
 
     let exposed_to_host = exposed_to_host
-        .values
+        .top_level_values
         .keys()
         .copied()
         .collect::<MutSet<_>>();
@@ -200,12 +202,12 @@ impl<'a> ImportDispatcher for TestDispatcher<'a> {
             self.wasi.dispatch(function_name, arguments, memory)
         } else if module_name == "env" && function_name == "send_panic_msg_to_rust" {
             let msg_ptr = arguments[0].expect_i32().unwrap();
-            let tag = arguments[1].expect_i32().unwrap();
+            let panic_tag = arguments[1].expect_i32().unwrap();
             let roc_msg = RocStr::decode(memory, msg_ptr as _);
-            let msg = match tag {
-                0 => format!(r#"Roc failed with message: "{}""#, roc_msg),
-                1 => format!(r#"User crash with message: "{}""#, roc_msg),
-                tag => format!(r#"Got an invald panic tag: "{}""#, tag),
+            let msg = match panic_tag {
+                0 => format!(r#"Roc failed with message: "{roc_msg}""#),
+                1 => format!(r#"User crash with message: "{roc_msg}""#),
+                _ => format!(r#"Got an invald panic tag: "{panic_tag}""#),
             };
             panic!("{}", msg)
         } else {

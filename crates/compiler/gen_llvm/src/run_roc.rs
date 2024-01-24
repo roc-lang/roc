@@ -155,34 +155,21 @@ macro_rules! run_jit_function_dynamic_type {
                 .ok_or(format!("Unable to JIT compile `{}`", $main_fn_name))
                 .expect("errored");
 
-            let size = std::mem::size_of::<RocCallResult<()>>() + $bytes;
-            let layout = std::alloc::Layout::array::<u8>(size).unwrap();
-            let result = std::alloc::alloc(layout);
-            main(result);
+            const CALL_RESULT_WIDTH: usize = std::mem::size_of::<RocCallResult<()>>();
+            let size = CALL_RESULT_WIDTH + $bytes;
+            let layout = std::alloc::Layout::from_size_align(size, 16).unwrap();
+            let output = std::alloc::alloc(layout);
+            main(output);
 
-            let flag = *result;
+            let call_result: RocCallResult<()> = unsafe { std::ptr::read_unaligned(output.cast()) };
+            let result = Result::from(call_result);
 
-            if flag == 0 {
-                $transform(result.add(std::mem::size_of::<RocCallResult<()>>()) as usize)
-            } else {
-                use std::ffi::CString;
-                use std::os::raw::c_char;
-
-                // first field is a char pointer (to the error message)
-                // read value, and transmute to a pointer
-                let ptr_as_int = *(result as *const u64).offset(1);
-                let ptr = ptr_as_int as *mut c_char;
-
-                // make CString (null-terminated)
-                let raw = CString::from_raw(ptr);
-
-                let result = format!("{:?}", raw);
-
-                // make sure rust doesn't try to free the Roc constant string
-                std::mem::forget(raw);
-
-                eprintln!("{}", result);
-                panic!("Roc hit an error");
+            match result {
+                Ok(()) => $transform(output.add(CALL_RESULT_WIDTH) as usize),
+                Err((msg, _crash_tag)) => {
+                    eprintln!("{}", msg);
+                    panic!("Roc hit an error");
+                }
             }
         }
     }};

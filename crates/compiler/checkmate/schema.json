@@ -1,0 +1,907 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AllEvents",
+  "type": "array",
+  "items": {
+    "$ref": "#/definitions/Event"
+  },
+  "definitions": {
+    "AliasKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Structural"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Opaque"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "AliasTypeVariables": {
+      "type": "object",
+      "required": [
+        "infer_ext_in_output_position_variables",
+        "lambda_set_variables",
+        "type_variables"
+      ],
+      "properties": {
+        "infer_ext_in_output_position_variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        },
+        "lambda_set_variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        },
+        "type_variables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        }
+      }
+    },
+    "ClosureType": {
+      "type": "object",
+      "required": [
+        "environment",
+        "function"
+      ],
+      "properties": {
+        "environment": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Variable"
+          }
+        },
+        "function": {
+          "$ref": "#/definitions/Symbol"
+        }
+      }
+    },
+    "Content": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Flex"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "name",
+            "type"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Rigid"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "abilities",
+            "type"
+          ],
+          "properties": {
+            "abilities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Symbol"
+              }
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "FlexAble"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "abilities",
+            "name",
+            "type"
+          ],
+          "properties": {
+            "abilities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Symbol"
+              }
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "RigidAble"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "structure",
+            "type"
+          ],
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "structure": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Recursive"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "ambient_function",
+            "solved",
+            "type",
+            "unspecialized"
+          ],
+          "properties": {
+            "ambient_function": {
+              "$ref": "#/definitions/Variable"
+            },
+            "recursion_var": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Variable"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "solved": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ClosureType"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "LambdaSet"
+              ]
+            },
+            "unspecialized": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/UnspecializedClosureType"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ErasedLambda"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "name",
+            "real_variable",
+            "type",
+            "variables"
+          ],
+          "properties": {
+            "kind": {
+              "$ref": "#/definitions/AliasKind"
+            },
+            "name": {
+              "$ref": "#/definitions/Symbol"
+            },
+            "real_variable": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Alias"
+              ]
+            },
+            "variables": {
+              "$ref": "#/definitions/AliasTypeVariables"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "symbol",
+            "type",
+            "variables"
+          ],
+          "properties": {
+            "symbol": {
+              "$ref": "#/definitions/Symbol"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Apply"
+              ]
+            },
+            "variables": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Variable"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "arguments",
+            "lambda_type",
+            "ret",
+            "type"
+          ],
+          "properties": {
+            "arguments": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Variable"
+              }
+            },
+            "lambda_type": {
+              "$ref": "#/definitions/Variable"
+            },
+            "ret": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Function"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "extension",
+            "fields",
+            "type"
+          ],
+          "properties": {
+            "extension": {
+              "$ref": "#/definitions/Variable"
+            },
+            "fields": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/RecordField"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Record"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "elements",
+            "extension",
+            "type"
+          ],
+          "properties": {
+            "elements": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/Variable"
+              }
+            },
+            "extension": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Tuple"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "extension",
+            "tags",
+            "type"
+          ],
+          "properties": {
+            "extension": {
+              "$ref": "#/definitions/TagUnionExtension"
+            },
+            "tags": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "TagUnion"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "extension",
+            "functions",
+            "tags",
+            "type"
+          ],
+          "properties": {
+            "extension": {
+              "$ref": "#/definitions/TagUnionExtension"
+            },
+            "functions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Symbol"
+              }
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "FunctionOrTagUnion"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "extension",
+            "recursion_var",
+            "tags",
+            "type"
+          ],
+          "properties": {
+            "extension": {
+              "$ref": "#/definitions/TagUnionExtension"
+            },
+            "recursion_var": {
+              "$ref": "#/definitions/Variable"
+            },
+            "tags": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/Variable"
+                }
+              }
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "RecursiveTagUnion"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "EmptyRecord"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "EmptyTuple"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "EmptyTagUnion"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "range",
+            "type"
+          ],
+          "properties": {
+            "range": {
+              "$ref": "#/definitions/NumericRange"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "RangedNumber"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "left",
+            "mode",
+            "right",
+            "subevents",
+            "type"
+          ],
+          "properties": {
+            "left": {
+              "$ref": "#/definitions/Variable"
+            },
+            "mode": {
+              "$ref": "#/definitions/UnificationMode"
+            },
+            "right": {
+              "$ref": "#/definitions/Variable"
+            },
+            "subevents": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Event"
+              }
+            },
+            "success": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Unification"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "from",
+            "to",
+            "type"
+          ],
+          "properties": {
+            "from": {
+              "$ref": "#/definitions/Variable"
+            },
+            "to": {
+              "$ref": "#/definitions/Variable"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "VariableUnified"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "variable"
+          ],
+          "properties": {
+            "content": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Content"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "rank": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Rank"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "VariableSetDescriptor"
+              ]
+            },
+            "variable": {
+              "$ref": "#/definitions/Variable"
+            }
+          }
+        }
+      ]
+    },
+    "NumericRange": {
+      "type": "object",
+      "required": [
+        "kind",
+        "min_width",
+        "signed"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/NumericRangeKind"
+        },
+        "min_width": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "signed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "NumericRangeKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Int"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "AnyNum"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Rank": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    },
+    "RecordField": {
+      "type": "object",
+      "required": [
+        "field_type",
+        "kind"
+      ],
+      "properties": {
+        "field_type": {
+          "$ref": "#/definitions/Variable"
+        },
+        "kind": {
+          "$ref": "#/definitions/RecordFieldKind"
+        }
+      }
+    },
+    "RecordFieldKind": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Demanded"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "rigid",
+            "type"
+          ],
+          "properties": {
+            "rigid": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Required"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "rigid",
+            "type"
+          ],
+          "properties": {
+            "rigid": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "Optional"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Symbol": {
+      "type": "string"
+    },
+    "TagUnionExtension": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "variable"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Openness"
+              ]
+            },
+            "variable": {
+              "$ref": "#/definitions/Variable"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "variable"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Any"
+              ]
+            },
+            "variable": {
+              "$ref": "#/definitions/Variable"
+            }
+          }
+        }
+      ]
+    },
+    "UnificationMode": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Eq"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "Present"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "LambdaSetSpecialization"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "UnspecializedClosureType": {
+      "type": "object",
+      "required": [
+        "ability_member",
+        "lambda_set_region",
+        "specialization"
+      ],
+      "properties": {
+        "ability_member": {
+          "$ref": "#/definitions/Symbol"
+        },
+        "lambda_set_region": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "specialization": {
+          "$ref": "#/definitions/Variable"
+        }
+      }
+    },
+    "Variable": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0.0
+    }
+  }
+}

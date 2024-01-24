@@ -13,26 +13,26 @@ use winit::event::VirtualKeyCode;
 extern "C" {
     // program
 
-    #[link_name = "roc__programForHost_1_exposed_generic"]
-    fn roc_program();
+    // #[link_name = "roc__programForHost_1_exposed_generic"]
+    // fn roc_program();
 
-    #[link_name = "roc__programForHost_size"]
-    fn roc_program_size() -> i64;
+    // #[link_name = "roc__programForHost_1_exposed_size"]
+    // fn roc_program_size() -> i64;
 
     // init
 
-    #[link_name = "roc__programForHost_1__Init_caller"]
+    #[link_name = "roc__programForHost_0_caller"]
     fn call_init(size: *const Bounds, closure_data: *const u8, output: *mut Model);
 
-    #[link_name = "roc__programForHost_1__Init_size"]
+    #[link_name = "roc__programForHost_0_size"]
     fn init_size() -> i64;
 
-    #[link_name = "roc__programForHost_1__Init_result_size"]
+    #[link_name = "roc__programForHost_0_result_size"]
     fn init_result_size() -> i64;
 
     // update
 
-    #[link_name = "roc__programForHost_1__Update_caller"]
+    #[link_name = "roc__programForHost_1_caller"]
     fn call_update(
         model: *const Model,
         event: *const RocEvent,
@@ -40,18 +40,18 @@ extern "C" {
         output: *mut Model,
     );
 
-    #[link_name = "roc__programForHost_1__Update_size"]
+    #[link_name = "roc__programForHost_1_size"]
     fn update_size() -> i64;
 
-    #[link_name = "roc__programForHost_1__Update_result_size"]
+    #[link_name = "roc__programForHost_1_result_size"]
     fn update_result_size() -> i64;
 
     // render
 
-    #[link_name = "roc__programForHost_1__Render_caller"]
+    #[link_name = "roc__programForHost_2_caller"]
     fn call_render(model: *const Model, closure_data: *const u8, output: *mut RocList<RocElem>);
 
-    #[link_name = "roc__programForHost_1__Render_size"]
+    #[link_name = "roc__programForHost_2_size"]
     fn roc_render_size() -> i64;
 }
 
@@ -184,21 +184,22 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(msg: *mut RocStr, tag_id: u32) {
     match tag_id {
         0 => {
-            let slice = CStr::from_ptr(c_ptr as *const c_char);
-            let string = slice.to_str().unwrap();
-            eprintln!("Roc hit a panic: {}", string);
-            std::process::exit(1);
+            eprintln!("Roc standard library hit a panic: {}", &*msg);
         }
-        _ => todo!(),
+        1 => {
+            eprintln!("Application hit a panic: {}", &*msg);
+        }
+        _ => unreachable!(),
     }
+    std::process::exit(1);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void {
-    libc::memcpy(dst, src, n)
+pub unsafe extern "C" fn roc_dbg(loc: *mut RocStr, msg: *mut RocStr, src: *mut RocStr) {
+    eprintln!("[{}] {} = {}", &*loc, &*src, &*msg);
 }
 
 #[no_mangle]

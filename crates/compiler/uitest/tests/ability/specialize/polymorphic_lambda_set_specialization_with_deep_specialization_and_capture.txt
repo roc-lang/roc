@@ -1,0 +1,16 @@
+app "test" provides [main] to "./platform"
+
+F implements f : a, b -> ({} -> ({} -> {})) where a implements F, b implements G
+G implements g : b -> ({} -> {}) where b implements G
+
+Fo := {} implements [F {f}]
+f = \@Fo {}, b -> \{} -> g b
+#^{-1} Fo#f(7): Fo, b -[[f(7)]]-> ({} -[[13 b]]-> ({} -[[] + b:g(4):2]-> {})) where b implements G
+
+Go := {} implements [G {g}]
+g = \@Go {} -> \{} -> {}
+#^{-1} Go#g(8): Go -[[g(8)]]-> ({} -[[14]]-> {})
+
+main =
+    (f (@Fo {}) (@Go {})) {}
+#    ^ Fo#f(7): Fo, Go -[[f(7)]]-> ({} -[[13 Go]]-> ({} -[[14]]-> {}))

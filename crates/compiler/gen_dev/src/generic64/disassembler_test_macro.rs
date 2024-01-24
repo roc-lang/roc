@@ -77,4 +77,24 @@ macro_rules! disassembler_test {
             }
         }
     }};
+    ($assemble_fn: expr, $format_fn: expr, $iter:expr, $iter2:expr, $iter3:expr, $iter4:expr) => {{
+        use $crate::generic64::disassembler_test_macro::merge_instructions_without_line_numbers;
+        let arena = bumpalo::Bump::new();
+        let (mut buf, cs) = setup_capstone_and_arena(&arena);
+        for i in $iter.iter() {
+            for i2 in $iter2.iter() {
+                for i3 in $iter3.iter() {
+                    for i4 in $iter4.iter() {
+                        buf.clear();
+                        $assemble_fn(&mut buf, *i, *i2, *i3, *i4);
+                        let instructions = cs.disasm_all(&buf, 0).unwrap();
+                        assert_eq!(
+                            $format_fn(*i, *i2, *i3, *i4),
+                            merge_instructions_without_line_numbers(instructions)
+                        );
+                    }
+                }
+            }
+        }
+    }};
 }

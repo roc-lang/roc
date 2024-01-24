@@ -14,10 +14,14 @@ polyDbg = \x ->
     x
 
 main =
+    str = "this will for sure be a large string so when we split it it will use seamless slices which affect printing"
+    words = Str.split str " "
+    expect words == []
+
     x = 42
-    expect x != x
     dbg x
     dbg "Fjoer en ferdjer frieten oan dyn geve lea"
+    dbg "this is line 24"
 
     r = {x : polyDbg "abc", y: polyDbg 10u8, z : polyDbg (A (B C))}
 

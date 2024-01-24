@@ -1,0 +1,41 @@
+on:
+  workflow_call:
+
+name: windows - release build
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows-release-build:
+    name: windows-release-build
+    runs-on: windows-2022
+    env:
+      LLVM_SYS_160_PREFIX: C:\LLVM-16.0.6-win64
+
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v3
+
+      - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
+
+      - name: download and install zig
+        run: |
+          curl.exe -f --output "C:\zig-windows-x86_64-0.11.0.zip" --url https://ziglang.org/download/0.11.0/zig-windows-x86_64-0.11.0.zip
+          cd C:\
+          7z x zig-windows-x86_64-0.11.0.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.11.0\"
+
+      - name: zig version
+        run: zig version
+
+      - name: install rust nightly 1.71.0
+        run: rustup install nightly-2023-05-28
+
+      - name: set up llvm 16
+        run: |
+          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v16.0.6/LLVM-16.0.6-win64.7z
+          7z x LLVM-16.0.6-win64.7z -oC:\LLVM-16.0.6-win64
+
+      - name: cargo build release.
+        run: cargo build --locked --release

@@ -249,7 +249,7 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
-    keep_test_binary: false && cfg!(debug_assertions), // see also ROC_WRITE_FINAL_WASM
+    keep_test_binary: false && cfg!(debug_assertions),
 };
 
 #[cfg(test)]
@@ -290,8 +290,8 @@ mod dummy_platform_functions {
     }
 
     #[no_mangle]
-    pub fn roc_memcpy(_dst: *mut c_void, _src: *mut c_void, _n: usize) -> *mut c_void {
-        unimplemented!("It is not valid to call roc memcpy from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    pub unsafe extern "C" fn roc_dbg(_loc: *mut c_void, _msg: *mut c_void, _src: *mut c_void) {
+        unimplemented!("It is not valid to call roc dbg from within the compiler. Please use the \"platform\" feature if this is a platform.")
     }
 
     #[no_mangle]

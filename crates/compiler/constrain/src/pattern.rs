@@ -3,16 +3,17 @@ use crate::expr::{constrain_expr, Env};
 use roc_can::constraint::{Constraint, Constraints, PExpectedTypeIndex, TypeOrVar};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
-use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct};
+use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct, TupleDestruct};
 use roc_collections::all::{HumanIndex, SendMap};
+use roc_collections::soa::Index;
 use roc_collections::VecMap;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{
-    AliasKind, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField, Type,
-    TypeExtension, TypeTag, Types,
+    AliasKind, AliasShared, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField,
+    Type, TypeExtension, TypeTag, Types,
 };
 
 #[derive(Default, Debug)]
@@ -31,10 +32,10 @@ pub struct PatternState {
 /// Would add `x => <42>` to the headers (i.e., symbol points to a type variable). If the
 /// definition has an annotation, we instead now add `x => Int`.
 pub fn headers_from_annotation(
-    types: &mut Types,
+    types: &Types,
     constraints: &mut Constraints,
     pattern: &Pattern,
-    annotation: &Loc<&Type>,
+    annotation: &Loc<Index<TypeTag>>,
 ) -> Option<VecMap<Symbol, Loc<TypeOrVar>>> {
     let mut headers = VecMap::default();
     // Check that the annotation structurally agrees with the pattern, preventing e.g. `{ x, y } : Int`
@@ -51,12 +52,13 @@ pub fn headers_from_annotation(
 }
 
 fn headers_from_annotation_help(
-    types: &mut Types,
+    types: &Types,
     constraints: &mut Constraints,
     pattern: &Pattern,
-    annotation: &Loc<&Type>,
+    annotation: &Loc<Index<TypeTag>>,
     headers: &mut VecMap<Symbol, Loc<TypeOrVar>>,
 ) -> bool {
+    let typ = annotation.value;
     match pattern {
         Identifier(symbol)
         | Shadowed(_, _, symbol)
@@ -64,20 +66,14 @@ fn headers_from_annotation_help(
             ident: symbol,
             specializes: _,
         } => {
-            let annotation_index = {
-                let typ = types.from_old_type(annotation.value);
-                constraints.push_type(types, typ)
-            };
+            let annotation_index = constraints.push_type(types, typ);
             let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
             true
         }
 
         As(subpattern, symbol) => {
-            let annotation_index = {
-                let typ = types.from_old_type(annotation.value);
-                constraints.push_type(types, typ)
-            };
+            let annotation_index = constraints.push_type(types, typ);
             let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
 
@@ -94,41 +90,54 @@ fn headers_from_annotation_help(
         | SingleQuote(..)
         | StrLiteral(_) => true,
 
-        RecordDestructure { destructs, .. } => match annotation.value.shallow_dealias() {
-            Type::Record(fields, _) => {
-                for loc_destruct in destructs {
-                    let destruct = &loc_destruct.value;
+        RecordDestructure { destructs, .. } => {
+            let dealiased = types.shallow_dealias(annotation.value);
+            match types[dealiased] {
+                TypeTag::Record(fields) => {
+                    let (field_names, _, field_types) = types.record_fields_slices(fields);
+                    let field_names = &types[field_names];
 
-                    // NOTE: We ignore both Guard and optionality when
-                    // determining the type of the assigned def (which is what
-                    // gets added to the header here).
-                    //
-                    // For example, no matter whether it's `{ x } = rec` or
-                    // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
-                    // the type of `x` within the binding itself is the same.
-                    if let Some(field_type) = fields.get(&destruct.label) {
-                        let field_type_index = {
-                            let typ = types.from_old_type(&field_type.as_inner().clone());
-                            constraints.push_type(types, typ)
-                        };
-                        headers.insert(
-                            destruct.symbol,
-                            Loc::at(annotation.region, field_type_index),
-                        );
-                    } else {
-                        return false;
+                    for loc_destruct in destructs {
+                        let destruct = &loc_destruct.value;
+
+                        // NOTE: We ignore both Guard and optionality when
+                        // determining the type of the assigned def (which is what
+                        // gets added to the header here).
+                        //
+                        // For example, no matter whether it's `{ x } = rec` or
+                        // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
+                        // the type of `x` within the binding itself is the same.
+                        if let Some(i) = field_names
+                            .iter()
+                            .position(|field| field == &destruct.label)
+                        {
+                            let field_type_index = {
+                                let typ = field_types.at(i);
+                                constraints.push_type(types, typ)
+                            };
+                            headers.insert(
+                                destruct.symbol,
+                                Loc::at(annotation.region, field_type_index),
+                            );
+                        } else {
+                            return false;
+                        }
                     }
+                    true
                 }
-                true
+                TypeTag::EmptyRecord => destructs.is_empty(),
+                _ => false,
             }
-            Type::EmptyRec => destructs.is_empty(),
-            _ => false,
-        },
+        }
+
+        TupleDestructure { destructs: _, .. } => {
+            todo!();
+        }
 
         List { patterns, .. } => {
             if let Some((_, Some(rest))) = patterns.opt_rest {
                 let annotation_index = {
-                    let typ = types.from_old_type(annotation.value);
+                    let typ = annotation.value;
                     constraints.push_type(types, typ)
                 };
                 let typ = Loc::at(annotation.region, annotation_index);
@@ -148,31 +157,38 @@ fn headers_from_annotation_help(
             tag_name,
             arguments,
             ..
-        } => match annotation.value.shallow_dealias() {
-            Type::TagUnion(tags, _) => {
-                if let Some((_, arg_types)) = tags.iter().find(|(name, _)| name == tag_name) {
-                    if !arguments.len() == arg_types.len() {
-                        return false;
-                    }
+        } => {
+            let dealiased = types.shallow_dealias(annotation.value);
+            match types[dealiased] {
+                TypeTag::TagUnion(tags, _) => {
+                    let (tags, payloads) = types.union_tag_slices(tags);
+                    let tags = &types[tags];
 
-                    arguments
-                        .iter()
-                        .zip(arg_types.iter())
-                        .all(|(arg_pattern, arg_type)| {
-                            headers_from_annotation_help(
-                                types,
-                                constraints,
-                                &arg_pattern.1.value,
-                                &Loc::at(annotation.region, arg_type),
-                                headers,
-                            )
-                        })
-                } else {
-                    false
+                    if let Some(i) = tags.iter().position(|name| name == tag_name) {
+                        let arg_types_slice = types[payloads.at(i)];
+
+                        if !arguments.len() == arg_types_slice.len() {
+                            return false;
+                        }
+
+                        arguments.iter().zip(arg_types_slice.into_iter()).all(
+                            |(arg_pattern, arg_type)| {
+                                headers_from_annotation_help(
+                                    types,
+                                    constraints,
+                                    &arg_pattern.1.value,
+                                    &Loc::at(annotation.region, arg_type),
+                                    headers,
+                                )
+                            },
+                        )
+                    } else {
+                        false
+                    }
                 }
+                _ => false,
             }
-            _ => false,
-        },
+        }
 
         UnwrappedOpaque {
             whole_var: _,
@@ -181,36 +197,41 @@ fn headers_from_annotation_help(
             specialized_def_type: _,
             type_arguments: pat_type_arguments,
             lambda_set_variables: pat_lambda_set_variables,
-        } => match &annotation.value {
-            Type::Alias {
-                symbol,
-                kind: AliasKind::Opaque,
-                actual,
-                type_arguments,
-                lambda_set_variables,
-                infer_ext_in_output_types: _,
-            } if symbol == opaque
-                && type_arguments.len() == pat_type_arguments.len()
-                && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
-            {
-                let annotation_index = {
-                    let typ = types.from_old_type(annotation.value);
-                    constraints.push_type(types, typ)
-                };
-                let typ = Loc::at(annotation.region, annotation_index);
-                headers.insert(*opaque, typ);
+        } => {
+            let typ = annotation.value;
 
-                let (_, argument_pat) = &**argument;
-                headers_from_annotation_help(
-                    types,
-                    constraints,
-                    &argument_pat.value,
-                    &Loc::at(annotation.region, actual),
-                    headers,
-                )
+            match types[typ] {
+                TypeTag::OpaqueAlias { shared, actual } => {
+                    let AliasShared {
+                        symbol,
+                        lambda_set_variables,
+                        ..
+                    } = types[shared];
+                    let type_arguments = types.get_type_arguments(typ);
+
+                    if symbol == *opaque
+                        && type_arguments.len() == pat_type_arguments.len()
+                        && lambda_set_variables.len() == pat_lambda_set_variables.len()
+                    {
+                        let annotation_index = constraints.push_type(types, typ);
+                        let typ = Loc::at(annotation.region, annotation_index);
+                        headers.insert(*opaque, typ);
+
+                        let (_, argument_pat) = &**argument;
+                        headers_from_annotation_help(
+                            types,
+                            constraints,
+                            &argument_pat.value,
+                            &Loc::at(annotation.region, actual),
+                            headers,
+                        )
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
             }
-            _ => false,
-        },
+        }
     }
 }
 
@@ -465,6 +486,96 @@ pub fn constrain_pattern(
             ));
         }
 
+        TupleDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => {
+            state.vars.push(*whole_var);
+            state.vars.push(*ext_var);
+            let ext_type = Type::Variable(*ext_var);
+
+            let mut elem_types: VecMap<usize, Type> = VecMap::default();
+
+            for Loc {
+                value:
+                    TupleDestruct {
+                        destruct_index: index,
+                        var,
+                        typ,
+                    },
+                ..
+            } in destructs.iter()
+            {
+                let pat_type = Type::Variable(*var);
+                let pat_type_index = constraints.push_variable(*var);
+                let expected =
+                    constraints.push_pat_expected_type(PExpected::NoExpectation(pat_type_index));
+
+                let (guard_var, loc_pattern) = typ;
+                let elem_type = {
+                    let guard_type = constraints.push_variable(*guard_var);
+                    let expected_pat = constraints.push_pat_expected_type(PExpected::ForReason(
+                        PReason::PatternGuard,
+                        pat_type_index,
+                        loc_pattern.region,
+                    ));
+
+                    state.constraints.push(constraints.pattern_presence(
+                        guard_type,
+                        expected_pat,
+                        PatternCategory::PatternGuard,
+                        region,
+                    ));
+                    state.vars.push(*guard_var);
+
+                    constrain_pattern(
+                        types,
+                        constraints,
+                        env,
+                        &loc_pattern.value,
+                        loc_pattern.region,
+                        expected,
+                        state,
+                    );
+
+                    pat_type
+                };
+
+                elem_types.insert(*index, elem_type);
+
+                state.vars.push(*var);
+            }
+
+            let tuple_type = {
+                let typ = types.from_old_type(&Type::Tuple(
+                    elem_types,
+                    TypeExtension::from_non_annotation_type(ext_type),
+                ));
+                constraints.push_type(types, typ)
+            };
+
+            let whole_var_index = constraints.push_variable(*whole_var);
+            let expected_record =
+                constraints.push_expected_type(Expected::NoExpectation(tuple_type));
+            let whole_con = constraints.equal_types(
+                whole_var_index,
+                expected_record,
+                Category::Storage(std::file!(), std::line!()),
+                region,
+            );
+
+            let record_con = constraints.pattern_presence(
+                whole_var_index,
+                expected,
+                PatternCategory::Record,
+                region,
+            );
+
+            state.constraints.push(whole_con);
+            state.constraints.push(record_con);
+        }
+
         RecordDestructure {
             whole_var,
             ext_var,
@@ -565,6 +676,17 @@ pub fn constrain_pattern(
                         RecordField::Optional(pat_type)
                     }
                     DestructType::Required => {
+                        // Named destructures like
+                        //   {foo} -> ...
+                        // are equivalent to wildcards on the type of `foo`, so if `foo` is a tag
+                        // union, we must add a constraint to ensure that this destructure opens it
+                        // up.
+                        if could_be_a_tag_union(types, pat_type_index) {
+                            state
+                                .delayed_is_open_constraints
+                                .push(constraints.is_open_type(pat_type_index));
+                        }
+
                         // No extra constraints necessary.
                         RecordField::Demanded(pat_type)
                     }
@@ -578,7 +700,7 @@ pub fn constrain_pattern(
             let record_type = {
                 let typ = types.from_old_type(&Type::Record(
                     field_types,
-                    TypeExtension::from_type(ext_type),
+                    TypeExtension::from_non_annotation_type(ext_type),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -785,7 +907,7 @@ pub fn constrain_pattern(
             // all constructors are covered in this branch!
             let arg_pattern_type = constraints.push_variable(*arg_pattern_var);
             let specialized_type_index = {
-                let typ = types.from_old_type(&(**specialized_def_type));
+                let typ = types.from_old_type(specialized_def_type);
                 constraints.push_type(types, typ)
             };
             let specialized_type_expected = constraints

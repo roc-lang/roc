@@ -85,8 +85,18 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
-                LowLevel::RefCountInc => unimplemented!(),
-                LowLevel::RefCountDec => unimplemented!(),
+                LowLevel::PtrStore => unimplemented!(),
+                LowLevel::PtrLoad => unimplemented!(),
+                LowLevel::PtrClearTagId => unimplemented!(),
+                LowLevel::RefCountIncRcPtr => unimplemented!(),
+                LowLevel::RefCountDecRcPtr=> unimplemented!(),
+                LowLevel::RefCountIncDataPtr => unimplemented!(),
+                LowLevel::RefCountDecDataPtr=> unimplemented!(),
+                LowLevel::RefCountIsUnique => unimplemented!(),
+
+                LowLevel::SetJmp => unimplemented!(),
+                LowLevel::LongJmp => unimplemented!(),
+                LowLevel::SetLongJmpBuffer => unimplemented!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),
@@ -105,32 +115,28 @@ map_symbol_to_lowlevel_and_arity! {
     StrJoinWith; STR_JOIN_WITH; 2,
     StrIsEmpty; STR_IS_EMPTY; 1,
     StrStartsWith; STR_STARTS_WITH; 2,
-    StrStartsWithScalar; STR_STARTS_WITH_SCALAR; 2,
     StrEndsWith; STR_ENDS_WITH; 2,
     StrSplit; STR_SPLIT; 2,
-    StrCountGraphemes; STR_COUNT_GRAPHEMES; 1,
     StrCountUtf8Bytes; STR_COUNT_UTF8_BYTES; 1,
     StrFromUtf8Range; STR_FROM_UTF8_RANGE_LOWLEVEL; 3,
     StrToUtf8; STR_TO_UTF8; 1,
     StrRepeat; STR_REPEAT; 2,
     StrTrim; STR_TRIM; 1,
-    StrTrimLeft; STR_TRIM_LEFT; 1,
-    StrTrimRight; STR_TRIM_RIGHT; 1,
-    StrToScalars; STR_TO_SCALARS; 1,
+    StrTrimStart; STR_TRIM_START; 1,
+    StrTrimEnd; STR_TRIM_END; 1,
     StrGetUnsafe; STR_GET_UNSAFE; 2,
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
     StrReserve; STR_RESERVE; 2,
-    StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
-    StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
     StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
-    StrGraphemes; STR_GRAPHEMES; 1,
+    StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
 
     ListLen; LIST_LEN; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
     ListReserve; LIST_RESERVE; 2,
     ListIsUnique; LIST_IS_UNIQUE; 1,
+    ListClone; LIST_CLONE; 1,
     ListAppendUnsafe; LIST_APPEND_UNSAFE; 2,
     ListPrepend; LIST_PREPEND; 2,
     ListGetUnsafe; LIST_GET_UNSAFE; 2,
@@ -145,6 +151,7 @@ map_symbol_to_lowlevel_and_arity! {
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
+    ListReleaseExcessCapacity; LIST_RELEASE_EXCESS_CAPACITY; 1,
 
     ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 
@@ -174,10 +181,14 @@ map_symbol_to_lowlevel_and_arity! {
     NumNeg; NUM_NEG; 1,
     NumSin; NUM_SIN; 1,
     NumCos; NUM_COS; 1,
+    NumTan; NUM_TAN; 1,
     NumSqrtUnchecked; NUM_SQRT; 1,
     NumLogUnchecked; NUM_LOG; 1,
     NumRound; NUM_ROUND; 1,
     NumToFrac; NUM_TO_FRAC; 1,
+    NumIsNan; NUM_IS_NAN; 1,
+    NumIsInfinite; NUM_IS_INFINITE; 1,
+    NumIsFinite; NUM_IS_FINITE; 1,
     NumPow; NUM_POW; 2,
     NumCeiling; NUM_CEILING; 1,
     NumPowInt; NUM_POW_INT; 2,
@@ -187,6 +198,8 @@ map_symbol_to_lowlevel_and_arity! {
     NumAsin; NUM_ASIN; 1,
     NumBytesToU16; NUM_BYTES_TO_U16_LOWLEVEL; 2,
     NumBytesToU32; NUM_BYTES_TO_U32_LOWLEVEL; 2,
+    NumBytesToU64; NUM_BYTES_TO_U64_LOWLEVEL; 2,
+    NumBytesToU128; NUM_BYTES_TO_U128_LOWLEVEL; 2,
     NumBitwiseAnd; NUM_BITWISE_AND; 2,
     NumBitwiseXor; NUM_BITWISE_XOR; 2,
     NumBitwiseOr; NUM_BITWISE_OR; 2,
@@ -194,6 +207,10 @@ map_symbol_to_lowlevel_and_arity! {
     NumShiftRightBy; NUM_SHIFT_RIGHT; 2,
     NumShiftRightZfBy; NUM_SHIFT_RIGHT_ZERO_FILL; 2,
     NumToStr; NUM_TO_STR; 1,
+    NumCountLeadingZeroBits; NUM_COUNT_LEADING_ZERO_BITS; 1,
+    NumCountTrailingZeroBits; NUM_COUNT_TRAILING_ZERO_BITS; 1,
+    NumCountOneBits; NUM_COUNT_ONE_BITS; 1,
+    I128OfDec; I128_OF_DEC; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
@@ -203,6 +220,7 @@ map_symbol_to_lowlevel_and_arity! {
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,
     Unreachable; LIST_UNREACHABLE; 1,
+    DictPseudoSeed; DICT_PSEUDO_SEED; 1,
 }
 
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
@@ -482,7 +500,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
             // if-condition
             no_region(
                 // arg_2.b
-                Access {
+                RecordAccess {
                     record_var,
                     ext_var: var_store.fresh(),
                     field: "b".into(),
@@ -505,7 +523,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
                     "Ok",
                     vec![
                         // arg_2.a
-                        Access {
+                        RecordAccess {
                             record_var,
                             ext_var: var_store.fresh(),
                             field: "a".into(),

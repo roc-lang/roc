@@ -22,8 +22,16 @@ impl Region {
         self.start <= other.start && self.end >= other.end
     }
 
+    pub fn contains_pos(&self, pos: Position) -> bool {
+        self.start <= pos && self.end >= pos
+    }
+
     pub fn is_empty(&self) -> bool {
         self.start == self.end
+    }
+
+    pub const fn len(&self) -> u32 {
+        self.end.offset - self.start.offset
     }
 
     pub fn span_across(start: &Region, end: &Region) -> Self {
@@ -105,14 +113,14 @@ impl Position {
     #[must_use]
     pub const fn bump_column(self, count: u32) -> Self {
         Self {
-            offset: self.offset + count as u32,
+            offset: self.offset + count,
         }
     }
 
     #[must_use]
     pub fn bump_invisible(self, count: u32) -> Self {
         Self {
-            offset: self.offset + count as u32,
+            offset: self.offset + count,
         }
     }
 
@@ -126,8 +134,12 @@ impl Position {
     #[must_use]
     pub const fn sub(self, count: u32) -> Self {
         Self {
-            offset: self.offset - count as u32,
+            offset: self.offset - count,
         }
+    }
+
+    pub fn byte_offset(&self) -> usize {
+        self.offset as usize
     }
 }
 
@@ -193,6 +205,10 @@ impl LineColumnRegion {
                 Greater => true,
             },
         }
+    }
+
+    pub fn includes(&self, lc: LineColumn) -> bool {
+        self.contains(&Self::from_pos(lc))
     }
 
     pub const fn from_pos(pos: LineColumn) -> Self {
@@ -322,6 +338,10 @@ impl<T> Loc<T> {
             value: transform(self.value),
         }
     }
+
+    pub fn byte_range(&self) -> std::ops::Range<usize> {
+        self.region.start.byte_offset()..self.region.end.byte_offset()
+    }
 }
 
 impl<T> fmt::Debug for Loc<T>
@@ -344,6 +364,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct LineInfo {
     line_offsets: Vec<u32>,
 }
@@ -364,7 +385,7 @@ impl LineInfo {
         let column = offset - self.line_offsets[line];
         LineColumn {
             line: line as u32,
-            column: column as u32,
+            column,
         }
     }
 
@@ -388,6 +409,10 @@ impl LineInfo {
         let start = self.convert_line_column(lc_region.start);
         let end = self.convert_line_column(lc_region.end);
         Region::new(start, end)
+    }
+
+    pub fn num_lines(&self) -> u32 {
+        self.line_offsets.len() as u32
     }
 }
 
@@ -422,10 +447,7 @@ fn test_line_info() {
             } else {
                 "\n" // HACK! pretend there's an extra newline on the end, strictly so we can do the comparison
             };
-            println!(
-                "checking {:?} {:?}, expecting {:?}",
-                input, offset, expected
-            );
+            println!("checking {input:?} {offset:?}, expecting {expected:?}");
             let line_column = info.convert_offset(offset as u32);
             assert!(
                 Some(line_column) > last,

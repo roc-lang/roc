@@ -8,12 +8,16 @@ use crate::types::{
     name_type_var, name_type_var_with_hint, AbilitySet, Polarity, RecordField, Uls,
 };
 use roc_collections::all::MutMap;
+use roc_collections::VecSet;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
+
+// TODO: since we technically don't support empty tuples at the source level, this should probably be removed
+static EMPTY_TUPLE: &str = "()";
 
 /// Requirements for parentheses.
 ///
@@ -55,16 +59,20 @@ macro_rules! write_parens {
 pub struct DebugPrint {
     pub print_lambda_sets: bool,
     pub print_only_under_alias: bool,
+    pub print_ranks: bool,
     pub ignore_polarity: bool,
     pub print_weakened_vars: bool,
+    pub print_variables: bool,
 }
 
 impl DebugPrint {
     pub const NOTHING: DebugPrint = DebugPrint {
         print_lambda_sets: false,
         print_only_under_alias: false,
+        print_ranks: false,
         ignore_polarity: false,
         print_weakened_vars: false,
+        print_variables: false,
     };
 }
 
@@ -128,8 +136,8 @@ fn find_names_needed(
             if !root_appearances.contains_key(&root) {
                 roots.push(root);
             }
-            // Able vars are always printed at least twice (in the signature, and in the "has"
-            // clause set).
+            // Able vars are always printed at least twice (in the signature, and in the
+            // "implements" clause set).
             root_appearances.insert(root, Appearances::Multiple);
         }
         RecursionVar {
@@ -225,6 +233,28 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
+        Structure(Tuple(elems, ext_var)) => {
+            for index in elems.iter_variables() {
+                let var = subs[index];
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
+            }
+
+            find_names_needed(
+                *ext_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
+        }
         Structure(TagUnion(tags, ext_var)) => {
             for slice_index in tags.variables() {
                 let slice = subs[slice_index];
@@ -242,7 +272,7 @@ fn find_names_needed(
             }
 
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -252,7 +282,7 @@ fn find_names_needed(
         }
         Structure(FunctionOrTagUnion(_, _, ext_var)) => {
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -277,7 +307,7 @@ fn find_names_needed(
             }
 
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -372,14 +402,18 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
+        Error
+        | Structure(EmptyRecord)
+        | Structure(EmptyTuple)
+        | Structure(EmptyTagUnion)
+        | ErasedLambda => {
             // Errors and empty records don't need names.
         }
     }
 }
 
 struct NamedResult {
-    recursion_structs_to_expand: Vec<Variable>,
+    recursion_structs_to_expand: VecSet<Variable>,
 }
 
 fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPrint) -> NamedResult {
@@ -398,20 +432,29 @@ fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPri
         debug_print.print_only_under_alias,
     );
 
-    let mut recursion_structs_to_expand = vec![];
+    let mut recursion_structs_to_expand = VecSet::default();
 
     for root in roots {
         // show the type variable number instead of `*`. useful for debugging
         // set_root_name(root, (format!("<{:?}>", root).into()), subs);
         match appearances.get(&root) {
             Some(Appearances::Multiple) => {
+                if let Content::RecursionVar { structure, .. } =
+                    subs.get_content_without_compacting(root)
+                {
+                    recursion_structs_to_expand
+                        .insert(subs.get_root_key_without_compacting(*structure));
+                }
                 letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
             }
             Some(Appearances::Single) => {
                 if let Content::RecursionVar { structure, .. } =
                     subs.get_content_without_compacting(root)
                 {
-                    recursion_structs_to_expand.push(*structure);
+                    recursion_structs_to_expand
+                        .insert(subs.get_root_key_without_compacting(*structure));
+                    letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
+                } else if debug_print.print_weakened_vars && is_weakened_unbound(subs, root) {
                     letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
                 }
             }
@@ -428,7 +471,7 @@ fn is_weakened_unbound(subs: &Subs, var: Variable) -> bool {
     use Content::*;
     let desc = subs.get_without_compacting(var);
     !desc.rank.is_generalized()
-        && !matches!(
+        && matches!(
             desc.content,
             FlexVar(_) | RigidVar(_) | FlexAbleVar(..) | RigidAbleVar(..)
         )
@@ -527,11 +570,11 @@ fn set_root_name(root: Variable, name: Lowercase, subs: &mut Subs) {
 #[derive(Default)]
 struct Context<'a> {
     able_variables: Vec<(&'a str, AbilitySet)>,
-    recursion_structs_to_expand: Vec<Variable>,
+    recursion_structs_to_expand: VecSet<Variable>,
 }
 
-fn content_to_string(
-    content: &Content,
+fn variable_to_string(
+    var: Variable,
     subs: &Subs,
     home: ModuleId,
     interns: &Interns,
@@ -553,7 +596,7 @@ fn content_to_string(
     write_content(
         &env,
         &mut ctx,
-        content,
+        var,
         subs,
         &mut buf,
         Parens::Unnecessary,
@@ -563,9 +606,16 @@ fn content_to_string(
     ctx.able_variables.sort();
     ctx.able_variables.dedup();
     for (i, (var, abilities)) in ctx.able_variables.into_iter().enumerate() {
-        buf.push_str(if i == 0 { " | " } else { ", " });
+        if i == 0 {
+            buf.push(' ');
+            buf.push_str(roc_parse::keyword::WHERE)
+        } else {
+            buf.push(',');
+        }
+        buf.push(' ');
         buf.push_str(var);
-        buf.push_str(" has");
+        buf.push(' ');
+        buf.push_str(roc_parse::keyword::IMPLEMENTS);
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
                 buf.push_str(" &");
@@ -586,9 +636,8 @@ pub fn name_and_print_var(
     debug_print: DebugPrint,
 ) -> String {
     let named_result = name_all_type_vars(var, subs, debug_print);
-    let content = subs.get_content_without_compacting(var);
-    content_to_string(
-        content,
+    variable_to_string(
+        var,
         subs,
         home,
         interns,
@@ -598,21 +647,20 @@ pub fn name_and_print_var(
     )
 }
 
-pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> &'a Content {
+pub fn get_single_arg<'a>(subs: &'a Subs, args: &'a AliasVariables) -> Variable {
     debug_assert_eq!(args.len(), 1);
 
     let arg_var_index = args
         .into_iter()
         .next()
         .expect("Num was not applied to a type argument!");
-    let arg_var = subs[arg_var_index];
-    subs.get_content_without_compacting(arg_var)
+    subs[arg_var_index]
 }
 
 fn write_content<'a>(
     env: &Env,
     ctx: &mut Context<'a>,
-    content: &Content,
+    var: Variable,
     subs: &'a Subs,
     buf: &mut String,
     parens: Parens,
@@ -620,7 +668,17 @@ fn write_content<'a>(
 ) {
     use crate::subs::Content::*;
 
-    match content {
+    if env.debug.print_ranks {
+        buf.push_str(&format!("⟨@{:?}⟩", subs.get_rank(var).into_usize()));
+    }
+    if env.debug.print_variables {
+        buf.push_str(&format!(
+            "<{:?}>",
+            subs.get_root_key_without_compacting(var)
+        ));
+    }
+
+    match subs.get_content_without_compacting(var) {
         FlexVar(Some(name_index)) => {
             let name = &subs.field_names[name_index.index as usize];
             buf.push_str(name.as_str())
@@ -649,22 +707,11 @@ fn write_content<'a>(
             structure,
         } => match opt_name {
             Some(name_index) => {
-                if let Some(idx) = ctx
-                    .recursion_structs_to_expand
-                    .iter()
-                    .position(|v| v == structure)
-                {
-                    ctx.recursion_structs_to_expand.swap_remove(idx);
+                let structure_root = subs.get_root_key_without_compacting(*structure);
+                if ctx.recursion_structs_to_expand.remove(&structure_root) {
+                    write_content(env, ctx, *structure, subs, buf, parens, pol);
 
-                    write_content(
-                        env,
-                        ctx,
-                        subs.get_content_without_compacting(*structure),
-                        subs,
-                        buf,
-                        parens,
-                        pol,
-                    );
+                    ctx.recursion_structs_to_expand.insert(structure_root);
                 } else {
                     let name = &subs.field_names[name_index.index as usize];
                     buf.push_str(name.as_str())
@@ -674,14 +721,14 @@ fn write_content<'a>(
                 unreachable!("This should always be filled in!")
             }
         },
-        Structure(flat_type) => write_flat_type(env, ctx, flat_type, subs, buf, parens, pol),
+        Structure(flat_type) => write_flat_type(env, ctx, var, flat_type, subs, buf, parens, pol),
         Alias(symbol, args, actual, _kind) => {
             let write_parens = parens == Parens::InTypeParam && !args.is_empty();
 
             match *symbol {
                 Symbol::NUM_NUM => {
                     let content = get_single_arg(subs, args);
-                    match *content {
+                    match *subs.get_content_without_compacting(content) {
                         Alias(nested, args, _actual, _kind) => match nested {
                             Symbol::NUM_INTEGER => {
                                 write_integer(
@@ -742,8 +789,7 @@ fn write_content<'a>(
                     || args.any_infer_ext_var_is_material(subs) =>
                 {
                     write_parens!(write_parens, buf, {
-                        let content = subs.get_content_without_compacting(*actual);
-                        write_content(env, ctx, content, subs, buf, parens, pol)
+                        write_content(env, ctx, *actual, subs, buf, parens, pol)
                     })
                 }
 
@@ -753,21 +799,12 @@ fn write_content<'a>(
                     for var_index in args.named_type_arguments() {
                         let var = subs[var_index];
                         buf.push(' ');
-                        write_content(
-                            env,
-                            ctx,
-                            subs.get_content_without_compacting(var),
-                            subs,
-                            buf,
-                            Parens::InTypeParam,
-                            pol,
-                        );
+                        write_content(env, ctx, var, subs, buf, Parens::InTypeParam, pol);
                     }
 
                     roc_debug_flags::dbg_do!(roc_debug_flags::ROC_PRETTY_PRINT_ALIAS_CONTENTS, {
                         buf.push_str("[[ but really ");
-                        let content = subs.get_content_without_compacting(*actual);
-                        write_content(env, ctx, content, subs, buf, parens, pol);
+                        write_content(env, ctx, *actual, subs, buf, parens, pol);
                         buf.push_str("]]");
                     });
                 }),
@@ -794,7 +831,7 @@ fn write_content<'a>(
                     "".to_string()
                 };
                 if env.home == symbol.module_id() {
-                    format!("{}{}", ident_str, disambiguation,)
+                    format!("{ident_str}{disambiguation}",)
                 } else {
                     format!(
                         "{}.{}{}",
@@ -819,28 +856,12 @@ fn write_content<'a>(
 
             if let Some(rec_var) = recursion_var.into_variable() {
                 buf.push_str(" as ");
-                write_content(
-                    env,
-                    ctx,
-                    subs.get_content_without_compacting(rec_var),
-                    subs,
-                    buf,
-                    parens,
-                    pol,
-                )
+                write_content(env, ctx, rec_var, subs, buf, parens, pol)
             }
 
             for Uls(var, member, region) in subs.get_subs_slice(*unspecialized) {
                 buf.push_str(" + ");
-                write_content(
-                    env,
-                    ctx,
-                    subs.get_content_without_compacting(*var),
-                    subs,
-                    buf,
-                    Parens::Unnecessary,
-                    pol,
-                );
+                write_content(env, ctx, *var, subs, buf, Parens::Unnecessary, pol);
                 buf.push(':');
                 buf.push_str(&print_symbol(member));
                 buf.push(':');
@@ -849,21 +870,19 @@ fn write_content<'a>(
 
             buf.push(']');
         }
+        ErasedLambda => {
+            debug_assert!(env.debug.print_lambda_sets);
+
+            // Easy mode 🤠
+            buf.push('?');
+        }
         RangedNumber(range) => {
             buf.push_str("Range(");
             for (i, &var) in range.variable_slice().iter().enumerate() {
                 if i > 0 {
                     buf.push_str(", ");
                 }
-                write_content(
-                    env,
-                    ctx,
-                    subs.get_content_without_compacting(var),
-                    subs,
-                    buf,
-                    Parens::Unnecessary,
-                    pol,
-                );
+                write_content(env, ctx, var, subs, buf, Parens::Unnecessary, pol);
             }
             buf.push(')');
         }
@@ -874,7 +893,7 @@ fn write_content<'a>(
 fn write_float<'a>(
     env: &Env,
     ctx: &mut Context<'a>,
-    content: &Content,
+    var: Variable,
     subs: &'a Subs,
     buf: &mut String,
     parens: Parens,
@@ -882,13 +901,13 @@ fn write_float<'a>(
     pol: Polarity,
 ) {
     use crate::subs::Content::*;
-    match content {
+    match subs.get_content_without_compacting(var) {
         Alias(Symbol::NUM_BINARY32, _, _, _) => buf.push_str("F32"),
         Alias(Symbol::NUM_BINARY64, _, _, _) => buf.push_str("F64"),
         Alias(Symbol::NUM_DECIMAL, _, _, _) => buf.push_str("Dec"),
         _ => write_parens!(write_parens, buf, {
-            buf.push_str("Float ");
-            write_content(env, ctx, content, subs, buf, parens, pol);
+            buf.push_str("Frac ");
+            write_content(env, ctx, var, subs, buf, parens, pol);
         }),
     }
 }
@@ -896,7 +915,7 @@ fn write_float<'a>(
 fn write_integer<'a>(
     env: &Env,
     ctx: &mut Context<'a>,
-    content: &Content,
+    var: Variable,
     subs: &'a Subs,
     buf: &mut String,
     parens: Parens,
@@ -907,19 +926,19 @@ fn write_integer<'a>(
 
     macro_rules! derive_num_writes {
         ($($lit:expr, $tag:path)*) => {
-            match content {
+            match subs.get_content_without_compacting(var) {
                 $(
                 &Alias($tag, _, _, _) => {
                     buf.push_str($lit)
                 },
                 )*
-                actual => {
+                _ => {
                     write_parens!(
                         write_parens,
                         buf,
                         {
                             buf.push_str("Int ");
-                            write_content(env, ctx, actual, subs, buf, parens, pol);
+                            write_content(env, ctx, var, subs, buf, parens, pol);
                         }
                     )
                 }
@@ -981,13 +1000,13 @@ fn write_ext_content<'a>(
     parens: Parens,
     pol: Polarity,
 ) {
-    if let ExtContent::Content(_, content) = ext_content {
+    if let ExtContent::Content(var, _) = ext_content {
         // This is an open record or tag union, so print the variable
         // right after the '}' or ']'
         //
         // e.g. the "*" at the end of `{ x: I64 }*`
         // or the "r" at the end of `{ x: I64 }r`
-        write_content(env, ctx, content, subs, buf, parens, pol)
+        write_content(env, ctx, var, subs, buf, parens, pol)
     }
 }
 
@@ -1019,15 +1038,7 @@ fn write_sorted_tags2<'a, L>(
 
         for var in vars {
             buf.push(' ');
-            write_content(
-                env,
-                ctx,
-                subs.get_content_without_compacting(*var),
-                subs,
-                buf,
-                Parens::InTypeParam,
-                pol,
-            );
+            write_content(env, ctx, *var, subs, buf, Parens::InTypeParam, pol);
         }
     }
 }
@@ -1072,15 +1083,7 @@ fn write_sorted_tags<'a>(
 
         for var in vars {
             buf.push(' ');
-            write_content(
-                env,
-                ctx,
-                subs.get_content_without_compacting(*var),
-                subs,
-                buf,
-                Parens::InTypeParam,
-                pol,
-            );
+            write_content(env, ctx, *var, subs, buf, Parens::InTypeParam, pol);
         }
     }
 
@@ -1090,6 +1093,7 @@ fn write_sorted_tags<'a>(
 fn write_flat_type<'a>(
     env: &Env,
     ctx: &mut Context<'a>,
+    var: Variable,
     flat_type: &FlatType,
     subs: &'a Subs,
     buf: &mut String,
@@ -1110,6 +1114,7 @@ fn write_flat_type<'a>(
             pol,
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
+        EmptyTuple => buf.push_str(EMPTY_TUPLE),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, closure, ret) => write_fn(
             env,
@@ -1157,15 +1162,7 @@ fn write_flat_type<'a>(
                         Required(_) | Demanded(_) | RigidRequired(_) => buf.push_str(" : "),
                     };
 
-                    write_content(
-                        env,
-                        ctx,
-                        subs.get_content_without_compacting(var),
-                        subs,
-                        buf,
-                        Parens::Unnecessary,
-                        pol,
-                    );
+                    write_content(env, ctx, var, subs, buf, Parens::Unnecessary, pol);
                 }
 
                 buf.push_str(" }");
@@ -1175,13 +1172,66 @@ fn write_flat_type<'a>(
                 Content::Structure(EmptyRecord) => {
                     // This is a closed record. We're done!
                 }
-                content => {
+                _ => {
                     // This is an open record, so print the variable
                     // right after the '}'
                     //
                     // e.g. the "*" at the end of `{ x: I64 }*`
                     // or the "r" at the end of `{ x: I64 }r`
-                    write_content(env, ctx, content, subs, buf, parens, pol)
+                    write_content(env, ctx, ext_var, subs, buf, parens, pol)
+                }
+            }
+        }
+        Tuple(elems, ext_var) => {
+            use crate::types::{gather_tuple_elems, TupleStructure};
+
+            // If the `ext` has concrete elems (e.g. (I64, I64)(Bool)), merge them
+            let TupleStructure {
+                elems: sorted_elems,
+                ext,
+            } = gather_tuple_elems(subs, *elems, *ext_var)
+                .expect("Something ended up weird in this record type");
+            let ext_var = ext;
+
+            buf.push_str("( ");
+
+            let mut any_written_yet = false;
+            let mut expected_next_index = 0;
+
+            for (index, var) in sorted_elems {
+                if any_written_yet {
+                    buf.push_str(", ");
+                } else {
+                    any_written_yet = true;
+                }
+
+                if index - expected_next_index > 4 {
+                    // Don't write out a large number of _'s - just write out a count
+                    buf.push_str(&format!("... {} omitted, ", index - expected_next_index));
+                } else if index - expected_next_index > 1 {
+                    // Write out a bunch of _'s
+                    for _ in expected_next_index..index {
+                        buf.push_str("_, ");
+                    }
+                }
+                expected_next_index = index + 1;
+
+                write_content(env, ctx, var, subs, buf, Parens::Unnecessary, pol);
+            }
+
+            buf.push_str(" )");
+
+            match subs.get_content_without_compacting(ext_var) {
+                Content::Structure(EmptyTuple) => {
+                    // This is a closed tuple. We're done!
+                }
+                _ => {
+                    // This is an open tuple, so print the variable
+                    // right after the ')'
+                    //
+                    // e.g. the "*" at the end of `( I64, I64 )*`
+                    // or the "r" at the end of `( I64, I64 )r`
+                    write_content(env, ctx, ext_var, subs, buf, parens, pol)
                 }
             }
         }
@@ -1207,7 +1257,7 @@ fn write_flat_type<'a>(
                 ctx,
                 subs,
                 buf,
-                ExtContent::for_tag(subs, new_ext_var, pol, &env.debug),
+                ExtContent::for_tag(subs, new_ext_var.var(), pol, &env.debug),
                 parens,
                 pol,
             )
@@ -1222,7 +1272,7 @@ fn write_flat_type<'a>(
                     .iter()
                     .map(|t| (t.clone(), vec![])),
             );
-            let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, *ext_var, pol);
+            let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, ext_var.var(), pol);
 
             buf.push(']');
 
@@ -1230,6 +1280,9 @@ fn write_flat_type<'a>(
         }
 
         RecursiveTagUnion(rec_var, tags, ext_var) => {
+            ctx.recursion_structs_to_expand
+                .remove(&subs.get_root_key_without_compacting(var));
+
             write_parens!(parens == Parens::InTypeParam, buf, {
                 buf.push('[');
 
@@ -1251,28 +1304,20 @@ fn write_flat_type<'a>(
                     ctx,
                     subs,
                     buf,
-                    ExtContent::for_tag(subs, new_ext_var, pol, &env.debug),
+                    ExtContent::for_tag(subs, new_ext_var.var(), pol, &env.debug),
                     parens,
                     pol,
                 );
 
                 buf.push_str(" as ");
-                write_content(
-                    env,
-                    ctx,
-                    subs.get_content_without_compacting(*rec_var),
-                    subs,
-                    buf,
-                    parens,
-                    pol,
-                )
+                write_content(env, ctx, *rec_var, subs, buf, parens, pol)
             })
         }
     }
 }
 
-pub fn push_union<'a, L: Label>(
-    subs: &'a Subs,
+pub fn push_union<L: Label>(
+    subs: &Subs,
     tags: &UnionLabels<L>,
     fields: &mut Vec<(L, Vec<Variable>)>,
 ) {
@@ -1304,12 +1349,12 @@ pub fn chase_ext_tag_union(
         Content::Structure(EmptyTagUnion) => ChasedExt::Empty,
         Content::Structure(TagUnion(tags, ext_var)) => {
             push_union(subs, tags, fields);
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             push_union(subs, tags, fields);
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_names, _, ext_var)) => {
             fields.extend(
@@ -1318,7 +1363,7 @@ pub fn chase_ext_tag_union(
                     .map(|t| (t.clone(), vec![])),
             );
 
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
 
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
@@ -1385,9 +1430,9 @@ fn write_apply<'a>(
                     Symbol::NUM_FLOATINGPOINT if nested_args.len() == 1 => {
                         buf.push_str("F64");
                     }
-                    _ => default_case(subs, arg_content),
+                    _ => default_case(subs, *arg),
                 },
-                _ => default_case(subs, arg_content),
+                _ => default_case(subs, *arg),
             }
         }
         _ => {
@@ -1399,15 +1444,7 @@ fn write_apply<'a>(
 
             for arg in args {
                 buf.push(' ');
-                write_content(
-                    env,
-                    ctx,
-                    subs.get_content_without_compacting(*arg),
-                    subs,
-                    buf,
-                    Parens::InTypeParam,
-                    pol,
-                );
+                write_content(env, ctx, *arg, subs, buf, Parens::InTypeParam, pol);
             }
 
             if write_parens {
@@ -1443,42 +1480,18 @@ fn write_fn<'a>(
             needs_comma = true;
         }
 
-        write_content(
-            env,
-            ctx,
-            subs.get_content_without_compacting(*arg),
-            subs,
-            buf,
-            Parens::InFn,
-            Polarity::Neg,
-        );
+        write_content(env, ctx, *arg, subs, buf, Parens::InFn, Polarity::Neg);
     }
 
     if !env.debug.print_lambda_sets {
         buf.push_str(" -> ");
     } else {
         buf.push_str(" -");
-        write_content(
-            env,
-            ctx,
-            subs.get_content_without_compacting(closure),
-            subs,
-            buf,
-            parens,
-            pol,
-        );
+        write_content(env, ctx, closure, subs, buf, parens, pol);
         buf.push_str("-> ");
     }
 
-    write_content(
-        env,
-        ctx,
-        subs.get_content_without_compacting(ret),
-        subs,
-        buf,
-        Parens::InFn,
-        Polarity::Pos,
-    );
+    write_content(env, ctx, ret, subs, buf, Parens::InFn, Polarity::Pos);
 
     if use_parens {
         buf.push(')');

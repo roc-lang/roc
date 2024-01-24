@@ -1,0 +1,25 @@
+# +opt infer:print_only_under_alias
+
+app "test" provides [main] to "./platform"
+
+Effect : {} -> Str
+
+after = \fx, toNext ->
+    afterInner = \{} ->
+        fxOut = fx {}
+        next = toNext fxOut
+        next {}
+
+    afterInner
+
+await : Effect, (Str -> Effect) -> Effect
+await = \fx, cont -> after fx (\result -> cont result)
+
+line : Str -> Effect
+line = \s -> \{} -> s
+
+main =
+#^^^^{-1} {} -[[afterInner(8) ({} -[[afterInner(8) ({} -a-> Str) (Str -[[13 (Str -[[20 Str]]-> ({} -[[16 Str]]-> Str))]]-> ({} -[[16 Str]]-> Str)), 16 Str] as a]-> Str) (Str -[[13 (Str -[[21]]-> ({} -[[16 Str]]-> Str))]]-> ({} -[[16 Str]]-> Str))] as [[afterInner(8) ({} -[[afterInner(8) ({} -a-> Str) (Str -[[13 (Str -[[20 Str]]-> ({} -[[16 Str]]-> Str))]]-> ({} -[[16 Str]]-> Str)), 16 Str] as a]-> Str) (Str -[[13 (Str -[[21]]-> ({} -[[16 Str]]-> Str))]]-> ({} -[[16 Str]]-> Str))] as b]]-> Str
+    await
+        (List.walk ["a", "b"] (line "printing letters") (\state, elem -> await state (\_ -> line elem)))
+        (\_ -> line "")

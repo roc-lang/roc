@@ -1362,7 +1362,7 @@ pub fn build_host_exposed_def(
         match typ.shallow_structural_dealias() {
             Type::Function(args, _, _) => {
                 for i in 0..args.len() {
-                    let name = format!("closure_arg_{}_{}", ident, i);
+                    let name = format!("closure_arg_{ident}_{i}");
 
                     let arg_symbol = {
                         let ident = name.clone().into();
@@ -1381,7 +1381,7 @@ pub fn build_host_exposed_def(
                     linked_symbol_arguments.push((arg_var, Expr::Var(arg_symbol, arg_var)));
                 }
 
-                let foreign_symbol_name = format!("roc_fx_{}", ident);
+                let foreign_symbol_name = format!("roc_fx_{ident}");
                 let low_level_call = Expr::ForeignCall {
                     foreign_symbol: foreign_symbol_name.into(),
                     args: linked_symbol_arguments,
@@ -1389,7 +1389,7 @@ pub fn build_host_exposed_def(
                 };
 
                 let effect_closure_symbol = {
-                    let name = format!("effect_closure_{}", ident);
+                    let name = format!("effect_closure_{ident}");
 
                     let ident = name.into();
                     scope.introduce(ident, Region::zero()).unwrap()
@@ -1435,7 +1435,7 @@ pub fn build_host_exposed_def(
             _ => {
                 // not a function
 
-                let foreign_symbol_name = format!("roc_fx_{}", ident);
+                let foreign_symbol_name = format!("roc_fx_{ident}");
                 let low_level_call = Expr::ForeignCall {
                     foreign_symbol: foreign_symbol_name.into(),
                     args: linked_symbol_arguments,
@@ -1443,7 +1443,7 @@ pub fn build_host_exposed_def(
                 };
 
                 let effect_closure_symbol = {
-                    let name = format!("effect_closure_{}", ident);
+                    let name = format!("effect_closure_{ident}");
 
                     let ident = name.into();
                     scope.introduce(ident, Region::zero()).unwrap()

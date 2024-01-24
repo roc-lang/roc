@@ -9,3 +9,10 @@ pub mod externs;
 mod intrinsics;
 mod lowlevel;
 pub mod refcounting;
+
+mod align;
+mod erased;
+mod fn_ptr;
+mod memcpy;
+mod scope;
+mod struct_;

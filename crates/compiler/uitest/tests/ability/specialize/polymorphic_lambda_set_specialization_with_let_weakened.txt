@@ -1,0 +1,20 @@
+app "test" provides [main] to "./platform"
+
+F implements f : a -> (b -> {}) where a implements F, b implements G
+G implements g : b -> {} where b implements G
+
+Fo := {} implements [F {f}]
+f = \@Fo {} -> g
+#^{-1} Fo#f(7): Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) where b implements G
+
+Go := {} implements [G {g}]
+g = \@Go {} -> {}
+#^{-1} Go#g(8): Go -[[g(8)]]-> {}
+
+main =
+    # h should get weakened
+    h = f (@Fo {})
+#       ^ Fo#f(7): Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
+#   ^ Go -[[g(8)]]-> {}
+    h (@Go {})
+#   ^ Go -[[g(8)]]-> {}

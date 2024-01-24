@@ -8,10 +8,6 @@ You can use `cargo doc` to generate docs for a specific package; e.g.
 cargo doc --package roc_ast --open
 ```
 
-## `ast/` - `roc_ast`
-
-Code to represent the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) as used by the editor. In contrast to the compiler, the types in this AST do not keep track of the location of the matching code in the source file.
-
 ## `cli/` - `roc_cli`
 
 The `roc` binary that brings together all functionality in the Roc toolset.
@@ -19,10 +15,6 @@ The `roc` binary that brings together all functionality in the Roc toolset.
 ## `cli_utils/` - `cli_utils`
 
 Provides shared code for cli tests and benchmarks.
-
-## `code_markup/` - `roc_code_markup`
-
-A [markup language](https://en.wikipedia.org/wiki/Markup_language) to display Roc code in the editor.
 
 ## `compiler/`
 
@@ -60,7 +52,6 @@ The compiler includes the following sub-crates;
 - `roc_serialize` provides helpers for serializing and deserializing to/from bytes.
 - `roc_solve` The entry point of Roc's [type inference](https://en.wikipedia.org/wiki/Type_inference) system. Implements type inference and specialization of abilities.
 - `roc_solve_problem` provides types to describe problems that can occur during solving.
-- `roc_str` provides `Roc` styled collection [reference counting](https://en.wikipedia.org/wiki/Reference_counting). See [README.md](./compiler/str/README.md) for more information.
 - `test_derive` Tests Roc's auto-derivers.
 - `test_gen` contains all of Roc's [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)) tests. See [README.md](./compiler/test_gen/README.md) for more information.
 - `test_mono` Tests Roc's generation of the mono intermediate representation.
@@ -77,10 +68,6 @@ Used for [roc-lang.org/builtins/Num](https://www.roc-lang.org/builtins/Num).
 
 Provides a binary that is only used for static build servers.
 
-## `editor/` - `roc_editor`
-
-Roc's editor. See [README.md](./editor/README.md) for more information.
-
 ## `error_macros/` - `roc_error_macros`
 
 Provides macros for consistent reporting of errors in Roc's rust code.
@@ -91,7 +78,7 @@ The `roc_glue` crate generates code needed for platform hosts to communicate wit
 
 ## `highlight/` - `roc_highlight`
 
-Provides syntax highlighting for the editor by transforming a string to markup nodes.
+Provides syntax highlighting for the static site gen platform which is used by the tutorial.
 
 ## `linker/` - `roc_linker`
 
@@ -104,6 +91,12 @@ Command Line Interface(CLI) functionality for the Read-Evaluate-Print-Loop (REPL
 ## `repl_eval/` - `roc_repl_eval`
 
 Provides the functionality for the REPL to evaluate Roc expressions.
+
+## `repl_state/` - `roc_repl_state`
+
+Implements the state machine the to handle user input for the REPL (CLI and web)
+If the user enters an expression, like `x * 2`, check it evaluate it.
+If the user enters a declaration, like `x = 123`, check it and remember it, but don't evaluate.
 
 ## `repl_expect/` - `roc_repl_expect`
 

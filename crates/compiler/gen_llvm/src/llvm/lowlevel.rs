@@ -1,8 +1,10 @@
 use inkwell::{
+    attributes::{Attribute, AttributeLoc},
+    module::Linkage,
     types::{BasicType, IntType},
     values::{
         BasicValue, BasicValueEnum, FloatValue, FunctionValue, InstructionOpcode, IntValue,
-        PointerValue, StructValue,
+        StructValue,
     },
     AddressSpace, IntPredicate,
 };
@@ -12,59 +14,62 @@ use roc_error_macros::internal_error;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
     ir::HigherOrderLowLevel,
-    layout::{Builtin, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner},
+    layout::{
+        Builtin, InLayout, LambdaSet, Layout, LayoutIds, LayoutInterner, LayoutRepr,
+        STLayoutInterner,
+    },
+    list_element_layout,
 };
-use roc_target::PtrWidth;
+use roc_target::{PtrWidth, TargetInfo};
 
 use crate::llvm::{
     bitcode::{
         call_bitcode_fn, call_bitcode_fn_fixing_for_convention, call_list_bitcode_fn,
         call_str_bitcode_fn, call_void_bitcode_fn, pass_list_or_string_to_zig_32bit,
-        BitcodeReturns,
+        pass_string_to_zig_wasm, BitcodeReturns,
     },
     build::{
-        complex_bitcast_check_size, create_entry_block_alloca, function_value_by_func_spec,
-        load_roc_value, roc_function_call, BuilderExt, RocReturn,
+        cast_basic_basic, complex_bitcast_check_size, create_entry_block_alloca,
+        function_value_by_func_spec, load_roc_value, roc_function_call, tag_pointer_clear_tag_id,
+        BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        list_append_unsafe, list_capacity, list_concat, list_drop_at, list_get_unsafe, list_len,
-        list_map, list_map2, list_map3, list_map4, list_prepend, list_replace_unsafe, list_reserve,
-        list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
-        pass_update_mode,
+        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len,
+        list_map, list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
+        list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
+        list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
     compare::{generic_eq, generic_neq},
     convert::{
-        self, basic_type_from_layout, zig_num_parse_result_type, zig_to_int_checked_result_type,
+        self, argument_type_from_layout, basic_type_from_layout, zig_num_parse_result_type,
+        zig_to_int_checked_result_type,
     },
     intrinsics::{
-        LLVM_ADD_SATURATED, LLVM_ADD_WITH_OVERFLOW, LLVM_CEILING, LLVM_COS, LLVM_FABS, LLVM_FLOOR,
-        LLVM_LOG, LLVM_MUL_WITH_OVERFLOW, LLVM_POW, LLVM_ROUND, LLVM_SIN, LLVM_SQRT,
-        LLVM_SUB_SATURATED, LLVM_SUB_WITH_OVERFLOW,
+        // These instrinsics do not generate calls to libc and are safe to keep.
+        // If we find that any of them generate calls to libc on some platforms, we need to define them as zig bitcode.
+        LLVM_ADD_SATURATED,
+        LLVM_ADD_WITH_OVERFLOW,
+        LLVM_MUL_WITH_OVERFLOW,
+        LLVM_SUB_SATURATED,
+        LLVM_SUB_WITH_OVERFLOW,
     },
+    refcounting::PointerToRefcount,
 };
 
-use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec};
+use super::{build::Env, convert::zig_dec_type};
 use super::{
-    build::{load_symbol, load_symbol_and_layout, Env, Scope},
-    convert::zig_dec_type,
+    build::{throw_internal_exception, use_roc_value, FAST_CALL_CONV},
+    convert::zig_with_overflow_roc_dec,
+    scope::Scope,
 };
 
-macro_rules! list_element_layout {
-    ($list_layout:expr) => {
-        match $list_layout {
-            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
-            _ => unreachable!("invalid list layout"),
-        }
-    };
-}
-
-pub(crate) fn run_low_level<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub(crate) fn run_low_level<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
     op: LowLevel,
     args: &[Symbol],
     update_mode: UpdateMode,
@@ -79,7 +84,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // look at that, a usage for if let ... else
             let [$($x),+] = match &args {
                 [$($x),+] => {
-                    [ $(load_symbol(scope, $x)),+ ]
+                    [ $(scope.load_symbol($x)),+ ]
                 }
                 _ => {
                     // we could get fancier with reporting here, but this macro is used a bunch
@@ -96,7 +101,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // look at that, a usage for if let ... else
             let [$(($x, $y)),+] = match &args {
                 [$($x),+] => {
-                    [ $(load_symbol_and_layout(scope, $x)),+ ]
+                    [ $(scope.load_symbol_and_layout($x)),+ ]
                 }
                 _ => {
                     // we could get fancier with reporting here, but this macro is used a bunch
@@ -148,18 +153,6 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
         }
-        StrToScalars => {
-            // Str.toScalars : Str -> List U32
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_TO_SCALARS,
-            )
-        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             arguments!(string, prefix);
@@ -170,18 +163,6 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[],
                 BitcodeReturns::Basic,
                 bitcode::STR_STARTS_WITH,
-            )
-        }
-        StrStartsWithScalar => {
-            // Str.startsWithScalar : Str, U32 -> Bool
-            arguments!(string, prefix);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[prefix],
-                BitcodeReturns::Basic,
-                bitcode::STR_STARTS_WITH_SCALAR,
             )
         }
         StrEndsWith => {
@@ -200,21 +181,24 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // Str.toNum : Str -> Result (Num *) {}
             arguments!(string);
 
-            let number_layout = match layout {
-                Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+            let number_layout = match layout_interner.get_repr(layout) {
+                LayoutRepr::Struct(field_layouts) => field_layouts[0], // TODO: why is it sometimes a struct?
                 _ => unreachable!(),
             };
 
             // match on the return layout to figure out which zig builtin we need
-            let intrinsic = match number_layout {
-                Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-                Layout::Builtin(Builtin::Float(float_width)) => &bitcode::STR_TO_FLOAT[float_width],
-                Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+            let intrinsic = match layout_interner.get_repr(number_layout) {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                    &bitcode::STR_TO_FLOAT[float_width]
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
                 _ => unreachable!(),
             };
 
-            let result = match env.target_info.ptr_width() {
-                PtrWidth::Bytes4 => {
+            use roc_target::Architecture::*;
+            let result = match env.target_info.architecture {
+                Aarch32 | X86_32 => {
                     let zig_function = env.module.get_function(intrinsic).unwrap();
                     let zig_function_type = zig_function.get_type();
 
@@ -227,9 +211,11 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             intrinsic,
                         ),
                         None => {
-                            let return_type_name = match number_layout {
-                                Layout::Builtin(Builtin::Int(int_width)) => int_width.type_name(),
-                                Layout::Builtin(Builtin::Decimal) => {
+                            let return_type_name = match layout_interner.get_repr(number_layout) {
+                                LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                                    int_width.type_name()
+                                }
+                                LayoutRepr::Builtin(Builtin::Decimal) => {
                                     // zig picks 128 for dec.RocDec
                                     "i128"
                                 }
@@ -254,11 +240,14 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                                 intrinsic,
                             );
 
-                            let roc_return_type =
-                                basic_type_from_layout(env, layout_interner, layout)
-                                    .ptr_type(AddressSpace::Generic);
+                            let roc_return_type = basic_type_from_layout(
+                                env,
+                                layout_interner,
+                                layout_interner.get_repr(layout),
+                            )
+                            .ptr_type(AddressSpace::default());
 
-                            let roc_return_alloca = env.builder.build_pointer_cast(
+                            let roc_return_alloca = env.builder.new_build_pointer_cast(
                                 zig_return_alloca,
                                 roc_return_type,
                                 "cast_to_roc",
@@ -267,27 +256,45 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             load_roc_value(
                                 env,
                                 layout_interner,
-                                *layout,
+                                layout_interner.get_repr(layout),
                                 roc_return_alloca,
                                 "str_to_num_result",
                             )
                         }
                     }
                 }
-                PtrWidth::Bytes8 => {
-                    let cc_return_by_pointer = match number_layout {
-                        Layout::Builtin(Builtin::Int(int_width)) => {
-                            (int_width.stack_size() as usize > env.target_info.ptr_size())
-                                .then_some(int_width.type_name())
+                Aarch64 | X86_64 => {
+                    let (type_name, width) = {
+                        match layout_interner.get_repr(number_layout) {
+                            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                                (int_width.type_name(), int_width.stack_size())
+                            }
+                            LayoutRepr::Builtin(Builtin::Decimal) => {
+                                // zig picks 128 for dec.RocDec
+                                ("i128", 16)
+                            }
+                            LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                                (float_width.type_name(), float_width.stack_size())
+                            }
+                            _ => {
+                                unreachable!("other layout types are non-numeric")
+                            }
                         }
-                        Layout::Builtin(Builtin::Decimal) => {
-                            // zig picks 128 for dec.RocDec
-                            Some("i128")
-                        }
-                        _ => None,
                     };
 
-                    if let Some(type_name) = cc_return_by_pointer {
+                    use roc_target::OperatingSystem::*;
+                    let cc_return_by_pointer = match env.target_info.operating_system {
+                        Windows => {
+                            // there is just one return register on Windows
+                            (width + 1) as usize > env.target_info.ptr_size()
+                        }
+                        _ => {
+                            // on other systems we have two return registers
+                            (width + 1) as usize > 2 * env.target_info.ptr_size()
+                        }
+                    };
+
+                    if cc_return_by_pointer {
                         let bitcode_return_type = zig_num_parse_result_type(env, type_name);
 
                         call_bitcode_fn_fixing_for_convention(
@@ -302,10 +309,58 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         call_bitcode_fn(env, &[string], intrinsic)
                     }
                 }
+                Wasm32 => {
+                    let return_type_name = match layout_interner.get_repr(number_layout) {
+                        LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width.type_name(),
+                        LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width.type_name(),
+                        LayoutRepr::Builtin(Builtin::Decimal) => {
+                            // zig picks 128 for dec.RocDec
+                            "i128"
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    let return_type = zig_num_parse_result_type(env, return_type_name);
+
+                    let zig_return_alloca =
+                        create_entry_block_alloca(env, parent, return_type.into(), "str_to_num");
+
+                    call_void_bitcode_fn(
+                        env,
+                        &[
+                            zig_return_alloca.into(),
+                            pass_string_to_zig_wasm(env, string).into(),
+                        ],
+                        intrinsic,
+                    );
+
+                    let roc_return_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .ptr_type(AddressSpace::default());
+
+                    let roc_return_alloca = env.builder.new_build_pointer_cast(
+                        zig_return_alloca,
+                        roc_return_type,
+                        "cast_to_roc",
+                    );
+
+                    load_roc_value(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                        roc_return_alloca,
+                        "str_to_num_result",
+                    )
+                }
             };
 
-            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
-            let expected_type = basic_type_from_layout(env, layout_interner, layout);
+            // zig passes the result as a packed integer sometimes, instead of a struct. So we cast if needed.
+            // We check the type as expected in an argument position, since that is how we actually will use it.
+            let expected_type =
+                argument_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
             let actual_type = result.get_type();
 
             if expected_type != actual_type {
@@ -318,11 +373,11 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // Str.fromInt : Int -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let (int, int_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (int, int_layout) = scope.load_symbol_and_layout(&args[0]);
             let int = int.into_int_value();
 
-            let int_width = match int_layout {
-                Layout::Builtin(Builtin::Int(int_width)) => *int_width,
+            let int_width = match layout_interner.get_repr(int_layout) {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => unreachable!(),
             };
 
@@ -335,13 +390,13 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         StrFromFloat => {
-            // Str.fromFloat : Float * -> Str
+            // Str.fromFloat : Frac * -> Str
             debug_assert_eq!(args.len(), 1);
 
-            let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
 
-            let float_width = match float_layout {
-                Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+            let float_width = match layout_interner.get_repr(float_layout) {
+                LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width,
                 _ => unreachable!(),
             };
 
@@ -357,10 +412,11 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
             let result_ptr = env
                 .builder
-                .build_alloca(result_type, "alloca_utf8_validate_bytes_result");
+                .new_build_alloca(result_type, "alloca_utf8_validate_bytes_result");
 
-            match env.target_info.ptr_width() {
-                PtrWidth::Bytes4 => {
+            use roc_target::Architecture::*;
+            match env.target_info.architecture {
+                Aarch32 | X86_32 => {
                     arguments!(list, start, count);
                     let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
 
@@ -377,7 +433,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         bitcode::STR_FROM_UTF8_RANGE,
                     );
                 }
-                PtrWidth::Bytes8 => {
+                Aarch64 | X86_64 | Wasm32 => {
                     arguments!(_list, start, count);
 
                     // we use the symbol here instead
@@ -397,7 +453,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 }
             }
 
-            crate::llvm::build_str::decode_from_utf8_result(env, result_ptr).into()
+            crate::llvm::build_str::decode_from_utf8_result(env, layout_interner, result_ptr)
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
@@ -450,80 +506,20 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             .into_int_value();
 
             // cast to the appropriate usize of the current build
-            let byte_count =
-                env.builder
-                    .build_int_cast_sign_flag(length, env.ptr_int(), false, "len_as_usize");
+            let byte_count = env.builder.new_build_int_cast_sign_flag(
+                length,
+                env.ptr_int(),
+                false,
+                "len_as_usize",
+            );
 
-            let is_zero = env.builder.build_int_compare(
+            let is_zero = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 byte_count,
                 env.ptr_int().const_zero(),
                 "str_len_is_zero",
             );
             BasicValueEnum::IntValue(is_zero)
-        }
-        StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Nat
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::Basic,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
-            )
-        }
-        StrGetScalarUnsafe => {
-            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
-            arguments!(string, index);
-
-            use roc_target::OperatingSystem::*;
-            match env.target_info.operating_system {
-                Windows => {
-                    let return_type = env.context.struct_type(
-                        &[env.ptr_int().into(), env.context.i32_type().into()],
-                        false,
-                    );
-
-                    let result = env.builder.build_alloca(return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[result.into(), string, index],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let return_type = basic_type_from_layout(env, layout_interner, layout);
-                    let cast_result = env.builder.build_pointer_cast(
-                        result,
-                        return_type.ptr_type(AddressSpace::Generic),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(return_type, cast_result, "load_result")
-                }
-                Unix => {
-                    let result = call_str_bitcode_fn(
-                        env,
-                        &[string],
-                        &[index],
-                        BitcodeReturns::Basic,
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    // on 32-bit targets, zig bitpacks the struct
-                    match env.target_info.ptr_width() {
-                        PtrWidth::Bytes8 => result,
-                        PtrWidth::Bytes4 => {
-                            let to = basic_type_from_layout(env, layout_interner, layout);
-                            complex_bitcast_check_size(env, result, to, "to_roc_record")
-                        }
-                    }
-                }
-                Wasi => unimplemented!(),
-            }
         }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
@@ -567,16 +563,16 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::STR_RESERVE,
             )
         }
-        StrAppendScalar => {
-            // Str.appendScalar : Str, U32 -> Str
-            arguments!(string, capacity);
+        StrReleaseExcessCapacity => {
+            // Str.releaseExcessCapacity: Str -> Str
+            arguments!(string);
 
             call_str_bitcode_fn(
                 env,
                 &[string],
-                &[capacity],
+                &[],
                 BitcodeReturns::Str,
-                bitcode::STR_APPEND_SCALAR,
+                bitcode::STR_RELEASE_EXCESS_CAPACITY,
             )
         }
         StrTrim => {
@@ -585,7 +581,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
             call_str_bitcode_fn(env, &[string], &[], BitcodeReturns::Str, bitcode::STR_TRIM)
         }
-        StrTrimLeft => {
+        StrTrimStart => {
             // Str.trim : Str -> Str
             arguments!(string);
 
@@ -594,10 +590,10 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[string],
                 &[],
                 BitcodeReturns::Str,
-                bitcode::STR_TRIM_LEFT,
+                bitcode::STR_TRIM_START,
             )
         }
-        StrTrimRight => {
+        StrTrimEnd => {
             // Str.trim : Str -> Str
             arguments!(string);
 
@@ -606,7 +602,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[string],
                 &[],
                 BitcodeReturns::Str,
-                bitcode::STR_TRIM_RIGHT,
+                bitcode::STR_TRIM_END,
             )
         }
         StrWithCapacity => {
@@ -621,18 +617,6 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
-        StrGraphemes => {
-            // Str.graphemes : Str -> List Str
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_GRAPHEMES,
-            )
-        }
         ListLen => {
             // List.len : List * -> Nat
             arguments!(list);
@@ -640,46 +624,52 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             list_len(env.builder, list.into_struct_value()).into()
         }
         ListGetCapacity => {
-            // List.capacity : List * -> Nat
+            // List.capacity: List a -> Nat
             arguments!(list);
 
-            list_capacity(env.builder, list.into_struct_value()).into()
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::LIST_CAPACITY,
+            )
         }
         ListWithCapacity => {
             // List.withCapacity : Nat -> List a
             arguments!(list_len);
 
-            let result_layout = *layout;
+            let result_layout = layout;
             list_with_capacity(
                 env,
                 layout_interner,
                 list_len.into_int_value(),
-                list_element_layout!(result_layout),
+                list_element_layout!(layout_interner, result_layout),
             )
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
 
-            let (first_list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (first_list, list_layout) = scope.load_symbol_and_layout(&args[0]);
 
-            let second_list = load_symbol(scope, &args[1]);
+            let second_list = scope.load_symbol(&args[1]);
 
-            let element_layout = list_element_layout!(list_layout);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
 
             list_concat(
                 env,
                 layout_interner,
                 first_list,
                 second_list,
-                *element_layout,
+                element_layout,
             )
         }
         ListAppendUnsafe => {
             // List.appendUnsafe : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
+            let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
             list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
         }
@@ -687,8 +677,8 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // List.prepend : List elem, elem -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+            let original_wrapper = scope.load_symbol(&args[0]).into_struct_value();
+            let (elem, elem_layout) = scope.load_symbol_and_layout(&args[1]);
 
             list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
         }
@@ -696,50 +686,59 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // List.reserve : List elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let element_layout = list_element_layout!(list_layout);
-            let spare = load_symbol(scope, &args[1]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+            let spare = scope.load_symbol(&args[1]);
 
             list_reserve(
                 env,
                 layout_interner,
                 list,
                 spare,
-                *element_layout,
+                element_layout,
                 update_mode,
             )
+        }
+        ListReleaseExcessCapacity => {
+            // List.releaseExcessCapacity: List elem -> List elem
+            debug_assert_eq!(args.len(), 1);
+
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+
+            list_release_excess_capacity(env, layout_interner, list, element_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
             debug_assert_eq!(args.len(), 3);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let index_1 = load_symbol(scope, &args[1]);
-            let index_2 = load_symbol(scope, &args[2]);
+            let index_1 = scope.load_symbol(&args[1]);
+            let index_2 = scope.load_symbol(&args[2]);
 
-            let element_layout = list_element_layout!(list_layout);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
             list_swap(
                 env,
                 layout_interner,
                 original_wrapper,
                 index_1.into_int_value(),
                 index_2.into_int_value(),
-                *element_layout,
+                element_layout,
                 update_mode,
             )
         }
         ListSublist => {
             debug_assert_eq!(args.len(), 3);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let start = load_symbol(scope, &args[1]);
-            let len = load_symbol(scope, &args[2]);
+            let start = scope.load_symbol(&args[1]);
+            let len = scope.load_symbol(&args[2]);
 
-            let element_layout = list_element_layout!(list_layout);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
             list_sublist(
                 env,
                 layout_interner,
@@ -747,26 +746,26 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 original_wrapper,
                 start.into_int_value(),
                 len.into_int_value(),
-                *element_layout,
+                element_layout,
             )
         }
         ListDropAt => {
             // List.dropAt : List elem, Nat -> List elem
             debug_assert_eq!(args.len(), 2);
 
-            let (list, list_layout) = load_symbol_and_layout(scope, &args[0]);
+            let (list, list_layout) = scope.load_symbol_and_layout(&args[0]);
             let original_wrapper = list.into_struct_value();
 
-            let count = load_symbol(scope, &args[1]);
+            let count = scope.load_symbol(&args[1]);
 
-            let element_layout = list_element_layout!(list_layout);
+            let element_layout = list_element_layout!(layout_interner, list_layout);
             list_drop_at(
                 env,
                 layout_interner,
                 layout_ids,
                 original_wrapper,
                 count.into_int_value(),
-                *element_layout,
+                element_layout,
             )
         }
         StrGetUnsafe => {
@@ -788,8 +787,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             list_get_unsafe(
                 env,
                 layout_interner,
-                layout_ids,
-                *list_element_layout!(list_layout),
+                list_element_layout!(layout_interner, list_layout),
                 element_index.into_int_value(),
                 wrapper_struct.into_struct_value(),
             )
@@ -820,12 +818,37 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::LIST_IS_UNIQUE,
             )
         }
+        ListClone => {
+            // List.clone : List a -> List a
+            arguments_with_layouts!((list, list_layout));
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+
+            match update_mode {
+                UpdateMode::Immutable => {
+                    //
+                    call_list_bitcode_fn(
+                        env,
+                        &[list.into_struct_value()],
+                        &[
+                            env.alignment_intvalue(layout_interner, element_layout),
+                            layout_width(env, layout_interner, element_layout),
+                        ],
+                        BitcodeReturns::List,
+                        bitcode::LIST_CLONE,
+                    )
+                }
+                UpdateMode::InPlace => {
+                    // we statically know the list is unique
+                    list
+                }
+            }
+        }
         NumToStr => {
             // Num.toStr : Num a -> Str
             arguments_with_layouts!((num, num_layout));
 
-            match num_layout {
-                Layout::Builtin(Builtin::Int(int_width)) => {
+            match layout_interner.get_repr(num_layout) {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => {
                     let int = num.into_int_value();
 
                     call_str_bitcode_fn(
@@ -833,14 +856,14 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         &[],
                         &[int.into()],
                         BitcodeReturns::Str,
-                        &bitcode::STR_FROM_INT[*int_width],
+                        &bitcode::STR_FROM_INT[int_width],
                     )
                 }
-                Layout::Builtin(Builtin::Float(_float_width)) => {
-                    let (float, float_layout) = load_symbol_and_layout(scope, &args[0]);
+                LayoutRepr::Builtin(Builtin::Float(_float_width)) => {
+                    let (float, float_layout) = scope.load_symbol_and_layout(&args[0]);
 
-                    let float_width = match float_layout {
-                        Layout::Builtin(Builtin::Float(float_width)) => *float_width,
+                    let float_width = match layout_interner.get_repr(float_layout) {
+                        LayoutRepr::Builtin(Builtin::Float(float_width)) => float_width,
                         _ => unreachable!(),
                     };
 
@@ -852,28 +875,46 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         &bitcode::STR_FROM_FLOAT[float_width],
                     )
                 }
-                Layout::Builtin(Builtin::Decimal) => dec_to_str(env, num),
+                LayoutRepr::Builtin(Builtin::Decimal) => dec_to_str(env, num),
                 _ => unreachable!(),
             }
         }
-        NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
-        | NumCeiling | NumFloor | NumToFrac | NumIsFinite | NumAtan | NumAcos | NumAsin
-        | NumToIntChecked => {
+        NumAbs
+        | NumNeg
+        | NumRound
+        | NumSqrtUnchecked
+        | NumLogUnchecked
+        | NumSin
+        | NumCos
+        | NumTan
+        | NumCeiling
+        | NumFloor
+        | NumToFrac
+        | NumIsNan
+        | NumIsInfinite
+        | NumIsFinite
+        | NumAtan
+        | NumAcos
+        | NumAsin
+        | NumToIntChecked
+        | NumCountLeadingZeroBits
+        | NumCountTrailingZeroBits
+        | NumCountOneBits => {
             arguments_with_layouts!((arg, arg_layout));
 
-            match arg_layout {
-                Layout::Builtin(arg_builtin) => {
+            match layout_interner.get_repr(arg_layout) {
+                LayoutRepr::Builtin(arg_builtin) => {
                     use roc_mono::layout::Builtin::*;
 
                     match arg_builtin {
                         Int(int_width) => {
-                            let int_type = convert::int_type_from_int_width(env, *int_width);
+                            let int_type = convert::int_type_from_int_width(env, int_width);
                             build_int_unary_op(
                                 env,
                                 layout_interner,
                                 parent,
                                 arg.into_int_value(),
-                                *int_width,
+                                int_width,
                                 int_type,
                                 op,
                                 layout,
@@ -881,11 +922,16 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         }
                         Float(float_width) => build_float_unary_op(
                             env,
+                            layout_interner,
                             layout,
                             arg.into_float_value(),
                             op,
-                            *float_width,
+                            float_width,
                         ),
+                        Decimal => {
+                            build_dec_unary_op(env, layout_interner, parent, arg, layout, op)
+                        }
+
                         _ => {
                             unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, arg_layout);
                         }
@@ -921,12 +967,46 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 bitcode::NUM_BYTES_TO_U32,
             )
         }
+        NumBytesToU64 => {
+            arguments!(list, position);
+
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U64,
+            )
+        }
+        NumBytesToU128 => {
+            arguments!(list, position);
+
+            let ret = call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[position],
+                BitcodeReturns::Basic,
+                bitcode::NUM_BYTES_TO_U128,
+            );
+
+            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+                // On windows the return type is not a i128, likely due to alignment
+                env.builder
+                    .build_bitcast(ret, env.context.i128_type(), "empty_string")
+                    .unwrap()
+            } else {
+                ret
+            }
+        }
         NumCompare => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             use inkwell::FloatPredicate;
-            match (lhs_layout, rhs_layout) {
-                (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+            match (
+                layout_interner.get_repr(lhs_layout),
+                layout_interner.get_repr(rhs_layout),
+            ) {
+                (LayoutRepr::Builtin(lhs_builtin), LayoutRepr::Builtin(rhs_builtin))
                     if lhs_builtin == rhs_builtin =>
                 {
                     use roc_mono::layout::Builtin::*;
@@ -937,7 +1017,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
                     match lhs_builtin {
                         Int(int_width) => {
-                            let are_equal = env.builder.build_int_compare(
+                            let are_equal = env.builder.new_build_int_compare(
                                 IntPredicate::EQ,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
@@ -950,18 +1030,21 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                                 IntPredicate::ULT
                             };
 
-                            let is_less_than = env.builder.build_int_compare(
+                            let is_less_than = env.builder.new_build_int_compare(
                                 predicate,
                                 lhs_arg.into_int_value(),
                                 rhs_arg.into_int_value(),
                                 "int_compare",
                             );
 
-                            let step1 =
-                                env.builder
-                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+                            let step1 = env.builder.new_build_select(
+                                is_less_than,
+                                tag_lt,
+                                tag_gt,
+                                "lt_or_gt",
+                            );
 
-                            env.builder.build_select(
+                            env.builder.new_build_select(
                                 are_equal,
                                 tag_eq,
                                 step1.into_int_value(),
@@ -969,28 +1052,39 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             )
                         }
                         Float(_) => {
-                            let are_equal = env.builder.build_float_compare(
+                            let are_equal = env.builder.new_build_float_compare(
                                 FloatPredicate::OEQ,
                                 lhs_arg.into_float_value(),
                                 rhs_arg.into_float_value(),
                                 "float_eq",
                             );
-                            let is_less_than = env.builder.build_float_compare(
+                            let is_less_than = env.builder.new_build_float_compare(
                                 FloatPredicate::OLT,
                                 lhs_arg.into_float_value(),
                                 rhs_arg.into_float_value(),
                                 "float_compare",
                             );
 
-                            let step1 =
-                                env.builder
-                                    .build_select(is_less_than, tag_lt, tag_gt, "lt_or_gt");
+                            let step1 = env.builder.new_build_select(
+                                is_less_than,
+                                tag_lt,
+                                tag_gt,
+                                "lt_or_gt",
+                            );
 
-                            env.builder.build_select(
+                            env.builder.new_build_select(
                                 are_equal,
                                 tag_eq,
                                 step1.into_int_value(),
                                 "lt_or_gt",
+                            )
+                        }
+                        Decimal => {
+                            //
+                            call_bitcode_fn(
+                                env,
+                                &[lhs_arg, rhs_arg],
+                                &bitcode::NUM_COMPARE[IntWidth::I128],
                             )
                         }
 
@@ -1011,16 +1105,27 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
         | NumSubChecked | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
-            build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
+            build_num_binop(
+                env,
+                layout_interner,
+                parent,
+                lhs_arg,
+                lhs_layout,
+                rhs_arg,
+                rhs_layout,
+                layout,
+                op,
+            )
         }
         NumBitwiseAnd | NumBitwiseOr | NumBitwiseXor => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             debug_assert_eq!(lhs_layout, rhs_layout);
-            let int_width = intwidth_from_layout(*lhs_layout);
+            let int_width = intwidth_from_layout(lhs_layout);
 
             build_int_binop(
                 env,
+                layout_interner,
                 parent,
                 int_width,
                 lhs_arg.into_int_value(),
@@ -1031,14 +1136,14 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
         NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
-            let int_width = intwidth_from_layout(*lhs_layout);
+            let int_width = intwidth_from_layout(lhs_layout);
 
-            debug_assert_eq!(rhs_layout, &Layout::Builtin(Builtin::Int(IntWidth::U8)));
+            debug_assert_eq!(rhs_layout, Layout::U8);
             let rhs_arg = if rhs_layout != lhs_layout {
                 // LLVM shift intrinsics expect the left and right sides to have the same type, so
                 // here we cast up `rhs` to the lhs type. Since the rhs was checked to be a U8,
                 // this cast isn't lossy.
-                let rhs_arg = env.builder.build_int_cast(
+                let rhs_arg = env.builder.new_build_int_cast(
                     rhs_arg.into_int_value(),
                     lhs_arg.get_type().into_int_type(),
                     "cast_for_shift",
@@ -1050,6 +1155,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
             build_int_binop(
                 env,
+                layout_interner,
                 parent,
                 int_width,
                 lhs_arg.into_int_value(),
@@ -1060,43 +1166,52 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
         NumIntCast => {
             arguments!(arg);
 
-            let to = basic_type_from_layout(env, layout_interner, layout).into_int_type();
-            let to_signed = intwidth_from_layout(*layout).is_signed();
+            let to = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                .into_int_type();
+            let to_signed = intwidth_from_layout(layout).is_signed();
 
             env.builder
-                .build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
+                .new_build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
                 .into()
         }
         NumToFloatCast => {
             arguments_with_layouts!((arg, arg_layout));
 
-            match arg_layout {
-                Layout::Builtin(Builtin::Int(width)) => {
+            match layout_interner.get_repr(arg_layout) {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
                     // Converting from int to float
                     let int_val = arg.into_int_value();
-                    let dest =
-                        basic_type_from_layout(env, layout_interner, layout).into_float_type();
+                    let dest = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .into_float_type();
 
                     if width.is_signed() {
                         env.builder
-                            .build_signed_int_to_float(int_val, dest, "signed_int_to_float")
+                            .new_build_signed_int_to_float(int_val, dest, "signed_int_to_float")
                             .into()
                     } else {
                         env.builder
-                            .build_unsigned_int_to_float(int_val, dest, "unsigned_int_to_float")
+                            .new_build_unsigned_int_to_float(int_val, dest, "unsigned_int_to_float")
                             .into()
                     }
                 }
-                Layout::Builtin(Builtin::Float(_)) => {
+                LayoutRepr::Builtin(Builtin::Float(_)) => {
                     // Converting from float to float - e.g. F64 to F32, or vice versa
-                    let dest =
-                        basic_type_from_layout(env, layout_interner, layout).into_float_type();
+                    let dest = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    )
+                    .into_float_type();
 
                     env.builder
-                        .build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
+                        .new_build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
                         .into()
                 }
-                Layout::Builtin(Builtin::Decimal) => {
+                LayoutRepr::Builtin(Builtin::Decimal) => {
                     todo!("Support converting Dec values to floats.");
                 }
                 other => {
@@ -1108,6 +1223,10 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // NOTE: There's a NumToIntChecked implementation above,
             // which could be useful to look at when implementing this.
             todo!("implement checked float conversion");
+        }
+        I128OfDec => {
+            arguments!(dec);
+            dec_unary_op(env, bitcode::DEC_TO_I128, dec)
         }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1139,7 +1258,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // The (&&) operator
             arguments!(lhs_arg, rhs_arg);
 
-            let bool_val = env.builder.build_and(
+            let bool_val = env.builder.new_build_and(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
                 "bool_and",
@@ -1151,7 +1270,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // The (||) operator
             arguments!(lhs_arg, rhs_arg);
 
-            let bool_val = env.builder.build_or(
+            let bool_val = env.builder.new_build_or(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
                 "bool_or",
@@ -1163,7 +1282,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // The (!) operator
             arguments!(arg);
 
-            let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
+            let bool_val = env.builder.new_build_not(arg.into_int_value(), "bool_not");
             BasicValueEnum::IntValue(bool_val)
         }
         Hash => {
@@ -1178,36 +1297,114 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("The {:?} operation is turned into mono Expr", op)
         }
 
-        PtrCast | RefCountInc | RefCountDec => {
+        PtrCast => {
+            arguments!(data_ptr);
+
+            let target_type =
+                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
+                    .into_pointer_type();
+
+            debug_assert!(data_ptr.is_pointer_value());
+
+            env.builder
+                .new_build_pointer_cast(data_ptr.into_pointer_value(), target_type, "ptr_cast")
+                .into()
+        }
+
+        PtrStore => {
+            arguments!(ptr, value);
+
+            env.builder.new_build_store(ptr.into_pointer_value(), value);
+
+            // ptr
+            env.context.struct_type(&[], false).const_zero().into()
+        }
+
+        PtrLoad => {
+            arguments!(ptr);
+
+            let ret_repr = layout_interner.get_repr(layout);
+            let element_type = basic_type_from_layout(env, layout_interner, ret_repr);
+
+            env.builder
+                .new_build_load(element_type, ptr.into_pointer_value(), "ptr_load")
+        }
+
+        PtrClearTagId => {
+            arguments!(ptr);
+
+            tag_pointer_clear_tag_id(env, ptr.into_pointer_value()).into()
+        }
+
+        RefCountIncRcPtr | RefCountDecRcPtr | RefCountIncDataPtr | RefCountDecDataPtr => {
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 
-        Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {
-            RocReturn::Return => {
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
-                basic_type.const_zero()
-            }
-            RocReturn::ByPointer => {
-                let basic_type = basic_type_from_layout(env, layout_interner, layout);
-                let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
-                env.builder.build_store(ptr, basic_type.const_zero());
+        RefCountIsUnique => {
+            arguments_with_layouts!((data_ptr, data_layout));
 
-                ptr.into()
+            let ptr = env.builder.new_build_pointer_cast(
+                data_ptr.into_pointer_value(),
+                env.context.i8_type().ptr_type(AddressSpace::default()),
+                "cast_to_i8_ptr",
+            );
+
+            let value_ptr = match layout_interner.runtime_representation(data_layout) {
+                LayoutRepr::Union(union_layout)
+                    if union_layout.stores_tag_id_in_pointer(env.target_info) =>
+                {
+                    tag_pointer_clear_tag_id(env, ptr)
+                }
+                _ => ptr,
+            };
+
+            let refcount_ptr = PointerToRefcount::from_ptr_to_data(env, value_ptr);
+
+            BasicValueEnum::IntValue(refcount_ptr.is_1(env))
+        }
+
+        Unreachable => {
+            match RocReturn::from_layout(layout_interner, layout_interner.get_repr(layout)) {
+                RocReturn::Return => {
+                    let basic_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
+                    basic_type.const_zero()
+                }
+                RocReturn::ByPointer => {
+                    let basic_type = basic_type_from_layout(
+                        env,
+                        layout_interner,
+                        layout_interner.get_repr(layout),
+                    );
+                    let ptr = env
+                        .builder
+                        .new_build_alloca(basic_type, "unreachable_alloca");
+                    env.builder.new_build_store(ptr, basic_type.const_zero());
+
+                    ptr.into()
+                }
             }
-        },
+        }
+        DictPseudoSeed => {
+            // Dict.pseudoSeed : {} -> u64
+
+            call_bitcode_fn(env, &[], bitcode::UTILS_DICT_PSEUDO_SEED)
+        }
+
+        SetJmp | LongJmp | SetLongJmpBuffer => unreachable!("only inserted in dev backend codegen"),
     }
 }
 
-fn intwidth_from_layout(layout: Layout) -> IntWidth {
-    match layout {
-        Layout::Builtin(Builtin::Int(int_width)) => int_width,
-
-        _ => unreachable!(),
-    }
+fn intwidth_from_layout(layout: InLayout) -> IntWidth {
+    layout.to_int_width()
 }
 
-fn build_int_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_int_binop<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'_>,
     parent: FunctionValue<'ctx>,
     int_width: IntWidth,
     lhs: IntValue<'ctx>,
@@ -1228,13 +1425,26 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer addition overflowed!")
+            throw_on_overflow(env, parent, result, "Integer addition overflowed!")
         }
-        NumAddWrap => bd.build_int_add(lhs, rhs, "add_int_wrap").into(),
-        NumAddChecked => env.call_intrinsic(
-            &LLVM_ADD_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumAddWrap => bd.new_build_int_add(lhs, rhs, "add_int_wrap").into(),
+        NumAddChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_ADD_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_add_with_overflow",
+            )
+        }
         NumAddSaturated => {
             env.call_intrinsic(&LLVM_ADD_SATURATED[int_width], &[lhs.into(), rhs.into()])
         }
@@ -1246,13 +1456,26 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
+            throw_on_overflow(env, parent, result, "Integer subtraction overflowed!")
         }
-        NumSubWrap => bd.build_int_sub(lhs, rhs, "sub_int").into(),
-        NumSubChecked => env.call_intrinsic(
-            &LLVM_SUB_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumSubWrap => bd.new_build_int_sub(lhs, rhs, "sub_int").into(),
+        NumSubChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_SUB_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_sub_with_overflow",
+            )
+        }
         NumSubSaturated => {
             env.call_intrinsic(&LLVM_SUB_SATURATED[int_width], &[lhs.into(), rhs.into()])
         }
@@ -1264,51 +1487,64 @@ fn build_int_binop<'a, 'ctx, 'env>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
+            throw_on_overflow(env, parent, result, "Integer multiplication overflowed!")
         }
-        NumMulWrap => bd.build_int_mul(lhs, rhs, "mul_int").into(),
+        NumMulWrap => bd.new_build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulSaturated => call_bitcode_fn(
             env,
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_MUL_SATURATED_INT[int_width],
         ),
-        NumMulChecked => env.call_intrinsic(
-            &LLVM_MUL_WITH_OVERFLOW[int_width],
-            &[lhs.into(), rhs.into()],
-        ),
+        NumMulChecked => {
+            let with_overflow = env.call_intrinsic(
+                &LLVM_MUL_WITH_OVERFLOW[int_width],
+                &[lhs.into(), rhs.into()],
+            );
+
+            let layout = Layout::from_int_width(int_width);
+            let layout_repr = LayoutRepr::Struct(env.arena.alloc([layout, Layout::BOOL]));
+
+            use_roc_value(
+                env,
+                layout_interner,
+                layout_repr,
+                with_overflow,
+                "num_mul_with_overflow",
+            )
+        }
         NumGt => {
             if int_width.is_signed() {
-                bd.build_int_compare(SGT, lhs, rhs, "gt_int").into()
+                bd.new_build_int_compare(SGT, lhs, rhs, "gt_int").into()
             } else {
-                bd.build_int_compare(UGT, lhs, rhs, "gt_uint").into()
+                bd.new_build_int_compare(UGT, lhs, rhs, "gt_uint").into()
             }
         }
         NumGte => {
             if int_width.is_signed() {
-                bd.build_int_compare(SGE, lhs, rhs, "gte_int").into()
+                bd.new_build_int_compare(SGE, lhs, rhs, "gte_int").into()
             } else {
-                bd.build_int_compare(UGE, lhs, rhs, "gte_uint").into()
+                bd.new_build_int_compare(UGE, lhs, rhs, "gte_uint").into()
             }
         }
         NumLt => {
             if int_width.is_signed() {
-                bd.build_int_compare(SLT, lhs, rhs, "lt_int").into()
+                bd.new_build_int_compare(SLT, lhs, rhs, "lt_int").into()
             } else {
-                bd.build_int_compare(ULT, lhs, rhs, "lt_uint").into()
+                bd.new_build_int_compare(ULT, lhs, rhs, "lt_uint").into()
             }
         }
         NumLte => {
             if int_width.is_signed() {
-                bd.build_int_compare(SLE, lhs, rhs, "lte_int").into()
+                bd.new_build_int_compare(SLE, lhs, rhs, "lte_int").into()
             } else {
-                bd.build_int_compare(ULE, lhs, rhs, "lte_uint").into()
+                bd.new_build_int_compare(ULE, lhs, rhs, "lte_uint").into()
             }
         }
         NumRemUnchecked => {
             if int_width.is_signed() {
-                bd.build_int_signed_rem(lhs, rhs, "rem_int").into()
+                bd.new_build_int_signed_rem(lhs, rhs, "rem_int").into()
             } else {
-                bd.build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
+                bd.new_build_int_unsigned_rem(lhs, rhs, "rem_uint").into()
             }
         }
         NumIsMultipleOf => {
@@ -1338,44 +1574,44 @@ fn build_int_binop<'a, 'ctx, 'env>(
             let cont_block = env.context.append_basic_block(parent, "branchcont");
 
             if is_signed {
-                bd.build_switch(
+                bd.new_build_switch(
                     rhs,
                     default_block,
                     &[(zero, special_block), (neg_1, special_block)],
                 )
             } else {
-                bd.build_switch(rhs, default_block, &[(zero, special_block)])
+                bd.new_build_switch(rhs, default_block, &[(zero, special_block)])
             };
 
             let condition_rem = {
                 bd.position_at_end(default_block);
 
                 let rem = if is_signed {
-                    bd.build_int_signed_rem(lhs, rhs, "int_rem")
+                    bd.new_build_int_signed_rem(lhs, rhs, "int_rem")
                 } else {
-                    bd.build_int_unsigned_rem(lhs, rhs, "uint_rem")
+                    bd.new_build_int_unsigned_rem(lhs, rhs, "uint_rem")
                 };
-                let result = bd.build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
+                let result = bd.new_build_int_compare(IntPredicate::EQ, rem, zero, "is_zero_rem");
 
-                bd.build_unconditional_branch(cont_block);
+                bd.new_build_unconditional_branch(cont_block);
                 result
             };
 
             let condition_special = {
                 bd.position_at_end(special_block);
 
-                let is_zero = bd.build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
+                let is_zero = bd.new_build_int_compare(IntPredicate::EQ, lhs, zero, "is_zero_lhs");
 
                 let result = if is_signed {
                     let is_neg_one =
-                        bd.build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
+                        bd.new_build_int_compare(IntPredicate::EQ, rhs, neg_1, "is_neg_one_rhs");
 
-                    bd.build_or(is_neg_one, is_zero, "cond")
+                    bd.new_build_or(is_neg_one, is_zero, "cond")
                 } else {
                     is_zero
                 };
 
-                bd.build_unconditional_branch(cont_block);
+                bd.new_build_unconditional_branch(cont_block);
 
                 result
             };
@@ -1383,7 +1619,7 @@ fn build_int_binop<'a, 'ctx, 'env>(
             {
                 bd.position_at_end(cont_block);
 
-                let phi = bd.build_phi(env.context.bool_type(), "branch");
+                let phi = bd.new_build_phi(env.context.bool_type(), "branch");
 
                 phi.add_incoming(&[
                     (&condition_rem, default_block),
@@ -1400,9 +1636,9 @@ fn build_int_binop<'a, 'ctx, 'env>(
         ),
         NumDivTruncUnchecked => {
             if int_width.is_signed() {
-                bd.build_int_signed_div(lhs, rhs, "div_int").into()
+                bd.new_build_int_signed_div(lhs, rhs, "div_int").into()
             } else {
-                bd.build_int_unsigned_div(lhs, rhs, "div_uint").into()
+                bd.new_build_int_unsigned_div(lhs, rhs, "div_uint").into()
             }
         }
         NumDivCeilUnchecked => call_bitcode_fn(
@@ -1410,15 +1646,15 @@ fn build_int_binop<'a, 'ctx, 'env>(
             &[lhs.into(), rhs.into()],
             &bitcode::NUM_DIV_CEIL[int_width],
         ),
-        NumBitwiseAnd => bd.build_and(lhs, rhs, "int_bitwise_and").into(),
-        NumBitwiseXor => bd.build_xor(lhs, rhs, "int_bitwise_xor").into(),
-        NumBitwiseOr => bd.build_or(lhs, rhs, "int_bitwise_or").into(),
-        NumShiftLeftBy => bd.build_left_shift(lhs, rhs, "int_shift_left").into(),
+        NumBitwiseAnd => bd.new_build_and(lhs, rhs, "int_bitwise_and").into(),
+        NumBitwiseXor => bd.new_build_xor(lhs, rhs, "int_bitwise_xor").into(),
+        NumBitwiseOr => bd.new_build_or(lhs, rhs, "int_bitwise_or").into(),
+        NumShiftLeftBy => bd.new_build_left_shift(lhs, rhs, "int_shift_left").into(),
         NumShiftRightBy => bd
-            .build_right_shift(lhs, rhs, true, "int_shift_right")
+            .new_build_right_shift(lhs, rhs, true, "int_shift_right")
             .into(),
         NumShiftRightZfBy => bd
-            .build_right_shift(lhs, rhs, false, "int_shift_right_zf")
+            .new_build_right_shift(lhs, rhs, false, "int_shift_right_zf")
             .into(),
 
         _ => {
@@ -1427,17 +1663,22 @@ fn build_int_binop<'a, 'ctx, 'env>(
     }
 }
 
-pub fn build_num_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub fn build_num_binop<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     lhs_arg: BasicValueEnum<'ctx>,
-    lhs_layout: &Layout<'a>,
+    lhs_layout: InLayout<'a>,
     rhs_arg: BasicValueEnum<'ctx>,
-    rhs_layout: &Layout<'a>,
+    rhs_layout: InLayout<'a>,
+    return_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
-    match (lhs_layout, rhs_layout) {
-        (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
+    match (
+        layout_interner.get_repr(lhs_layout),
+        layout_interner.get_repr(rhs_layout),
+    ) {
+        (LayoutRepr::Builtin(lhs_builtin), LayoutRepr::Builtin(rhs_builtin))
             if lhs_builtin == rhs_builtin =>
         {
             use roc_mono::layout::Builtin::*;
@@ -1445,8 +1686,9 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
             match lhs_builtin {
                 Int(int_width) => build_int_binop(
                     env,
+                    layout_interner,
                     parent,
-                    *int_width,
+                    int_width,
                     lhs_arg.into_int_value(),
                     rhs_arg.into_int_value(),
                     op,
@@ -1454,15 +1696,21 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
 
                 Float(float_width) => build_float_binop(
                     env,
-                    *float_width,
+                    float_width,
                     lhs_arg.into_float_value(),
                     rhs_arg.into_float_value(),
                     op,
                 ),
 
-                Decimal => {
-                    build_dec_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
-                }
+                Decimal => build_dec_binop(
+                    env,
+                    layout_interner,
+                    parent,
+                    lhs_arg,
+                    rhs_arg,
+                    return_layout,
+                    op,
+                ),
                 _ => {
                     unreachable!("Compiler bug: tried to run numeric operation {:?} on invalid builtin layout: ({:?})", op, lhs_layout);
                 }
@@ -1474,8 +1722,8 @@ pub fn build_num_binop<'a, 'ctx, 'env>(
     }
 }
 
-fn build_float_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_float_binop<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     float_width: FloatWidth,
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
@@ -1486,22 +1734,25 @@ fn build_float_binop<'a, 'ctx, 'env>(
 
     let bd = env.builder;
 
+    let float_type = match float_width {
+        FloatWidth::F32 => env.context.f32_type(),
+        FloatWidth::F64 => env.context.f64_type(),
+    };
+
     match op {
-        NumAdd => bd.build_float_add(lhs, rhs, "add_float").into(),
+        NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
             let context = env.context;
 
-            let result = bd.build_float_add(lhs, rhs, "add_float");
+            let result = bd.new_build_float_add(lhs, rhs, "add_float");
 
             let is_finite =
                 call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
-            let is_infinite = bd.build_not(is_finite, "negate");
+            let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1516,21 +1767,19 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumAddWrap => unreachable!("wrapping addition is not defined on floats"),
-        NumSub => bd.build_float_sub(lhs, rhs, "sub_float").into(),
+        NumSub => bd.new_build_float_sub(lhs, rhs, "sub_float").into(),
         NumSubChecked => {
             let context = env.context;
 
-            let result = bd.build_float_sub(lhs, rhs, "sub_float");
+            let result = bd.new_build_float_sub(lhs, rhs, "sub_float");
 
             let is_finite =
                 call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
-            let is_infinite = bd.build_not(is_finite, "negate");
+            let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1545,22 +1794,20 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumSubWrap => unreachable!("wrapping subtraction is not defined on floats"),
-        NumMul => bd.build_float_mul(lhs, rhs, "mul_float").into(),
-        NumMulSaturated => bd.build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMul => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
+        NumMulSaturated => bd.new_build_float_mul(lhs, rhs, "mul_float").into(),
         NumMulChecked => {
             let context = env.context;
 
-            let result = bd.build_float_mul(lhs, rhs, "mul_float");
+            let result = bd.new_build_float_mul(lhs, rhs, "mul_float");
 
             let is_finite =
                 call_bitcode_fn(env, &[result.into()], &bitcode::NUM_IS_FINITE[float_width])
                     .into_int_value();
-            let is_infinite = bd.build_not(is_finite, "negate");
+            let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1575,20 +1822,28 @@ fn build_float_binop<'a, 'ctx, 'env>(
             struct_value.into()
         }
         NumMulWrap => unreachable!("wrapping multiplication is not defined on floats"),
-        NumGt => bd.build_float_compare(OGT, lhs, rhs, "float_gt").into(),
-        NumGte => bd.build_float_compare(OGE, lhs, rhs, "float_gte").into(),
-        NumLt => bd.build_float_compare(OLT, lhs, rhs, "float_lt").into(),
-        NumLte => bd.build_float_compare(OLE, lhs, rhs, "float_lte").into(),
-        NumDivFrac => bd.build_float_div(lhs, rhs, "div_float").into(),
-        NumPow => env.call_intrinsic(&LLVM_POW[float_width], &[lhs.into(), rhs.into()]),
+        NumGt => bd.new_build_float_compare(OGT, lhs, rhs, "float_gt").into(),
+        NumGte => bd
+            .new_build_float_compare(OGE, lhs, rhs, "float_gte")
+            .into(),
+        NumLt => bd.new_build_float_compare(OLT, lhs, rhs, "float_lt").into(),
+        NumLte => bd
+            .new_build_float_compare(OLE, lhs, rhs, "float_lte")
+            .into(),
+        NumDivFrac => bd.new_build_float_div(lhs, rhs, "div_float").into(),
+        NumPow => call_bitcode_fn(
+            env,
+            &[lhs.into(), rhs.into()],
+            &bitcode::NUM_POW[float_width],
+        ),
         _ => {
             unreachable!("Unrecognized int binary operation: {:?}", op);
         }
     }
 }
 
-fn throw_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn throw_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     parent: FunctionValue<'ctx>,
     result: StructValue<'ctx>, // of the form { value: T, has_overflowed: bool }
     message: &str,
@@ -1598,7 +1853,7 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
 
     let has_overflowed = bd.build_extract_value(result, 1, "has_overflowed").unwrap();
 
-    let condition = bd.build_int_compare(
+    let condition = bd.new_build_int_compare(
         IntPredicate::EQ,
         has_overflowed.into_int_value(),
         context.bool_type().const_zero(),
@@ -1608,11 +1863,11 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
     let then_block = context.append_basic_block(parent, "then_block");
     let throw_block = context.append_basic_block(parent, "throw_block");
 
-    bd.build_conditional_branch(condition, then_block, throw_block);
+    bd.new_build_conditional_branch(condition, then_block, throw_block);
 
     bd.position_at_end(throw_block);
 
-    throw_internal_exception(env, parent, message);
+    throw_because_overflow(env, message);
 
     bd.position_at_end(then_block);
 
@@ -1620,8 +1875,62 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
         .unwrap()
 }
 
-fn dec_split_into_words<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn throw_because_overflow(env: &Env<'_, '_, '_>, message: &str) {
+    let block = env.builder.get_insert_block().expect("to be in a function");
+    let di_location = env.builder.get_current_debug_location().unwrap();
+
+    let function_name = "throw_on_overflow";
+    let function = match env.module.get_function(function_name) {
+        Some(function_value) => function_value,
+        None => {
+            let function_type = env.context.void_type().fn_type(&[], false);
+            let function_value =
+                env.module
+                    .add_function(function_name, function_type, Some(Linkage::Internal));
+
+            function_value.set_call_conventions(FAST_CALL_CONV);
+
+            // prevent inlining of this function
+            let kind_id = Attribute::get_named_enum_kind_id("noinline");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // calling this function is unlikely
+            let kind_id = Attribute::get_named_enum_kind_id("cold");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // this function never returns
+            let kind_id = Attribute::get_named_enum_kind_id("noreturn");
+            debug_assert!(kind_id > 0);
+            let enum_attr = env.context.create_enum_attribute(kind_id, 0);
+            function_value.add_attribute(AttributeLoc::Function, enum_attr);
+
+            // Add a basic block for the entry point
+            let entry = env.context.append_basic_block(function_value, "entry");
+
+            env.builder.position_at_end(entry);
+
+            // ends in unreachable, so no return is needed
+            throw_internal_exception(env, function_value, message);
+
+            function_value
+        }
+    };
+
+    env.builder.position_at_end(block);
+    env.builder.set_current_debug_location(di_location);
+
+    let call = env.builder.new_build_call(function, &[], "overflow");
+    call.set_call_convention(FAST_CALL_CONV);
+
+    env.builder.new_build_unreachable();
+}
+
+fn dec_split_into_words<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     value: IntValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
     let int_64 = env.context.i128_type().const_int(64, false);
@@ -1629,56 +1938,72 @@ fn dec_split_into_words<'a, 'ctx, 'env>(
 
     let left_bits_i128 = env
         .builder
-        .build_right_shift(value, int_64, false, "left_bits_i128");
+        .new_build_right_shift(value, int_64, false, "left_bits_i128");
 
     (
-        env.builder.build_int_cast(value, int_64_type, ""),
-        env.builder.build_int_cast(left_bits_i128, int_64_type, ""),
+        env.builder.new_build_int_cast(value, int_64_type, ""),
+        env.builder
+            .new_build_int_cast(left_bits_i128, int_64_type, ""),
     )
 }
 
-fn dec_alloca<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    value: IntValue<'ctx>,
-) -> PointerValue<'ctx> {
-    let dec_type = zig_dec_type(env);
+fn dec_alloca<'ctx>(env: &Env<'_, 'ctx, '_>, value: IntValue<'ctx>) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
+    use roc_target::OperatingSystem::*;
+    match env.target_info.operating_system {
+        Windows => {
+            let dec_type = zig_dec_type(env);
 
-    let alloca = env.builder.build_alloca(dec_type, "dec_alloca");
+            let alloca = env.builder.new_build_alloca(dec_type, "dec_alloca");
 
-    let instruction = alloca.as_instruction_value().unwrap();
-    instruction.set_alignment(16).unwrap();
+            let instruction = alloca.as_instruction_value().unwrap();
+            instruction.set_alignment(16).unwrap();
 
-    let ptr = env.builder.build_pointer_cast(
-        alloca,
-        value.get_type().ptr_type(AddressSpace::Generic),
-        "cast_to_i128_ptr",
-    );
+            let ptr = env.builder.new_build_pointer_cast(
+                alloca,
+                value.get_type().ptr_type(AddressSpace::default()),
+                "cast_to_i128_ptr",
+            );
 
-    env.builder.build_store(ptr, value);
+            env.builder.new_build_store(ptr, value);
 
-    alloca
+            alloca.into()
+        }
+        Unix => {
+            if matches!(env.target_info.architecture, X86_32 | X86_64) {
+                internal_error!("X86 unix does not pass with a dec alloc instead it splits into high and low halves");
+            }
+            let i64_type = env.context.i64_type();
+            let alloca = env
+                .builder
+                .build_array_alloca(i64_type, i64_type.const_int(2, false), "dec_alloca")
+                .unwrap();
+            let instruction = alloca.as_instruction_value().unwrap();
+            instruction.set_alignment(16).unwrap();
+            let ptr = env.builder.new_build_pointer_cast(
+                alloca,
+                value.get_type().ptr_type(AddressSpace::default()),
+                "cast_to_i128_ptr",
+            );
+            env.builder.new_build_store(ptr, value);
+            env.builder
+                .new_build_load(i64_type.array_type(2), alloca, "load as array")
+        }
+        Wasi => unimplemented!(),
+    }
 }
 
-fn dec_to_str<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    dec: BasicValueEnum<'ctx>,
-) -> BasicValueEnum<'ctx> {
+fn dec_to_str<'ctx>(env: &Env<'_, 'ctx, '_>, dec: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let dec = dec.into_int_value();
 
-    match env.target_info.operating_system {
-        Windows => {
-            //
-            call_str_bitcode_fn(
-                env,
-                &[],
-                &[dec_alloca(env, dec).into()],
-                BitcodeReturns::Str,
-                bitcode::DEC_TO_STR,
-            )
-        }
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (low, high) = dec_split_into_words(env, dec);
 
             call_str_bitcode_fn(
@@ -1689,40 +2014,73 @@ fn dec_to_str<'a, 'ctx, 'env>(
                 bitcode::DEC_TO_STR,
             )
         }
-        Wasi => unimplemented!(),
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_str_bitcode_fn(
+            env,
+            &[],
+            &[dec.into()],
+            BitcodeReturns::Str,
+            bitcode::DEC_TO_STR,
+        ),
+        _ => call_str_bitcode_fn(
+            env,
+            &[],
+            &[dec_alloca(env, dec)],
+            BitcodeReturns::Str,
+            bitcode::DEC_TO_STR,
+        ),
     }
 }
 
-fn dec_binop_with_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn dec_unary_op<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
+    fn_name: &str,
+    dec: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
+    use roc_target::OperatingSystem::*;
+
+    let dec = dec.into_int_value();
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
+            let (low, high) = dec_split_into_words(env, dec);
+            call_bitcode_fn(env, &[low.into(), high.into()], fn_name)
+        }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[dec.into()], fn_name),
+        _ => call_bitcode_fn(env, &[dec_alloca(env, dec)], fn_name),
+    }
+}
+
+fn dec_binop_with_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> StructValue<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
     let return_type = zig_with_overflow_roc_dec(env);
-    let return_alloca = env.builder.build_alloca(return_type, "return_alloca");
+    let return_alloca = env.builder.new_build_alloca(return_type, "return_alloca");
 
-    match env.target_info.operating_system {
-        Windows => {
-            call_void_bitcode_fn(
-                env,
-                &[
-                    return_alloca.into(),
-                    dec_alloca(env, lhs).into(),
-                    dec_alloca(env, rhs).into(),
-                ],
-                fn_name,
-            );
-        }
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
-
             call_void_bitcode_fn(
                 env,
                 &[
@@ -1735,38 +2093,53 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
                 fn_name,
             );
         }
-        Wasi => unimplemented!(),
-    }
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => {
+            call_void_bitcode_fn(
+                env,
+                &[return_alloca.into(), lhs.into(), rhs.into()],
+                fn_name,
+            );
+        }
+        _ => {
+            call_void_bitcode_fn(
+                env,
+                &[
+                    return_alloca.into(),
+                    dec_alloca(env, lhs),
+                    dec_alloca(env, rhs),
+                ],
+                fn_name,
+            );
+        }
+    };
 
     env.builder
         .new_build_load(return_type, return_alloca, "load_dec")
         .into_struct_value()
 }
 
-pub(crate) fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+pub(crate) fn dec_binop_with_unchecked<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     fn_name: &str,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    use roc_target::Architecture::*;
     use roc_target::OperatingSystem::*;
 
     let lhs = lhs.into_int_value();
     let rhs = rhs.into_int_value();
 
-    match env.target_info.operating_system {
-        Windows => {
-            // windows is much nicer for us here
-            call_bitcode_fn(
-                env,
-                &[dec_alloca(env, lhs).into(), dec_alloca(env, rhs).into()],
-                fn_name,
-            )
-        }
-        Unix => {
+    match env.target_info {
+        TargetInfo {
+            architecture: X86_64 | X86_32,
+            operating_system: Unix,
+        } => {
             let (lhs_low, lhs_high) = dec_split_into_words(env, lhs);
             let (rhs_low, rhs_high) = dec_split_into_words(env, rhs);
-
             call_bitcode_fn(
                 env,
                 &[
@@ -1778,32 +2151,95 @@ pub(crate) fn dec_binop_with_unchecked<'a, 'ctx, 'env>(
                 fn_name,
             )
         }
-        Wasi => unimplemented!(),
+        TargetInfo {
+            architecture: Wasm32,
+            operating_system: Unix,
+        } => call_bitcode_fn(env, &[lhs.into(), rhs.into()], fn_name),
+        _ => call_bitcode_fn(env, &[dec_alloca(env, lhs), dec_alloca(env, rhs)], fn_name),
     }
 }
 
-fn build_dec_binop<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
-    lhs: BasicValueEnum<'ctx>,
-    _lhs_layout: &Layout<'a>,
-    rhs: BasicValueEnum<'ctx>,
-    _rhs_layout: &Layout<'a>,
+/// Zig returns a nominal `WithOverflow(Dec)` struct (see [zig_with_overflow_roc_dec]),
+/// but the Roc side may flatten the overflow struct. LLVM does not admit comparisons
+/// between the two representations, so always cast to the Roc representation.
+fn change_with_overflow_to_roc_type<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    val: impl BasicValue<'ctx>,
+    return_layout: InLayout<'a>,
+) -> BasicValueEnum<'ctx> {
+    let return_type = convert::basic_type_from_layout(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+    );
+    let casted = cast_basic_basic(env.builder, val.as_basic_value_enum(), return_type);
+
+    use_roc_value(
+        env,
+        layout_interner,
+        layout_interner.get_repr(return_layout),
+        casted,
+        "use_dec_with_overflow",
+    )
+}
+
+fn build_dec_unary_op<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    _layout_interner: &STLayoutInterner<'a>,
+    _parent: FunctionValue<'ctx>,
+    arg: BasicValueEnum<'ctx>,
+    _return_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
     match op {
-        NumAddChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_ADD_WITH_OVERFLOW),
-        NumSubChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_SUB_WITH_OVERFLOW),
-        NumMulChecked => call_bitcode_fn(env, &[lhs, rhs], bitcode::DEC_MUL_WITH_OVERFLOW),
+        NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
+        NumAcos => dec_unary_op(env, bitcode::DEC_ACOS, arg),
+        NumAsin => dec_unary_op(env, bitcode::DEC_ASIN, arg),
+        NumAtan => dec_unary_op(env, bitcode::DEC_ATAN, arg),
+        NumCos => dec_unary_op(env, bitcode::DEC_COS, arg),
+        NumSin => dec_unary_op(env, bitcode::DEC_SIN, arg),
+        NumTan => dec_unary_op(env, bitcode::DEC_TAN, arg),
+
+        _ => {
+            unreachable!("Unrecognized dec unary operation: {:?}", op);
+        }
+    }
+}
+
+fn build_dec_binop<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    parent: FunctionValue<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    return_layout: InLayout<'a>,
+    op: LowLevel,
+) -> BasicValueEnum<'ctx> {
+    use roc_module::low_level::LowLevel::*;
+
+    match op {
+        NumAddChecked => {
+            let val = dec_binop_with_overflow(env, bitcode::DEC_ADD_WITH_OVERFLOW, lhs, rhs);
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
+        }
+        NumSubChecked => {
+            let val = dec_binop_with_overflow(env, bitcode::DEC_SUB_WITH_OVERFLOW, lhs, rhs);
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
+        }
+        NumMulChecked => {
+            let val = dec_binop_with_overflow(env, bitcode::DEC_MUL_WITH_OVERFLOW, lhs, rhs);
+            change_with_overflow_to_roc_type(env, layout_interner, val, return_layout)
+        }
         NumAdd => build_dec_binop_throw_on_overflow(
             env,
             parent,
             bitcode::DEC_ADD_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal addition overflowed",
+            "Decimal addition overflowed",
         ),
         NumSub => build_dec_binop_throw_on_overflow(
             env,
@@ -1811,7 +2247,7 @@ fn build_dec_binop<'a, 'ctx, 'env>(
             bitcode::DEC_SUB_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal subtraction overflowed",
+            "Decimal subtraction overflowed",
         ),
         NumMul => build_dec_binop_throw_on_overflow(
             env,
@@ -1819,17 +2255,30 @@ fn build_dec_binop<'a, 'ctx, 'env>(
             bitcode::DEC_MUL_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal multiplication overflowed",
+            "Decimal multiplication overflowed",
         ),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
+
+        NumLt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_LESS_THAN[IntWidth::I128]),
+        NumGt => call_bitcode_fn(env, &[lhs, rhs], &bitcode::NUM_GREATER_THAN[IntWidth::I128]),
+        NumLte => call_bitcode_fn(
+            env,
+            &[lhs, rhs],
+            &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128],
+        ),
+        NumGte => call_bitcode_fn(
+            env,
+            &[lhs, rhs],
+            &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128],
+        ),
         _ => {
-            unreachable!("Unrecognized int binary operation: {:?}", op);
+            unreachable!("Unrecognized dec binary operation: {:?}", op);
         }
     }
 }
 
-fn build_dec_binop_throw_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn build_dec_binop_throw_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     parent: FunctionValue<'ctx>,
     operation: &str,
     lhs: BasicValueEnum<'ctx>,
@@ -1862,13 +2311,13 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     arg: IntValue<'ctx>,
     arg_width: IntWidth,
     arg_int_type: IntType<'ctx>,
     op: LowLevel,
-    return_layout: &Layout<'a>,
+    return_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
 
@@ -1886,33 +2335,30 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
         NumToFrac => {
             // This is an Int, so we need to convert it.
 
-            let target_float_type = match return_layout {
-                Layout::Builtin(Builtin::Float(float_width)) => {
-                    convert::float_type_from_float_width(env, *float_width)
+            match layout_interner.get_repr(return_layout) {
+                LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                    let target_float_type = convert::float_type_from_float_width(env, float_width);
+
+                    bd.new_build_cast(
+                        InstructionOpcode::SIToFP,
+                        arg,
+                        target_float_type,
+                        "i64_to_f64",
+                    )
+                }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::DEC_FROM_INT[arg_width])
                 }
                 _ => internal_error!("There can only be floats here!"),
-            };
-
-            bd.build_cast(
-                InstructionOpcode::SIToFP,
-                arg,
-                target_float_type,
-                "i64_to_f64",
-            )
+            }
         }
         NumToIntChecked => {
             // return_layout : Result N [OutOfBounds]* ~ { result: N, out_of_bounds: bool }
 
-            let target_int_width = match return_layout {
-                Layout::Struct { field_layouts, .. } if field_layouts.len() == 2 => {
-                    debug_assert!(matches!(field_layouts[1], Layout::Builtin(Builtin::Bool)));
-                    match field_layouts[0] {
-                        Layout::Builtin(Builtin::Int(iw)) => iw,
-                        layout => internal_error!(
-                            "There can only be an int layout here, found {:?}!",
-                            layout
-                        ),
-                    }
+            let target_int_width = match layout_interner.get_repr(return_layout) {
+                LayoutRepr::Struct(field_layouts) if field_layouts.len() == 2 => {
+                    debug_assert!(layout_interner.eq_repr(field_layouts[1], Layout::BOOL));
+                    field_layouts[0].to_int_width()
                 }
                 layout => internal_error!(
                     "There can only be a result layout here, found {:?}!",
@@ -1933,8 +2379,19 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 || // Or if the two types are the same, they trivially fit.
                 arg_width == target_int_width;
 
-            let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout)
-                .into_struct_type();
+            // How the return type needs to be stored on the stack.
+            let return_type_stack_type = convert::basic_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            )
+            .into_struct_type();
+            // How the return type is actually used, in the Roc calling convention.
+            let return_type_use_type = convert::argument_type_from_layout(
+                env,
+                layout_interner,
+                layout_interner.get_repr(return_layout),
+            );
 
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM
@@ -1942,7 +2399,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 let target_int_type = convert::int_type_from_int_width(env, target_int_width);
                 let target_int_val: BasicValueEnum<'ctx> = env
                     .builder
-                    .build_int_cast_sign_flag(
+                    .new_build_int_cast_sign_flag(
                         arg,
                         target_int_type,
                         target_int_width.is_signed(),
@@ -1950,7 +2407,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     )
                     .into();
 
-                let r = return_type.const_zero();
+                let r = return_type_stack_type.const_zero();
                 let r = bd
                     .build_insert_value(r, target_int_val, 0, "converted_int")
                     .unwrap();
@@ -2004,11 +2461,14 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     intrinsic,
                                 );
 
-                                let roc_return_type =
-                                    basic_type_from_layout(env, layout_interner, return_layout)
-                                        .ptr_type(AddressSpace::Generic);
+                                let roc_return_type = basic_type_from_layout(
+                                    env,
+                                    layout_interner,
+                                    layout_interner.get_repr(return_layout),
+                                )
+                                .ptr_type(AddressSpace::default());
 
-                                let roc_return_alloca = env.builder.build_pointer_cast(
+                                let roc_return_alloca = env.builder.new_build_pointer_cast(
                                     zig_return_alloca,
                                     roc_return_type,
                                     "cast_to_roc",
@@ -2017,7 +2477,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 load_roc_value(
                                     env,
                                     layout_interner,
-                                    *return_layout,
+                                    layout_interner.get_repr(return_layout),
                                     roc_return_alloca,
                                     "num_to_int",
                                 )
@@ -2025,7 +2485,16 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                         }
                     }
                     PtrWidth::Bytes8 => {
-                        if target_int_width.stack_size() as usize > env.target_info.ptr_size() {
+                        let return_by_pointer = {
+                            if env.target_info.operating_system
+                                == roc_target::OperatingSystem::Windows
+                            {
+                                target_int_width.stack_size() as usize >= env.target_info.ptr_size()
+                            } else {
+                                target_int_width.stack_size() as usize > env.target_info.ptr_size()
+                            }
+                        };
+                        if return_by_pointer {
                             let bitcode_return_type =
                                 zig_to_int_checked_result_type(env, target_int_width.type_name());
 
@@ -2043,8 +2512,21 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                     }
                 };
 
-                complex_bitcast_check_size(env, result, return_type.into(), "cast_bitpacked")
+                complex_bitcast_check_size(env, result, return_type_use_type, "cast_bitpacked")
             }
+        }
+        NumCountLeadingZeroBits => call_bitcode_fn(
+            env,
+            &[arg.into()],
+            &bitcode::NUM_COUNT_LEADING_ZERO_BITS[arg_width],
+        ),
+        NumCountTrailingZeroBits => call_bitcode_fn(
+            env,
+            &[arg.into()],
+            &bitcode::NUM_COUNT_TRAILING_ZERO_BITS[arg_width],
+        ),
+        NumCountOneBits => {
+            call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COUNT_ONE_BITS[arg_width])
         }
         _ => {
             unreachable!("Unrecognized int unary operation: {:?}", op);
@@ -2052,15 +2534,15 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn int_neg_raise_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
     let min_val = int_type_signed_min(int_type);
-    let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
+    let condition = builder.new_build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let parent = block.get_parent().expect("to be in a function");
@@ -2068,30 +2550,30 @@ fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
     let else_block = env.context.append_basic_block(parent, "else");
 
     env.builder
-        .build_conditional_branch(condition, then_block, else_block);
+        .new_build_conditional_branch(condition, then_block, else_block);
 
     builder.position_at_end(then_block);
 
     throw_internal_exception(
         env,
         parent,
-        "integer negation overflowed because its argument is the minimum value",
+        "Integer negation overflowed because its argument is the minimum value",
     );
 
     builder.position_at_end(else_block);
 
-    builder.build_int_neg(arg, "negate_int").into()
+    builder.new_build_int_neg(arg, "negate_int").into()
 }
 
-fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn int_abs_raise_on_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
     let min_val = int_type_signed_min(int_type);
-    let condition = builder.build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
+    let condition = builder.new_build_int_compare(IntPredicate::EQ, arg, min_val, "is_min_val");
 
     let block = env.builder.get_insert_block().expect("to be in a function");
     let parent = block.get_parent().expect("to be in a function");
@@ -2099,14 +2581,14 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
     let else_block = env.context.append_basic_block(parent, "else");
 
     env.builder
-        .build_conditional_branch(condition, then_block, else_block);
+        .new_build_conditional_branch(condition, then_block, else_block);
 
     builder.position_at_end(then_block);
 
     throw_internal_exception(
         env,
         parent,
-        "integer absolute overflowed because its argument is the minimum value",
+        "Integer absolute overflowed because its argument is the minimum value",
     );
 
     builder.position_at_end(else_block);
@@ -2114,8 +2596,8 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
     int_abs_with_overflow(env, arg, int_type)
 }
 
-fn int_abs_with_overflow<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
+fn int_abs_with_overflow<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     arg: IntValue<'ctx>,
     int_type: IntType<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -2131,16 +2613,16 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     let shifted_alloca = {
         let bits_to_shift = int_type.get_bit_width() as u64 - 1;
         let shift_val = int_type.const_int(bits_to_shift, false);
-        let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
-        let alloca = bd.build_alloca(int_type, "#int_abs_help");
+        let shifted = bd.new_build_right_shift(arg, shift_val, true, shifted_name);
+        let alloca = bd.new_build_alloca(int_type, "#int_abs_help");
 
         // shifted = arg >>> 63
-        bd.build_store(alloca, shifted);
+        bd.new_build_store(alloca, shifted);
 
         alloca
     };
 
-    let xored_arg = bd.build_xor(
+    let xored_arg = bd.new_build_xor(
         arg,
         bd.new_build_load(int_type, shifted_alloca, shifted_name)
             .into_int_value(),
@@ -2148,7 +2630,7 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     );
 
     BasicValueEnum::IntValue(
-        bd.build_int_sub(
+        bd.new_build_int_sub(
             xored_arg,
             bd.new_build_load(int_type, shifted_alloca, shifted_name)
                 .into_int_value(),
@@ -2157,9 +2639,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     )
 }
 
-fn build_float_unary_op<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout: &Layout<'a>,
+fn build_float_unary_op<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    layout: InLayout<'a>,
     arg: FloatValue<'ctx>,
     op: LowLevel,
     float_width: FloatWidth, // arg width
@@ -2170,24 +2653,24 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
 
     // TODO: Handle different sized floats
     match op {
-        NumNeg => bd.build_float_neg(arg, "negate_float").into(),
-        NumAbs => env.call_intrinsic(&LLVM_FABS[float_width], &[arg.into()]),
-        NumSqrtUnchecked => env.call_intrinsic(&LLVM_SQRT[float_width], &[arg.into()]),
-        NumLogUnchecked => env.call_intrinsic(&LLVM_LOG[float_width], &[arg.into()]),
+        NumNeg => bd.new_build_float_neg(arg, "negate_float").into(),
+        NumAbs => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FABS[float_width]),
+        NumSqrtUnchecked => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SQRT[float_width]),
+        NumLogUnchecked => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_LOG[float_width]),
         NumToFrac => {
-            let return_width = match layout {
-                Layout::Builtin(Builtin::Float(return_width)) => *return_width,
+            let return_width = match layout_interner.get_repr(layout) {
+                LayoutRepr::Builtin(Builtin::Float(return_width)) => return_width,
                 _ => internal_error!("Layout for returning is not Float : {:?}", layout),
             };
             match (float_width, return_width) {
                 (FloatWidth::F32, FloatWidth::F32) => arg.into(),
-                (FloatWidth::F32, FloatWidth::F64) => bd.build_cast(
+                (FloatWidth::F32, FloatWidth::F64) => bd.new_build_cast(
                     InstructionOpcode::FPExt,
                     arg,
                     env.context.f64_type(),
                     "f32_to_f64",
                 ),
-                (FloatWidth::F64, FloatWidth::F32) => bd.build_cast(
+                (FloatWidth::F64, FloatWidth::F32) => bd.new_build_cast(
                     InstructionOpcode::FPTrunc,
                     arg,
                     env.context.f32_type(),
@@ -2197,70 +2680,57 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
             }
         }
         NumCeiling => {
-            let (return_signed, return_type) = match layout {
-                Layout::Builtin(Builtin::Int(int_width)) => (
-                    int_width.is_signed(),
-                    convert::int_type_from_int_width(env, *int_width),
-                ),
+            let int_width = match layout_interner.get_repr(layout) {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
             };
-            let opcode = if return_signed {
-                InstructionOpcode::FPToSI
-            } else {
-                InstructionOpcode::FPToUI
-            };
-            env.builder.build_cast(
-                opcode,
-                env.call_intrinsic(&LLVM_CEILING[float_width], &[arg.into()]),
-                return_type,
-                "num_ceiling",
-            )
+            match float_width {
+                FloatWidth::F32 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F32[int_width])
+                }
+                FloatWidth::F64 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F64[int_width])
+                }
+            }
         }
         NumFloor => {
-            let (return_signed, return_type) = match layout {
-                Layout::Builtin(Builtin::Int(int_width)) => (
-                    int_width.is_signed(),
-                    convert::int_type_from_int_width(env, *int_width),
-                ),
-                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            let int_width = match layout_interner.get_repr(layout) {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+                _ => internal_error!("Floor return layout is not int: {:?}", layout),
             };
-            let opcode = if return_signed {
-                InstructionOpcode::FPToSI
-            } else {
-                InstructionOpcode::FPToUI
-            };
-            env.builder.build_cast(
-                opcode,
-                env.call_intrinsic(&LLVM_FLOOR[float_width], &[arg.into()]),
-                return_type,
-                "num_floor",
-            )
+            match float_width {
+                FloatWidth::F32 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F32[int_width])
+                }
+                FloatWidth::F64 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F64[int_width])
+                }
+            }
         }
         NumRound => {
-            let (return_signed, return_type) = match layout {
-                Layout::Builtin(Builtin::Int(int_width)) => (
-                    int_width.is_signed(),
-                    convert::int_type_from_int_width(env, *int_width),
-                ),
-                _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
+            let int_width = match layout_interner.get_repr(layout) {
+                LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+                _ => internal_error!("Round return layout is not int: {:?}", layout),
             };
-            let opcode = if return_signed {
-                InstructionOpcode::FPToSI
-            } else {
-                InstructionOpcode::FPToUI
-            };
-            env.builder.build_cast(
-                opcode,
-                env.call_intrinsic(&LLVM_ROUND[float_width], &[arg.into()]),
-                return_type,
-                "num_round",
-            )
+            match float_width {
+                FloatWidth::F32 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F32[int_width])
+                }
+                FloatWidth::F64 => {
+                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F64[int_width])
+                }
+            }
+        }
+        NumIsNan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_NAN[float_width]),
+        NumIsInfinite => {
+            call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_INFINITE[float_width])
         }
         NumIsFinite => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_FINITE[float_width]),
 
         // trigonometry
-        NumSin => env.call_intrinsic(&LLVM_SIN[float_width], &[arg.into()]),
-        NumCos => env.call_intrinsic(&LLVM_COS[float_width], &[arg.into()]),
+        NumSin => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_SIN[float_width]),
+        NumCos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_COS[float_width]),
+        NumTan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_TAN[float_width]),
 
         NumAtan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ATAN[float_width]),
         NumAcos => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ACOS[float_width]),
@@ -2272,12 +2742,12 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub(crate) fn run_higher_order_low_level<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
-    return_layout: &Layout<'a>,
+    return_layout: InLayout<'a>,
     func_spec: FuncSpec,
     higher_order: &HigherOrderLowLevel<'a>,
 ) -> BasicValueEnum<'ctx> {
@@ -2291,7 +2761,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
     } = higher_order;
 
     let PassedFunction {
-        argument_layouts,
+        argument_layouts: _,
         return_layout: result_layout,
         owns_captured_environment: function_owns_closure_data,
         name: function_name,
@@ -2304,15 +2774,12 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
         () => {{
             let function = function_value_by_func_spec(
                 env,
-                func_spec,
+                FuncBorrowSpec::Some(func_spec),
                 function_name.name(),
-                argument_layouts,
-                function_name.niche(),
-                return_layout,
             );
 
             let (closure, closure_layout) =
-                load_symbol_and_lambda_set(scope, &captured_environment);
+                load_symbol_and_lambda_set(layout_interner, scope, &captured_environment);
 
             (function, closure, closure_layout)
         }};
@@ -2321,18 +2788,18 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
     match op {
         ListMap { xs } => {
             // List.map : List before, (before -> after) -> List after
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+            let (list, list_layout) = scope.load_symbol_and_layout(xs);
 
             let (function, closure, closure_layout) = function_details!();
 
-            match (list_layout, return_layout) {
+            match (
+                layout_interner.get_repr(list_layout),
+                layout_interner.get_repr(return_layout),
+            ) {
                 (
-                    Layout::Builtin(Builtin::List(element_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element_layout)),
+                    LayoutRepr::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let element_layout = layout_interner.get(*element_layout);
-                    let result_layout = layout_interner.get(*result_layout);
-
                     let argument_layouts = &[element_layout];
 
                     let roc_function_call = roc_function_call(
@@ -2352,29 +2819,29 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_interner,
                         roc_function_call,
                         list,
-                        &element_layout,
-                        &result_layout,
+                        element_layout,
+                        result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
             }
         }
         ListMap2 { xs, ys } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
 
             let (function, closure, closure_layout) = function_details!();
 
-            match (list1_layout, list2_layout, return_layout) {
+            match (
+                layout_interner.get_repr(list1_layout),
+                layout_interner.get_repr(list2_layout),
+                layout_interner.get_repr(return_layout),
+            ) {
                 (
-                    Layout::Builtin(Builtin::List(element1_layout)),
-                    Layout::Builtin(Builtin::List(element2_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element1_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element2_layout)),
+                    LayoutRepr::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let element1_layout = layout_interner.get(*element1_layout);
-                    let element2_layout = layout_interner.get(*element2_layout);
-                    let result_layout = layout_interner.get(*result_layout);
-
                     let argument_layouts = &[element1_layout, element2_layout];
 
                     let roc_function_call = roc_function_call(
@@ -2396,33 +2863,33 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         roc_function_call,
                         list1,
                         list2,
-                        &element1_layout,
-                        &element2_layout,
-                        &result_layout,
+                        element1_layout,
+                        element2_layout,
+                        result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
             }
         }
         ListMap3 { xs, ys, zs } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
+            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
 
             let (function, closure, closure_layout) = function_details!();
 
-            match (list1_layout, list2_layout, list3_layout, return_layout) {
+            match (
+                layout_interner.get_repr(list1_layout),
+                layout_interner.get_repr(list2_layout),
+                layout_interner.get_repr(list3_layout),
+                layout_interner.get_repr(return_layout),
+            ) {
                 (
-                    Layout::Builtin(Builtin::List(element1_layout)),
-                    Layout::Builtin(Builtin::List(element2_layout)),
-                    Layout::Builtin(Builtin::List(element3_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element1_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element2_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element3_layout)),
+                    LayoutRepr::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let element1_layout = layout_interner.get(*element1_layout);
-                    let element2_layout = layout_interner.get(*element2_layout);
-                    let element3_layout = layout_interner.get(*element3_layout);
-                    let result_layout = layout_interner.get(*result_layout);
-
                     let argument_layouts = &[element1_layout, element2_layout, element3_layout];
 
                     let roc_function_call = roc_function_call(
@@ -2445,43 +2912,37 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         list1,
                         list2,
                         list3,
-                        &element1_layout,
-                        &element2_layout,
-                        &element3_layout,
-                        &result_layout,
+                        element1_layout,
+                        element2_layout,
+                        element3_layout,
+                        result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
             }
         }
         ListMap4 { xs, ys, zs, ws } => {
-            let (list1, list1_layout) = load_symbol_and_layout(scope, xs);
-            let (list2, list2_layout) = load_symbol_and_layout(scope, ys);
-            let (list3, list3_layout) = load_symbol_and_layout(scope, zs);
-            let (list4, list4_layout) = load_symbol_and_layout(scope, ws);
+            let (list1, list1_layout) = scope.load_symbol_and_layout(xs);
+            let (list2, list2_layout) = scope.load_symbol_and_layout(ys);
+            let (list3, list3_layout) = scope.load_symbol_and_layout(zs);
+            let (list4, list4_layout) = scope.load_symbol_and_layout(ws);
 
             let (function, closure, closure_layout) = function_details!();
 
             match (
-                list1_layout,
-                list2_layout,
-                list3_layout,
-                list4_layout,
-                return_layout,
+                layout_interner.get_repr(list1_layout),
+                layout_interner.get_repr(list2_layout),
+                layout_interner.get_repr(list3_layout),
+                layout_interner.get_repr(list4_layout),
+                layout_interner.get_repr(return_layout),
             ) {
                 (
-                    Layout::Builtin(Builtin::List(element1_layout)),
-                    Layout::Builtin(Builtin::List(element2_layout)),
-                    Layout::Builtin(Builtin::List(element3_layout)),
-                    Layout::Builtin(Builtin::List(element4_layout)),
-                    Layout::Builtin(Builtin::List(result_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element1_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element2_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element3_layout)),
+                    LayoutRepr::Builtin(Builtin::List(element4_layout)),
+                    LayoutRepr::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let element1_layout = layout_interner.get(*element1_layout);
-                    let element2_layout = layout_interner.get(*element2_layout);
-                    let element3_layout = layout_interner.get(*element3_layout);
-                    let element4_layout = layout_interner.get(*element4_layout);
-                    let result_layout = layout_interner.get(*result_layout);
-
                     let argument_layouts = &[
                         element1_layout,
                         element2_layout,
@@ -2510,11 +2971,11 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         list2,
                         list3,
                         list4,
-                        &element1_layout,
-                        &element2_layout,
-                        &element3_layout,
-                        &element4_layout,
-                        &result_layout,
+                        element1_layout,
+                        element2_layout,
+                        element3_layout,
+                        element4_layout,
+                        result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
@@ -2522,24 +2983,23 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
         }
         ListSortWith { xs } => {
             // List.sortWith : List a, (a, a -> Ordering) -> List a
-            let (list, list_layout) = load_symbol_and_layout(scope, xs);
+            let (list, list_layout) = scope.load_symbol_and_layout(xs);
 
             let (function, closure, closure_layout) = function_details!();
 
-            match list_layout {
-                Layout::Builtin(Builtin::List(element_layout)) => {
+            match layout_interner.get_repr(list_layout) {
+                LayoutRepr::Builtin(Builtin::List(element_layout)) => {
                     use crate::llvm::bitcode::build_compare_wrapper;
-
-                    let element_layout = layout_interner.get(*element_layout);
 
                     let argument_layouts = &[element_layout, element_layout];
 
                     let compare_wrapper = build_compare_wrapper(
                         env,
                         layout_interner,
+                        layout_ids,
                         function,
                         closure_layout,
-                        &element_layout,
+                        element_layout,
                     )
                     .as_global_value()
                     .as_pointer_value();
@@ -2562,7 +3022,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         roc_function_call,
                         compare_wrapper,
                         list,
-                        &element_layout,
+                        element_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
@@ -2571,13 +3031,14 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
     }
 }
 
-fn load_symbol_and_lambda_set<'a, 'ctx, 'b>(
-    scope: &'b Scope<'a, 'ctx>,
+fn load_symbol_and_lambda_set<'a, 'ctx>(
+    layout_interner: &STLayoutInterner<'a>,
+    scope: &Scope<'a, 'ctx>,
     symbol: &Symbol,
 ) -> (BasicValueEnum<'ctx>, LambdaSet<'a>) {
-    match scope.get(symbol) {
-        Some((Layout::LambdaSet(lambda_set), ptr)) => (*ptr, *lambda_set),
-        Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
-        None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    let (ptr, layout) = scope.load_symbol_and_layout(symbol);
+    match layout_interner.get_repr(layout) {
+        LayoutRepr::LambdaSet(lambda_set) => (ptr, lambda_set),
+        other => panic!("Not a lambda set: {other:?}, {ptr:?}"),
     }
 }

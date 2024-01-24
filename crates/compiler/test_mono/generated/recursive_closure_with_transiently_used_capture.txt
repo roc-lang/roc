@@ -1,0 +1,18 @@
+procedure Test.1 (Test.2, Test.3):
+    let Test.14 : [] = CallByName Test.6 Test.2 Test.3;
+    ret Test.14;
+
+procedure Test.5 (Test.8, Test.4):
+    let Test.12 : [] = CallByName Test.1 Test.4 Test.4;
+    ret Test.12;
+
+procedure Test.6 (Test.15, Test.4):
+    let Test.18 : {} = Struct {};
+    let Test.17 : [] = CallByName Test.5 Test.18 Test.4;
+    ret Test.17;
+
+procedure Test.0 (Test.7):
+    let Test.4 : U16 = 10i64;
+    let Test.10 : {} = Struct {};
+    let Test.9 : [] = CallByName Test.5 Test.10 Test.4;
+    ret Test.9;

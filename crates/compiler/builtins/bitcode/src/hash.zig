@@ -40,7 +40,7 @@ fn read_8bytes_swapped(data: []const u8) u64 {
 fn mum(a: u64, b: u64) u64 {
     var r = std.math.mulWide(u64, a, b);
     r = (r >> 64) ^ r;
-    return @truncate(u64, r);
+    return @as(u64, @truncate(r));
 }
 
 fn mix0(a: u64, b: u64, seed: u64) u64 {
@@ -94,7 +94,7 @@ const WyhashStateless = struct {
         std.debug.assert(b.len < 32);
 
         const seed = self.seed;
-        const rem_len = @intCast(u5, b.len);
+        const rem_len = @as(u5, @intCast(b.len));
         const rem_key = b[0..rem_len];
 
         self.seed = switch (rem_len) {
@@ -176,7 +176,7 @@ pub const Wyhash = struct {
         self.state.update(b[off .. off + aligned_len]);
 
         mem.copy(u8, self.buf[self.buf_len..], b[off + aligned_len ..]);
-        self.buf_len += @intCast(u8, b[off + aligned_len ..].len);
+        self.buf_len += @as(u8, @intCast(b[off + aligned_len ..].len));
     }
 
     pub fn final(self: *Wyhash) u64 {
@@ -232,8 +232,8 @@ test "test vectors streaming" {
 
 test "iterative non-divisible update" {
     var buf: [8192]u8 = undefined;
-    for (buf) |*e, i| {
-        e.* = @truncate(u8, i);
+    for (buf, 0..) |*e, i| {
+        e.* = @as(u8, @truncate(i));
     }
 
     const seed = 0x128dad08f;

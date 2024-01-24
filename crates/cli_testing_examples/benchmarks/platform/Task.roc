@@ -1,5 +1,5 @@
 interface Task
-    exposes [Task, succeed, fail, after, map, putLine, putInt, getInt, forever, loop]
+    exposes [Task, succeed, fail, after, map, putLine, putInt, getInt, forever, loop, attempt]
     imports [pf.Effect]
 
 Task ok err : Effect.Effect (Result ok err)
@@ -46,6 +46,15 @@ after = \effect, transform ->
                 Ok a -> transform a
                 Err err -> Task.fail err
 
+attempt : Task a b, (Result a b -> Task c d) -> Task c d
+attempt = \task, transform ->
+    Effect.after
+        task
+        \result ->
+            when result is
+                Ok ok -> transform (Ok ok)
+                Err err -> transform (Err err)
+
 map : Task a err, (a -> b) -> Task b err
 map = \effect, transform ->
     Effect.map
@@ -61,7 +70,7 @@ putLine = \line -> Effect.map (Effect.putLine line) (\_ -> Ok {})
 putInt : I64 -> Task {} *
 putInt = \line -> Effect.map (Effect.putInt line) (\_ -> Ok {})
 
-getInt : Task I64 []
+getInt : Task I64 [GetIntError]
 getInt =
     Effect.after
         Effect.getInt
@@ -69,10 +78,11 @@ getInt =
             if
                 isError
             then
+                # TODO
                 # when errorCode is
                 #    # A -> Task.fail InvalidCharacter
                 #    # B -> Task.fail IOError
                 #    _ ->
-                Task.succeed -1
+                Task.fail GetIntError
             else
                 Task.succeed value

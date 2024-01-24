@@ -1,10 +1,7 @@
-on: [pull_request]
+on:
+  workflow_call:
 
 name: CI
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -12,17 +9,21 @@ env:
 jobs:
   test-zig-rust-wasm:
     name: test zig, rust, wasm...
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
+      RUSTC_WRAPPER: /home/big-ci-user/.cargo/bin/sccache
     steps:
-      - uses: actions/checkout@v2
-        with:
-          clean: "true"
+      - uses: actions/checkout@v3
 
       - name: Check for duplicate AUTHORS
         run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
+
+      - name: Update PATH to use zig 11
+        run: |
+          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+      
+      - run: zig version
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
@@ -34,28 +35,20 @@ jobs:
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
       - name: regular rust tests
-        run: cargo test --locked --release && sccache --show-stats
-
-      - name: test examples/helloWorld.roc separately because it is ignored by default
-        run: cargo test --locked --release -p roc_cli cli_run::hello_world -- --ignored && sccache --show-stats
+        # see #5904 for skipped test
+        run: cargo test --locked --release -- --skip cli_run::expects_dev_and_test && sccache --show-stats
 
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
-
-      - name: test launching the editor
-        run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
-
+        
       - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
 
       - name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
 
-      - name: run `roc test` on Str builtins
-        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
-
-      - name: run `roc test` on Dict builtins
-        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Dict.roc && sccache --show-stats
+      - name: roc test all builtins
+        run: ./ci/roc_test_builtins.sh
 
       - name: wasm repl test
         run: crates/repl_test/test_wasm.sh && sccache --show-stats
@@ -64,8 +57,7 @@ jobs:
         run: ./ci/www-repl.sh && sccache --show-stats
 
       #TODO i386 (32-bit linux) cli tests
-
       #TODO verify-no-git-changes
 
       - name: test website build script
-        run: REPL_DEBUG=1 bash www/build.sh
+        run: bash www/build.sh

@@ -54,11 +54,30 @@ pub enum TypeAnnotation {
         fields: Vec<RecordField>,
         extension: Box<TypeAnnotation>,
     },
+    Tuple {
+        elems: Vec<TypeAnnotation>,
+        extension: Box<TypeAnnotation>,
+    },
     Ability {
         members: Vec<AbilityMember>,
     },
     Wildcard,
     NoTypeAnn,
+    Where {
+        ann: Box<TypeAnnotation>,
+        implements: Vec<ImplementsClause>,
+    },
+    As {
+        ann: Box<TypeAnnotation>,
+        name: String,
+        vars: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ImplementsClause {
+    pub name: String,
+    pub abilities: Vec<TypeAnnotation>,
 }
 
 #[derive(Debug, Clone)]
@@ -403,7 +422,7 @@ fn contains_unexposed_type(
 
             false
         }
-        Tuple { fields, ext } => {
+        Tuple { elems: fields, ext } => {
             if let Some(loc_ext) = ext {
                 if contains_unexposed_type(&loc_ext.value, exposed_module_ids, module_ids) {
                     return true;
@@ -450,7 +469,7 @@ fn contains_unexposed_type(
             false
         }
         Where(loc_ann, _loc_has_clauses) => {
-            // We assume all the abilities in the `has` clause are from exported modules.
+            // We assume all the abilities in the `implements` clause are from exported modules.
             // TODO don't assume this! Instead, look them up and verify.
             contains_unexposed_type(&loc_ann.value, exposed_module_ids, module_ids)
         }
@@ -540,7 +559,57 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
             }
         }
         ast::TypeAnnotation::Wildcard => TypeAnnotation::Wildcard,
-        _ => NoTypeAnn,
+        ast::TypeAnnotation::As(loc_ann, _comments, type_header) => TypeAnnotation::As {
+            ann: Box::new(type_to_docs(in_func_type_ann, loc_ann.value)),
+            name: type_header.name.value.to_string(),
+            vars: type_header
+                .vars
+                .iter()
+                .filter_map(|loc_pattern| match loc_pattern.value {
+                    ast::Pattern::Identifier(ident) => Some(ident.to_string()),
+                    _ => None,
+                })
+                .collect(),
+        },
+        ast::TypeAnnotation::Tuple { elems, ext } => {
+            let mut doc_elems = Vec::new();
+
+            for loc_ann in elems.items {
+                doc_elems.push(type_to_docs(in_func_type_ann, loc_ann.value));
+            }
+
+            let extension = match ext {
+                None => NoTypeAnn,
+                Some(ext_type_ann) => type_to_docs(in_func_type_ann, ext_type_ann.value),
+            };
+
+            TypeAnnotation::Tuple {
+                elems: doc_elems,
+                extension: Box::new(extension),
+            }
+        }
+        ast::TypeAnnotation::Where(loc_ann, implements) => TypeAnnotation::Where {
+            ann: Box::new(type_to_docs(in_func_type_ann, loc_ann.value)),
+            implements: implements
+                .iter()
+                .map(|clause| {
+                    let abilities = clause
+                        .value
+                        .abilities
+                        .iter()
+                        .map(|ability| type_to_docs(in_func_type_ann, ability.value))
+                        .collect();
+
+                    ImplementsClause {
+                        name: clause.value.var.value.item().to_string(),
+                        abilities,
+                    }
+                })
+                .collect(),
+        },
+        ast::TypeAnnotation::Malformed(_) | ast::TypeAnnotation::Inferred => {
+            TypeAnnotation::NoTypeAnn
+        }
     }
 }
 
@@ -553,7 +622,7 @@ fn ability_member_type_to_docs(
             let has_clauses = has_clauses
                 .iter()
                 .map(|hc| {
-                    let ast::HasClause { var, abilities } = hc.value;
+                    let ast::ImplementsClause { var, abilities } = hc.value;
                     (
                         var.value.extract_spaces().item.to_string(),
                         abilities

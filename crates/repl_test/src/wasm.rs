@@ -4,7 +4,7 @@ use roc_wasm_interp::{
 };
 
 const COMPILER_BYTES: &[u8] =
-    include_bytes!("../../../target/wasm32-wasi/release/roc_repl_wasm.wasm");
+    include_bytes!("../../../target/wasm32-wasi/release-with-lto/roc_repl_wasm.wasm");
 
 struct CompilerDispatcher<'a> {
     arena: &'a Bump,
@@ -122,7 +122,7 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
     }
 }
 
-fn run(src: &'static str) -> Result<String, String> {
+fn run(src: &'static str) -> String {
     let arena = Bump::new();
 
     let mut instance = {
@@ -140,27 +140,29 @@ fn run(src: &'static str) -> Result<String, String> {
     };
 
     let len = Value::I32(src.len() as i32);
-    let wasm_ok: i32 = instance
-        .call_export("entrypoint_from_test", [len])
-        .unwrap()
-        .unwrap()
-        .expect_i32()
-        .unwrap();
-    let answer_str = instance.import_dispatcher.answer.to_owned();
-
-    if wasm_ok == 0 {
-        Err(answer_str)
-    } else {
-        Ok(answer_str)
-    }
+    instance.call_export("entrypoint_from_test", [len]).unwrap();
+    instance.import_dispatcher.answer.to_owned()
 }
 
 #[allow(dead_code)]
 pub fn expect_success(input: &'static str, expected: &str) {
-    assert_eq!(run(input), Ok(expected.into()));
+    expect(input, expected);
 }
 
 #[allow(dead_code)]
 pub fn expect_failure(input: &'static str, expected: &str) {
-    assert_eq!(run(input), Err(expected.into()));
+    expect(input, expected);
+}
+
+#[allow(dead_code)]
+pub fn expect(input: &'static str, expected: &str) {
+    let raw_output = run(input);
+
+    // We need to get rid of HTML tags, and we can be quite specific about it!
+    // If we ever write more complex test cases, we might need regex here.
+    let without_html = raw_output.replace("<span class='color-magenta'> : </span>", " : ");
+
+    let clean_output = without_html.trim();
+
+    assert_eq!(clean_output, expected);
 }

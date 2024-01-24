@@ -103,7 +103,7 @@ field = \fieldParser ->
             Ok rawStr ->
                 when Parser.Str.parseRawStr fieldParser rawStr is
                     Ok val ->
-                        Ok { val: val, input: List.dropFirst fieldsList }
+                        Ok { val: val, input: List.dropFirst fieldsList 1 }
 
                     Err (ParsingFailure reason) ->
                         fieldStr = rawStr |> strFromRaw

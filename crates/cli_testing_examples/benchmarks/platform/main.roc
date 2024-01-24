@@ -5,5 +5,5 @@ platform "benchmarks"
     imports [Task.{ Task }]
     provides [mainForHost]
 
-mainForHost : Task {} [] as Fx
+mainForHost : Task {} []
 mainForHost = main

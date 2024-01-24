@@ -13,7 +13,7 @@ use roc_std::{RocList, RocStr};
 type Pointer = usize;
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn str_inc() {
     assert_refcounts!(
         indoc!(
@@ -32,7 +32,7 @@ fn str_inc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn str_dealloc() {
     assert_refcounts!(
         indoc!(
@@ -48,7 +48,7 @@ fn str_dealloc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn list_int_inc() {
     assert_refcounts!(
         indoc!(
@@ -66,7 +66,7 @@ fn list_int_inc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn list_int_dealloc() {
     assert_refcounts!(
         indoc!(
@@ -84,7 +84,7 @@ fn list_int_dealloc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn list_str_inc() {
     assert_refcounts!(
         indoc!(
@@ -104,7 +104,7 @@ fn list_str_inc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn list_str_dealloc() {
     assert_refcounts!(
         indoc!(
@@ -124,7 +124,7 @@ fn list_str_dealloc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn struct_inc() {
     assert_refcounts!(
         indoc!(
@@ -141,7 +141,7 @@ fn struct_inc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn struct_dealloc() {
     assert_refcounts!(
         indoc!(
@@ -159,7 +159,7 @@ fn struct_dealloc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_nonrecursive_inc() {
     type TwoStr = (RocStr, RocStr, i64);
 
@@ -185,7 +185,7 @@ fn union_nonrecursive_inc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_nonrecursive_dec() {
     assert_refcounts!(
         indoc!(
@@ -208,7 +208,7 @@ fn union_nonrecursive_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_recursive_inc() {
     assert_refcounts!(
         indoc!(
@@ -228,15 +228,15 @@ fn union_recursive_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(4), // s
-            Live(4), // sym
+            Live(1), // s
+            Live(2), // x
             Live(2), // e
         ]
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_recursive_dec() {
     assert_refcounts!(
         indoc!(
@@ -266,7 +266,7 @@ fn union_recursive_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn refcount_different_rosetrees_inc() {
     // Requires two different Inc procedures for `List (Rose I64)` and `List (Rose Str)`
     // even though both appear in the mono Layout as `List(RecursivePointer)`
@@ -294,7 +294,7 @@ fn refcount_different_rosetrees_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(3), // i1
             Live(2), // s1
             Live(1), // [i1, i1]
@@ -306,7 +306,7 @@ fn refcount_different_rosetrees_inc() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn refcount_different_rosetrees_dec() {
     // Requires two different Dec procedures for `List (Rose I64)` and `List (Rose Str)`
     // even though both appear in the mono Layout as `List(RecursivePointer)`
@@ -347,7 +347,7 @@ fn refcount_different_rosetrees_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_linked_list_inc() {
     assert_refcounts!(
         indoc!(
@@ -364,16 +364,16 @@ fn union_linked_list_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(6), // s
-            Live(2), // Cons
-            Live(2), // Cons
-            Live(2), // Cons
+            Live(3), // s
+            Live(1), // inner-most Cons
+            Live(1), // middle Cons
+            Live(2), // linked
         ]
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_linked_list_dec() {
     assert_refcounts!(
         indoc!(
@@ -401,7 +401,7 @@ fn union_linked_list_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_linked_list_nil_dec() {
     let no_refcounts: &[crate::helpers::RefCount] = &[];
     assert_refcounts!(
@@ -423,7 +423,7 @@ fn union_linked_list_nil_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn union_linked_list_long_dec() {
     assert_refcounts!(
         indoc!(
@@ -455,7 +455,7 @@ fn union_linked_list_long_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn boxed_str_inc() {
     assert_refcounts!(
         indoc!(
@@ -468,14 +468,14 @@ fn boxed_str_inc() {
         ),
         (Pointer, Pointer),
         &[
-            Live(2), // s
+            Live(1), // s
             Live(2), // b
         ]
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(feature = "gen-wasm")]
 fn boxed_str_dec() {
     assert_refcounts!(
         indoc!(
@@ -493,6 +493,81 @@ fn boxed_str_dec() {
         &[
             Deallocated, // s
             Deallocated, // b
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn non_nullable_unwrapped_alignment_8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            Expr : [ZAdd Expr Expr, Val I64, Var I64]
+
+            eval : Expr -> I64
+            eval = \e ->
+                when e is
+                    Var _ -> 0
+                    Val v -> v
+                    ZAdd l r -> eval l + eval r
+
+            expr : Expr
+            expr = (ZAdd (Val 4) (Val 5))
+
+            eval expr
+            "#
+        ),
+        i64,
+        &[
+            Deallocated, // Val 4
+            Deallocated, // Val 5
+            Deallocated, // ZAdd _ _
+        ]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn reset_reuse_alignment_8() {
+    assert_refcounts!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Expr : [ZAdd Expr Expr, Val I64, Var I64]
+
+            eval : Expr -> I64
+            eval = \e ->
+                when e is
+                    Var _ -> 0
+                    Val v -> v
+                    ZAdd l r -> eval l + eval r
+
+            constFolding : Expr -> Expr
+            constFolding = \e ->
+                when e is
+                    ZAdd e1 e2 ->
+                        when Pair e1 e2 is
+                            Pair (Val a) (Val b) -> Val (a+b)
+                            Pair _ _             -> ZAdd e1 e2
+
+
+                    _ -> e
+
+
+            expr : Expr
+            expr = ZAdd (Val 4) (Val 5)
+
+            main : I64
+            main = eval (constFolding expr)
+            "#
+        ),
+        i64,
+        &[
+            Deallocated, // Val 4
+            Deallocated, // Val 5
+            Deallocated, // ZAdd _ _
         ]
     );
 }

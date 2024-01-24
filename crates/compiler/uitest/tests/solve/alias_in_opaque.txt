@@ -1,0 +1,8 @@
+app "test" provides [foo] to "./platform"
+
+MyError : [Error]
+
+MyResult := Result U8 MyError
+
+foo = @MyResult (Err Error)
+#^^^{-1} MyResult

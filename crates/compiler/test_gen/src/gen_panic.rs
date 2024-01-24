@@ -7,8 +7,11 @@ use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-wasm")]
 use crate::helpers::wasm::assert_evals_to;
 
+#[cfg(feature = "gen-dev")]
+use crate::helpers::dev::assert_evals_to;
+
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic = r#"User crash with message: "hello crash""#]
 fn crash_literal() {
     assert_evals_to!(
@@ -25,7 +28,7 @@ fn crash_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic = r#"User crash with message: "hello crash""#]
 fn crash_variable() {
     assert_evals_to!(
@@ -44,7 +47,7 @@ fn crash_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic = r#"User crash with message: "turns out this was fallible""#]
 fn crash_in_call() {
     assert_evals_to!(
@@ -68,7 +71,7 @@ fn crash_in_call() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 #[should_panic = r#"User crash with message: "no new even primes""#]
 fn crash_in_passed_closure() {
     assert_evals_to!(

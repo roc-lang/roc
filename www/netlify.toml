@@ -14,6 +14,17 @@
   [headers.values]
     X-Frame-Options = "DENY"
     X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    # Firefox prefetch requires some cache-control to be set
+    # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
+    Cache-Control = "public, max-age=1200"
+
+[[headers]]
+  for = "/packages/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
     # unsafe-eval is needed for wasm compilation in the repl to work on Safari and Chrome;
     # otherwise they block it.
     # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
@@ -26,11 +37,24 @@
     #   $ echo -n "polygon{fill:#7d59dd}@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}" | openssl dgst -sha256 -binary | openssl enc -base64
     #
     # Details on how this works: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/style-src
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=';"
-    X-Content-Type-Options = "nosniff"
+    #
+    # Also note that the sha256 in the script-src is for the <script> in the <head>
+    # which removes the 'no-js' class. When changing it, use:
+    #
+    #   $ echo -n "document.documentElement.className = document.documentElement.className.replace('no-js', '');" | openssl dgst -sha256 -binary | openssl enc -base64
+    #
+    # In both cases, the sha256 should be in this format: 'sha256-MySha256GoesHere'
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'sha256-glHRII/7b3zzlpV/fHgyDU43eehue/Hg2K6Ihbt7o6Q='; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=' 'unsafe-inline';"
     # Firefox prefetch requires some cache-control to be set
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
     Cache-Control = "public, max-age=1200"
+
+[[headers]]
+  for = "/fonts/*"
+
+  [headers.values]
+    # Preloading fonts requires CORS headers for some reason
+    Access-Control-Allow-Origin = "*"
 
 # Redirect roc-lang.org/authors to the AUTHORS file in this repo
 #

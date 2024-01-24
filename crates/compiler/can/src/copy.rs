@@ -1,7 +1,9 @@
 use crate::{
     def::Def,
-    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranchPattern},
-    pattern::{DestructType, ListPatterns, Pattern, RecordDestruct},
+    expr::{
+        ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
+    },
+    pattern::{DestructType, ListPatterns, Pattern, RecordDestruct, TupleDestruct},
 };
 use roc_module::{
     ident::{Lowercase, TagName},
@@ -10,7 +12,7 @@ use roc_module::{
 use roc_types::{
     subs::{
         self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
-        SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
     },
     types::{RecordField, Uls},
 };
@@ -22,7 +24,7 @@ trait CopyEnv {
             if descriptor.copy.into_variable().is_some() {
                 descriptor.copy = OptVariable::NONE;
             } else {
-                debug_assert!(false, "{:?} marked as copied but it wasn't", var);
+                debug_assert!(false, "{var:?} marked as copied but it wasn't");
             }
         })
     }
@@ -62,6 +64,11 @@ trait CopyEnv {
 
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase>;
 
+    fn clone_tuple_elem_indices(
+        &mut self,
+        tuple_elem_indices: SubsSlice<usize>,
+    ) -> SubsSlice<usize>;
+
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName>;
 
     fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol>;
@@ -96,6 +103,14 @@ impl CopyEnv for Subs {
     #[inline(always)]
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
         field_names
+    }
+
+    #[inline(always)]
+    fn clone_tuple_elem_indices(
+        &mut self,
+        tuple_elem_indices: SubsSlice<usize>,
+    ) -> SubsSlice<usize> {
+        tuple_elem_indices
     }
 
     #[inline(always)]
@@ -148,6 +163,20 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
         SubsSlice::extend_new(
             &mut self.target.field_names,
             self.source.get_subs_slice(field_names).iter().cloned(),
+        )
+    }
+
+    #[inline(always)]
+    fn clone_tuple_elem_indices(
+        &mut self,
+        tuple_elem_indices: SubsSlice<usize>,
+    ) -> SubsSlice<usize> {
+        SubsSlice::extend_new(
+            &mut self.target.tuple_elem_indices,
+            self.source
+                .get_subs_slice(tuple_elem_indices)
+                .iter()
+                .cloned(),
         )
     }
 
@@ -248,6 +277,9 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         Float(v1, v2, str, val, bound) => Float(sub!(*v1), sub!(*v2), str.clone(), *val, *bound),
         Str(str) => Str(str.clone()),
         SingleQuote(v1, v2, char, bound) => SingleQuote(sub!(*v1), sub!(*v2), *char, *bound),
+        IngestedFile(file_path, bytes, var) => {
+            IngestedFile(file_path.clone(), bytes.clone(), sub!(*var))
+        }
         List {
             elem_var,
             loc_elems,
@@ -461,13 +493,21 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
 
         EmptyRecord => EmptyRecord,
 
-        Access {
+        Tuple { tuple_var, elems } => Tuple {
+            tuple_var: sub!(*tuple_var),
+            elems: elems
+                .iter()
+                .map(|(var, loc_expr)| (sub!(*var), Box::new(loc_expr.map(|e| go_help!(e)))))
+                .collect(),
+        },
+
+        RecordAccess {
             record_var,
             ext_var,
             field_var,
             loc_expr,
             field,
-        } => Access {
+        } => RecordAccess {
             record_var: sub!(*record_var),
             ext_var: sub!(*ext_var),
             field_var: sub!(*field_var),
@@ -475,7 +515,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             field: field.clone(),
         },
 
-        Accessor(AccessorData {
+        RecordAccessor(StructAccessorData {
             name,
             function_var,
             record_var,
@@ -483,7 +523,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             ext_var,
             field_var,
             field,
-        }) => Accessor(AccessorData {
+        }) => RecordAccessor(StructAccessorData {
             name: *name,
             function_var: sub!(*function_var),
             record_var: sub!(*record_var),
@@ -493,12 +533,26 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             field: field.clone(),
         }),
 
-        Update {
+        TupleAccess {
+            tuple_var,
+            ext_var,
+            elem_var,
+            loc_expr,
+            index,
+        } => TupleAccess {
+            tuple_var: sub!(*tuple_var),
+            ext_var: sub!(*ext_var),
+            elem_var: sub!(*elem_var),
+            loc_expr: Box::new(loc_expr.map(|e| go_help!(e))),
+            index: *index,
+        },
+
+        RecordUpdate {
             record_var,
             ext_var,
             symbol,
             updates,
-        } => Update {
+        } => RecordUpdate {
             record_var: sub!(*record_var),
             ext_var: sub!(*ext_var),
             symbol: *symbol,
@@ -616,12 +670,16 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         },
 
         Dbg {
-            loc_condition,
+            source_location,
+            source,
+            loc_message,
             loc_continuation,
             variable,
             symbol,
         } => Dbg {
-            loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
+            source_location: source_location.clone(),
+            source: source.clone(),
+            loc_message: Box::new(loc_message.map(|e| go_help!(e))),
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             variable: sub!(*variable),
             symbol: *symbol,
@@ -719,6 +777,30 @@ fn deep_copy_pattern_help<C: CopyEnv>(
                                     DestructType::Guard(sub!(*var), pat.map(|p| go_help!(p)))
                                 }
                             },
+                        },
+                    )
+                })
+                .collect(),
+        },
+        TupleDestructure {
+            whole_var,
+            ext_var,
+            destructs,
+        } => TupleDestructure {
+            whole_var: sub!(*whole_var),
+            ext_var: sub!(*ext_var),
+            destructs: destructs
+                .iter()
+                .map(|lrd| {
+                    lrd.map(
+                        |TupleDestruct {
+                             destruct_index: index,
+                             var,
+                             typ: (tyvar, pat),
+                         }: &crate::pattern::TupleDestruct| TupleDestruct {
+                            destruct_index: *index,
+                            var: sub!(*var),
+                            typ: (sub!(*tyvar), pat.map(|p| go_help!(p))),
                         },
                     )
                 })
@@ -861,7 +943,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
-                EmptyRecord | EmptyTagUnion => Structure(flat_type),
+                EmptyRecord | EmptyTuple | EmptyTagUnion => Structure(flat_type),
                 Apply(symbol, arguments) => {
                     descend_slice!(arguments);
 
@@ -903,8 +985,28 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         Structure(Record(new_fields, new_ext_var))
                     })
                 }
-                TagUnion(tags, ext_var) => {
+                Tuple(elems, ext_var) => {
                     let new_ext_var = descend_var!(ext_var);
+
+                    descend_slice!(elems.variables());
+
+                    perform_clone!({
+                        let new_variables = clone_var_slice!(elems.variables());
+                        let new_elem_indices = env.clone_tuple_elem_indices(elems.elem_indices());
+
+                        let new_elems = {
+                            TupleElems {
+                                length: elems.length,
+                                variables_start: new_variables.start,
+                                elem_index_start: new_elem_indices.start,
+                            }
+                        };
+
+                        Structure(Tuple(new_elems, new_ext_var))
+                    })
+                }
+                TagUnion(tags, ext_var) => {
+                    let new_ext_var = ext_var.map(|v| descend_var!(v));
 
                     for variables_slice_index in tags.variables() {
                         let variables_slice = env.source()[variables_slice_index];
@@ -929,7 +1031,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     })
                 }
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_ext_var = descend_var!(ext_var);
+                    let new_ext_var = ext_var.map(|v| descend_var!(v));
                     let new_rec_var = descend_var!(rec_var);
 
                     for variables_slice_index in tags.variables() {
@@ -956,7 +1058,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     })
                 }
                 FunctionOrTagUnion(tag_names, symbols, ext_var) => {
-                    let new_ext_var = descend_var!(ext_var);
+                    let new_ext_var = ext_var.map(|v| descend_var!(v));
                     let new_tag_names = env.clone_tag_names(tag_names);
                     let new_symbols = env.clone_lambda_names(symbols);
                     perform_clone!(Structure(FunctionOrTagUnion(
@@ -1010,7 +1112,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 }
                 for uls_index in unspecialized {
                     let Uls(var, _, _) = env.source()[uls_index];
-                    descend_var!(var);
+                    let _ignored = descend_var!(var);
                 }
                 let new_ambient_function = descend_var!(ambient_function);
 
@@ -1050,6 +1152,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     })
                 })
             }
+            ErasedLambda => ErasedLambda,
 
             RangedNumber(range) => {
                 perform_clone!(RangedNumber(range))
@@ -1222,7 +1325,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(subs[*name].as_str(), "a");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
                 assert_eq!(var, variant_var);
                 assert!(matches!(
@@ -1239,7 +1342,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(subs[*name].as_str(), "b");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
 
                 match arg.value {
@@ -1257,10 +1360,10 @@ mod test {
                         assert_eq!(name.0.as_str(), "G");
                         assert_eq!(arguments.len(), 0);
                     }
-                    e => panic!("{:?}", e),
+                    e => panic!("{e:?}"),
                 }
             }
-            e => panic!("{:?}", e),
+            e => panic!("{e:?}"),
         }
     }
 
@@ -1305,7 +1408,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(target[*name].as_str(), "a");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
                 assert_eq!(var, variant_var);
                 assert!(matches!(
@@ -1320,7 +1423,7 @@ mod test {
                     FlexVar(Some(name)) => {
                         assert_eq!(target[*name].as_str(), "b");
                     }
-                    it => panic!("{:?}", it),
+                    it => panic!("{it:?}"),
                 }
 
                 match arg.value {
@@ -1338,10 +1441,10 @@ mod test {
                         assert_eq!(name.0.as_str(), "G");
                         assert_eq!(arguments.len(), 0);
                     }
-                    e => panic!("{:?}", e),
+                    e => panic!("{e:?}"),
                 }
             }
-            e => panic!("{:?}", e),
+            e => panic!("{e:?}"),
         }
     }
 

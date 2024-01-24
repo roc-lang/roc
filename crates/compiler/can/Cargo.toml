@@ -1,28 +1,29 @@
 [package]
 name = "roc_can"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
 roc_exhaustive = { path = "../exhaustive" }
-roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
-roc_types = { path = "../types" }
+roc_region = { path = "../region" }
 roc_serialize = { path = "../serialize" }
-
-bumpalo.workspace = true
-static_assertions.workspace = true
-bitvec.workspace = true
+roc_types = { path = "../types" }
 
 ven_pretty = { path = "../../vendor/pretty" }
 
+bitvec.workspace = true
+bumpalo.workspace = true
+static_assertions.workspace = true
+
 [dev-dependencies]
-pretty_assertions.workspace = true
 indoc.workspace = true
+pretty_assertions.workspace = true

@@ -1,12 +1,13 @@
 #[cfg(not(target_family = "wasm"))]
-use crate::https::{self, PackageMetadata, Problem};
-use roc_error_macros::internal_error;
-use std::{
-    fs,
-    path::{Path, PathBuf},
+use {
+    crate::https::{self, PackageMetadata, Problem},
+    roc_error_macros::internal_error,
+    std::fs,
 };
-
+#[cfg(not(target_family = "wasm"))]
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1_000_000_000; // GB
+
+use std::path::{Path, PathBuf};
 
 #[derive(Copy, Clone, Debug)]
 pub enum RocCacheDir<'a> {
@@ -17,6 +18,41 @@ pub enum RocCacheDir<'a> {
     /// For tests only; we don't want to write to the real cache during a test!
     #[cfg(test)]
     Temp(&'a tempfile::TempDir),
+}
+
+// Errors in case NixOS users try to use a dynamically linked platform
+#[cfg(target_os = "linux")]
+fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
+    let output = std::process::Command::new("uname")
+        .arg("-a")
+        .output()
+        .expect("uname command failed to start");
+    let running_nixos = String::from_utf8_lossy(&output.stdout).contains("NixOS");
+
+    if running_nixos {
+        // bash -c is used instead of plain ldd because process::Command escapes its arguments
+        let ldd_output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
+            .output()
+            .expect("ldd command failed to start");
+        let is_dynamic = String::from_utf8_lossy(&ldd_output.stdout).contains("=>");
+
+        if is_dynamic {
+            eprintln!("The platform downloaded from the URL {url} is dynamically linked.\n\
+                        Dynamically linked platforms can't be used on NixOS.\n\n\
+                        You can:\n\n\t\
+                            - Download the source of the platform and build it locally, like in this example:\n\t  \
+                                https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rocLovesRust.roc.\n\t  \
+                                When building your roc application, you can use the flag `--prebuilt-platform` to prevent the platform from being rebuilt every time.\n\t  \
+                                For some graphical platforms you may need to use https://github.com/guibou/nixGL.\n\n\t\
+                            - Contact the author of the platform to ask them to statically link their platform.\n\t  \
+                                musl can be used to prevent a dynamic dependency on the systems' libc.\n\t  \
+                                If the platform is dynamically linked to GPU drivers, it can not be statically linked practically. Use the previous suggestion to build locally in this case.\n"
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Accepts either a path to the Roc cache dir, or else a TempDir. If a TempDir, always download
@@ -34,6 +70,8 @@ pub fn install_package<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
+    use std::io::ErrorKind;
+
     let PackageMetadata {
         cache_subdir,
         content_hash,
@@ -50,6 +88,12 @@ pub fn install_package<'a>(
             if dest_dir.exists() {
                 // If the cache dir exists already, we assume it has the correct contents
                 // (it's a cache, after all!) and return without downloading anything.
+                //
+                #[cfg(target_os = "linux")]
+                {
+                    nixos_error_if_dynamic(url, &dest_dir);
+                }
+
                 Ok((dest_dir, root_module_filename))
             } else {
                 // Download into a tempdir; only move it to dest_dir if hash verification passes.
@@ -68,10 +112,24 @@ pub fn install_package<'a>(
                     // Now that we've verified the hash, rename the tempdir to the real dir.
 
                     // Create the destination dir's parent dir, since it may not exist yet.
-                    fs::create_dir_all(parent_dir).map_err(Problem::IoErr)?;
+                    fs::create_dir_all(parent_dir).or_else(|err| match err.kind() {
+                        // It's fine if the destination dir's parent already exists
+                        ErrorKind::AlreadyExists => Ok(()),
+                        _ => Err(Problem::IoErr(err)),
+                    })?;
 
                     // This rename should be super cheap if it succeeds - just an inode change.
-                    if fs::rename(tempdir_path, &dest_dir).is_err() {
+                    let rename_err_kind = fs::rename(tempdir_path, &dest_dir)
+                        .err()
+                        .map(|err| err.kind());
+
+                    // It's okay if the rename failed because the destination already existed.
+                    // This could be a race condition between multiple downloads happening concurrently.
+                    // (This has happened in our test suite, for example!) Both downloads should have
+                    // the same content, so the rename failing for that reason should be no problem.
+                    if rename_err_kind.is_some()
+                        && rename_err_kind != Some(ErrorKind::AlreadyExists)
+                    {
                         // If the rename failed, try a recursive copy -
                         // it could have failed due to std::io::ErrorKind::CrossesDevices
                         // (e.g. if the source an destination directories are on different disks)
@@ -80,7 +138,12 @@ pub fn install_package<'a>(
                         // but if that's what happened, this should work!
 
                         // fs_extra::dir::copy needs the destination directory to exist already.
-                        fs::create_dir(&dest_dir).map_err(Problem::IoErr)?;
+                        fs::create_dir(&dest_dir).or_else(|err| match err.kind() {
+                            // It's fine if the destination dir already exists
+                            ErrorKind::AlreadyExists => Ok(()),
+                            _ => Err(Problem::IoErr(err)),
+                        })?;
+
                         fs_extra::dir::copy(
                             tempdir_path,
                             &dest_dir,
@@ -89,7 +152,17 @@ pub fn install_package<'a>(
                                 ..Default::default()
                             },
                         )
-                        .map_err(Problem::FsExtraErr)?;
+                        .or_else(|err| match err.kind {
+                            // It's fine if the destination file already exists; this could be the same
+                            // as the rename race condition mentioned above.
+                            fs_extra::error::ErrorKind::AlreadyExists => Ok(0),
+                            _ => Err(Problem::FsExtraErr(err)),
+                        })?;
+                    }
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        nixos_error_if_dynamic(url, &dest_dir);
                     }
 
                     // The package's files are now in the cache. We're done!

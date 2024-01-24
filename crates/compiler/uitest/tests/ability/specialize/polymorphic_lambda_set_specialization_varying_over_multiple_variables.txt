@@ -1,0 +1,34 @@
+app "test" provides [main] to "./platform"
+
+J implements j : j -> (k -> {}) where j implements J, k implements K
+K implements k : k -> {} where k implements K
+
+C := {} implements [J {j: jC}]
+jC = \@C _ -> k
+#^^{-1} C -[[jC(8)]]-> (k -[[] + k:k(4):1]-> {}) where k implements K
+
+D := {} implements [J {j: jD}]
+jD = \@D _ -> k
+#^^{-1} D -[[jD(9)]]-> (k -[[] + k:k(4):1]-> {}) where k implements K
+
+E := {} implements [K {k}]
+k = \@E _ -> {}
+#^{-1} E#k(10): E -[[k(10)]]-> {}
+
+f = \flag, a, b ->
+#             ^ j where j implements J
+#          ^ j where j implements J
+    it =
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} where j implements J, j1 implements J, k implements K
+        when flag is
+            A -> j a
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j:j(2):2 + j1:j(2):2]-> {}) where j implements J, j1 implements J, k implements K
+            B -> j b
+            #    ^ J#j(2): j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) where j implements J, j1 implements J, k implements K
+    it
+#   ^^ k -[[] + j:j(2):2 + j1:j(2):2]-> {} where j implements J, j1 implements J, k implements K
+
+main = (f A (@C {}) (@D {})) (@E {})
+#       ^ [A, B], C, D -[[f(11)]]-> (E -[[k(10)]]-> {})
+#       ^^^^^^^^^^^^^^^^^^^ E -[[k(10)]]-> {}
+#^^^^{-1} {}

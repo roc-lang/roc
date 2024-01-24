@@ -49,7 +49,6 @@ impl Progress {
 pub enum SyntaxError<'a> {
     Unexpected(Region),
     OutdentedTooFar,
-    TooManyLines,
     Eof(Region),
     InvalidPattern,
     BadUtf8,
@@ -232,6 +231,9 @@ pub enum EImports {
     IndentSetStart(Position),
     SetStart(Position),
     SetEnd(Position),
+    TypedIdent(Position),
+    AsKeyword(Position),
+    StrLiteral(Position),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,10 +265,6 @@ pub enum BadInputError {
     HasTab,
     HasMisplacedCarriageReturn,
     HasAsciiControl,
-    ///
-    TooManyLines,
-    ///
-    ///
     BadUtf8,
 }
 
@@ -355,6 +353,8 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
+    OptionalValueInRecordBuilder(Region),
+    RecordUpdateBuilder(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -407,6 +407,7 @@ pub enum ERecord<'a> {
     Field(Position),
     Colon(Position),
     QuestionMark(Position),
+    Arrow(Position),
     Ampersand(Position),
 
     // TODO remove
@@ -535,6 +536,8 @@ pub enum EPattern<'a> {
     IndentStart(Position),
     IndentEnd(Position),
     AsIndentStart(Position),
+
+    AccessorFunction(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,7 +594,7 @@ pub enum EType<'a> {
     TEnd(Position),
     TFunctionArgument(Position),
     TWhereBar(Position),
-    THasClause(Position),
+    TImplementsClause(Position),
     TAbilityImpl(ETypeAbilityImpl<'a>, Position),
     ///
     TIndentStart(Position),
@@ -670,6 +673,7 @@ pub enum ETypeAbilityImpl<'a> {
 
     Field(Position),
     Colon(Position),
+    Arrow(Position),
     Optional(Position),
     Type(&'a EType<'a>, Position),
 
@@ -690,6 +694,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Open(p) => ETypeAbilityImpl::Open(p),
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
+            ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Updateable(p) => ETypeAbilityImpl::Updateable(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
@@ -1514,6 +1519,23 @@ where
     }
 }
 
+pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
+where
+    ToError: Fn(Position) -> E,
+    E: 'a,
+{
+    debug_assert!(!word.contains('\n'));
+
+    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
+        if state.bytes().starts_with(word.as_bytes()) {
+            let state = state.advance(word.len());
+            Ok((MadeProgress, (), state))
+        } else {
+            Err((NoProgress, to_error(state.pos())))
+        }
+    }
+}
+
 pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
@@ -1612,6 +1634,7 @@ macro_rules! word1_check_indent {
 macro_rules! map {
     ($parser:expr, $transform:expr) => {
         move |arena, state, min_indent| {
+            #[allow(clippy::redundant_closure_call)]
             $parser
                 .parse(arena, state, min_indent)
                 .map(|(progress, output, next_state)| (progress, $transform(output), next_state))
@@ -1623,6 +1646,7 @@ macro_rules! map {
 macro_rules! map_with_arena {
     ($parser:expr, $transform:expr) => {
         move |arena, state, min_indent| {
+            #[allow(clippy::redundant_closure_call)]
             $parser
                 .parse(arena, state, min_indent)
                 .map(|(progress, output, next_state)| {

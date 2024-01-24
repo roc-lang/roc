@@ -11,7 +11,7 @@
     + Note: notebooks fit very well if you are trying to tell a story; for a tutorial, analyzing data, interactive textbook, prototyping… . I have not seen them used for large systems or codebases.
 
 - Glamorous toolkit:
-    + ![Gtoolkit overview](https://raw.githubusercontent.com/feenkcom/gtoolkit/main/doc/gtr-overview.png)
+    + ![Gtoolkit overview](https://feenk.com/assets/pictures/gtr-overview.png)
     + multi-language notebook, code editor, software analysis platform, visualization engine, knowledge management system
 - Design software:
     + blender

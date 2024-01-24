@@ -10,7 +10,7 @@ main = {
             args: [],
         },
         job: [],
-        inputFiles : ["foo"],
-    }
+        inputFiles: ["foo"],
+    },
 }
 

@@ -67,8 +67,7 @@ impl<'a> Env<'a> {
     ) -> Result<Symbol, RuntimeError> {
         debug_assert!(
             !module_name_str.is_empty(),
-            "Called env.qualified_lookup with an unqualified ident: {:?}",
-            ident
+            "Called env.qualified_lookup with an unqualified ident: {ident:?}"
         );
 
         let module_name = ModuleName::from(module_name_str);
@@ -124,18 +123,19 @@ impl<'a> Env<'a> {
                     Ok(symbol)
                 }
                 None => {
-                    let error = RuntimeError::LookupNotInScope(
-                        Loc {
+                    let error = RuntimeError::LookupNotInScope {
+                        loc_name: Loc {
                             value: Ident::from(ident),
                             region,
                         },
-                        scope
+                        suggestion_options: scope
                             .locals
                             .ident_ids
                             .ident_strs()
                             .map(|(_, string)| string.into())
                             .collect(),
-                    );
+                        underscored_suggestion_region: None,
+                    };
                     Err(error)
                 }
             }

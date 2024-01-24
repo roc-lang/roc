@@ -92,6 +92,9 @@ flags! {
     /// Prints all type mismatches hit during type unification.
     ROC_PRINT_MISMATCHES
 
+    /// Prints all type variables entered for fixpoint-fixing.
+    ROC_PRINT_FIXPOINT_FIXING
+
     /// Verifies that after let-generalization of a def, any rigid variables in the type annotation
     /// of the def are indeed generalized.
     ///
@@ -109,13 +112,12 @@ flags! {
     ROC_VERIFY_RIGID_LET_GENERALIZED
 
     /// Verifies that an `occurs` check indeed only contains non-recursive types that need to be
-    /// fixed-up.
+    /// fixed-up with one new recursion variable.
     ///
-    /// This flag is disabled by default because an occurs check may pass through an inferred
-    /// partially-recursive structure if a part of that structure also has type errors. However, in
-    /// the presence of programs without type errors, occurs checks should always consist of only
-    /// non-recursive types, and this flag should pass.
-    ROC_VERIFY_OCCURS_RECURSION
+    /// This flag is disabled by default because an occurs check may pass through another recursive
+    /// structure for which a recursive pointer has already been allocated. However, during debugging,
+    /// you may be interested in checking that the occurs check finds only one variable to fix.
+    ROC_VERIFY_OCCURS_ONE_RECURSION
 
     // ===Mono===
 
@@ -132,6 +134,14 @@ flags! {
     /// Writes a pretty-printed mono IR to stderr after insertion of refcount
     /// instructions.
     ROC_PRINT_IR_AFTER_REFCOUNT
+
+    /// Writes a pretty-printed mono IR to stderr after the tail recursion (modulo cons)
+    /// has been applied.
+    ROC_PRINT_IR_AFTER_TRMC
+
+    /// Writes a pretty-printed mono IR to stderr after performing dropspecialization.
+    /// Which inlines drop functions to remove pairs of alloc/dealloc instructions of its children.
+    ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION
 
     /// Prints debug information during the alias analysis pass.
     ROC_DEBUG_ALIAS_ANALYSIS

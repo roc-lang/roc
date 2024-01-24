@@ -6,7 +6,9 @@
 
 pub mod gen_abilities;
 pub mod gen_compare;
+pub mod gen_definitions;
 pub mod gen_dict;
+pub mod gen_erased;
 pub mod gen_list;
 pub mod gen_num;
 pub mod gen_panic;
@@ -17,6 +19,7 @@ pub mod gen_result;
 pub mod gen_set;
 pub mod gen_str;
 pub mod gen_tags;
+pub mod gen_tuples;
 mod helpers;
 pub mod wasm_str;
 

@@ -34,6 +34,12 @@ impl<T: PartialEq> VecSet<T> {
         self.elements.is_empty()
     }
 
+    pub fn singleton(value: T) -> Self {
+        Self {
+            elements: vec![value],
+        }
+    }
+
     pub fn swap_remove(&mut self, index: usize) -> T {
         self.elements.swap_remove(index)
     }

@@ -2,15 +2,14 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
-use roc_builtins::bitcode;
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
 const PLATFORM_FILENAME: &str = "repl_platform";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    let source_path = format!("src/{}.c", PLATFORM_FILENAME);
-    println!("cargo:rerun-if-changed={}", source_path);
+    let source_path = format!("src/{PLATFORM_FILENAME}.c");
+    println!("cargo:rerun-if-changed={source_path}");
 
     // Zig can produce *either* an object containing relocations OR an object containing libc code
     // But we want both, so we have to compile twice with different flags, then link them
@@ -21,12 +20,12 @@ fn main() {
 
     let mut pre_linked_binary_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     pre_linked_binary_path.extend(["pre_linked_binary"]);
-    pre_linked_binary_path.set_extension("o");
+    pre_linked_binary_path.set_extension("wasm");
 
-    let builtins_host_tempfile =
-        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile = roc_bitcode::host_wasm_tempfile()
+        .expect("failed to write host builtins object to tempfile");
 
-    let output = Command::new(&zig_executable())
+    let output = Command::new(zig_executable())
         .args([
             "wasm-ld",
             builtins_host_tempfile.path().to_str().unwrap(),
@@ -46,9 +45,9 @@ fn main() {
     // (and thus deleted) before the Zig process is done using it!
     let _ = builtins_host_tempfile;
 
-    assert!(output.status.success(), "{:#?}", output);
-    assert!(output.stdout.is_empty(), "{:#?}", output);
-    assert!(output.stderr.is_empty(), "{:#?}", output);
+    assert!(output.status.success(), "{output:#?}");
+    assert!(output.stdout.is_empty(), "{output:#?}");
+    assert!(output.stderr.is_empty(), "{output:#?}");
 }
 
 fn zig_executable() -> String {
@@ -60,9 +59,9 @@ fn zig_executable() -> String {
 
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
     let mut platform_obj = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
-    platform_obj.set_extension("o");
+    platform_obj.set_extension("wasm");
 
-    Command::new(&zig_executable())
+    Command::new(zig_executable())
         .args([
             "build-lib",
             "-target",

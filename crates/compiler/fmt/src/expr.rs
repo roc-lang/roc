@@ -1,4 +1,4 @@
-use crate::annotation::{Formattable, Newlines, Parens};
+use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::def::fmt_defs;
 use crate::pattern::fmt_pattern;
@@ -9,9 +9,11 @@ use crate::spaces::{
 use crate::Buf;
 use roc_module::called_via::{self, BinOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
+    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern,
+    RecordBuilderField, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
+use roc_parse::ident::Accessor;
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
@@ -35,41 +37,23 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | RecordAccess(_, _)
-            | RecordAccessorFunction(_)
+            | AccessorFunction(_)
             | TupleAccess(_, _)
-            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
             | OpaqueRef(_)
+            | IngestedFile(_, _)
             | Crash => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
 
-            List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
+            List(items) => is_collection_multiline(items),
 
-            Str(literal) => {
-                use roc_parse::ast::StrLiteral::*;
-
-                match literal {
-                    PlainLine(string) => {
-                        // When a PlainLine contains '\n' or '"', format as a block string
-                        string.contains('"') || string.contains('\n')
-                    }
-                    Line(_) => {
-                        // If this had any newlines, it'd have parsed as Block.
-                        false
-                    }
-                    Block(_) => {
-                        // Block strings are always formatted on multiple lines,
-                        // even if the string is only a single line.
-                        true
-                    }
-                }
-            }
+            Str(literal) => is_str_multiline(literal),
             Apply(loc_expr, args, _) => {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
@@ -77,7 +61,10 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
-            Dbg(condition, continuation) => condition.is_multiline() || continuation.is_multiline(),
+            Dbg(condition, _) => condition.is_multiline(),
+            LowLevelDbg(_, _, _) => unreachable!(
+                "LowLevelDbg should only exist after desugaring, not during formatting"
+            ),
 
             If(branches, final_else) => {
                 final_else.is_multiline()
@@ -94,7 +81,9 @@ impl<'a> Formattable for Expr<'a> {
             UnaryOp(loc_subexpr, _)
             | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
                 expr: loc_subexpr, ..
-            }) => loc_subexpr.is_multiline(),
+            })
+            | MultipleRecordBuilders(loc_subexpr)
+            | UnappliedRecordBuilder(loc_subexpr) => loc_subexpr.is_multiline(),
 
             ParensAround(subexpr) => subexpr.is_multiline(),
 
@@ -114,19 +103,14 @@ impl<'a> Formattable for Expr<'a> {
                         .any(|loc_pattern| loc_pattern.is_multiline())
             }
 
-            Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
-            Tuple(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
-            RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Record(fields) => is_collection_multiline(fields),
+            Tuple(fields) => is_collection_multiline(fields),
+            RecordUpdate { fields, .. } => is_collection_multiline(fields),
+            RecordBuilder(fields) => is_collection_multiline(fields),
         }
     }
 
-    fn format_with_options<'buf>(
-        &self,
-        buf: &mut Buf<'buf>,
-        parens: Parens,
-        newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
         use self::Expr::*;
 
         let apply_needs_parens = parens == Parens::InApply;
@@ -142,7 +126,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             ParensAround(sub_expr) => {
                 if parens == Parens::NotNeeded && !sub_expr_requests_parens(sub_expr) {
-                    sub_expr.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
+                    sub_expr.format_with_options(buf, Parens::NotNeeded, newlines, indent);
                 } else {
                     let should_add_newlines = match sub_expr {
                         Expr::Closure(..)
@@ -202,86 +186,127 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str("crash");
             }
             Apply(loc_expr, loc_args, _) => {
+                // Sadly this assertion fails in practice. The fact that the parser produces code like this is going to
+                // confuse the formatter, because it depends on being able to "see" spaces that logically come before the inner
+                // expr in several places - which is necessarily the case when the `loc_expr` of the apply itself has
+                // SpaceBefore.
+                //
+                // TODO: enforce in the type system that spaces must be pushed to the "outside".
+                // In other words, Expr::Apply should look something like the following, and there shouldn't be Expr::SpaceBefore and ::SpaceAfter.
+                //
+                // ```
+                // Apply(&'a SpaceAfter<Loc<Expr<'a>>>, &'a [&'a SpaceBefore<Loc<Expr<'a>>>], CalledVia),
+                // ```
+                //
+                // assert!(loc_expr.extract_spaces().before.is_empty(), "{:#?}", self);
+
                 buf.indent(indent);
                 if apply_needs_parens && !loc_args.is_empty() {
                     buf.push('(');
                 }
 
-                loc_expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                // should_reflow_outdentable, aka should we transform this:
+                //
+                // ```
+                // foo bar
+                //   [
+                //     1,
+                //     2,
+                //   ]
+                // ```
+                //
+                // Into this:
+                //
+                // ```
+                // foo bar [
+                //   1,
+                //   2,
+                // ]
+                // ```
+                let should_reflow_outdentable = loc_expr.extract_spaces().after.is_empty()
+                    && except_last(loc_args).all(|a| !a.is_multiline())
+                    && loc_args
+                        .last()
+                        .map(|a| {
+                            a.extract_spaces().item.is_multiline()
+                                && matches!(
+                                    a.value.extract_spaces().item,
+                                    Expr::Tuple(_)
+                                        | Expr::List(_)
+                                        | Expr::Record(_)
+                                        | Expr::RecordBuilder(_)
+                                )
+                                && a.extract_spaces().before == [CommentOrNewline::Newline]
+                        })
+                        .unwrap_or_default();
 
-                let multiline_args = loc_args.iter().any(|loc_arg| loc_arg.is_multiline());
+                let needs_indent = !should_reflow_outdentable
+                    && (!loc_expr.extract_spaces().after.is_empty()
+                        || except_last(loc_args).any(|a| a.is_multiline())
+                        || loc_args
+                            .last()
+                            .map(|a| {
+                                a.is_multiline()
+                                    && (!a.extract_spaces().before.is_empty()
+                                        || !is_outdentable(&a.value))
+                            })
+                            .unwrap_or_default());
 
-                let mut found_multiline_expr = false;
-                let mut iter = loc_args.iter().peekable();
+                let arg_indent = if needs_indent {
+                    indent + INDENT
+                } else {
+                    indent
+                };
 
-                while let Some(loc_arg) = iter.next() {
-                    if iter.peek().is_none() {
-                        found_multiline_expr = match loc_arg.value {
-                            SpaceBefore(sub_expr, spaces) => match sub_expr {
-                                Record { .. } | List { .. } => {
-                                    let is_only_newlines = spaces.iter().all(|s| s.is_newline());
-                                    is_only_newlines
-                                        && !found_multiline_expr
-                                        && sub_expr.is_multiline()
-                                }
-                                _ => false,
-                            },
-                            Record { .. } | List { .. } | Closure { .. } => {
-                                !found_multiline_expr && loc_arg.is_multiline()
-                            }
-                            _ => false,
-                        }
-                    } else {
-                        found_multiline_expr = loc_arg.is_multiline();
-                    }
+                let expr_needs_parens =
+                    matches!(loc_expr.value.extract_spaces().item, Expr::Closure(..))
+                        && !loc_args.is_empty();
+
+                if expr_needs_parens {
+                    buf.push('(');
                 }
 
-                let should_outdent_last_arg = found_multiline_expr;
+                loc_expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
 
-                if multiline_args && !should_outdent_last_arg {
-                    let arg_indent = indent + INDENT;
+                if expr_needs_parens {
+                    buf.indent(indent);
+                    buf.push(')');
+                }
 
-                    for loc_arg in loc_args.iter() {
-                        buf.newline();
-                        loc_arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
-                    }
-                } else if multiline_args && should_outdent_last_arg {
-                    let mut iter = loc_args.iter().peekable();
-                    while let Some(loc_arg) = iter.next() {
+                for loc_arg in loc_args.iter() {
+                    if should_reflow_outdentable {
                         buf.spaces(1);
 
-                        if iter.peek().is_none() {
-                            match loc_arg.value {
-                                SpaceBefore(sub_expr, _) => {
-                                    sub_expr.format_with_options(
-                                        buf,
-                                        Parens::InApply,
-                                        Newlines::Yes,
-                                        indent,
-                                    );
-                                }
-                                _ => {
-                                    loc_arg.format_with_options(
-                                        buf,
-                                        Parens::InApply,
-                                        Newlines::Yes,
-                                        indent,
-                                    );
-                                }
-                            }
-                        } else {
-                            loc_arg.format_with_options(
-                                buf,
-                                Parens::InApply,
-                                Newlines::Yes,
-                                indent,
-                            );
-                        }
-                    }
-                } else {
-                    for loc_arg in loc_args.iter() {
+                        // Ignore any comments+newlines before/after.
+                        // We checked above that there's only a single newline before the last arg,
+                        // which we're intentionally ignoring.
+
+                        let arg = loc_arg.extract_spaces();
+                        arg.item.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::Yes,
+                            arg_indent,
+                        );
+                    } else if needs_indent {
+                        let arg = loc_arg.extract_spaces();
+                        fmt_spaces(buf, arg.before.iter(), arg_indent);
+                        buf.ensure_ends_with_newline();
+                        arg.item.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::Yes,
+                            arg_indent,
+                        );
+                        fmt_spaces(buf, arg.after.iter(), arg_indent);
+                    } else {
                         buf.spaces(1);
-                        loc_arg.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                        loc_arg.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::Yes,
+                            arg_indent,
+                        );
                     }
                 }
 
@@ -325,10 +350,34 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(string);
             }
             Record(fields) => {
-                fmt_record(buf, None, *fields, indent);
+                fmt_record_like(
+                    buf,
+                    None,
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                );
             }
             RecordUpdate { update, fields } => {
-                fmt_record(buf, Some(*update), *fields, indent);
+                fmt_record_like(
+                    buf,
+                    Some(*update),
+                    *fields,
+                    indent,
+                    format_assigned_field_multiline,
+                    assigned_field_to_space_before,
+                );
+            }
+            RecordBuilder(fields) => {
+                fmt_record_like(
+                    buf,
+                    None,
+                    *fields,
+                    indent,
+                    format_record_builder_field_multiline,
+                    record_builder_field_to_space_before,
+                );
             }
             Closure(loc_patterns, loc_ret) => {
                 fmt_closure(buf, loc_patterns, loc_ret, indent);
@@ -337,24 +386,28 @@ impl<'a> Formattable for Expr<'a> {
                 fmt_backpassing(buf, loc_patterns, loc_body, loc_ret, indent);
             }
             Defs(defs, ret) => {
-                // It should theoretically be impossible to *parse* an empty defs list.
-                // (Canonicalization can remove defs later, but that hasn't happened yet!)
-                debug_assert!(!defs.is_empty());
+                {
+                    let indent = if parens == Parens::InOperator {
+                        buf.indent(indent);
+                        buf.push('(');
+                        buf.newline();
+                        indent + INDENT
+                    } else {
+                        indent
+                    };
 
-                fmt_defs(buf, defs, indent);
+                    // It should theoretically be impossible to *parse* an empty defs list.
+                    // (Canonicalization can remove defs later, but that hasn't happened yet!)
+                    debug_assert!(!defs.is_empty());
 
-                match &ret.value {
-                    SpaceBefore(sub_expr, spaces) => {
-                        let empty_line_before_return = empty_line_before_expr(&ret.value);
-                        let has_inline_comment = has_line_comment_before(&ret.value);
+                    fmt_defs(buf, defs, indent);
 
-                        if has_inline_comment {
+                    match &ret.value {
+                        SpaceBefore(sub_expr, spaces) => {
                             buf.spaces(1);
-                            format_spaces(buf, spaces, newlines, indent);
+                            fmt_spaces(buf, spaces.iter(), indent);
 
-                            if !empty_line_before_return {
-                                buf.newline();
-                            }
+                            buf.indent(indent);
 
                             sub_expr.format_with_options(
                                 buf,
@@ -362,17 +415,21 @@ impl<'a> Formattable for Expr<'a> {
                                 Newlines::Yes,
                                 indent,
                             );
-                        } else {
+                        }
+                        _ => {
+                            buf.ensure_ends_with_newline();
+                            buf.indent(indent);
+                            // Even if there were no defs, which theoretically should never happen,
+                            // still print the return value.
                             ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                         }
                     }
-                    _ => {
-                        buf.ensure_ends_with_newline();
-                        buf.indent(indent);
-                        // Even if there were no defs, which theoretically should never happen,
-                        // still print the return value.
-                        ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
-                    }
+                }
+
+                if parens == Parens::InOperator {
+                    buf.ensure_ends_with_newline();
+                    buf.indent(indent);
+                    buf.push(')');
                 }
             }
             Expect(condition, continuation) => {
@@ -381,13 +438,16 @@ impl<'a> Formattable for Expr<'a> {
             Dbg(condition, continuation) => {
                 fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
             }
+            LowLevelDbg(_, _, _) => unreachable!(
+                "LowLevelDbg should only exist after desugaring, not during formatting"
+            ),
             If(branches, final_else) => {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
             Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
-            BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, parens, indent),
+            BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, indent),
             UnaryOp(sub_expr, unary_op) => {
                 buf.indent(indent);
                 match &unary_op.value {
@@ -399,20 +459,42 @@ impl<'a> Formattable for Expr<'a> {
                     }
                 }
 
-                sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
+                let needs_newline = match &sub_expr.value {
+                    SpaceBefore(..) => true,
+                    Str(text) => is_str_multiline(text),
+                    _ => false,
+                };
+                let needs_parens =
+                    needs_newline && matches!(unary_op.value, called_via::UnaryOp::Negate);
+
+                if needs_parens {
+                    // Unary negation can't be followed by whitespace (which is what a newline is) - so
+                    // we need to wrap the negated value in parens.
+                    buf.push('(');
+                }
+
+                let inner_indent = if needs_parens {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                sub_expr.format_with_options(buf, Parens::InApply, newlines, inner_indent);
+
+                if needs_parens {
+                    buf.push(')');
+                }
             }
-            RecordAccessorFunction(key) => {
+            AccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
-                buf.push_str(key);
+                match key {
+                    Accessor::RecordField(key) => buf.push_str(key),
+                    Accessor::TupleIndex(key) => buf.push_str(key),
+                }
             }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('.');
-                buf.push_str(key);
-            }
-            TupleAccessorFunction(key) => {
-                buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }
@@ -427,6 +509,29 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
+            MultipleRecordBuilders { .. } => {}
+            UnappliedRecordBuilder { .. } => {}
+            IngestedFile(_, _) => {}
+        }
+    }
+}
+
+fn is_str_multiline(literal: &StrLiteral) -> bool {
+    use roc_parse::ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(string) => {
+            // When a PlainLine contains '\n' or '"', format as a block string
+            string.contains('"') || string.contains('\n')
+        }
+        Line(_) => {
+            // If this had any newlines, it'd have parsed as Block.
+            false
+        }
+        Block(_) => {
+            // Block strings are always formatted on multiple lines,
+            // even if the string is only a single line.
+            true
         }
     }
 }
@@ -461,6 +566,17 @@ pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
     buf.push('\'');
 }
 
+fn is_outdentable(expr: &Expr) -> bool {
+    matches!(
+        expr.extract_spaces().item,
+        Expr::Tuple(_)
+            | Expr::List(_)
+            | Expr::Record(_)
+            | Expr::RecordBuilder(_)
+            | Expr::Closure(..)
+    )
+}
+
 fn starts_with_newline(expr: &Expr) -> bool {
     use roc_parse::ast::Expr::*;
 
@@ -472,7 +588,7 @@ fn starts_with_newline(expr: &Expr) -> bool {
     }
 }
 
-fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, indent: u16) {
+fn format_str_segment(seg: &StrSegment, buf: &mut Buf, indent: u16) {
     use StrSegment::*;
 
     match seg {
@@ -496,9 +612,20 @@ fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, inden
             buf.push('\\');
             buf.push(escaped.to_parsed_char());
         }
-        Interpolated(loc_expr) => {
+        DeprecatedInterpolated(loc_expr) => {
             buf.push_str("\\(");
-            // e.g. (name) in "Hi, \(name)!"
+            // e.g. (name) in "Hi, $(name)!"
+            loc_expr.value.format_with_options(
+                buf,
+                Parens::NotNeeded, // We already printed parens!
+                Newlines::No,      // Interpolations can never have newlines
+                indent,
+            );
+            buf.push(')');
+        }
+        Interpolated(loc_expr) => {
+            buf.push_str("$(");
+            // e.g. (name) in "Hi, $(name)!"
             loc_expr.value.format_with_options(
                 buf,
                 Parens::NotNeeded, // We already printed parens!
@@ -535,7 +662,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
     }
 }
 
-pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
+pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
     match literal {
@@ -545,11 +672,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                 buf.ensure_ends_with_newline();
                 buf.indent(indent);
                 buf.push_str("\"\"\"");
-                buf.newline();
+                buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
                     buf.push_str_allow_spaces(line);
-                    buf.newline();
+                    buf.push_newline_literal();
                 }
                 buf.indent(indent);
                 buf.push_str("\"\"\"");
@@ -573,7 +700,7 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push_str("\"\"\"");
-            buf.newline();
+            buf.push_newline_literal();
 
             for segments in lines.iter() {
                 for seg in segments.iter() {
@@ -582,11 +709,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                         buf.indent(indent);
                         format_str_segment(seg, buf, indent);
                     } else {
-                        buf.newline();
+                        buf.push_newline_literal();
                     }
                 }
 
-                buf.newline();
+                buf.push_newline_literal();
             }
             buf.indent(indent);
             buf.push_str("\"\"\"");
@@ -594,12 +721,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     }
 }
 
-fn fmt_binops<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_binops<'a>(
+    buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
     part_of_multi_line_binops: bool,
-    apply_needs_parens: Parens,
     indent: u16,
 ) {
     let is_multiline = part_of_multi_line_binops
@@ -609,7 +735,7 @@ fn fmt_binops<'a, 'buf>(
     for (loc_left_side, loc_binop) in lefts {
         let binop = loc_binop.value;
 
-        loc_left_side.format_with_options(buf, apply_needs_parens, Newlines::No, indent);
+        loc_left_side.format_with_options(buf, Parens::InOperator, Newlines::No, indent);
 
         if is_multiline {
             buf.ensure_ends_with_newline();
@@ -623,15 +749,10 @@ fn fmt_binops<'a, 'buf>(
         buf.spaces(1);
     }
 
-    loc_right_side.format_with_options(buf, apply_needs_parens, Newlines::Yes, indent);
+    loc_right_side.format_with_options(buf, Parens::InOperator, Newlines::Yes, indent);
 }
 
-fn format_spaces<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    spaces: &[CommentOrNewline<'a>],
-    newlines: Newlines,
-    indent: u16,
-) {
+fn format_spaces(buf: &mut Buf, spaces: &[CommentOrNewline], newlines: Newlines, indent: u16) {
     match newlines {
         Newlines::Yes => {
             fmt_spaces(buf, spaces.iter(), indent);
@@ -639,44 +760,6 @@ fn format_spaces<'a, 'buf>(
         Newlines::No => {
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
-    }
-}
-
-fn has_line_comment_before<'a>(expr: &'a Expr<'a>) -> bool {
-    use roc_parse::ast::Expr::*;
-
-    match expr {
-        SpaceBefore(_, spaces) => {
-            matches!(spaces.iter().next(), Some(CommentOrNewline::LineComment(_)))
-        }
-        _ => false,
-    }
-}
-
-fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
-    use roc_parse::ast::Expr::*;
-
-    match expr {
-        SpaceBefore(_, spaces) => {
-            let mut has_at_least_one_newline = false;
-
-            for comment_or_newline in spaces.iter() {
-                match comment_or_newline {
-                    CommentOrNewline::Newline => {
-                        if has_at_least_one_newline {
-                            return true;
-                        } else {
-                            has_at_least_one_newline = true;
-                        }
-                    }
-                    CommentOrNewline::LineComment(_) | CommentOrNewline::DocComment(_) => {}
-                }
-            }
-
-            false
-        }
-
-        _ => false,
     }
 }
 
@@ -698,8 +781,8 @@ fn is_when_patterns_multiline(when_branch: &WhenBranch) -> bool {
     is_multiline_patterns
 }
 
-fn fmt_when<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_when<'a>(
+    buf: &mut Buf,
     loc_condition: &'a Loc<Expr<'a>>,
     branches: &[&'a WhenBranch<'a>],
     indent: u16,
@@ -880,26 +963,20 @@ fn fmt_when<'a, 'buf>(
     }
 }
 
-fn fmt_dbg<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_dbg<'a>(
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
-    is_multiline: bool,
+    _: bool,
     indent: u16,
 ) {
     buf.ensure_ends_with_newline();
     buf.indent(indent);
     buf.push_str("dbg");
 
-    let return_indent = if is_multiline {
-        buf.newline();
-        indent + INDENT
-    } else {
-        buf.spaces(1);
-        indent
-    };
+    buf.spaces(1);
 
-    condition.format(buf, return_indent);
+    condition.format(buf, indent);
 
     // Always put a blank line after the `dbg` line(s)
     buf.ensure_ends_with_blank_line();
@@ -907,8 +984,8 @@ fn fmt_dbg<'a, 'buf>(
     continuation.format(buf, indent);
 }
 
-fn fmt_expect<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_expect<'a>(
+    buf: &mut Buf,
     condition: &'a Loc<Expr<'a>>,
     continuation: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -934,8 +1011,8 @@ fn fmt_expect<'a, 'buf>(
     continuation.format(buf, indent);
 }
 
-fn fmt_if<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_if<'a>(
+    buf: &mut Buf,
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
@@ -1083,8 +1160,8 @@ fn fmt_if<'a, 'buf>(
     final_else.format(buf, return_indent);
 }
 
-fn fmt_closure<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_closure<'a>(
+    buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
     indent: u16,
@@ -1184,8 +1261,8 @@ fn fmt_closure<'a, 'buf>(
     }
 }
 
-fn fmt_backpassing<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_backpassing<'a>(
+    buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_body: &'a Loc<Expr<'a>>,
     loc_ret: &'a Loc<Expr<'a>>,
@@ -1204,19 +1281,16 @@ fn fmt_backpassing<'a, 'buf>(
         indent
     };
 
-    let pattern_needs_parens = loc_patterns
-        .iter()
-        .any(|p| pattern_needs_parens_when_backpassing(&p.value));
-
-    if pattern_needs_parens {
-        buf.indent(indent);
-        buf.push('(');
-    }
-
     let mut it = loc_patterns.iter().peekable();
 
     while let Some(loc_pattern) = it.next() {
-        loc_pattern.format(buf, indent);
+        let needs_parens = if pattern_needs_parens_when_backpassing(&loc_pattern.value) {
+            Parens::InApply
+        } else {
+            Parens::NotNeeded
+        };
+
+        loc_pattern.format_with_options(buf, needs_parens, Newlines::No, indent);
 
         if it.peek().is_some() {
             if arguments_are_multiline {
@@ -1227,10 +1301,6 @@ fn fmt_backpassing<'a, 'buf>(
                 buf.spaces(1);
             }
         }
-    }
-
-    if pattern_needs_parens {
-        buf.push(')');
     }
 
     if arguments_are_multiline {
@@ -1279,16 +1349,22 @@ fn pattern_needs_parens_when_backpassing(pat: &Pattern) -> bool {
     }
 }
 
-fn fmt_record<'a, 'buf>(
-    buf: &mut Buf<'buf>,
+fn fmt_record_like<'a, Field, Format, ToSpaceBefore>(
+    buf: &mut Buf,
     update: Option<&'a Loc<Expr<'a>>>,
-    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    fields: Collection<'a, Loc<Field>>,
     indent: u16,
-) {
+    format_field_multiline: Format,
+    to_space_before: ToSpaceBefore,
+) where
+    Field: Formattable,
+    Format: Fn(&mut Buf, &Field, u16, &str),
+    ToSpaceBefore: Fn(&'a Field) -> Option<(&'a Field, &'a [CommentOrNewline<'a>])>,
+{
     let loc_fields = fields.items;
     let final_comments = fields.final_comments();
     buf.indent(indent);
-    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) {
+    if loc_fields.is_empty() && final_comments.iter().all(|c| c.is_newline()) && update.is_none() {
         buf.push_str("{}");
     } else {
         buf.push('{');
@@ -1320,7 +1396,7 @@ fn fmt_record<'a, 'buf>(
                 // In this case, we have to move the comma before the comment.
 
                 let is_first_item = index == 0;
-                if let AssignedField::SpaceBefore(_sub_field, spaces) = &field.value {
+                if let Some((_sub_field, spaces)) = to_space_before(&field.value) {
                     let is_only_newlines = spaces.iter().all(|s| s.is_newline());
                     if !is_first_item
                         && !is_only_newlines
@@ -1371,9 +1447,9 @@ fn fmt_record<'a, 'buf>(
     }
 }
 
-fn format_field_multiline<'a, 'buf, T>(
-    buf: &mut Buf<'buf>,
-    field: &AssignedField<'a, T>,
+fn format_assigned_field_multiline<T>(
+    buf: &mut Buf,
+    field: &AssignedField<T>,
     indent: u16,
     separator_prefix: &str,
 ) where
@@ -1427,7 +1503,7 @@ fn format_field_multiline<'a, 'buf, T>(
             // ```
             // we'd like to preserve this
 
-            format_field_multiline(buf, sub_field, indent, separator_prefix);
+            format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
             // We have something like that:
@@ -1441,12 +1517,128 @@ fn format_field_multiline<'a, 'buf, T>(
             // # comment
             // otherfield
             // ```
-            format_field_multiline(buf, sub_field, indent, separator_prefix);
+            format_assigned_field_multiline(buf, sub_field, indent, separator_prefix);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
         }
         Malformed(raw) => {
             buf.push_str(raw);
         }
+    }
+}
+
+fn assigned_field_to_space_before<'a, T>(
+    field: &'a AssignedField<'a, T>,
+) -> Option<(&AssignedField<'a, T>, &'a [CommentOrNewline<'a>])> {
+    match field {
+        AssignedField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
+        _ => None,
+    }
+}
+
+fn format_record_builder_field_multiline(
+    buf: &mut Buf,
+    field: &RecordBuilderField,
+    indent: u16,
+    separator_prefix: &str,
+) {
+    use self::RecordBuilderField::*;
+    match field {
+        Value(name, spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push_str(name.value);
+
+            if !spaces.is_empty() {
+                fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push_str(":");
+
+            if ann.value.is_multiline() {
+                buf.newline();
+                ann.value.format(buf, indent + INDENT);
+            } else {
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
+
+            buf.push(',');
+        }
+        ApplyValue(name, colon_spaces, arrow_spaces, ann) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push_str(name.value);
+
+            if !colon_spaces.is_empty() {
+                fmt_spaces(buf, colon_spaces.iter(), indent);
+                buf.indent(indent);
+            }
+
+            buf.push_str(separator_prefix);
+            buf.push(':');
+            buf.spaces(1);
+
+            if !arrow_spaces.is_empty() {
+                fmt_spaces(buf, arrow_spaces.iter(), indent);
+                buf.indent(indent + INDENT);
+            }
+
+            buf.push_str("<-");
+
+            if ann.value.is_multiline() {
+                buf.newline();
+                ann.value.format(buf, indent + INDENT);
+            } else {
+                buf.spaces(1);
+                ann.value.format(buf, indent);
+            }
+            buf.push(',');
+        }
+        LabelOnly(name) => {
+            buf.newline();
+            buf.indent(indent);
+            buf.push_str(name.value);
+            buf.push(',');
+        }
+        SpaceBefore(sub_field, _spaces) => {
+            // We have something like that:
+            // ```
+            // # comment
+            // field,
+            // ```
+            // we'd like to preserve this
+
+            format_record_builder_field_multiline(buf, sub_field, indent, separator_prefix);
+        }
+        SpaceAfter(sub_field, spaces) => {
+            // We have something like that:
+            // ```
+            // field # comment
+            // , otherfield
+            // ```
+            // we'd like to transform it into:
+            // ```
+            // field,
+            // # comment
+            // otherfield
+            // ```
+            format_record_builder_field_multiline(buf, sub_field, indent, separator_prefix);
+            fmt_comments_only(buf, spaces.iter(), NewlineAt::Top, indent);
+        }
+        Malformed(raw) => {
+            buf.push_str(raw);
+        }
+    }
+}
+
+fn record_builder_field_to_space_before<'a>(
+    field: &'a RecordBuilderField<'a>,
+) -> Option<(&RecordBuilderField<'a>, &'a [CommentOrNewline<'a>])> {
+    match field {
+        RecordBuilderField::SpaceBefore(sub_field, spaces) => Some((sub_field, spaces)),
+        _ => None,
     }
 }
 
@@ -1479,6 +1671,8 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                 })
         }
         Expr::If(_, _) => true,
+        Expr::SpaceBefore(e, _) => sub_expr_requests_parens(e),
+        Expr::SpaceAfter(e, _) => sub_expr_requests_parens(e),
         _ => false,
     }
 }

@@ -10,6 +10,11 @@
 // file with the same name in the fixture-templates/ directory.
 
 fn main() {
+    #[cfg(not(windows))]
     println!("cargo:rustc-link-lib=dylib=app");
+
+    #[cfg(windows)]
+    println!("cargo:rustc-link-lib=dylib=libapp");
+
     println!("cargo:rustc-link-search=.");
 }

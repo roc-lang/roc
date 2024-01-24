@@ -1,5 +1,6 @@
 use bumpalo::{collections::vec::Vec, Bump};
-use std::mem::size_of;
+use roc_reporting::report::{DEFAULT_PALETTE_HTML, HTML_STYLE_CODES};
+use std::{cell::RefCell, mem::size_of};
 
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result;
@@ -7,16 +8,26 @@ use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::jit_to_ast,
-    gen::{compile_to_mono, format_answer},
+    gen::{format_answer, ReplOutput},
     ReplApp, ReplAppMemory,
 };
-use roc_reporting::report::DEFAULT_PALETTE_HTML;
+use roc_repl_ui::{
+    format_output,
+    repl_state::{ReplAction, ReplState},
+    TIPS,
+};
 use roc_target::TargetInfo;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
 
 const WRAPPER_NAME: &str = "wrapper";
+
+// On the web, we keep the REPL state in a global variable, because `main` is not in our Rust code!
+// We return back to JS after every line of input. `main` is in the browser engine, running the JS event loop.
+std::thread_local! {
+    static REPL_STATE: RefCell<ReplState> = RefCell::new(ReplState::new());
+}
 
 pub struct WasmReplApp<'a> {
     arena: &'a Bump,
@@ -76,7 +87,8 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
             &self.copied_bytes[addr..][..len]
         } else {
             let chars_index = self.deref_usize(addr);
-            let len = self.deref_usize(addr + 4);
+            let seamless_slice_mask = u32::MAX as usize >> 1;
+            let len = self.deref_usize(addr + 4) & seamless_slice_mask;
             &self.copied_bytes[chars_index..][..len]
         };
 
@@ -165,43 +177,49 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
 }
 
 const PRE_LINKED_BINARY: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.o")) as &[_];
+    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.wasm")) as &[_];
 
-pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
+pub async fn entrypoint_from_js(src: String) -> String {
+    // If our Rust code panics, redirect the error message to JS console.error
+    // Also, our JS code overrides console.error to display the error message text (including stack trace) in the REPL output.
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
+    // TODO: make this a global and reset it?
     let arena = &Bump::new();
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    // TODO use this to filter out problems and warnings in wrapped defs.
-    // See the variable by the same name in the CLI REPL for how to do this!
-    let mono = match compile_to_mono(
-        arena,
-        std::iter::empty(),
-        &src,
-        target_info,
-        DEFAULT_PALETTE_HTML,
-    ) {
-        (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible
-        (_, problems) => {
-            // TODO always report these, but continue if possible with the MonomorphizedModule if we have one.
-            let mut buf = String::new();
 
-            // Join all the errors and warnings together with blank lines.
-            for message in problems.errors.iter().chain(problems.warnings.iter()) {
-                if !buf.is_empty() {
-                    buf.push_str("\n\n");
-                }
+    // Advance the REPL state machine
+    let action = REPL_STATE.with(|repl_state_cell| {
+        let mut repl_state = repl_state_cell.borrow_mut();
+        repl_state.step(arena, &src, target_info, DEFAULT_PALETTE_HTML)
+    });
 
-                buf.push_str(message);
-            }
-
-            return Err(buf);
+    // Perform the action the state machine asked for, and return the appropriate output string
+    match action {
+        ReplAction::Help => TIPS.to_string(),
+        ReplAction::Exit => {
+            "To exit the web version of the REPL, just close the browser tab!".to_string()
         }
-    };
+        ReplAction::Nothing => String::new(),
+        ReplAction::Eval { opt_mono, problems } => {
+            let opt_output = match opt_mono {
+                Some(mono) => eval_wasm(arena, target_info, mono).await,
+                None => None,
+            };
 
+            format_output(HTML_STYLE_CODES, opt_output, problems)
+        }
+    }
+}
+
+async fn eval_wasm<'a>(
+    arena: &'a Bump,
+    target_info: TargetInfo,
+    mono: MonomorphizedModule<'a>,
+) -> Option<ReplOutput> {
     let MonomorphizedModule {
         module_id,
         procedures,
@@ -212,13 +230,13 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         ..
     } = mono;
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
-    let (main_fn_symbol, main_fn_var) = exposed_to_host.values.iter().next().unwrap();
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
+    let (main_fn_symbol, main_fn_var) = exposed_to_host.top_level_values.iter().next().unwrap();
     let main_fn_symbol = *main_fn_symbol;
     let main_fn_var = *main_fn_var;
 
     // pretty-print the expr type string for later.
-    let expr_type_str = name_and_print_var(
+    let expr_type = name_and_print_var(
         main_fn_var,
         &mut subs,
         module_id,
@@ -226,10 +244,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         DebugPrint::NOTHING,
     );
 
-    let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
-        Some(layout) => *layout,
-        None => return Ok(format!("<function> : {}", expr_type_str)),
-    };
+    let (_, main_fn_layout) = *procedures.keys().find(|(s, _)| *s == main_fn_symbol)?;
 
     let app_module_bytes = {
         let env = roc_gen_wasm::Env {
@@ -237,7 +252,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             module_id,
             stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host
-                .values
+                .top_level_values
                 .keys()
                 .copied()
                 .collect::<MutSet<_>>(),
@@ -260,7 +275,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             &mut module,
             WRAPPER_NAME,
             main_fn_index,
-            &main_fn_layout.result,
+            main_fn_layout.result,
         );
         called_fns.push(true);
 
@@ -272,10 +287,16 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         buffer
     };
 
-    // Send the compiled binary out to JS and create an executable instance from it
-    js_create_app(&app_module_bytes)
-        .await
-        .map_err(|js| format!("{:?}", js))?;
+    // Send the compiled binary out to JS, which will asynchronously create an executable WebAssembly instance
+    match js_create_app(&app_module_bytes).await {
+        Ok(()) => {}
+        Err(js_exception) => {
+            return Some(ReplOutput {
+                expr: format!("<span class='color-red'>{js_exception:?}</span>"),
+                expr_type: String::new(),
+            })
+        }
+    }
 
     let mut app = WasmReplApp { arena };
 
@@ -293,11 +314,8 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         target_info,
     );
 
-    let var_name = String::new(); // TODO turn this into something like " # val1"
-
     // Transform the Expr to a string
-    // `Result::Err` becomes a JS exception that will be caught and displayed
-    let expr = format_answer(arena, res_answer);
+    let expr = format_answer(arena, res_answer).to_string();
 
-    Ok(format!("{expr} : {expr_type_str}{var_name}"))
+    Some(ReplOutput { expr, expr_type })
 }

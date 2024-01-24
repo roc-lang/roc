@@ -1,0 +1,25 @@
+[package]
+name = "roc_repl_ui"
+description = "UI for the Roc REPL, shared between CLI and WebAssembly versions."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_collections = { path = "../compiler/collections" }
+roc_load = { path = "../compiler/load" }
+roc_parse = { path = "../compiler/parse" }
+roc_region = { path = "../compiler/region" }
+roc_repl_eval = { path = "../repl_eval" }
+roc_reporting = { path = "../reporting" }
+roc_target = { path = "../compiler/roc_target" }
+
+bumpalo.workspace = true
+const_format.workspace = true
+unicode-segmentation.workspace = true
+
+[lib]
+name = "roc_repl_ui"
+path = "src/lib.rs"

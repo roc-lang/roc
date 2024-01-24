@@ -9,8 +9,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType,
-    OptAbleVar, RecordField, Type, TypeExtension,
+    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, ExtImplicitOpenness,
+    LambdaSet, OptAbleType, OptAbleVar, RecordField, Type, TypeExtension,
 };
 
 #[derive(Clone, Debug)]
@@ -122,7 +122,7 @@ pub struct NamedVariable {
     pub first_seen: Region,
 }
 
-/// A type variable bound to an ability, like "a has Hash".
+/// A type variable bound to an ability, like "a implements Hash".
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AbleVariable {
     pub variable: Variable,
@@ -296,7 +296,7 @@ pub(crate) fn canonicalize_annotation(
 
     let (annotation, region) = match annotation {
         TypeAnnotation::Where(annotation, clauses) => {
-            // Add each "has" clause. The association of a variable to an ability will be saved on
+            // Add each "implements" clause. The association of a variable to an ability will be saved on
             // `introduced_variables`, which we'll process later.
             for clause in clauses.iter() {
                 let opt_err = canonicalize_has_clause(
@@ -448,8 +448,9 @@ pub fn find_type_def_symbols(
             As(actual, _, _) => {
                 stack.push(&actual.value);
             }
-            Tuple { fields: _, ext: _ } => {
-                todo!("find_type_def_symbols: Tuple");
+            Tuple { elems, ext } => {
+                stack.extend(elems.iter().map(|t| &t.value));
+                stack.extend(ext.iter().map(|t| &t.value));
             }
             Record { fields, ext } => {
                 let mut inner_stack = Vec::with_capacity(fields.items.len());
@@ -846,37 +847,22 @@ fn can_annotation_help(
             let alias = scope.lookup_alias(symbol).unwrap();
             local_aliases.insert(symbol, alias.clone());
 
-            if vars.is_empty() && env.home == symbol.module_id() {
-                let actual_var = var_store.fresh();
-                introduced_variables.insert_host_exposed_alias(symbol, actual_var);
-                Type::HostExposedAlias {
-                    name: symbol,
-                    type_arguments: vars,
-                    lambda_set_variables: alias.lambda_set_variables.clone(),
-                    actual: Box::new(alias.typ.clone()),
-                    actual_var,
-                }
-            } else {
-                Type::Alias {
-                    symbol,
-                    type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
-                    lambda_set_variables: alias.lambda_set_variables.clone(),
-                    infer_ext_in_output_types: alias
-                        .infer_ext_in_output_variables
-                        .iter()
-                        .map(|v| Type::Variable(*v))
-                        .collect(),
-                    actual: Box::new(alias.typ.clone()),
-                    kind: alias.kind,
-                }
+            Type::Alias {
+                symbol,
+                type_arguments: vars.into_iter().map(OptAbleType::unbound).collect(),
+                lambda_set_variables: alias.lambda_set_variables.clone(),
+                infer_ext_in_output_types: alias
+                    .infer_ext_in_output_variables
+                    .iter()
+                    .map(|v| Type::Variable(*v))
+                    .collect(),
+                actual: Box::new(alias.typ.clone()),
+                kind: alias.kind,
             }
         }
 
-        Tuple { fields: _, ext: _ } => {
-            todo!("tuple");
-        }
-        Record { fields, ext } => {
-            let ext_type = can_extension_type(
+        Tuple { elems, ext } => {
+            let (ext_type, is_implicit_openness) = can_extension_type(
                 env,
                 pol,
                 scope,
@@ -888,13 +874,57 @@ fn can_annotation_help(
                 roc_problem::can::ExtensionTypeKind::Record,
             );
 
+            debug_assert!(
+                matches!(is_implicit_openness, ExtImplicitOpenness::No),
+                "tuples should never be implicitly inferred open"
+            );
+
+            debug_assert!(!elems.is_empty()); // We don't allow empty tuples
+
+            let elem_types = can_assigned_tuple_elems(
+                env,
+                pol,
+                &elems.items,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
+
+            Type::Tuple(
+                elem_types,
+                TypeExtension::from_type(ext_type, is_implicit_openness),
+            )
+        }
+        Record { fields, ext } => {
+            let (ext_type, is_implicit_openness) = can_extension_type(
+                env,
+                pol,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::Record,
+            );
+
+            debug_assert!(
+                matches!(is_implicit_openness, ExtImplicitOpenness::No),
+                "records should never be implicitly inferred open"
+            );
+
             if fields.is_empty() {
                 match ext {
                     Some(_) => {
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::Record(Default::default(), TypeExtension::from_type(ext_type))
+                        Type::Record(
+                            Default::default(),
+                            TypeExtension::from_type(ext_type, is_implicit_openness),
+                        )
                     }
 
                     None => Type::EmptyRec,
@@ -912,11 +942,14 @@ fn can_annotation_help(
                     references,
                 );
 
-                Type::Record(field_types, TypeExtension::from_type(ext_type))
+                Type::Record(
+                    field_types,
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             }
         }
         TagUnion { tags, ext, .. } => {
-            let ext_type = can_extension_type(
+            let (ext_type, is_implicit_openness) = can_extension_type(
                 env,
                 pol,
                 scope,
@@ -931,10 +964,13 @@ fn can_annotation_help(
             if tags.is_empty() {
                 match ext {
                     Some(_) => {
-                        // just `a` does not mean the same as `{}a`, so even
-                        // if there are no fields, still make this a `Record`,
-                        // not an EmptyRec
-                        Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
+                        // just `a` does not mean the same as `[]`, so even
+                        // if there are no fields, still make this a `TagUnion`,
+                        // not an EmptyTagUnion
+                        Type::TagUnion(
+                            Default::default(),
+                            TypeExtension::from_type(ext_type, is_implicit_openness),
+                        )
                     }
 
                     None => Type::EmptyTagUnion,
@@ -957,7 +993,10 @@ fn can_annotation_help(
                 // in theory we save a lot of time by sorting once here
                 insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
-                Type::TagUnion(tag_types, TypeExtension::from_type(ext_type))
+                Type::TagUnion(
+                    tag_types,
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
@@ -990,8 +1029,8 @@ fn can_annotation_help(
         Where(_annotation, clauses) => {
             debug_assert!(!clauses.is_empty());
 
-            // Has clauses are allowed only on the top level of a signature, which we handle elsewhere.
-            env.problem(roc_problem::can::Problem::IllegalHasClause {
+            // Implements clauses are allowed only on the top level of a signature, which we handle elsewhere.
+            env.problem(roc_problem::can::Problem::IllegalImplementsClause {
                 region: Region::across_all(clauses.iter().map(|clause| &clause.region)),
             });
 
@@ -1014,13 +1053,13 @@ fn canonicalize_has_clause(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    clause: &Loc<roc_parse::ast::HasClause<'_>>,
+    clause: &Loc<roc_parse::ast::ImplementsClause<'_>>,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
         region,
-        value: roc_parse::ast::HasClause { var, abilities },
+        value: roc_parse::ast::ImplementsClause { var, abilities },
     } = clause;
     let region = *region;
 
@@ -1046,13 +1085,13 @@ fn canonicalize_has_clause(
                 // or an ability that was imported from elsewhere
                 && !scope.abilities_store.is_ability(symbol)
                 {
-                    env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                    env.problem(roc_problem::can::Problem::ImplementsClauseIsNotAbility { region });
                     return Err(Type::Error);
                 }
                 symbol
             }
             _ => {
-                env.problem(roc_problem::can::Problem::HasClauseIsNotAbility { region });
+                env.problem(roc_problem::can::Problem::ImplementsClauseIsNotAbility { region });
                 return Err(Type::Error);
             }
         };
@@ -1061,7 +1100,7 @@ fn canonicalize_has_clause(
         let already_seen = can_abilities.insert(ability);
 
         if already_seen {
-            env.problem(roc_problem::can::Problem::DuplicateHasAbility { ability, region });
+            env.problem(roc_problem::can::Problem::DuplicateImplementsAbility { ability, region });
         }
     }
 
@@ -1084,7 +1123,7 @@ fn canonicalize_has_clause(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn can_extension_type<'a>(
+fn can_extension_type(
     env: &mut Env,
     pol: CanPolarity,
     scope: &mut Scope,
@@ -1092,9 +1131,9 @@ fn can_extension_type<'a>(
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
-    opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
+    opt_ext: &Option<&Loc<TypeAnnotation>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
-) -> Type {
+) -> (Type, ExtImplicitOpenness) {
     fn valid_record_ext_type(typ: &Type) -> bool {
         // Include erroneous types so that we don't overreport errors.
         matches!(
@@ -1141,7 +1180,7 @@ fn can_extension_type<'a>(
                     })
                 }
 
-                ext_type
+                (ext_type, ExtImplicitOpenness::No)
             } else {
                 // Report an error but mark the extension variable to be inferred
                 // so that we're as permissive as possible.
@@ -1157,21 +1196,27 @@ fn can_extension_type<'a>(
 
                 introduced_variables.insert_inferred(Loc::at_zero(var));
 
-                Type::Variable(var)
+                (
+                    Type::Variable(var),
+                    // Since this is an error anyway, just be permissive
+                    ExtImplicitOpenness::No,
+                )
             }
         }
         None => match ext_problem_kind {
-            ExtensionTypeKind::Record => Type::EmptyRec,
+            ExtensionTypeKind::Record => (Type::EmptyRec, ExtImplicitOpenness::No),
             ExtensionTypeKind::TagUnion => {
                 // In negative positions a missing extension variable forces a closed tag union;
                 // otherwise, open-in-output-position means we give the tag an inference variable.
                 match pol {
-                    CanPolarity::Neg | CanPolarity::InOpaque => Type::EmptyTagUnion,
+                    CanPolarity::Neg | CanPolarity::InOpaque => {
+                        (Type::EmptyTagUnion, ExtImplicitOpenness::No)
+                    }
                     CanPolarity::Pos | CanPolarity::InAlias => {
                         let var = var_store.fresh();
                         introduced_variables.insert_infer_ext_in_output(var);
 
-                        Type::Variable(var)
+                        (Type::Variable(var), ExtImplicitOpenness::Yes)
                     }
                 }
             }
@@ -1202,51 +1247,6 @@ fn shallow_dealias_with_scope<'a>(scope: &'a mut Scope, typ: &'a Type) -> &'a Ty
     result
 }
 
-pub fn instantiate_and_freshen_alias_type(
-    var_store: &mut VarStore,
-    introduced_variables: &mut IntroducedVariables,
-    type_variables: &[Loc<AliasVar>],
-    type_arguments: Vec<Type>,
-    lambda_set_variables: &[LambdaSet],
-    mut actual_type: Type,
-) -> (Vec<(Lowercase, Type)>, Vec<LambdaSet>, Type) {
-    let mut substitutions = ImMap::default();
-    let mut type_var_to_arg = Vec::new();
-
-    for (loc_var, arg_ann) in type_variables.iter().zip(type_arguments.into_iter()) {
-        let name = loc_var.value.name.clone();
-        let var = loc_var.value.var;
-
-        substitutions.insert(var, arg_ann.clone());
-        type_var_to_arg.push((name.clone(), arg_ann));
-    }
-
-    // make sure the recursion variable is freshly instantiated
-    if let Type::RecursiveTagUnion(rvar, _, _) = &mut actual_type {
-        let new = var_store.fresh();
-        substitutions.insert(*rvar, Type::Variable(new));
-        *rvar = new;
-    }
-
-    // make sure hidden variables are freshly instantiated
-    let mut new_lambda_set_variables = Vec::with_capacity(lambda_set_variables.len());
-    for typ in lambda_set_variables.iter() {
-        if let Type::Variable(var) = typ.0 {
-            let fresh = var_store.fresh();
-            substitutions.insert(var, Type::Variable(fresh));
-            introduced_variables.insert_lambda_set(fresh);
-            new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
-        } else {
-            unreachable!("at this point there should be only vars in there");
-        }
-    }
-
-    // instantiate variables
-    actual_type.substitute(&substitutions);
-
-    (type_var_to_arg, new_lambda_set_variables, actual_type)
-}
-
 pub fn freshen_opaque_def(
     var_store: &mut VarStore,
     opaque: &Alias,
@@ -1262,25 +1262,46 @@ pub fn freshen_opaque_def(
         })
         .collect();
 
-    let fresh_type_arguments = fresh_variables
-        .iter()
-        .map(|av| Type::Variable(av.var))
-        .collect();
-
     // NB: We don't introduce the fresh variables here, we introduce them during constraint gen.
     // NB: If there are bugs, check whether this is a problem!
     let mut introduced_variables = IntroducedVariables::default();
 
-    let (_fresh_type_arguments, fresh_lambda_set, fresh_type) = instantiate_and_freshen_alias_type(
-        var_store,
-        &mut introduced_variables,
-        &opaque.type_variables,
-        fresh_type_arguments,
-        &opaque.lambda_set_variables,
-        opaque.typ.clone(),
-    );
+    let mut substitutions = ImMap::default();
 
-    (fresh_variables, fresh_lambda_set, fresh_type)
+    // Freshen all type variables used in the opaque.
+    for (loc_var, fresh_var) in opaque.type_variables.iter().zip(fresh_variables.iter()) {
+        let old_var = loc_var.value.var;
+        substitutions.insert(old_var, Type::Variable(fresh_var.var));
+        // NB: fresh var not introduced in this pass; see above.
+    }
+
+    // Freshen all nested recursion variables.
+    for &rec_var in opaque.recursion_variables.iter() {
+        let new = var_store.fresh();
+        substitutions.insert(rec_var, Type::Variable(new));
+    }
+
+    // Freshen all nested lambda sets.
+    let mut new_lambda_set_variables = Vec::with_capacity(opaque.lambda_set_variables.len());
+    for typ in opaque.lambda_set_variables.iter() {
+        if let Type::Variable(var) = typ.0 {
+            let fresh = var_store.fresh();
+            substitutions.insert(var, Type::Variable(fresh));
+            introduced_variables.insert_lambda_set(fresh);
+            new_lambda_set_variables.push(LambdaSet(Type::Variable(fresh)));
+        } else {
+            unreachable!("at this point there should be only vars in there");
+        }
+    }
+
+    // Fresh the real type with our new variables.
+    let actual_type = {
+        let mut typ = opaque.typ.clone();
+        typ.substitute(&substitutions);
+        typ
+    };
+
+    (fresh_variables, new_lambda_set_variables, actual_type)
 }
 
 fn insertion_sort_by<T, F>(arr: &mut [T], mut compare: F)
@@ -1415,6 +1436,39 @@ fn can_assigned_fields<'a>(
     }
 
     field_types
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+fn can_assigned_tuple_elems(
+    env: &mut Env,
+    pol: CanPolarity,
+    elems: &&[Loc<TypeAnnotation>],
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    local_aliases: &mut VecMap<Symbol, Alias>,
+    references: &mut VecSet<Symbol>,
+) -> VecMap<usize, Type> {
+    let mut elem_types = VecMap::with_capacity(elems.len());
+
+    for (index, loc_elem) in elems.iter().enumerate() {
+        let elem_type = can_annotation_help(
+            env,
+            pol,
+            &loc_elem.value,
+            loc_elem.region,
+            scope,
+            var_store,
+            introduced_variables,
+            local_aliases,
+            references,
+        );
+
+        elem_types.insert(index, elem_type);
+    }
+
+    elem_types
 }
 
 // TODO trim down these arguments!

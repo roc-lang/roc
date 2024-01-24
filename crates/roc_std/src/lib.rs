@@ -1,5 +1,5 @@
 //! Provides Rust representations of Roc data structures.
-#![no_std]
+// #![cfg_attr(not(feature = "std"), no_std)]
 #![crate_type = "lib"]
 
 use arrayvec::ArrayString;
@@ -36,7 +36,7 @@ extern "C" {
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
-    pub fn roc_memcpy(dst: *mut c_void, src: *mut c_void, n: usize) -> *mut c_void;
+    pub fn roc_dbg(loc: *mut c_void, msg: *mut c_void, src: *mut c_void);
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
@@ -102,6 +102,13 @@ where
     }
 }
 
+impl<T, E> Eq for RocResult<T, E>
+where
+    T: Eq,
+    E: Eq,
+{
+}
+
 impl<T, E> PartialEq for RocResult<T, E>
 where
     T: PartialEq,
@@ -109,6 +116,37 @@ where
 {
     fn eq(&self, other: &Self) -> bool {
         self.as_result_of_refs() == other.as_result_of_refs()
+    }
+}
+
+impl<T, E> Ord for RocResult<T, E>
+where
+    T: Ord,
+    E: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_result_of_refs().cmp(&other.as_result_of_refs())
+    }
+}
+
+impl<T, E> PartialOrd for RocResult<T, E>
+where
+    T: PartialOrd,
+    E: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.as_result_of_refs()
+            .partial_cmp(&other.as_result_of_refs())
+    }
+}
+
+impl<T, E> Hash for RocResult<T, E>
+where
+    T: Hash,
+    E: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_result_of_refs().hash(state)
     }
 }
 
@@ -228,9 +266,18 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
-#[repr(C)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
+
+impl Debug for RocDec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RocDec")
+            .field(&self.0)
+            .field(&self.to_str())
+            .finish()
+    }
+}
 
 impl RocDec {
     pub const MIN: Self = Self(i128::MIN.to_ne_bytes());
@@ -298,12 +345,36 @@ impl RocDec {
         };
 
         // Calculate the high digits - the ones before the decimal point.
-        match before_point.parse::<i128>() {
-            Ok(answer) => match answer.checked_mul(Self::ONE_POINT_ZERO) {
-                Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
-                None => None,
-            },
-            Err(_) => None,
+        let (is_pos, digits) = match before_point.chars().next() {
+            Some('+') => (true, &before_point[1..]),
+            Some('-') => (false, &before_point[1..]),
+            _ => (true, before_point),
+        };
+
+        let mut hi: i128 = 0;
+        macro_rules! adjust_hi {
+            ($op:ident) => {{
+                for digit in digits.chars() {
+                    if digit == '_' {
+                        continue;
+                    }
+
+                    let digit = digit.to_digit(10)?;
+                    hi = hi.checked_mul(10)?;
+                    hi = hi.$op(digit as _)?;
+                }
+            }};
+        }
+
+        if is_pos {
+            adjust_hi!(checked_add);
+        } else {
+            adjust_hi!(checked_sub);
+        }
+
+        match hi.checked_mul(Self::ONE_POINT_ZERO) {
+            Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
+            None => None,
         }
     }
 
@@ -340,13 +411,11 @@ impl RocDec {
         // get their leading zeros placed in bytes for us. i.e. `string = b"0012340000000000000"`
         write!(string, "{:019}", self.as_i128()).unwrap();
 
-        let is_negative = self.as_i128() < 0;
-        let decimal_location = string.len() - Self::DECIMAL_PLACES + (is_negative as usize);
-
+        let decimal_location = string.len() - Self::DECIMAL_PLACES;
         // skip trailing zeros
         let last_nonzero_byte = string.trim_end_matches('0').len();
 
-        if last_nonzero_byte < decimal_location {
+        if last_nonzero_byte <= decimal_location {
             // This means that we've removed trailing zeros and are left with an integer. Our
             // convention is to print these without a decimal point or trailing zeros, so we're done.
             string.truncate(decimal_location);
@@ -375,6 +444,12 @@ impl RocDec {
 
     pub fn to_str(&self) -> RocStr {
         RocStr::from(self.to_str_helper(&mut ArrayString::new()))
+    }
+}
+
+impl From<i32> for RocDec {
+    fn from(value: i32) -> Self {
+        RocDec::from_ne_bytes((RocDec::ONE_POINT_ZERO * value as i128).to_ne_bytes())
     }
 }
 
@@ -420,7 +495,7 @@ impl PartialEq for I128 {
 
 impl PartialOrd for I128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        i128::from(*self).partial_cmp(&i128::from(*other))
+        Some(self.cmp(other))
     }
 }
 
@@ -472,7 +547,7 @@ impl PartialEq for U128 {
 
 impl PartialOrd for U128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        u128::from(*self).partial_cmp(&u128::from(*other))
+        Some(self.cmp(other))
     }
 }
 

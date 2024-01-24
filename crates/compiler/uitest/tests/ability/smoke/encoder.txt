@@ -1,0 +1,29 @@
+app "test" provides [myU8Bytes] to "./platform"
+
+MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
+
+MEncoding implements
+  toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
+
+Format implements
+  u8 : U8 -> MEncoder fmt where fmt implements Format
+
+appendWith : List U8, MEncoder fmt, fmt -> List U8 where fmt implements Format
+appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
+
+toBytes : val, fmt -> List U8 where val implements MEncoding, fmt implements Format
+toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+
+
+Linear := {} implements [Format {u8}]
+
+u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
+#^^{-1} Linear#u8(10): U8 -[[u8(10)]]-> MEncoder Linear
+
+MyU8 := U8 implements [MEncoding {toEncoder}]
+
+toEncoder = \@MyU8 n -> u8 n
+#^^^^^^^^^{-1} MyU8#toEncoder(11): MyU8 -[[toEncoder(11)]]-> MEncoder fmt where fmt implements Format
+
+myU8Bytes = toBytes (@MyU8 15) (@Linear {})
+#^^^^^^^^^{-1} List U8

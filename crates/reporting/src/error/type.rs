@@ -2,6 +2,8 @@
 
 use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
+use itertools::EitherOrBoth;
+use itertools::Itertools;
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -13,17 +15,17 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
-    Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
+    UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Polarity, Reason, RecordField,
-    TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
+    RecordField, TypeExt,
 };
 use std::path::PathBuf;
-use ven_pretty::DocAllocator;
+use ven_pretty::{text, DocAllocator};
 
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
@@ -69,7 +71,7 @@ pub fn type_problem<'b>(
             symbol,
             overall_type,
         )),
-        UnexposedLookup(symbol) => {
+        UnexposedLookup(_, symbol) => {
             let title = "UNRECOGNIZED NAME".to_string();
             let doc = alloc
                 .stack(vec![alloc
@@ -207,6 +209,45 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        IngestedFileBadUtf8(file_path, utf8_err) => {
+            let stack = [
+                alloc.concat([
+                    alloc.reflow("Failed to load "),
+                    text!(alloc, "{:?}", file_path),
+                    alloc.reflow(" as Str:"),
+                ]),
+                text!(alloc, "{}", utf8_err),
+            ];
+            Some(Report {
+                title: "INVALID UTF-8".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        IngestedFileUnsupportedType(file_path, typ) => {
+            let stack = [
+                alloc.concat([
+                    text!(alloc, "{:?}", file_path),
+                    alloc.reflow(" is annotated to be a "),
+                    alloc.inline_type_block(error_type_to_doc(alloc, typ)),
+                    alloc.reflow("."),
+                ]),
+                alloc.concat([
+                    alloc.reflow("Ingested files can only be of type "),
+                    alloc.type_str("List U8"),
+                    alloc.reflow(" or "),
+                    alloc.type_str("Str"),
+                    alloc.reflow("."),
+                ]),
+            ];
+            Some(Report {
+                title: "INVALID TYPE FOR INGESTED FILE".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
     }
 }
 
@@ -332,7 +373,7 @@ fn underivable_hint<'b>(
                         alloc.concat([
                             alloc.reflow(" or "),
                             alloc.inline_type_block(alloc.concat([
-                                alloc.keyword("has"),
+                                alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                                 alloc.space(),
                                 alloc.symbol_qualified(ability),
                             ])),
@@ -358,20 +399,43 @@ fn underivable_hint<'b>(
             Some(alloc.tip().append(alloc.concat([
                 alloc.reflow("This type variable is not bound to "),
                 alloc.symbol_unqualified(ability),
-                alloc.reflow(". Consider adding a "),
-                alloc.keyword("has"),
+                alloc.reflow(". Consider adding an "),
+                alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                 alloc.reflow(" clause to bind the type variable, like "),
                 alloc.inline_type_block(alloc.concat([
-                    alloc.string("| ".to_string()),
+                    alloc.keyword(roc_parse::keyword::WHERE),
+                    alloc.space(),
                     alloc.type_variable(v.clone()),
                     alloc.space(),
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_qualified(ability),
                 ])),
             ])))
         }
+        NotDerivableContext::Encode(reason) => match reason {
+            NotDerivableEncode::Nat => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("Encoding a "),
+                    alloc.type_str("Nat"),
+                    alloc.reflow(" is not supported. Consider using a fixed-sized unsigned integer, like a "),
+                    alloc.type_str("U64"),
+                    alloc.reflow(" instead."),
+                ])))
+            }
+        },
         NotDerivableContext::Decode(reason) => match reason {
+            NotDerivableDecode::Nat => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("Decoding to a "),
+                    alloc.type_str("Nat"),
+                    alloc.reflow(" is not supported. Consider decoding to a fixed-sized unsigned integer, like "),
+                    alloc.type_str("U64"),
+                    alloc.reflow(", then converting to a "),
+                    alloc.type_str("Nat"),
+                    alloc.reflow(" if needed."),
+                ])))
+            }
             NotDerivableDecode::OptionalRecordField(field) => {
                 Some(alloc.note("").append(alloc.concat([
                     alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
@@ -647,9 +711,9 @@ fn to_expr_report<'b>(
             let thing = match annotation_source {
                 TypedIfBranch {
                     index,
-                    num_branches,
+                    num_branches: 2,
                     ..
-                } if num_branches == 2 => alloc.concat([
+                } => alloc.concat([
                     alloc.keyword(if index == HumanIndex::FIRST {
                         "then"
                     } else {
@@ -684,7 +748,7 @@ fn to_expr_report<'b>(
             };
 
             let it_is = match annotation_source {
-                TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
+                TypedIfBranch { .. } => "This branch is".to_string(),
                 TypedWhenBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedBody { .. } => "The body is".into(),
                 RequiredSymbol { .. } => "The provided type is".into(),
@@ -984,7 +1048,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.reflow("This list contains elements with different types:"),
-                    alloc.string(format!("Its {} element is", ith)),
+                    alloc.string(format!("Its {ith} element is")),
                     alloc.reflow(prev_elems_msg),
                     Some(alloc.reflow("Every element in a list must have the same type!")),
                 )
@@ -1075,8 +1139,12 @@ fn to_expr_report<'b>(
                     ),
                 }
             }
-            Reason::FnCall { name, arity } => match count_arguments(&found) {
-                0 => {
+            Reason::FnCall {
+                name,
+                arity,
+                called_via,
+            } => match describe_wanted_function(&found) {
+                DescribedFunction::NotAFunction(tag) => {
                     let this_value = match name {
                         None => alloc.text("This value"),
                         Some(symbol) => alloc.concat([
@@ -1086,30 +1154,62 @@ fn to_expr_report<'b>(
                         ]),
                     };
 
-                    let lines = vec![
-                        alloc.concat([
-                            this_value,
-                            alloc.string(format!(
-                                " is not a function, but it was given {}:",
-                                if arity == 1 {
-                                    "1 argument".into()
-                                } else {
-                                    format!("{} arguments", arity)
+                    use NotAFunctionTag::*;
+                    let doc = match tag {
+                        OpaqueNeedsUnwrap => alloc.stack([
+                            alloc.concat([
+                                this_value,
+                                alloc.reflow(
+                                    " is an opaque type, so it cannot be called with an argument:",
+                                ),
+                            ]),
+                            alloc.region(lines.convert_region(expr_region)),
+                            match called_via {
+                                CalledVia::RecordBuilder => {
+                                    alloc.hint("Did you mean to apply it to a function first?")
+                                },
+                                _ => {
+                                    alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?")
                                 }
-                            )),
+                            }
                         ]),
-                        alloc.region(lines.convert_region(expr_region)),
-                        alloc.reflow("Are there any missing commas? Or missing parentheses?"),
-                    ];
+                        Other => alloc.stack([
+                            alloc.concat([
+                                this_value,
+                                alloc.string(format!(
+                                    " is not a function, but it was given {}:",
+                                    if arity == 1 {
+                                        "1 argument".into()
+                                    } else {
+                                        format!("{arity} arguments")
+                                    }
+                                )),
+                            ]),
+                            alloc.region(lines.convert_region(expr_region)),
+                            match called_via {
+                                CalledVia::RecordBuilder => {
+                                    alloc.concat([
+                                        alloc.tip(),
+                                        alloc.reflow("Remove "),
+                                        alloc.keyword("<-"),
+                                        alloc.reflow(" to assign the field directly.")
+                                    ])
+                                }
+                                _ => {
+                                    alloc.reflow("Are there any missing commas? Or missing parentheses?")
+                                }
+                            }
+                        ]),
+                    };
 
                     Report {
                         filename,
                         title: "TOO MANY ARGS".to_string(),
-                        doc: alloc.stack(lines),
+                        doc,
                         severity,
                     }
                 }
-                n => {
+                DescribedFunction::Arguments(n) => {
                     let this_function = match name {
                         None => alloc.text("This function"),
                         Some(symbol) => alloc.concat([
@@ -1128,7 +1228,7 @@ fn to_expr_report<'b>(
                                     if n == 1 {
                                         "1 argument".into()
                                     } else {
-                                        format!("{} arguments", n)
+                                        format!("{n} arguments")
                                     },
                                     arity
                                 )),
@@ -1152,7 +1252,7 @@ fn to_expr_report<'b>(
                                     if n == 1 {
                                         "1 argument".into()
                                     } else {
-                                        format!("{} arguments", n)
+                                        format!("{n} arguments")
                                     },
                                     arity
                                 )),
@@ -1173,12 +1273,24 @@ fn to_expr_report<'b>(
                     }
                 }
             },
-            Reason::FnArg { name, arg_index } => {
+            Reason::FnArg {
+                name,
+                arg_index,
+                called_via,
+            } => {
                 let ith = arg_index.ordinal();
 
-                let this_function = match name {
-                    None => alloc.text("this function"),
-                    Some(symbol) => alloc.symbol_unqualified(symbol),
+                let this_function = match (called_via, name) {
+                    (CalledVia::Space, Some(symbole)) => alloc.symbol_unqualified(symbole),
+                    (CalledVia::BinOp(op), _) => alloc.binop(op),
+                    (CalledVia::UnaryOp(op), _) => alloc.unop(op),
+                    (CalledVia::StringInterpolation, _) => alloc.text("this string interpolation"),
+                    _ => alloc.text("this function"),
+                };
+
+                let argument = match called_via {
+                    CalledVia::StringInterpolation => "argument".to_string(),
+                    _ => format!("{ith} argument"),
                 };
 
                 report_mismatch(
@@ -1192,7 +1304,7 @@ fn to_expr_report<'b>(
                     region,
                     Some(expr_region),
                     alloc.concat([
-                        alloc.string(format!("This {ith} argument to ")),
+                        alloc.string(format!("This {argument} to ")),
                         this_function.clone(),
                         alloc.text(" has an unexpected type:"),
                     ]),
@@ -1200,7 +1312,7 @@ fn to_expr_report<'b>(
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs its {ith} argument to be:")),
+                        alloc.string(format!(" needs its {argument} to be:")),
                     ]),
                     None,
                 )
@@ -1480,13 +1592,35 @@ fn does_not_implement<'a>(
     ])
 }
 
-fn count_arguments(tipe: &ErrorType) -> usize {
+enum DescribedFunction {
+    Arguments(usize),
+    NotAFunction(NotAFunctionTag),
+}
+
+enum NotAFunctionTag {
+    OpaqueNeedsUnwrap,
+    Other,
+}
+
+fn describe_wanted_function(tipe: &ErrorType) -> DescribedFunction {
     use ErrorType::*;
 
     match tipe {
-        Function(args, _, _) => args.len(),
-        Alias(_, _, actual, _) => count_arguments(actual),
-        _ => 0,
+        Function(args, _, _) => DescribedFunction::Arguments(args.len()),
+        Alias(_, _, actual, AliasKind::Structural) => describe_wanted_function(actual),
+        Alias(_, _, actual, AliasKind::Opaque) => {
+            let tag = if matches!(
+                describe_wanted_function(actual),
+                DescribedFunction::Arguments(_)
+            ) {
+                NotAFunctionTag::OpaqueNeedsUnwrap
+            } else {
+                NotAFunctionTag::Other
+            };
+
+            DescribedFunction::NotAFunction(tag)
+        }
+        _ => DescribedFunction::NotAFunction(NotAFunctionTag::Other),
     }
 }
 
@@ -1580,7 +1714,7 @@ fn format_category<'b>(
     match category {
         Lookup(name) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.symbol_foreign_qualified(*name),
                 alloc.text(" value"),
             ]),
@@ -1589,7 +1723,7 @@ fn format_category<'b>(
 
         If => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.keyword("if"),
                 alloc.text(" expression"),
             ]),
@@ -1597,7 +1731,7 @@ fn format_category<'b>(
         ),
         When => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.keyword("when"),
                 alloc.text(" expression"),
             ]),
@@ -1631,6 +1765,10 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" a Unicode scalar value")]),
             alloc.text(" of type:"),
         ),
+        IngestedFile(file_path) => (
+            alloc.concat([this_is, text!(alloc, " an ingested file ({:?})", file_path)]),
+            alloc.text(" of type:"),
+        ),
         Lambda => (
             alloc.concat([this_is, alloc.text(" an anonymous function")]),
             alloc.text(" of type:"),
@@ -1642,7 +1780,7 @@ fn format_category<'b>(
 
         OpaqueWrap(opaque) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.opaque_name(*opaque),
                 alloc.text(" opaque wrapping"),
             ]),
@@ -1650,7 +1788,7 @@ fn format_category<'b>(
         ),
 
         OpaqueArg => (
-            alloc.concat([alloc.text(format!("{}his argument to an opaque type", t))]),
+            alloc.concat([text!(alloc, "{}his argument to an opaque type", t)]),
             alloc.text(" has type:"),
         ),
 
@@ -1659,7 +1797,7 @@ fn format_category<'b>(
             args_count: 0,
         } => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.tag(name.to_owned()),
                 alloc.text(" tag"),
             ]),
@@ -1671,7 +1809,7 @@ fn format_category<'b>(
             args_count: _,
         } => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.tag(name.to_owned()),
                 alloc.text(" tag application"),
             ]),
@@ -1685,19 +1823,33 @@ fn format_category<'b>(
 
         Accessor(field) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
-                alloc.record_field(field.to_owned()),
+                text!(alloc, "{}his ", t),
+                match field {
+                    IndexOrField::Index(index) => alloc.tuple_field(*index),
+                    IndexOrField::Field(field) => alloc.record_field(field.to_owned()),
+                },
                 alloc.text(" value"),
             ]),
             alloc.text(" is a:"),
         ),
-        Access(field) => (
+        RecordAccess(field) => (
             alloc.concat([
-                alloc.text(format!("{}he value at ", t)),
+                text!(alloc, "{}he value at ", t),
                 alloc.record_field(field.to_owned()),
             ]),
             alloc.text(" is a:"),
         ),
+
+        Tuple => (
+            alloc.concat([this_is, alloc.text(" a tuple")]),
+            alloc.text(" of type:"),
+        ),
+
+        TupleAccess(index) => (
+            alloc.concat([text!(alloc, "{}he value at ", t), alloc.tuple_field(*index)]),
+            alloc.text(" is a:"),
+        ),
+
         CallResult(
             Some(_),
             CalledVia::BinOp(
@@ -1709,7 +1861,7 @@ fn format_category<'b>(
                 | BinOp::GreaterThanOrEq,
             ),
         ) => (
-            alloc.text(format!("{}his comparison", t)),
+            text!(alloc, "{}his comparison", t),
             alloc.text(" produces:"),
         ),
         CallResult(Some(_), CalledVia::StringInterpolation) => (
@@ -1718,7 +1870,7 @@ fn format_category<'b>(
         ),
         CallResult(Some(symbol), _) => (
             alloc.concat([
-                alloc.text(format!("{}his ", t)),
+                text!(alloc, "{}his ", t),
                 alloc.symbol_foreign_qualified(*symbol),
                 alloc.text(" call"),
             ]),
@@ -1726,10 +1878,7 @@ fn format_category<'b>(
         ),
         CallResult(None, _) => (this_is, alloc.text(":")),
         LowLevelOpResult(op) => {
-            panic!(
-                "Compiler bug: invalid return type from low-level op {:?}",
-                op
-            );
+            panic!("Compiler bug: invalid return type from low-level op {op:?}");
         }
         ForeignCall => {
             panic!("Compiler bug: invalid return type from foreign call",);
@@ -2002,6 +2151,7 @@ fn add_pattern_category<'b>(
 
     let rest = match category {
         Record => alloc.reflow(" record values of type:"),
+        Tuple => alloc.reflow(" tuple values of type:"),
         EmptyRecord => alloc.reflow(" an empty record:"),
         PatternGuard => alloc.reflow(" a pattern guard of type:"),
         PatternDefault => alloc.reflow(" an optional field of type:"),
@@ -2412,6 +2562,21 @@ fn to_doc_help<'b>(
                     })
                     .collect(),
                 record_ext_to_doc(alloc, ext),
+                0, // zero fields omitted, since this isn't a diff
+            )
+        }
+
+        Tuple(elems, ext) => {
+            report_text::tuple(
+                alloc,
+                elems
+                    .into_iter()
+                    .map(|(_, value)| {
+                        to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, value)
+                    })
+                    .collect(),
+                record_ext_to_doc(alloc, ext),
+                0, // zero elems omitted, since this isn't a diff
             )
         }
 
@@ -2437,6 +2602,8 @@ fn to_doc_help<'b>(
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
                 tag_ext_to_doc(alloc, pol, gen_usages, ext),
+                0, // zero tags omitted, since this isn't a diff
+                None,
             )
         }
 
@@ -2456,13 +2623,16 @@ fn to_doc_help<'b>(
                 .collect::<Vec<_>>();
             tags.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-            report_text::recursive_tag_union(
+            let rec_doc = to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, *rec_var);
+
+            report_text::tag_union(
                 alloc,
-                to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, *rec_var),
                 tags.into_iter()
                     .map(|(k, v)| (alloc.tag_name(k), v))
                     .collect(),
                 tag_ext_to_doc(alloc, pol, gen_usages, ext),
+                0, // zero tags omitted, since this isn't a diff
+                Some(rec_doc),
             )
         }
 
@@ -2507,6 +2677,10 @@ fn count_generated_name_usages<'a>(
             }
             Record(fields, ext) => {
                 stack.extend(fields.values().map(|f| (f.as_inner(), only_unseen)));
+                ext_stack.push((ext, only_unseen));
+            }
+            Tuple(elems, ext) => {
+                stack.extend(elems.iter().map(|(_, f)| (f, only_unseen)));
                 ext_stack.push((ext, only_unseen));
             }
             TagUnion(tags, ext, _) => {
@@ -2591,10 +2765,16 @@ fn type_with_able_vars<'b>(
     doc.push(typ);
 
     for (i, (var, abilities)) in able.into_iter().enumerate() {
-        doc.push(alloc.string(if i == 0 { " | " } else { ", " }.to_string()));
+        if i == 0 {
+            doc.push(alloc.space());
+            doc.push(alloc.keyword(roc_parse::keyword::WHERE));
+        } else {
+            doc.push(alloc.string(",".to_string()));
+        }
+        doc.push(alloc.space());
         doc.push(alloc.type_variable(var));
         doc.push(alloc.space());
-        doc.push(alloc.keyword("has"));
+        doc.push(alloc.keyword(roc_parse::keyword::IMPLEMENTS));
 
         for (i, ability) in abilities.into_sorted_iter().enumerate() {
             if i > 0 {
@@ -2690,7 +2870,7 @@ fn to_diff<'b>(
         (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
-                let arg_diff = traverse(alloc, Parens::InFn, args1, args2);
+                let arg_diff = diff_args(alloc, Parens::InFn, args1, args2);
                 let ret_diff = to_diff(alloc, Parens::InFn, *ret1, *ret2);
                 status.merge(arg_diff.status);
                 status.merge(ret_diff.status);
@@ -2726,7 +2906,7 @@ fn to_diff<'b>(
             }
         }
         (Type(symbol1, args1), Type(symbol2, args2)) if symbol1 == symbol2 => {
-            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let args_diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -2750,7 +2930,7 @@ fn to_diff<'b>(
         }
 
         (Alias(symbol1, args1, _, _), Alias(symbol2, args2, _, _)) if symbol1 == symbol2 => {
-            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let args_diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -2826,21 +3006,11 @@ fn to_diff<'b>(
         }
 
         (TagUnion(tags1, ext1, pol), TagUnion(tags2, ext2, _)) => {
-            diff_tag_union(alloc, pol, &tags1, ext1, &tags2, ext2)
+            diff_tag_union(alloc, pol, tags1, ext1, None, tags2, ext2, None)
         }
 
-        (RecursiveTagUnion(_rec1, _tags1, _ext1, _), RecursiveTagUnion(_rec2, _tags2, _ext2, _)) => {
-            // TODO do a better job here
-            let (left, left_able) = to_doc(alloc, Parens::Unnecessary, type1);
-            let (right, right_able) = to_doc(alloc, Parens::Unnecessary, type2);
-
-            Diff {
-                left,
-                right,
-                status: Status::Similar,
-                left_able,
-                right_able,
-            }
+        (RecursiveTagUnion(rec1, tags1, ext1, pol), RecursiveTagUnion(rec2, tags2, ext2, _)) => {
+            diff_tag_union(alloc, pol, tags1, ext1, Some(*rec1), tags2, ext2, Some(*rec2))
         }
 
         pair => {
@@ -2908,7 +3078,7 @@ fn to_diff<'b>(
     }
 }
 
-fn traverse<'b, I>(
+fn diff_args<'b, I>(
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     args1: I,
@@ -2956,61 +3126,57 @@ fn diff_record<'b>(
     alloc: &'b RocDocAllocator<'b>,
     fields1: SendMap<Lowercase, RecordField<ErrorType>>,
     ext1: TypeExt,
-    fields2: SendMap<Lowercase, RecordField<ErrorType>>,
+    mut fields2: SendMap<Lowercase, RecordField<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): (
-        &Lowercase,
-        &(RecordField<ErrorType>, RecordField<ErrorType>),
-    )| {
-        let diff = to_diff(
-            alloc,
-            Parens::Unnecessary,
-            t1.clone().into_inner(),
-            t2.clone().into_inner(),
-        );
+    let to_overlap_docs =
+        |(field, (t1, t2)): (Lowercase, (RecordField<ErrorType>, RecordField<ErrorType>))| {
+            let diff = to_diff(
+                alloc,
+                Parens::Unnecessary,
+                t1.clone().into_inner(),
+                t2.clone().into_inner(),
+            );
 
-        Diff {
-            left: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                t1.replace(diff.left),
-            ),
-            right: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                t2.replace(diff.right),
-            ),
-            status: {
-                match (&t1, &t2) {
-                    (RecordField::Demanded(_), RecordField::Optional(_))
-                    | (RecordField::Optional(_), RecordField::Demanded(_))
-                    | (
-                        RecordField::Demanded(_) | RecordField::Required(_),
-                        RecordField::RigidOptional(_),
-                    )
-                    | (
-                        RecordField::RigidOptional(_),
-                        RecordField::Demanded(_) | RecordField::Required(_),
-                    ) => match diff.status {
-                        Status::Similar => {
-                            Status::Different(vec![Problem::OptionalRequiredMismatch(
-                                field.clone(),
-                            )])
-                        }
-                        Status::Different(mut problems) => {
-                            problems.push(Problem::OptionalRequiredMismatch(field.clone()));
+            Diff {
+                left: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    t1.replace(diff.left),
+                ),
+                right: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    t2.replace(diff.right),
+                ),
+                status: {
+                    match (&t1, &t2) {
+                        (RecordField::Demanded(_), RecordField::Optional(_))
+                        | (RecordField::Optional(_), RecordField::Demanded(_))
+                        | (
+                            RecordField::Demanded(_) | RecordField::Required(_),
+                            RecordField::RigidOptional(_),
+                        )
+                        | (
+                            RecordField::RigidOptional(_),
+                            RecordField::Demanded(_) | RecordField::Required(_),
+                        ) => match diff.status {
+                            Status::Similar => {
+                                Status::Different(vec![Problem::OptionalRequiredMismatch(field)])
+                            }
+                            Status::Different(mut problems) => {
+                                problems.push(Problem::OptionalRequiredMismatch(field));
 
-                            Status::Different(problems)
-                        }
-                    },
-                    _ => diff.status,
-                }
-            },
-            left_able: diff.left_able,
-            right_able: diff.right_able,
-        }
-    };
+                                Status::Different(problems)
+                            }
+                        },
+                        _ => diff.status,
+                    }
+                },
+                left_able: diff.left_able,
+                right_able: diff.right_able,
+            }
+        };
 
     let to_unknown_docs = |(field, tipe): (&Lowercase, &RecordField<ErrorType>)| {
         (
@@ -3019,15 +3185,38 @@ fn diff_record<'b>(
             tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone()).0),
         )
     };
-    let shared_keys = fields1
-        .clone()
-        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
-    let left_keys = fields1.clone().relative_complement(fields2.clone());
-    let right_keys = fields2.clone().relative_complement(fields1.clone());
+    let mut same_fields_different_types = VecMap::default();
+    let mut fields_in_left_only = Vec::default();
+    let mut same_fields_same_types = 0;
 
-    let both = shared_keys.iter().map(to_overlap_docs);
-    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
-    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+    for (k1, v1) in fields1.into_iter() {
+        match fields2.remove(&k1) {
+            Some(v2) if should_show_field_diff(&v1, &v2) => {
+                // The field names are the same but the types are different
+                // (or at least should be rendered as different)
+                same_fields_different_types.insert(k1, (v1, v2));
+            }
+            Some(_) => {
+                // They're both the same fields and the same types
+                same_fields_same_types += 1;
+            }
+            None => {
+                // Only fields1 has this field.
+                fields_in_left_only.push((k1, v1));
+            }
+        }
+    }
+
+    // We've removed all the fields that they had in common, so the remaining entries in fields2
+    // are ones that appear on the right only.
+    let fields_in_right_only = fields2;
+
+    let both = same_fields_different_types.into_iter().map(to_overlap_docs);
+    let mut left = fields_in_left_only
+        .iter()
+        .map(|(k, v)| to_unknown_docs((k, v)))
+        .peekable();
+    let mut right = fields_in_right_only.iter().map(to_unknown_docs).peekable();
 
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
@@ -3035,7 +3224,7 @@ fn diff_record<'b>(
         (true, true) => match left.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                fields_in_right_only.keys().cloned().collect(),
             )]),
             None => {
                 if right.peek().is_none() {
@@ -3045,7 +3234,7 @@ fn diff_record<'b>(
                         right.map(|v| v.0).collect(),
                     )]);
                     // we just used the values in `right`.  in
-                    right = right_keys.iter().map(to_unknown_docs).peekable();
+                    right = fields_in_right_only.iter().map(to_unknown_docs).peekable();
                     result
                 }
             }
@@ -3053,14 +3242,17 @@ fn diff_record<'b>(
         (false, true) => match left.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                fields_in_right_only.keys().cloned().collect(),
             )]),
             None => Status::Similar,
         },
         (true, false) => match right.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields1.keys().cloned().collect(),
+                fields_in_left_only
+                    .iter()
+                    .map(|(field, _)| field.clone())
+                    .collect(),
             )]),
             None => Status::Similar,
         },
@@ -3104,6 +3296,7 @@ fn diff_record<'b>(
             .map(|(_, b, c)| (b, c))
             .collect(),
         ext_diff.left,
+        same_fields_same_types,
     );
     let doc2 = report_text::record(
         alloc,
@@ -3113,6 +3306,7 @@ fn diff_record<'b>(
             .map(|(_, b, c)| (b, c))
             .collect(),
         ext_diff.right,
+        same_fields_same_types,
     );
 
     fields_diff.status.merge(status);
@@ -3126,67 +3320,355 @@ fn diff_record<'b>(
     }
 }
 
+/// This is a helper for should_show_field_diff - see its doc comment for details.
+fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
+    use ErrorType::*;
+
+    match (t1, t2) {
+        (Type(sym1, types1), Type(sym2, types2)) => {
+            if sym1 != sym2 || types1.len() != types2.len() {
+                return true;
+            }
+
+            types1
+                .iter()
+                .zip(types2.iter())
+                .any(|(t1, t2)| should_show_diff(t1, t2))
+        }
+        (Infinite, Infinite) | (Error, Error) => false,
+        (RigidVar(v1), RigidVar(v2)) => v1 != v2,
+        (FlexVar(_), _) | (_, FlexVar(_)) => {
+            // If either is flex, it will unify to the other type; no diff is needed.
+            false
+        }
+        (FlexAbleVar(v1, _set1), FlexAbleVar(v2, _set2))
+        | (RigidAbleVar(v1, _set1), RigidAbleVar(v2, _set2)) => {
+            #[cfg(debug_assertions)]
+            {
+                if v1 == v2 {
+                    // If v1 == v2, then the sets should be equal too!
+                    debug_assert_eq!(_set1.len(), _set2.len());
+                    debug_assert!(_set1
+                        .sorted_iter()
+                        .zip(_set2.sorted_iter())
+                        .all(|(t1, t2)| t1 == t2));
+                }
+            }
+
+            v1 != v2
+        }
+        (Record(fields1, ext1), Record(fields2, ext2)) => {
+            let is_1_open = matches!(ext1, TypeExt::FlexOpen(_));
+            let is_2_open = matches!(ext2, TypeExt::FlexOpen(_));
+
+            if !is_1_open && !is_2_open && fields1.len() != fields2.len() {
+                return true;
+            }
+
+            // Check for diffs in any of the fields1 fields.
+            for (name, f1) in fields1.iter() {
+                match fields2.get(name) {
+                    Some(f2) => {
+                        // If the field is on both records, and the diff should be
+                        // shown, then we should show a diff for the whole record.
+                        if should_show_field_diff(f1, f2) {
+                            return true;
+                        }
+
+                        // (If the field is on both records, but no diff should be
+                        // shown between those fields, continue checking other fields.)
+                    }
+                    None => {
+                        // It's fine for 1 to have a field that the other doesn't have,
+                        // so long as the other one is open.
+                        if !is_2_open {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // At this point we've checked all the fields that are in both records,
+            // as well as all the fields that are in 1 but not 2.
+            // All that remains is to check the fields that are in 2 but not 1,
+            // which we don't care about if 1 is open (because then it's fine
+            // for the other record to have fields it doesn't).
+            if !is_1_open {
+                for name in fields2.keys() {
+                    if !fields1.contains_key(name) {
+                        // fields1 is missing this field, and fields1 is not open,
+                        // therefore this is a relevant diff.
+                        return true;
+                    }
+                }
+            }
+
+            // We haven't early-returned true yet, so we didn't find any relevant diffs!
+            false
+        }
+        (Tuple(elems1, ext1), Tuple(elems2, ext2)) => {
+            if elems1.len() != elems2.len() || ext1 != ext2 {
+                return true;
+            }
+
+            elems1
+                .iter()
+                .zip(elems2.iter())
+                .any(|((i1, e1), (i2, e2))| i1 != i2 || should_show_diff(e1, e2))
+        }
+        (TagUnion(tags1, ext1, polarity1), TagUnion(tags2, ext2, polarity2)) => {
+            debug_assert_eq!(
+                polarity1, polarity2,
+                "Any two tag unions we're comparing should have the same polarity!"
+            );
+
+            if tags1.len() != tags2.len() || ext1 != ext2 {
+                return true;
+            }
+
+            tags1
+                .iter()
+                .zip(tags2.iter())
+                .any(|((name1, payload1), (name2, payload2))| {
+                    if name1 != name2 || payload1.len() != payload2.len() {
+                        return true;
+                    }
+
+                    payload1
+                        .iter()
+                        .zip(payload2.iter())
+                        .any(|(p1, p2)| should_show_diff(p1, p2))
+                })
+        }
+        (
+            RecursiveTagUnion(rec1, tags1, ext1, _polarity1),
+            RecursiveTagUnion(rec2, tags2, ext2, _polarity2),
+        ) => {
+            // If two tag unions differ only in polarity, don't show that as a diff;
+            // polarity is invisible to the reader!
+
+            if tags1.len() != tags2.len() || ext1 != ext2 || should_show_diff(rec1, rec2) {
+                return true;
+            }
+
+            tags1
+                .iter()
+                .zip(tags2.iter())
+                .any(|((name1, payload1), (name2, payload2))| {
+                    if name1 != name2 || payload1.len() != payload2.len() {
+                        return true;
+                    }
+
+                    payload1
+                        .iter()
+                        .zip(payload2.iter())
+                        .any(|(p1, p2)| should_show_diff(p1, p2))
+                })
+        }
+        (Function(params1, ret1, l1), Function(params2, ret2, l2)) => {
+            if params1.len() != params2.len()
+                || should_show_diff(ret1, ret2)
+                || should_show_diff(l1, l2)
+            {
+                return true;
+            }
+
+            params1
+                .iter()
+                .zip(params2.iter())
+                .any(|(p1, p2)| should_show_diff(p1, p2))
+        }
+        (Alias(sym1, params1, t1, kind1), Alias(sym2, params2, t2, kind2)) => {
+            if sym1 != sym2
+                || kind1 != kind2
+                || params1.len() != params2.len()
+                || should_show_diff(t1, t2)
+            {
+                return true;
+            }
+
+            params1
+                .iter()
+                .zip(params2.iter())
+                .any(|(p1, p2)| should_show_diff(p1, p2))
+        }
+        (Range(types1), Range(types2)) => {
+            if types1.len() != types2.len() {
+                return true;
+            }
+
+            types1
+                .iter()
+                .zip(types2.iter())
+                .any(|(t1, t2)| should_show_diff(t1, t2))
+        }
+        (Alias(_sym, _params, aliased, AliasKind::Structural), other)
+        | (other, Alias(_sym, _params, aliased, AliasKind::Structural)) => {
+            // Check to see if we should show the diff after unwrapping the alias
+            should_show_diff(aliased, other)
+        }
+        (Alias(_, _, _, AliasKind::Opaque), _)
+        | (_, Alias(_, _, _, AliasKind::Opaque))
+        | (Infinite, _)
+        | (_, Infinite)
+        | (Error, _)
+        | (_, Error)
+        | (Type(_, _), _)
+        | (_, Type(_, _))
+        | (RigidVar(_), _)
+        | (_, RigidVar(_))
+        | (FlexAbleVar(_, _), _)
+        | (_, FlexAbleVar(_, _))
+        | (RigidAbleVar(_, _), _)
+        | (_, RigidAbleVar(_, _))
+        | (Record(_, _), _)
+        | (_, Record(_, _))
+        | (Tuple(_, _), _)
+        | (_, Tuple(_, _))
+        | (TagUnion(_, _, _), _)
+        | (_, TagUnion(_, _, _))
+        | (RecursiveTagUnion(_, _, _, _), _)
+        | (_, RecursiveTagUnion(_, _, _, _))
+        | (Function(_, _, _), _)
+        | (_, Function(_, _, _)) => true,
+    }
+}
+
+/// If these are equivalent, we shouldn't bother showing them in a diff.
+/// (For example, if one is Required and the other is Demanded, showing
+/// them in a diff will be unhelpful; they'll both be rendered using : and will look
+/// exactly the same to the reader!)
+fn should_show_field_diff(
+    field1: &RecordField<ErrorType>,
+    field2: &RecordField<ErrorType>,
+) -> bool {
+    use RecordField::*;
+
+    match (field1, field2) {
+        // If they're both the same, they don't need a diff
+        (Demanded(t1), Demanded(t2))
+        | (Required(t1), Required(t2))
+        | (RigidRequired(t1), RigidRequired(t2))
+        | (RigidOptional(t1), RigidOptional(t2))
+        | (Optional(t1), Optional(t2))
+        // Demanded and Required don't need a diff
+        | (Demanded(t1), Required(t2))
+        | (Required(t1), Demanded(t2))
+        // Demanded and RigidRequired don't need a diff
+        | (Demanded(t1), RigidRequired(t2))
+        | (RigidRequired(t1), Demanded(t2))
+        => should_show_diff(t1, t2),
+        // Everything else needs a diff
+        (Demanded(_), Optional(_))
+        | (Demanded(_), RigidOptional(_))
+        | (Required(_), RigidRequired(_))
+        | (Required(_), Optional(_))
+        | (Optional(_), Demanded(_))
+        | (Optional(_), RigidRequired(_))
+        | (Optional(_), RigidOptional(_))
+        | (Optional(_), Required(_))
+        | (RigidRequired(_), Required(_))
+        | (RigidRequired(_), Optional(_))
+        | (RigidRequired(_), RigidOptional(_))
+        | (Required(_), RigidOptional(_))
+        | (RigidOptional(_), Demanded(_))
+        | (RigidOptional(_), Required(_))
+        | (RigidOptional(_), Optional(_))
+        | (RigidOptional(_), RigidRequired(_)) => true,
+    }
+}
+
 fn same_tag_name_overlap_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
     field: TagName,
-    args1: Vec<ErrorType>,
-    args2: Vec<ErrorType>,
+    payload_vals1: Vec<ErrorType>,
+    payload_vals2: Vec<ErrorType>,
 ) -> Diff<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)> {
-    if args1.len() == args2.len() {
-        let diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+    // Render ellipses wherever the payload slots have the same type.
+    let mut left_doc = Vec::with_capacity(payload_vals1.len());
+    let mut left_able = Vec::new();
+    let mut right_doc = Vec::with_capacity(payload_vals2.len());
+    let mut right_able = Vec::new();
 
-        Diff {
-            left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
-            right: (field.clone(), alloc.tag_name(field), diff.right),
-            status: diff.status,
-            left_able: diff.left_able,
-            right_able: diff.right_able,
-        }
-    } else {
-        let (left_doc, left_able): (_, Vec<AbleVariables>) = args1
-            .into_iter()
-            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
-            .unzip();
-        let (right_doc, right_able): (_, Vec<AbleVariables>) = args2
-            .into_iter()
-            .map(|arg| to_doc(alloc, Parens::InTypeParam, arg))
-            .unzip();
+    // itertools::zip_longest is a zip that can continue past the end of one Vec.
+    // If they both have payload values in a given slot, and both are the same type,
+    // we render ellipsis instead of the actual type - since there's no diff between them.
+    // If one of them doesn't have a payload value in that slot, we always render its type.
+    for either_or_both in payload_vals1
+        .into_iter()
+        .zip_longest(payload_vals2.into_iter())
+    {
+        match either_or_both {
+            // Both tag unions have a payload value in this slot
+            EitherOrBoth::Both(t1, t2) => {
+                if should_show_diff(&t1, &t2) {
+                    {
+                        let (doc, able) = to_doc(alloc, Parens::InTypeParam, t1);
+                        left_doc.push(doc);
+                        left_able.extend(able);
+                    }
 
-        Diff {
-            left: (field.clone(), alloc.tag_name(field.clone()), left_doc),
-            right: (field.clone(), alloc.tag_name(field), right_doc),
-            status: Status::Similar,
-            left_able: left_able.into_iter().flatten().collect(),
-            right_able: right_able.into_iter().flatten().collect(),
+                    {
+                        let (doc, able) = to_doc(alloc, Parens::InTypeParam, t2);
+                        right_doc.push(doc);
+                        right_able.extend(able);
+                    }
+                } else {
+                    left_doc.push(alloc.ellipsis());
+                    right_doc.push(alloc.ellipsis());
+                }
+            }
+            // Only the left tag union has a payload value in this slot
+            EitherOrBoth::Left(t1) => {
+                let (doc, able) = to_doc(alloc, Parens::InTypeParam, t1);
+                left_doc.push(doc);
+                left_able.extend(able);
+            }
+            // Only the right tag union has a payload value in this slot
+            EitherOrBoth::Right(t2) => {
+                let (doc, able) = to_doc(alloc, Parens::InTypeParam, t2);
+                right_doc.push(doc);
+                right_able.extend(able);
+            }
         }
+    }
+
+    Diff {
+        left: (field.clone(), alloc.tag_name(field.clone()), left_doc),
+        right: (field.clone(), alloc.tag_name(field), right_doc),
+        status: Status::Similar,
+        left_able,
+        right_able,
     }
 }
 
 fn diff_tag_union<'b>(
     alloc: &'b RocDocAllocator<'b>,
     pol: Polarity,
-    fields1: &SendMap<TagName, Vec<ErrorType>>,
+    tags1: SendMap<TagName, Vec<ErrorType>>,
     ext1: TypeExt,
-    fields2: &SendMap<TagName, Vec<ErrorType>>,
+    rec1: Option<ErrorType>,
+    mut tags2: SendMap<TagName, Vec<ErrorType>>,
     ext2: TypeExt,
+    rec2: Option<ErrorType>,
 ) -> Diff<RocDocBuilder<'b>> {
     let gen_usages1 = {
         let mut usages = VecMap::default();
-        count_generated_name_usages(&mut usages, fields1.values().flatten());
+        count_generated_name_usages(&mut usages, tags1.values().flatten());
         count_generated_name_usages_in_exts(&mut usages, [(&ext1, false)]);
         usages
     };
     let gen_usages2 = {
         let mut usages = VecMap::default();
-        count_generated_name_usages(&mut usages, fields2.values().flatten());
+        count_generated_name_usages(&mut usages, tags2.values().flatten());
         count_generated_name_usages_in_exts(&mut usages, [(&ext2, false)]);
         usages
     };
 
-    let to_overlap_docs = |(field, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
-        same_tag_name_overlap_diff(alloc, field, t1, t2)
+    let to_overlap_docs = |(tag_name, (t1, t2)): (TagName, (Vec<ErrorType>, Vec<ErrorType>))| {
+        same_tag_name_overlap_diff(alloc, tag_name, t1, t2)
     };
-    let to_unknown_docs = |(field, args): (&TagName, &Vec<ErrorType>)| -> (
+    let to_unknown_docs = |(tag_name, args): (&TagName, &Vec<ErrorType>)| -> (
         TagName,
         RocDocBuilder<'b>,
         Vec<RocDocBuilder<'b>>,
@@ -3198,103 +3680,221 @@ fn diff_tag_union<'b>(
                 .map(|arg| to_doc(alloc, Parens::InTypeParam, arg.clone()))
                 .unzip();
         (
-            field.clone(),
-            alloc.tag_name(field.clone()),
+            tag_name.clone(),
+            alloc.tag_name(tag_name.clone()),
             args,
             able.into_iter().flatten().collect(),
         )
     };
-    let shared_keys = fields1
-        .clone()
-        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
+    let mut same_tags_different_payloads = VecMap::default();
+    let mut tags_in_left_only = Vec::default();
+    let mut same_tags_same_payloads = 0;
 
-    let left_keys = fields1.clone().relative_complement(fields2.clone());
-    let right_keys = fields2.clone().relative_complement(fields1.clone());
+    for (k1, v1) in tags1.into_iter() {
+        match tags2.remove(&k1) {
+            Some(v2) if should_show_payload_diff(&v1, &v2) => {
+                // The tag names are the same but the payload types are different
+                // (or at least should be rendered as different)
+                same_tags_different_payloads.insert(k1.clone(), (v1.clone(), v2));
+            }
+            Some(_) => {
+                // They both have the same tag name as well as the same payload types
+                same_tags_same_payloads += 1;
+            }
+            None => {
+                // Only tags1 has this tag.
+                tags_in_left_only.push((k1, v1));
+            }
+        }
+    }
 
-    let both = shared_keys.into_iter().map(to_overlap_docs);
-    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
-    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+    // We've removed all the tags that they had in common, so the remaining entries in tags2
+    // are ones that appear on the right only.
+    let tags_in_right_only = tags2;
+    let no_tags_in_common = same_tags_different_payloads.is_empty() && same_tags_same_payloads == 0;
+    let both = same_tags_different_payloads
+        .into_iter()
+        .map(to_overlap_docs);
 
-    let all_fields_shared = left.peek().is_none() && right.peek().is_none();
+    let any_tags_on_one_side_only = !tags_in_left_only.is_empty() || !tags_in_right_only.is_empty();
+
+    let mut left = tags_in_left_only
+        .iter()
+        .map(|(k, v)| to_unknown_docs((k, v)))
+        .peekable();
+    let mut right = tags_in_right_only.iter().map(to_unknown_docs).peekable();
 
     let status = match (ext_has_fixed_fields(&ext1), ext_has_fixed_fields(&ext2)) {
         (false, false) => Status::Similar,
         _ => match (left.peek(), right.peek()) {
+            // At least one tag appeared only on the left, and also
+            // at least one tag appeared only on the right. There's a chance this is
+            // because of a typo, so we'll suggest that as a hint.
             (Some((f, _, _, _)), Some(_)) => Status::Different(vec![Problem::TagTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                tags_in_right_only.keys().cloned().collect(),
             )]),
-            (Some(_), None) => {
-                let status =
-                    Status::Different(vec![Problem::TagsMissing(left.map(|v| v.0).collect())]);
-                left = left_keys.iter().map(to_unknown_docs).peekable();
-                status
-            }
+            // At least one tag appeared only on the left, but all of the tags
+            // on the right also appeared on the left. So at least one tag is missing.
+            (Some(_), None) => Status::Different(vec![Problem::TagsMissing(
+                left.clone().map(|v| v.0).collect(),
+            )]),
+            // At least one tag appeared only on the right, but all of the tags
+            // on the left also appeared on the right. So at least one tag is missing.
             (None, Some(_)) => {
                 let status =
                     Status::Different(vec![Problem::TagsMissing(right.map(|v| v.0).collect())]);
-                right = right_keys.iter().map(to_unknown_docs).peekable();
+                right = tags_in_right_only.iter().map(to_unknown_docs).peekable();
                 status
             }
+            // Left and right have the same set of tag names (but may have different payloads).
             (None, None) => Status::Similar,
         },
     };
 
+    let ext1_is_open = matches!(&ext1, TypeExt::FlexOpen(_));
+    let ext2_is_open = matches!(&ext2, TypeExt::FlexOpen(_));
     let ext_diff = tag_ext_to_diff(alloc, pol, ext1, ext2, &gen_usages1, &gen_usages2);
 
-    let mut fields_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
-        left: vec![],
-        right: vec![],
+    let mut tags_diff: Diff<Vec<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>> = Diff {
         status: Status::Similar,
-        left_able: vec![],
-        right_able: vec![],
+        left: Vec::new(),
+        right: Vec::new(),
+        left_able: Vec::new(),
+        right_able: Vec::new(),
     };
 
     for diff in both {
-        fields_diff.left.push(diff.left);
-        fields_diff.right.push(diff.right);
-        fields_diff.status.merge(diff.status);
-        fields_diff.left_able.extend(diff.left_able);
-        fields_diff.right_able.extend(diff.right_able);
+        tags_diff.status.merge(diff.status);
+        tags_diff.left.push(diff.left);
+        tags_diff.right.push(diff.right);
+        tags_diff.left_able.extend(diff.left_able);
+        tags_diff.right_able.extend(diff.right_able);
     }
 
-    if !all_fields_shared {
-        for (tag, tag_doc, args, able) in left {
-            fields_diff.left.push((tag, tag_doc, args));
-            fields_diff.left_able.extend(able);
+    let left_tags_omitted;
+    let right_tags_omitted;
+
+    if no_tags_in_common {
+        // If they have no tags in common, we shouldn't omit any tags,
+        // because that would result in an unhelpful diff of
+        // […] on one side and another […] on the other side!
+
+        left_tags_omitted = 0;
+        right_tags_omitted = 0;
+
+        for (tag, tag_doc, payload_vals, able) in left {
+            tags_diff.left.push((tag, tag_doc, payload_vals));
+            tags_diff.left_able.extend(able);
         }
-        for (tag, tag_doc, args, able) in right {
-            fields_diff.right.push((tag, tag_doc, args));
-            fields_diff.right_able.extend(able);
+
+        for (tag, tag_doc, payload_vals, able) in right {
+            tags_diff.right.push((tag, tag_doc, payload_vals));
+            tags_diff.right_able.extend(able);
         }
-        fields_diff.status.merge(Status::Different(vec![]));
+
+        tags_diff.status.merge(Status::Different(Vec::new()));
+    } else if any_tags_on_one_side_only {
+        // If either tag union is open but the other is not, then omit the tags in the other.
+        //
+        // In other words, if one tag union is a pattern match which has _ ->,
+        // don't list the tags which fall under that catch-all pattern because
+        // they won't be helpful. By omitting them, we'll only show the tags that
+        // are actually matched.
+        //
+        // We shouldn't do this if they're both open though,
+        // because that would result in an unhelpful diff of
+        // […] on one side and another […] on the other side!
+        if ext2_is_open && !ext1_is_open {
+            left_tags_omitted = same_tags_same_payloads + left.len();
+        } else {
+            left_tags_omitted = same_tags_same_payloads;
+
+            for (tag, tag_doc, args, able) in left {
+                tags_diff.left.push((tag, tag_doc, args));
+                tags_diff.left_able.extend(able);
+            }
+        }
+
+        if ext1_is_open && !ext2_is_open {
+            right_tags_omitted = same_tags_same_payloads + right.len();
+        } else {
+            right_tags_omitted = same_tags_same_payloads;
+
+            for (tag, tag_doc, args, able) in right {
+                tags_diff.right.push((tag, tag_doc, args));
+                tags_diff.right_able.extend(able);
+            }
+        }
+
+        tags_diff.status.merge(Status::Different(Vec::new()));
+    } else {
+        left_tags_omitted = same_tags_same_payloads;
+        right_tags_omitted = same_tags_same_payloads;
     }
 
-    fields_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
-    fields_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
+    tags_diff.left.sort_by(|a, b| a.0.cmp(&b.0));
+    tags_diff.right.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let lefts = fields_diff
-        .left
-        .into_iter()
-        .map(|(_, a, b)| (a, b))
-        .collect();
-    let rights = fields_diff
+    let lefts = tags_diff.left.into_iter().map(|(_, a, b)| (a, b)).collect();
+    let rights = tags_diff
         .right
         .into_iter()
         .map(|(_, a, b)| (a, b))
         .collect();
 
-    let doc1 = report_text::tag_union(alloc, lefts, ext_diff.left);
-    let doc2 = report_text::tag_union(alloc, rights, ext_diff.right);
+    let doc1 = match rec1 {
+        None => report_text::tag_union(alloc, lefts, ext_diff.left, left_tags_omitted, None),
+        Some(rec) => {
+            let (rec_doc, able) = to_doc(alloc, Parens::Unnecessary, rec);
 
-    fields_diff.status.merge(status);
+            tags_diff.left_able.extend(able);
+
+            report_text::tag_union(
+                alloc,
+                lefts,
+                ext_diff.left,
+                left_tags_omitted,
+                Some(rec_doc),
+            )
+        }
+    };
+    let doc2 = match rec2 {
+        None => report_text::tag_union(alloc, rights, ext_diff.right, right_tags_omitted, None),
+        Some(rec) => {
+            let (rec_doc, able) = to_doc(alloc, Parens::Unnecessary, rec);
+
+            tags_diff.right_able.extend(able);
+
+            report_text::tag_union(
+                alloc,
+                rights,
+                ext_diff.right,
+                right_tags_omitted,
+                Some(rec_doc),
+            )
+        }
+    };
+
+    tags_diff.status.merge(status);
 
     Diff {
         left: doc1,
         right: doc2,
-        status: fields_diff.status,
-        left_able: fields_diff.left_able,
-        right_able: fields_diff.right_able,
+        status: tags_diff.status,
+        left_able: tags_diff.left_able,
+        right_able: tags_diff.right_able,
+    }
+}
+
+fn should_show_payload_diff(errs1: &[ErrorType], errs2: &[ErrorType]) -> bool {
+    if errs1.len() == errs2.len() {
+        errs1
+            .iter()
+            .zip(errs2.iter())
+            .any(|(err1, err2)| should_show_diff(err1, err2))
+    } else {
+        true
     }
 }
 
@@ -3315,16 +3915,15 @@ fn tag_ext_to_diff<'b>(
             left: ext_doc_1,
             right: ext_doc_2,
             status,
-            left_able: vec![],
-            right_able: vec![],
+            left_able: Vec::new(),
+            right_able: Vec::new(),
         },
         Status::Different(_) => Diff {
-            // NOTE elm colors these differently at this point
             left: ext_doc_1,
             right: ext_doc_2,
             status,
-            left_able: vec![],
-            right_able: vec![],
+            left_able: Vec::new(),
+            right_able: Vec::new(),
         },
     }
 }
@@ -3440,6 +4039,82 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         entries: Vec<(RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
+        fields_omitted: usize,
+    ) -> RocDocBuilder<'b> {
+        let ext_doc = if let Some(t) = opt_ext {
+            t
+        } else {
+            alloc.nil()
+        };
+
+        let entry_to_doc =
+            |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
+                match field_type {
+                    RecordField::Demanded(field)
+                    | RecordField::Required(field)
+                    | RecordField::RigidRequired(field) => {
+                        field_name.append(alloc.text(" : ")).append(field)
+                    }
+                    RecordField::Optional(field) | RecordField::RigidOptional(field) => {
+                        field_name.append(alloc.text(" ? ")).append(field)
+                    }
+                }
+            };
+
+        if entries.is_empty() {
+            if fields_omitted == 0 {
+                alloc.text("{}")
+            } else {
+                alloc
+                    .text("{ ")
+                    .append(alloc.ellipsis().append(alloc.text(" }")))
+            }
+            .append(ext_doc)
+        } else if entries.len() == 1 {
+            // Single-field records get printed on one line; multi-field records get multiple lines
+            alloc
+                .text("{ ")
+                .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(if fields_omitted == 0 {
+                    alloc.text("")
+                } else {
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
+                .append(alloc.text(" }"))
+                .append(ext_doc)
+        } else {
+            let ending = if fields_omitted == 0 {
+                alloc.reflow("}")
+            } else {
+                alloc.vcat([
+                    alloc.ellipsis().indent(super::RECORD_FIELD_INDENT),
+                    alloc.reflow("}"),
+                ])
+            };
+
+            // Multi-field records get printed on multiple lines, as do records with fields omitted.
+            alloc
+                .vcat(
+                    std::iter::once(alloc.reflow("{")).chain(
+                        entries
+                            .into_iter()
+                            .map(|entry| {
+                                entry_to_doc(entry)
+                                    .indent(super::RECORD_FIELD_INDENT)
+                                    .append(alloc.reflow(","))
+                            })
+                            .chain(std::iter::once(ending)),
+                    ),
+                )
+                .append(ext_doc)
+        }
+    }
+
+    pub fn tuple<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        entries: Vec<RocDocBuilder<'b>>,
+        opt_ext: Option<RocDocBuilder<'b>>,
+        fields_omitted: usize,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
@@ -3448,33 +4123,50 @@ mod report_text {
         };
 
         if entries.is_empty() {
-            alloc.text("{}").append(ext_doc)
+            if fields_omitted == 0 {
+                alloc.text("()")
+            } else {
+                alloc
+                    .text("(")
+                    .append(alloc.ellipsis().append(alloc.text(")")))
+            }
+            .append(ext_doc)
+        } else if entries.len() == 1 {
+            // Single-field records get printed on one line; multi-field records get multiple lines
+            alloc
+                .text("(")
+                .append(entries.into_iter().next().unwrap())
+                .append(if fields_omitted == 0 {
+                    alloc.text("")
+                } else {
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
+                .append(alloc.text(")"))
+                .append(ext_doc)
         } else {
-            let entry_to_doc =
-                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
-                    match field_type {
-                        RecordField::Demanded(field)
-                        | RecordField::Required(field)
-                        | RecordField::RigidRequired(field) => {
-                            field_name.append(alloc.text(" : ")).append(field)
-                        }
-                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
-                            field_name.append(alloc.text(" ? ")).append(field)
-                        }
-                    }
-                };
+            let ending = if fields_omitted == 0 {
+                alloc.reflow(")")
+            } else {
+                alloc.vcat([
+                    alloc.ellipsis().indent(super::RECORD_FIELD_INDENT),
+                    alloc.reflow(")"),
+                ])
+            }
+            .append(ext_doc);
 
-            let starts =
-                std::iter::once(alloc.reflow("{ ")).chain(std::iter::repeat(alloc.reflow(", ")));
-
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc.append(alloc.reflow(" }")).append(ext_doc)
+            // Multi-elem tuples get printed on multiple lines
+            alloc.vcat(
+                std::iter::once(alloc.reflow("(")).chain(
+                    entries
+                        .into_iter()
+                        .map(|entry| {
+                            entry
+                                .indent(super::RECORD_FIELD_INDENT)
+                                .append(alloc.reflow(","))
+                        })
+                        .chain(std::iter::once(ending)),
+                ),
+            )
         }
     }
 
@@ -3552,6 +4244,8 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
+        tags_omitted: usize,
+        opt_rec: Option<RocDocBuilder<'b>>,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
@@ -3559,73 +4253,67 @@ mod report_text {
             alloc.nil()
         };
 
-        if entries.is_empty() {
-            alloc.text("[]")
-        } else {
-            let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
-                if arguments.is_empty() {
-                    tag_name
-                } else {
-                    tag_name
-                        .append(alloc.space())
-                        .append(alloc.intersperse(arguments, alloc.space()))
-                }
-            };
-
-            let starts =
-                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
-
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc.append(alloc.reflow("]")).append(ext_doc)
-        }
-    }
-
-    pub fn recursive_tag_union<'b>(
-        alloc: &'b RocDocAllocator<'b>,
-        rec_var: RocDocBuilder<'b>,
-        entries: Vec<(RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)>,
-        opt_ext: Option<RocDocBuilder<'b>>,
-    ) -> RocDocBuilder<'b> {
-        let ext_doc = if let Some(t) = opt_ext {
-            t
-        } else {
-            alloc.nil()
+        let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
+            if arguments.is_empty() {
+                tag_name
+            } else {
+                tag_name
+                    .append(alloc.space())
+                    .append(alloc.intersperse(arguments, alloc.space()))
+            }
         };
 
-        if entries.is_empty() {
-            alloc.text("[]")
-        } else {
-            let entry_to_doc = |(tag_name, arguments): (RocDocBuilder<'b>, Vec<_>)| {
-                if arguments.is_empty() {
-                    tag_name
+        let without_rec = if entries.is_empty() {
+            if tags_omitted == 0 {
+                alloc.text("[]")
+            } else {
+                alloc
+                    .text("[")
+                    .append(alloc.ellipsis().append(alloc.text("]")))
+            }
+            .append(ext_doc)
+        } else if entries.len() == 1 {
+            // Single-tag unions get printed on one line; multi-tag unions get multiple lines
+            alloc
+                .text("[")
+                .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(if tags_omitted == 0 {
+                    alloc.text("")
                 } else {
-                    tag_name
-                        .append(alloc.space())
-                        .append(alloc.intersperse(arguments, alloc.space()))
-                }
-            };
-
-            let starts =
-                std::iter::once(alloc.reflow("[")).chain(std::iter::repeat(alloc.reflow(", ")));
-
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc
-                .append(alloc.reflow("]"))
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
+                .append(alloc.text("]"))
                 .append(ext_doc)
-                .append(alloc.text(" as "))
-                .append(rec_var)
+        } else {
+            let ending = if tags_omitted == 0 {
+                alloc.reflow("]")
+            } else {
+                alloc.vcat([
+                    alloc.ellipsis().indent(super::TAG_INDENT),
+                    alloc.reflow("]"),
+                ])
+            };
+
+            // Multi-tag unions get printed on multiple lines, as do tag unions with tags omitted.
+            alloc
+                .vcat(
+                    std::iter::once(alloc.reflow("[")).chain(
+                        entries
+                            .into_iter()
+                            .map(|entry| {
+                                entry_to_doc(entry)
+                                    .indent(super::TAG_INDENT)
+                                    .append(alloc.reflow(","))
+                            })
+                            .chain(std::iter::once(ending)),
+                    ),
+                )
+                .append(ext_doc)
+        };
+
+        match opt_rec {
+            Some(rec) => without_rec.append(alloc.text(" as ")).append(rec),
+            None => without_rec,
         }
     }
 
@@ -3700,8 +4388,8 @@ fn type_problem_to_pretty<'b>(
             match suggestions.get(0) {
                 None => alloc.nil(),
                 Some(nearest) => {
-                    let typo_str = format!("{}", typo);
-                    let nearest_str = format!("{}", nearest);
+                    let typo_str = format!("{typo}");
+                    let nearest_str = format!("{nearest}");
 
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
@@ -3752,7 +4440,7 @@ fn type_problem_to_pretty<'b>(
             match suggestions.get(0) {
                 None => alloc.nil(),
                 Some(nearest) => {
-                    let nearest_str = format!("{}", nearest);
+                    let nearest_str = format!("{nearest}");
 
                     let found = alloc.text(typo_str).annotate(Annotation::Typo);
                     let suggestion = alloc.text(nearest_str).annotate(Annotation::TypoSuggestion);
@@ -3796,7 +4484,7 @@ fn type_problem_to_pretty<'b>(
                         .note("")
                         .append(alloc.reflow("The type variable "))
                         .append(alloc.type_variable(name.clone()))
-                        .append(alloc.reflow(" says it can take on any value that has the "))
+                        .append(alloc.reflow(" says it can take on any value that implements the "))
                         .append(list_abilities(alloc, &abilities))
                         .append(alloc.reflow(".")),
                     alloc.concat([
@@ -3837,11 +4525,13 @@ fn type_problem_to_pretty<'b>(
                         alloc
                             .note("")
                             .append(type_var_doc)
-                            .append(alloc.reflow(" can take on any value that has only the "))
+                            .append(
+                                alloc.reflow(" can take on any value that implements only the "),
+                            )
                             .append(list_abilities(alloc, &abilities))
                             .append(alloc.reflow(".")),
                         alloc.concat([
-                            alloc.reflow("But, I see that it's also used as if it has the "),
+                            alloc.reflow("But, I see that it's also used as if it implements the "),
                             list_abilities(alloc, &extra_abilities),
                             alloc.reflow(". Can you use "),
                             alloc.type_variable(name.clone()),
@@ -3858,7 +4548,7 @@ fn type_problem_to_pretty<'b>(
                                 alloc.reflow("it")
                             },
                             alloc.reflow(" to the "),
-                            alloc.keyword("has"),
+                            alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                             alloc.reflow(" clause of "),
                             alloc.type_variable(name),
                             alloc.reflow("."),
@@ -3884,6 +4574,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
                 Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
+                Tuple(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     rigid_able_vs_concrete(x, alloc.reflow("a tag value"))
                 }
@@ -3972,6 +4663,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
+                Tuple(_, _) => bad_rigid_var(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     bad_rigid_var(x, alloc.reflow("a tag value"))
                 }
@@ -3987,17 +4679,19 @@ fn type_problem_to_pretty<'b>(
             }
         }
 
-        (IntFloat, _) => alloc.tip().append(alloc.concat([
-            alloc.reflow("You can convert between "),
-            alloc.type_str("Int"),
-            alloc.reflow(" and "),
-            alloc.type_str("Frac"),
-            alloc.reflow(" using functions like "),
-            alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
-            alloc.reflow(" and "),
-            alloc.symbol_qualified(Symbol::NUM_ROUND),
-            alloc.reflow("."),
-        ])),
+        (IntFloat, _) => {
+            alloc.tip().append(alloc.concat(
+                [
+                    alloc.reflow(
+                        "You can convert between integers and fractions using functions like ",
+                    ),
+                    alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
+                    alloc.reflow(" and "),
+                    alloc.symbol_qualified(Symbol::NUM_ROUND),
+                    alloc.reflow("."),
+                ],
+            ))
+        }
 
         (TagsMissing(missing), ExpectationContext::WhenCondition) => match missing.split_last() {
             None => alloc.nil(),
@@ -4155,8 +4849,7 @@ fn report_record_field_typo<'b>(
         } else {
             let f = suggestions.remove(0);
             let fs = suggestions;
-            let f_doc = alloc
-                .text(format!("{}{}{}", field_prefix, field, field_suffix))
+            let f_doc = text!(alloc, "{}{}{}", field_prefix, field, field_suffix)
                 .annotate(Annotation::Typo);
 
             let r_doc = match opt_sym {
@@ -4175,8 +4868,7 @@ fn report_record_field_typo<'b>(
                     alloc.reflow("Maybe "),
                     f_doc,
                     alloc.reflow(" should be "),
-                    alloc
-                        .text(format!("{}{}{}", field_prefix, f.0, field_suffix))
+                    text!(alloc, "{}{}{}", field_prefix, f.0, field_suffix)
                         .annotate(Annotation::TypoSuggestion),
                     alloc.reflow(" instead?"),
                 ]),
@@ -4358,6 +5050,8 @@ fn exhaustive_pattern_to_doc<'b>(
 }
 
 const AFTER_TAG_INDENT: &str = "    ";
+const TAG_INDENT: usize = 4;
+const RECORD_FIELD_INDENT: usize = 4;
 
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -4452,6 +5146,18 @@ fn pattern_to_doc_help<'b>(
                         .text("{ ")
                         .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
                         .append(" }")
+                }
+                RenderAs::Tuple => {
+                    let mut arg_docs = Vec::with_capacity(args.len());
+
+                    for v in args.into_iter() {
+                        arg_docs.push(pattern_to_doc_help(alloc, v, false));
+                    }
+
+                    alloc
+                        .text("( ")
+                        .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
+                        .append(" )")
                 }
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];

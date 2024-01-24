@@ -15,7 +15,7 @@ interface Parser.Str
         scalar,
         oneOf,
         digit,
-        digits,
+        positiveInt,
         strFromRaw,
     ]
     imports [Parser.Core.{ Parser, ParseResult, map, oneOrMore, parse, parsePartial, buildPrimitiveParser }]
@@ -33,10 +33,11 @@ strToRaw : Str -> RawStr
 strToRaw = \str ->
     str |> Str.toUtf8
 
-strFromScalar : U32 -> Str
-strFromScalar = \scalarVal ->
-    Str.appendScalar "" (Num.intCast scalarVal)
-    |> Result.withDefault "Unexpected problem while turning a U32 (that was probably originally a scalar constant) into a Str. This should never happen!"
+strFromAscii : U8 -> Str
+strFromAscii = \asciiNum ->
+    when Str.fromUtf8 [asciiNum] is
+        Ok answer -> answer
+        Err _ -> crash "The number $(Num.toStr asciiNum) is not a valid ASCII constant!"
 
 strFromCodeunit : U8 -> Str
 strFromCodeunit = \cu ->
@@ -142,12 +143,12 @@ string = \expectedString ->
     |> stringRaw
     |> map \_val -> expectedString
 
-scalar : U32 -> Parser RawStr U32
-scalar = \expectedScalar ->
-    expectedScalar
-    |> strFromScalar
+scalar : U8 -> Parser RawStr U8
+scalar = \expectedAscii ->
+    expectedAscii
+    |> strFromAscii
     |> string
-    |> map \_ -> expectedScalar
+    |> map \_ -> expectedAscii
 
 # Matches any codeunit
 anyCodeunit : Parser RawStr U8
@@ -178,20 +179,20 @@ digit : Parser RawStr U8
 digit =
     digitParsers =
         List.range { start: At '0', end: At '9' }
-        |> List.map \digitNum ->
-            digitNum
+        |> List.map \digitCodeUnit ->
+            digitCodeUnit
             |> codeunit
-            |> map \_ -> digitNum
+            |> map \_ -> digitCodeUnit - '0'
 
     oneOf digitParsers
 
 # NOTE: Currently happily accepts leading zeroes
-digits : Parser RawStr (Int *)
-digits =
+positiveInt : Parser RawStr (Int *)
+positiveInt =
     oneOrMore digit
     |> map \digitsList ->
         digitsList
-        |> List.map Num.intCast
+        |> List.map \char -> Num.intCast char - '0'
         |> List.walk 0 \sum, digitVal -> 10 * sum + digitVal
 
 ## Try a bunch of different parsers.

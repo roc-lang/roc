@@ -13,5 +13,5 @@ platform "test-platform"
 # that all variants have.
 NonRecursive : [Foo Str, Bar U128, Blah I32, Baz]
 
-mainForHost : NonRecursive
-mainForHost = main
+mainForHost : {} -> NonRecursive
+mainForHost = \{} -> main

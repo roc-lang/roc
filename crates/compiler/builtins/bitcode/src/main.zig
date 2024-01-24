@@ -4,6 +4,7 @@ const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
 const panic_utils = @import("panic.zig");
+const dbg_utils = @import("dbg.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -12,26 +13,46 @@ const STR = "str";
 // Dec Module
 const dec = @import("dec.zig");
 
+var FLTUSED: i32 = 0;
 comptime {
-    exportDecFn(dec.fromStr, "from_str");
-    exportDecFn(dec.toStr, "to_str");
-    exportDecFn(dec.fromF64C, "from_f64");
-    exportDecFn(dec.eqC, "eq");
-    exportDecFn(dec.neqC, "neq");
-    exportDecFn(dec.negateC, "negate");
-    exportDecFn(dec.divC, "div");
+    if (builtin.os.tag == .windows) {
+        @export(FLTUSED, .{ .name = "_fltused", .linkage = .Weak });
+    }
+}
 
+comptime {
+    exportDecFn(dec.absC, "abs");
+    exportDecFn(dec.acosC, "acos");
     exportDecFn(dec.addC, "add_with_overflow");
     exportDecFn(dec.addOrPanicC, "add_or_panic");
     exportDecFn(dec.addSaturatedC, "add_saturated");
-
-    exportDecFn(dec.subC, "sub_with_overflow");
-    exportDecFn(dec.subOrPanicC, "sub_or_panic");
-    exportDecFn(dec.subSaturatedC, "sub_saturated");
-
+    exportDecFn(dec.asinC, "asin");
+    exportDecFn(dec.atanC, "atan");
+    exportDecFn(dec.cosC, "cos");
+    exportDecFn(dec.divC, "div");
+    exportDecFn(dec.eqC, "eq");
+    exportDecFn(dec.fromF32C, "from_float.f32");
+    exportDecFn(dec.fromF64C, "from_float.f64");
+    exportDecFn(dec.fromStr, "from_str");
+    exportDecFn(dec.fromU64C, "from_u64");
+    exportDecFn(dec.logC, "log");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
+    exportDecFn(dec.negateC, "negate");
+    exportDecFn(dec.neqC, "neq");
+    exportDecFn(dec.sinC, "sin");
+    exportDecFn(dec.subC, "sub_with_overflow");
+    exportDecFn(dec.subOrPanicC, "sub_or_panic");
+    exportDecFn(dec.subSaturatedC, "sub_saturated");
+    exportDecFn(dec.tanC, "tan");
+    exportDecFn(dec.toF64, "to_f64");
+    exportDecFn(dec.toI128, "to_i128");
+    exportDecFn(dec.toStr, "to_str");
+
+    inline for (INTEGERS) |T| {
+        dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
+    }
 }
 
 // List Module
@@ -54,6 +75,10 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listClone, "clone");
+    exportListFn(list.listCapacity, "capacity");
+    exportListFn(list.listAllocationPtr, "allocation_ptr");
+    exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
 }
 
 // Num Module
@@ -67,13 +92,35 @@ const NUMBERS = INTEGERS ++ FLOATS;
 comptime {
     exportNumFn(num.bytesToU16C, "bytes_to_u16");
     exportNumFn(num.bytesToU32C, "bytes_to_u32");
+    exportNumFn(num.bytesToU64C, "bytes_to_u64");
+    exportNumFn(num.bytesToU128C, "bytes_to_u128");
 
-    inline for (INTEGERS) |T, i| {
+    exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
+    exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
+
+    exportNumFn(num.compareI128, "compare.i128");
+    exportNumFn(num.compareU128, "compare.u128");
+
+    exportNumFn(num.lessThanI128, "less_than.i128");
+    exportNumFn(num.lessThanOrEqualI128, "less_than_or_equal.i128");
+    exportNumFn(num.greaterThanI128, "greater_than.i128");
+    exportNumFn(num.greaterThanOrEqualI128, "greater_than_or_equal.i128");
+
+    exportNumFn(num.lessThanU128, "less_than.u128");
+    exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
+    exportNumFn(num.greaterThanU128, "greater_than.u128");
+    exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
+
+    inline for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
 
-        num.exportRoundF32(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
-        num.exportRoundF64(T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+        num.exportRound(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
+        num.exportRound(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
+        num.exportFloor(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f32.");
+        num.exportFloor(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f64.");
+        num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
+        num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
@@ -86,6 +133,13 @@ comptime {
         num.exportMulWithOverflow(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
         num.exportMulOrPanic(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_or_panic.");
         num.exportMulSaturatedInt(T, WIDEINTS[i], ROC_BUILTINS ++ "." ++ NUM ++ ".mul_saturated.");
+        num.exportMulWrappedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".mul_wrapped.");
+
+        num.exportIsMultipleOf(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_multiple_of.");
+
+        num.exportCountLeadingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_leading_zero_bits.");
+        num.exportCountTrailingZeroBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_trailing_zero_bits.");
+        num.exportCountOneBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_one_bits.");
     }
 
     inline for (INTEGERS) |FROM| {
@@ -103,14 +157,19 @@ comptime {
 
         num.exportSin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sin.");
         num.exportCos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".cos.");
+        num.exportTan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".tan.");
 
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow.");
         num.exportLog(T, ROC_BUILTINS ++ "." ++ NUM ++ ".log.");
+        num.exportFAbs(T, ROC_BUILTINS ++ "." ++ NUM ++ ".fabs.");
+        num.exportSqrt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sqrt.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportSubWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".sub_with_overflow.");
         num.exportMulWithOverflow(T, T, ROC_BUILTINS ++ "." ++ NUM ++ ".mul_with_overflow.");
 
+        num.exportIsNan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_nan.");
+        num.exportIsInfinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_infinite.");
         num.exportIsFinite(T, ROC_BUILTINS ++ "." ++ NUM ++ ".is_finite.");
     }
 }
@@ -119,14 +178,12 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
-    exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplit, "str_split");
     exportStrFn(str.countSegments, "count_segments");
-    exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
+    exportStrFn(str.isEmpty, "is_empty");
     exportStrFn(str.getCapacity, "capacity");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
@@ -135,18 +192,16 @@ comptime {
     exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.getUnsafe, "get_unsafe");
     exportStrFn(str.reserve, "reserve");
-    exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
-    exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
-    exportStrFn(str.fromUtf8C, "from_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
     exportStrFn(str.strTrim, "trim");
-    exportStrFn(str.strTrimLeft, "trim_left");
-    exportStrFn(str.strTrimRight, "trim_right");
+    exportStrFn(str.strTrimStart, "trim_start");
+    exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
     exportStrFn(str.withCapacity, "with_capacity");
-    exportStrFn(str.strGraphemes, "graphemes");
+    exportStrFn(str.strAllocationPtr, "allocation_ptr");
+    exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
@@ -161,19 +216,26 @@ comptime {
 
 // Utils
 comptime {
+    exportUtilsFn(utils.test_dbg, "test_dbg");
     exportUtilsFn(utils.test_panic, "test_panic");
-    exportUtilsFn(utils.increfC, "incref");
-    exportUtilsFn(utils.decrefC, "decref");
+    exportUtilsFn(utils.increfRcPtrC, "incref_rc_ptr");
+    exportUtilsFn(utils.decrefRcPtrC, "decref_rc_ptr");
+    exportUtilsFn(utils.freeRcPtrC, "free_rc_ptr");
+    exportUtilsFn(utils.increfDataPtrC, "incref_data_ptr");
+    exportUtilsFn(utils.decrefDataPtrC, "decref_data_ptr");
+    exportUtilsFn(utils.freeDataPtrC, "free_data_ptr");
+    exportUtilsFn(utils.isUnique, "is_unique");
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
+    exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
     @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+    @export(dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .Weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
         exportUtilsFn(expect.expectFailedStartSharedFile, "expect_failed_start_shared_file");
         exportUtilsFn(expect.notifyParentExpect, "notify_parent_expect");
-        exportUtilsFn(expect.notifyParentDbg, "notify_parent_dbg");
 
         // sets the buffer used for expect failures
         @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
@@ -184,6 +246,9 @@ comptime {
     if (builtin.target.cpu.arch == .aarch64) {
         @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
         @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+    } else if (builtin.os.tag == .windows) {
+        @export(__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
+        @export(__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
     }
 }
 
@@ -199,12 +264,101 @@ pub extern fn _longjmp([*c]c_int, c_int) noreturn;
 pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
 pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
 pub extern fn longjmperror() void;
+
 // Zig won't expose the externs (and hence link correctly) unless we force them to be used.
 fn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {
     return setjmp(it);
 }
+
 fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
     longjmp(a0, a1);
+}
+
+pub extern fn windows_setjmp([*c]c_int) c_int;
+pub extern fn windows_longjmp([*c]c_int, c_int) noreturn;
+
+fn __roc_force_setjmp_windows(it: [*c]c_int) callconv(.C) c_int {
+    return windows_setjmp(it);
+}
+
+fn __roc_force_longjmp_windows(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+    windows_longjmp(a0, a1);
+}
+
+comptime {
+    if (builtin.os.tag == .windows) {
+        asm (
+            \\.global windows_longjmp;
+            \\windows_longjmp:
+            \\  movq 0x00(%rcx), %rdx
+            \\  movq 0x08(%rcx), %rbx
+            \\  # note 0x10 is not used yet!
+            \\  movq 0x18(%rcx), %rbp
+            \\  movq 0x20(%rcx), %rsi
+            \\  movq 0x28(%rcx), %rdi
+            \\  movq 0x30(%rcx), %r12
+            \\  movq 0x38(%rcx), %r13
+            \\  movq 0x40(%rcx), %r14
+            \\  movq 0x48(%rcx), %r15
+            \\
+            \\  # restore stack pointer
+            \\  movq 0x10(%rcx), %rsp
+            \\
+            \\  # load jmp address
+            \\  movq 0x50(%rcx), %r8
+            \\
+            \\  # set up return value
+            \\  movq %rbx, %rax
+            \\
+            \\  movdqu 0x60(%rcx), %xmm6
+            \\  movdqu 0x70(%rcx), %xmm7
+            \\  movdqu 0x80(%rcx), %xmm8
+            \\  movdqu 0x90(%rcx), %xmm9
+            \\  movdqu 0xa0(%rcx), %xmm10
+            \\  movdqu 0xb0(%rcx), %xmm11
+            \\  movdqu 0xc0(%rcx), %xmm12
+            \\  movdqu 0xd0(%rcx), %xmm13
+            \\  movdqu 0xe0(%rcx), %xmm14
+            \\  movdqu 0xf0(%rcx), %xmm15
+            \\
+            \\  jmp *%r8
+            \\
+            \\.global windows_setjmp;
+            \\windows_setjmp:
+            \\  movq %rdx, 0x00(%rcx)
+            \\  movq %rbx, 0x08(%rcx)
+            \\  # note 0x10 is not used yet!
+            \\  movq %rbp, 0x18(%rcx)
+            \\  movq %rsi, 0x20(%rcx)
+            \\  movq %rdi, 0x28(%rcx)
+            \\  movq %r12, 0x30(%rcx)
+            \\  movq %r13, 0x38(%rcx)
+            \\  movq %r14, 0x40(%rcx)
+            \\  movq %r15, 0x48(%rcx)
+            \\
+            \\  # the stack location right after the windows_setjmp call
+            \\  leaq 0x08(%rsp), %r8
+            \\  movq %r8, 0x10(%rcx)
+            \\
+            \\  movq (%rsp), %r8
+            \\  movq %r8, 0x50(%rcx)
+            \\
+            \\  movdqu %xmm6,  0x60(%rcx)
+            \\  movdqu %xmm7,  0x70(%rcx)
+            \\  movdqu %xmm8,  0x80(%rcx)
+            \\  movdqu %xmm9,  0x90(%rcx)
+            \\  movdqu %xmm10, 0xa0(%rcx)
+            \\  movdqu %xmm11, 0xb0(%rcx)
+            \\  movdqu %xmm12, 0xc0(%rcx)
+            \\  movdqu %xmm13, 0xd0(%rcx)
+            \\  movdqu %xmm14, 0xe0(%rcx)
+            \\  movdqu %xmm15, 0xf0(%rcx)
+            \\
+            \\  xorl %eax, %eax
+            \\  ret
+            \\
+        );
+    }
 }
 
 // Export helpers - Must be run inside a comptime
@@ -232,12 +386,9 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
-pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
+pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
-    } else {
-        _ = message;
-        _ = stacktrace;
     }
 
     unreachable;
@@ -245,65 +396,8 @@ pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn
 
 // Run all tests in imported modules
 // https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
-test "" {
+test {
     const testing = std.testing;
 
     testing.refAllDecls(@This());
-}
-
-// For unclear reasons, sometimes this function is not linked in on some machines.
-// Therefore we provide it as LLVM bitcode and mark it as externally linked during our LLVM codegen
-//
-// Taken from
-// https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
-//
-// Thank you Zig Contributors!
-
-// Export it as weak incase it is already linked in by something else.
-comptime {
-    if (builtin.target.os.tag != .windows) {
-        @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
-    }
-}
-fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
-    // @setRuntimeSafety(std.builtin.is_test);
-
-    const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));
-    const max = ~min;
-    overflow.* = 0;
-
-    const r = a *% b;
-    if (a == min) {
-        if (b != 0 and b != 1) {
-            overflow.* = 1;
-        }
-        return r;
-    }
-    if (b == min) {
-        if (a != 0 and a != 1) {
-            overflow.* = 1;
-        }
-        return r;
-    }
-
-    const sa = a >> (128 - 1);
-    const abs_a = (a ^ sa) -% sa;
-    const sb = b >> (128 - 1);
-    const abs_b = (b ^ sb) -% sb;
-
-    if (abs_a < 2 or abs_b < 2) {
-        return r;
-    }
-
-    if (sa == sb) {
-        if (abs_a > @divTrunc(max, abs_b)) {
-            overflow.* = 1;
-        }
-    } else {
-        if (abs_a > @divTrunc(min, -abs_b)) {
-            overflow.* = 1;
-        }
-    }
-
-    return r;
 }

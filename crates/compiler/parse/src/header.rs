@@ -1,5 +1,8 @@
-use crate::ast::{Collection, CommentOrNewline, Spaced, Spaces, StrLiteral, TypeAnnotation};
+use crate::ast::{
+    Collection, CommentOrNewline, Malformed, Spaced, Spaces, StrLiteral, TypeAnnotation,
+};
 use crate::blankspace::space0_e;
+use crate::expr::merge_spaces;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
@@ -18,6 +21,16 @@ impl<'a> HeaderType<'a> {
             | HeaderType::Builtin { exposes, .. }
             | HeaderType::Interface { exposes, .. } => exposes,
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
+        }
+    }
+    pub fn to_string(&'a self) -> &str {
+        match self {
+            HeaderType::App { .. } => "app",
+            HeaderType::Hosted { .. } => "hosted",
+            HeaderType::Builtin { .. } => "builtin",
+            HeaderType::Package { .. } => "package",
+            HeaderType::Platform { .. } => "platform",
+            HeaderType::Interface { .. } => "interface",
         }
     }
 }
@@ -275,6 +288,9 @@ pub enum ImportsEntry<'a> {
         ModuleName<'a>,
         Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
     ),
+
+    /// e.g "path/to/my/file.txt" as myFile : Str
+    IngestedFile(StrLiteral<'a>, Spaced<'a, TypedIdent<'a>>),
 }
 
 /// e.g.
@@ -295,7 +311,7 @@ pub struct PackageEntry<'a> {
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
-    map!(
+    map_with_arena!(
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
@@ -303,18 +319,25 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
         and!(
             optional(and!(
                 skip_second!(
-                    specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
+                    and!(
+                        specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
+                        space0_e(EPackageEntry::IndentPackage)
+                    ),
                     word1(b':', EPackageEntry::Colon)
                 ),
                 space0_e(EPackageEntry::IndentPackage)
             )),
             loc!(specialize(EPackageEntry::BadPackage, package_name()))
         ),
-        move |(opt_shorthand, package_or_path)| {
+        move |arena, (opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
-                Some((shorthand, spaces_after_shorthand)) => PackageEntry {
+                Some(((shorthand, spaces_before_colon), spaces_after_colon)) => PackageEntry {
                     shorthand,
-                    spaces_after_shorthand,
+                    spaces_after_shorthand: merge_spaces(
+                        arena,
+                        spaces_before_colon,
+                        spaces_after_colon,
+                    ),
                     package_name: package_or_path,
                 },
                 None => PackageEntry {
@@ -341,4 +364,56 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> 
             StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(text.region.start()))),
         },
     )
+}
+
+impl<'a, K, V> Malformed for KeywordItem<'a, K, V>
+where
+    K: Malformed,
+    V: Malformed,
+{
+    fn is_malformed(&self) -> bool {
+        self.keyword.is_malformed() || self.item.is_malformed()
+    }
+}
+
+impl<'a> Malformed for InterfaceHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for HostedHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for AppHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        self.name.is_malformed()
+    }
+}
+
+impl<'a> Malformed for PackageHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for PlatformRequires<'a> {
+    fn is_malformed(&self) -> bool {
+        self.signature.is_malformed()
+    }
+}
+
+impl<'a> Malformed for PlatformHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> Malformed for TypedIdent<'a> {
+    fn is_malformed(&self) -> bool {
+        self.ann.is_malformed()
+    }
 }

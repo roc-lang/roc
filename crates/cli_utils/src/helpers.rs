@@ -4,18 +4,16 @@ extern crate roc_load;
 extern crate roc_module;
 extern crate tempfile;
 
-use roc_utils::cargo;
-use roc_utils::pretty_command_string;
-use roc_utils::root_dir;
+use roc_command_utils::{cargo, pretty_command_string, root_dir};
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Mutex;
 use tempfile::NamedTempFile;
 
 #[derive(Debug)]
@@ -31,60 +29,45 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let roc_binary_path = build_roc_bin_cached();
-
-    run_roc_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
+    run_roc_with_stdin_and_env(args, stdin_vals, extra_env)
 }
 
-// If we don't already have a /target/release/roc, build it!
-pub fn build_roc_bin_cached() -> PathBuf {
-    let roc_binary_path = path_to_roc_binary();
-
-    if !roc_binary_path.exists() {
-        // Remove the /target/release/roc part
-        let root_project_dir = roc_binary_path
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap();
-
-        // cargo build --bin roc
-        // (with --release iff the test is being built with --release)
-        let args = if cfg!(debug_assertions) {
-            vec!["build", "--bin", "roc"]
-        } else {
-            vec!["build", "--release", "--bin", "roc"]
-        };
-
-        let mut cargo_cmd = cargo();
-
-        cargo_cmd.current_dir(root_project_dir).args(&args);
-
-        let cargo_cmd_str = format!("{:?}", cargo_cmd);
-
-        let cargo_output = cargo_cmd.output().unwrap();
-
-        if !cargo_output.status.success() {
-            panic!(
-                "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
-                cargo_cmd_str,
-                String::from_utf8(cargo_output.stdout).unwrap(),
-                String::from_utf8(cargo_output.stderr).unwrap()
-            );
-        }
-    }
-
-    roc_binary_path
-}
+// Since glue is always compiling the same plugin, it can not be run in parallel.
+// That would lead to a race condition in writing the output shared library.
+// Thus, all calls to glue in a test are made sequential.
+// TODO: In the future, look into compiling the shared library once and then caching it.
+static GLUE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn run_glue<I, S>(args: I) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_roc_with_stdin(&path_to_roc_binary(), args, &[])
+    let _guard = GLUE_LOCK.lock().unwrap();
+
+    run_roc_with_stdin(args, &[])
+}
+
+pub fn has_error(stderr: &str) -> bool {
+    let stderr_stripped = stderr
+        .replacen("🔨 Rebuilding platform...\n", "", 1)
+        // for some reason, llvm prints out this warning when targeting windows
+        .replacen(
+            "warning: ignoring debug info with an invalid version (0) in app\r\n",
+            "",
+            1,
+        );
+
+    let is_reporting_runtime =
+        stderr_stripped.starts_with("runtime: ") && stderr_stripped.ends_with("ms\n");
+
+    let is_clean = stderr_stripped.is_empty() ||
+        is_reporting_runtime ||
+        // macOS ld reports this warning, but if we remove -undefined dynamic_lookup,
+        // linking stops working properly.
+        stderr_stripped.trim() == "ld: warning: -undefined dynamic_lookup may not work with chained fixups";
+
+    !is_clean
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
@@ -131,16 +114,15 @@ pub fn strip_colors(str: &str) -> String {
         .replace(ANSI_STYLE_CODES.color_reset, "")
 }
 
-pub fn run_roc_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
+pub fn run_roc_with_stdin<I, S>(args: I, stdin_vals: &[&str]) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_roc_with_stdin_and_env(path, args, stdin_vals, &[])
+    run_roc_with_stdin_and_env(args, stdin_vals, &[])
 }
 
 pub fn run_roc_with_stdin_and_env<I, S>(
-    roc_path: &Path,
     args: I,
     stdin_vals: &[&str],
     extra_env: &[(&str, &str)],
@@ -149,6 +131,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let roc_path = build_roc_bin_cached();
     let mut roc_cmd = Command::new(roc_path);
 
     for arg in args {
@@ -196,6 +179,59 @@ where
     }
 }
 
+// If we don't already have a /target/release/roc, build it!
+pub fn build_roc_bin_cached() -> PathBuf {
+    let roc_binary_path = path_to_roc_binary();
+
+    if !roc_binary_path.exists() {
+        build_roc_bin(&[]);
+    }
+
+    roc_binary_path
+}
+
+pub fn build_roc_bin(extra_args: &[&str]) -> PathBuf {
+    let roc_binary_path = path_to_roc_binary();
+
+    // Remove the /target/release/roc part
+    let root_project_dir = roc_binary_path
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+
+    // cargo build --bin roc
+    // (with --release iff the test is being built with --release)
+    let mut args = if cfg!(debug_assertions) {
+        vec!["build", "--bin", "roc"]
+    } else {
+        vec!["build", "--release", "--bin", "roc"]
+    };
+
+    args.extend(extra_args);
+
+    let mut cargo_cmd = cargo();
+
+    cargo_cmd.current_dir(root_project_dir).args(&args);
+
+    let cargo_cmd_str = format!("{cargo_cmd:?}");
+
+    let cargo_output = cargo_cmd.output().unwrap();
+
+    if !cargo_output.status.success() {
+        panic!(
+            "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
+            cargo_cmd_str,
+            String::from_utf8(cargo_output.stdout).unwrap(),
+            String::from_utf8(cargo_output.stderr).unwrap()
+        );
+    }
+
+    roc_binary_path
+}
+
 pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a str, &'a str)>>(
     cmd_name: &str,
     stdin_vals: I,
@@ -219,7 +255,12 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|err| {
+            panic!(
+                "Encountered error:\n\t{:?}\nWhile executing cmd:\n\t{:?}",
+                err, cmd_str
+            )
+        });
 
     {
         let stdin = child.stdin.as_mut().expect("Failed to open stdin");
@@ -233,7 +274,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
 
     let output = child
         .wait_with_output()
-        .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
+        .unwrap_or_else(|_| panic!("Failed to execute cmd:\n\t`{:?}`", cmd_str));
 
     Out {
         cmd_str,
@@ -387,7 +428,7 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
     // Descend into examples/{dir_name}
     path.push("crates");
     path.push("cli_testing_examples");
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
@@ -396,7 +437,7 @@ pub fn cli_testing_dir(dir_name: &str) -> PathBuf {
 pub fn dir_path_from_root(dir_name: &str) -> PathBuf {
     let mut path = root_dir();
 
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }
@@ -419,7 +460,7 @@ pub fn fixtures_dir(dir_name: &str) -> PathBuf {
     path.push("cli");
     path.push("tests");
     path.push("fixtures");
-    path.extend(dir_name.split("/")); // Make slashes cross-target
+    path.extend(dir_name.split('/')); // Make slashes cross-target
 
     path
 }

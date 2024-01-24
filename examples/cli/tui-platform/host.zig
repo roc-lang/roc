@@ -1,25 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("str");
+const str = @import("glue").str;
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
 const expect = testing.expect;
 const maxInt = std.math.maxInt;
-
-comptime {
-    // This is a workaround for https://github.com/ziglang/zig/issues/8218
-    // which is only necessary on macOS.
-    //
-    // Once that issue is fixed, we can undo the changes in
-    // 177cf12e0555147faa4d436e52fc15175c2c4ff0 and go back to passing
-    // -fcompiler-rt in link.rs instead of doing this. Note that this
-    // workaround is present in many host.zig files, so make sure to undo
-    // it everywhere!
-    if (builtin.os.tag == .macos) {
-        _ = @import("compiler_rt");
-    }
-}
 
 const mem = std.mem;
 const Allocator = mem.Allocator;
@@ -32,14 +18,14 @@ extern fn roc__mainForHost_size() i64;
 const ConstModel = [*]const u8;
 const MutModel = [*]u8;
 
-extern fn roc__mainForHost_1__Init_caller([*]u8, [*]u8, MutModel) void;
-extern fn roc__mainForHost_1__Init_size() i64;
-extern fn roc__mainForHost_1__Init_result_size() i64;
+extern fn roc__mainForHost_0_caller([*]u8, [*]u8, MutModel) void;
+extern fn roc__mainForHost_0_size() i64;
+extern fn roc__mainForHost_0_result_size() i64;
 
 fn allocate_model(allocator: *Allocator) MutModel {
-    const size = roc__mainForHost_1__Init_result_size();
-    const raw_output = allocator.allocAdvanced(u8, @alignOf(u64), @intCast(usize, size), .at_least) catch unreachable;
-    var output = @ptrCast([*]u8, raw_output);
+    const size = roc__mainForHost_0_result_size();
+    const raw_output = allocator.alignedAlloc(u8, @alignOf(u64), @as(usize, @intCast(size))) catch unreachable;
+    var output = @as([*]u8, @ptrCast(raw_output));
 
     return output;
 }
@@ -48,33 +34,33 @@ fn init(allocator: *Allocator) ConstModel {
     const closure: [*]u8 = undefined;
     const output = allocate_model(allocator);
 
-    roc__mainForHost_1__Init_caller(closure, closure, output);
+    roc__mainForHost_0_caller(closure, closure, output);
 
     return output;
 }
 
-extern fn roc__mainForHost_1__Update_caller(ConstModel, *const RocStr, [*]u8, MutModel) void;
-extern fn roc__mainForHost_1__Update_size() i64;
-extern fn roc__mainForHost_1__Update_result_size() i64;
+extern fn roc__mainForHost_1_caller(ConstModel, *const RocStr, [*]u8, MutModel) void;
+extern fn roc__mainForHost_1_size() i64;
+extern fn roc__mainForHost_1_result_size() i64;
 
 fn update(allocator: *Allocator, model: ConstModel, msg: RocStr) ConstModel {
     const closure: [*]u8 = undefined;
     const output = allocate_model(allocator);
 
-    roc__mainForHost_1__Update_caller(model, &msg, closure, output);
+    roc__mainForHost_1_caller(model, &msg, closure, output);
 
     return output;
 }
 
-extern fn roc__mainForHost_1__View_caller(ConstModel, [*]u8, *RocStr) void;
-extern fn roc__mainForHost_1__View_size() i64;
-extern fn roc__mainForHost_1__View_result_size() i64;
+extern fn roc__mainForHost_2_caller(ConstModel, [*]u8, *RocStr) void;
+extern fn roc__mainForHost_2_size() i64;
+extern fn roc__mainForHost_2_result_size() i64;
 
 fn view(input: ConstModel) RocStr {
     const closure: [*]u8 = undefined;
     var output: RocStr = undefined;
 
-    roc__mainForHost_1__View_caller(input, closure, &output);
+    roc__mainForHost_2_caller(input, closure, &output);
 
     return output;
 }
@@ -115,7 +101,7 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
         stdout.print("realloc: {d} (alignment {d}, old_size {d})\n", .{ c_ptr, alignment, old_size }) catch unreachable;
     }
 
-    return realloc(@alignCast(Align, @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
@@ -124,20 +110,26 @@ export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
         stdout.print("dealloc: {d} (alignment {d})\n", .{ c_ptr, alignment }) catch unreachable;
     }
 
-    free(@alignCast(Align, @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
-export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
-
+export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
     const stderr = std.io.getStdErr().writer();
-    const msg = @ptrCast([*:0]const u8, c_ptr);
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-    std.process.exit(0);
+    switch (tag_id) {
+        0 => {
+            stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        1 => {
+            stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        else => unreachable,
+    }
+    std.process.exit(1);
 }
 
-export fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void {
-    return memcpy(dst, src, size);
+export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
 export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
@@ -186,7 +178,7 @@ pub export fn main() callconv(.C) u8 {
     call_the_closure(program);
 
     const nanos = timer.read();
-    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
+    const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);
 
     const stderr = std.io.getStdErr().writer();
     stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
@@ -195,7 +187,7 @@ pub export fn main() callconv(.C) u8 {
 }
 
 fn to_seconds(tms: std.os.timespec) f64 {
-    return @intToFloat(f64, tms.tv_sec) + (@intToFloat(f64, tms.tv_nsec) / 1_000_000_000.0);
+    return @as(f64, @floatFromInt(tms.tv_sec)) + (@as(f64, @floatFromInt(tms.tv_nsec)) / 1_000_000_000.0);
 }
 
 fn call_the_closure(program: Program) void {
@@ -298,7 +290,7 @@ fn roc_fx_getInt_help() !i64 {
 
     // make sure to strip `\r` on windows
     const raw_line: []u8 = (try stdin.readUntilDelimiterOrEof(&buf, '\n')) orelse "";
-    const line = std.mem.trimRight(u8, raw_line, &std.ascii.spaces);
+    const line = std.mem.trimRight(u8, raw_line, &std.ascii.whitespace);
 
     return std.fmt.parseInt(i64, line, 10);
 }

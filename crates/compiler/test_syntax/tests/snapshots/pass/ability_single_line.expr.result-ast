@@ -4,7 +4,7 @@ Defs(
             Index(0),
         ],
         regions: [
-            @0-37,
+            @0-55,
         ],
         space_before: [
             Slice(start = 0, length = 0),
@@ -19,28 +19,28 @@ Defs(
                     name: @0-4 "Hash",
                     vars: [],
                 },
-                loc_has: @5-8 Has,
+                loc_implements: @5-15 Implements,
                 members: [
                     AbilityMember {
-                        name: @9-13 "hash",
-                        typ: @16-37 Where(
-                            @16-24 Function(
+                        name: @16-20 "hash",
+                        typ: @23-55 Where(
+                            @23-31 Function(
                                 [
-                                    @16-17 BoundVariable(
+                                    @23-24 BoundVariable(
                                         "a",
                                     ),
                                 ],
-                                @21-24 Apply(
+                                @28-31 Apply(
                                     "",
                                     "U64",
                                     [],
                                 ),
                             ),
                             [
-                                @27-37 HasClause {
-                                    var: @27-28 "a",
+                                @38-55 ImplementsClause {
+                                    var: @38-39 "a",
                                     abilities: [
-                                        @33-37 Apply(
+                                        @51-55 Apply(
                                             "",
                                             "Hash",
                                             [],
@@ -55,7 +55,7 @@ Defs(
         ],
         value_defs: [],
     },
-    @39-40 SpaceBefore(
+    @57-58 SpaceBefore(
         Num(
             "1",
         ),

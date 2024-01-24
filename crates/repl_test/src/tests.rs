@@ -32,12 +32,12 @@ fn literal_0x42() {
 
 #[test]
 fn literal_0point0() {
-    expect_success("0.0", "0 : Float *");
+    expect_success("0.0", "0 : Frac *");
 }
 
 #[test]
 fn literal_4point2() {
-    expect_success("4.2", "4.2 : Float *");
+    expect_success("4.2", "4.2 : Frac *");
 }
 
 #[test]
@@ -52,7 +52,7 @@ fn int_addition() {
 
 #[test]
 fn float_addition() {
-    expect_success("1.1 + 2", "3.1 : Float *");
+    expect_success("1.1 + 2", "3.1 : Frac *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -124,11 +124,11 @@ fn bool_basic_equality() {
 fn bool_true() {
     expect_success(
         indoc!(
-            r#"
+            r"
             Bool.true
-            "#
+            "
         ),
-        r#"Bool.true : Bool"#,
+        r"Bool.true : Bool",
     );
 }
 
@@ -136,11 +136,11 @@ fn bool_true() {
 fn bool_false() {
     expect_success(
         indoc!(
-            r#"
+            r"
             Bool.false
-            "#
+            "
         ),
-        r#"Bool.false : Bool"#,
+        r"Bool.false : Bool",
     );
 }
 
@@ -185,7 +185,7 @@ fn tag_in_record() {
 #[test]
 fn single_element_tag_union() {
     expect_success("True 1", "True 1 : [True (Num *)]");
-    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Float *)]");
+    expect_success("Foo 1 3.14", "Foo 1 3.14 : [Foo (Num *) (Frac *)]");
 }
 
 #[test]
@@ -241,7 +241,7 @@ fn tag_with_arguments() {
 
     expect_success(
         "if 1 == 1 then True 3 else False 3.14",
-        "True 3 : [False (Float *), True (Num *)]",
+        "True 3 : [False (Frac *), True (Num *)]",
     )
 }
 
@@ -269,11 +269,6 @@ fn str_concat() {
 }
 
 #[test]
-fn str_count_graphemes() {
-    expect_success("Str.countGraphemes \"å🤔\"", "2 : Nat");
-}
-
-#[test]
 fn literal_empty_list() {
     expect_success("[]", "[] : List *");
 }
@@ -296,7 +291,7 @@ fn literal_int_list() {
 
 #[test]
 fn literal_float_list() {
-    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Float *)");
+    expect_success("[1.1, 2.2, 3.3]", "[1.1, 2.2, 3.3] : List (Frac *)");
 }
 
 #[test]
@@ -315,24 +310,24 @@ fn nested_string_list() {
 #[test]
 fn nested_num_list() {
     expect_success(
-        r#"[[[4, 3, 2], [1, 0]], [[]], []]"#,
-        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Num *)))"#,
+        r"[[[4, 3, 2], [1, 0]], [[]], []]",
+        r"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Num *)))",
     );
 }
 
 #[test]
 fn nested_int_list() {
     expect_success(
-        r#"[[[4, 3, 2], [1, 0x0]], [[]], []]"#,
-        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Int *)))"#,
+        r"[[[4, 3, 2], [1, 0x0]], [[]], []]",
+        r"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Int *)))",
     );
 }
 
 #[test]
 fn nested_float_list() {
     expect_success(
-        r#"[[[4, 3, 2], [1, 0.0]], [[]], []]"#,
-        r#"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Float *)))"#,
+        r"[[[4, 3, 2], [1, 0.0]], [[]], []]",
+        r"[[[4, 3, 2], [1, 0]], [[]], []] : List (List (List (Frac *)))",
     );
 }
 
@@ -411,7 +406,7 @@ fn num_mul_checked() {
 fn list_concat() {
     expect_success(
         "List.concat [1.1, 2.2] [3.3, 4.4, 5.5]",
-        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Float *)",
+        "[1.1, 2.2, 3.3, 4.4, 5.5] : List (Frac *)",
     );
 }
 
@@ -425,10 +420,20 @@ fn list_contains() {
 
 #[cfg(not(feature = "wasm"))]
 #[test]
-fn list_sum() {
+fn list_sum_empty() {
     expect_success("List.sum []", "0 : Num a");
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn list_sum_num() {
     expect_success("List.sum [1, 2, 3]", "6 : Num *");
-    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Float *");
+}
+
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn list_sum_frac() {
+    expect_success("List.sum [1.1, 2.2, 3.3]", "6.6 : Frac *");
 }
 
 #[cfg(not(feature = "wasm"))]
@@ -471,7 +476,7 @@ fn basic_1_field_i64_record() {
 fn basic_1_field_f64_record() {
     // Even though this gets unwrapped at runtime, the repl should still
     // report it as a record
-    expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Float * }");
+    expect_success("{ foo: 4.2 }", "{ foo: 4.2 } : { foo : Frac * }");
 }
 
 #[test]
@@ -490,7 +495,7 @@ fn nested_1_field_f64_record() {
     // report it as a record
     expect_success(
         "{ foo: { bar: { baz: 4.2 } } }",
-        "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Float * } } }",
+        "{ foo: { bar: { baz: 4.2 } } } : { foo : { bar : { baz : Frac * } } }",
     );
 }
 
@@ -506,7 +511,7 @@ fn basic_2_field_i64_record() {
 fn basic_2_field_f64_record() {
     expect_success(
         "{ foo: 4.1, bar: 2.3 }",
-        "{ bar: 2.3, foo: 4.1 } : { bar : Float *, foo : Float * }",
+        "{ bar: 2.3, foo: 4.1 } : { bar : Frac *, foo : Frac * }",
     );
 }
 
@@ -514,7 +519,7 @@ fn basic_2_field_f64_record() {
 fn basic_2_field_mixed_record() {
     expect_success(
         "{ foo: 4.1, bar: 2 }",
-        "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Float * }",
+        "{ bar: 2, foo: 4.1 } : { bar : Num *, foo : Frac * }",
     );
 }
 
@@ -522,7 +527,7 @@ fn basic_2_field_mixed_record() {
 fn basic_3_field_record() {
     expect_success(
         "{ foo: 4.1, bar: 2, baz: 0x5 }",
-        "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int *, foo : Float * }",
+        "{ bar: 2, baz: 5, foo: 4.1 } : { bar : Num *, baz : Int *, foo : Frac * }",
     );
 }
 
@@ -537,7 +542,7 @@ fn list_of_1_field_records() {
 fn list_of_2_field_records() {
     expect_success(
         "[{ foo: 4.1, bar: 2 }]",
-        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Float * }",
+        "[{ bar: 2, foo: 4.1 }] : List { bar : Num *, foo : Frac * }",
     );
 }
 
@@ -578,11 +583,7 @@ fn multiline_string_non_wasm() {
     );
 
     assert_multiline_str_eq!("", out.stderr.as_str());
-
-    // Don't consider the auto variable name ("# val1") at the end.
-    // The state.rs tests do that!
-    assert_multiline_str_eq!(expected, out.stdout.replace("# val1", "").trim());
-
+    assert_multiline_str_eq!(expected, out.stdout.trim());
     assert!(out.status.success());
 }
 
@@ -608,7 +609,7 @@ fn multiline_string_wasm() {
 fn list_of_3_field_records() {
     expect_success(
         "[{ foo: 4.1, bar: 2, baz: 0x3 }]",
-        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Float * }",
+        "[{ bar: 2, baz: 3, foo: 4.1 }] : List { bar : Num *, baz : Int *, foo : Frac * }",
     );
 }
 
@@ -635,7 +636,7 @@ fn too_few_args() {
     expect_failure(
         "Num.add 2",
         indoc!(
-            r#"
+            r"
                 ── TOO FEW ARGS ────────────────────────────────────────────────────────────────
 
                 The add function expects 2 arguments, but it got only 1:
@@ -645,24 +646,24 @@ fn too_few_args() {
 
                 Roc does not allow functions to be partially applied. Use a closure to
                 make partial application explicit.
-                "#
+                "
         ),
     );
 }
 
 #[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn type_problem() {
+fn type_problem_function() {
     expect_failure(
-        "1 + \"\"",
+        "Num.add 1 \"not a num\"",
         indoc!(
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This 2nd argument to add has an unexpected type:
 
-                4│      1 + ""
-                            ^^
+                4│      Num.add 1 "not a num"
+                                  ^^^^^^^^^^^
 
                 The argument is a string of type:
 
@@ -676,17 +677,107 @@ fn type_problem() {
     );
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
 #[test]
-fn issue_2149() {
+fn type_problem_binary_operator() {
+    expect_failure(
+        "1 + \"\"",
+        indoc!(
+            r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This 2nd argument to + has an unexpected type:
+
+                4│      1 + ""
+                            ^^
+
+                The argument is a string of type:
+
+                    Str
+
+                But + needs its 2nd argument to be:
+
+                    Num *
+                "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn type_problem_unary_operator() {
+    expect_failure(
+        "!\"not a bool\"",
+        indoc!(
+            r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This 1st argument to ! has an unexpected type:
+
+                4│      !"not a bool"
+                         ^^^^^^^^^^^^
+
+                The argument is a string of type:
+
+                    Str
+
+                But ! needs its 1st argument to be:
+
+                    Bool
+                "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn type_problem_string_interpolation() {
+    expect_failure(
+        "\"This is not a string -> \\(1)\"",
+        indoc!(
+            r#"
+                ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+                This argument to this string interpolation has an unexpected type:
+
+                4│      "This is not a string -> \(1)"
+                                                   ^
+
+                The argument is a number of type:
+
+                    Num *
+
+                But this string interpolation needs its argument to be:
+
+                    Str
+                "#
+        ),
+    );
+}
+
+#[test]
+fn issue_2149_i8_ok() {
     expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
+}
+
+#[test]
+fn issue_2149_i8_err() {
     expect_success(
         r#"Str.toI8 "128""#,
         "Err InvalidNumStr : Result I8 [InvalidNumStr]",
     );
+}
+
+#[test]
+fn issue_2149_i16_ok() {
     expect_success(
         r#"Str.toI16 "32767""#,
         "Ok 32767 : Result I16 [InvalidNumStr]",
     );
+}
+
+#[test]
+fn issue_2149_i16_err() {
     expect_success(
         r#"Str.toI16 "32768""#,
         "Err InvalidNumStr : Result I16 [InvalidNumStr]",
@@ -874,7 +965,7 @@ fn large_nullable_wrapped_tag_union() {
 fn issue_2300() {
     expect_success(
         r#"\Email str -> str == """#,
-        r#"<function> : [Email Str] -> Bool"#,
+        r"<function> : [Email Str] -> Bool",
     )
 }
 
@@ -882,8 +973,8 @@ fn issue_2300() {
 #[test]
 fn function_in_list() {
     expect_success(
-        r#"[\x -> x + 1, \s -> s * 2]"#,
-        r#"[<function>, <function>] : List (Num a -> Num a)"#,
+        r"[\x -> x + 1, \s -> s * 2]",
+        r"[<function>, <function>] : List (Num a -> Num a)",
     )
 }
 
@@ -891,8 +982,8 @@ fn function_in_list() {
 #[test]
 fn function_in_record() {
     expect_success(
-        r#"{ n: 1, adder: \x -> x + 1 }"#,
-        r#"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }"#,
+        r"{ n: 1, adder: \x -> x + 1 }",
+        r"{ adder: <function>, n: 1 } : { adder : Num a -> Num a, n : Num * }",
     )
 }
 
@@ -900,8 +991,8 @@ fn function_in_record() {
 #[test]
 fn function_in_unwrapped_record() {
     expect_success(
-        r#"{ adder: \x -> x + 1 }"#,
-        r#"{ adder: <function> } : { adder : Num a -> Num a }"#,
+        r"{ adder: \x -> x + 1 }",
+        r"{ adder: <function> } : { adder : Num a -> Num a }",
     )
 }
 
@@ -909,16 +1000,16 @@ fn function_in_unwrapped_record() {
 #[test]
 fn function_in_tag() {
     expect_success(
-        r#"Adder (\x -> x + 1)"#,
-        r#"Adder <function> : [Adder (Num a -> Num a)]"#,
+        r"Adder (\x -> x + 1)",
+        r"Adder <function> : [Adder (Num a -> Num a)]",
     )
 }
 
 #[test]
 fn newtype_of_record_of_tag_of_record_of_tag() {
     expect_success(
-        r#"A {b: C {d: 1}}"#,
-        r#"A { b: C { d: 1 } } : [A { b : [C { d : Num * }] }]"#,
+        r"A {b: C {d: 1}}",
+        r"A { b: C { d: 1 } } : [A { b : [C { d : Num * }] }]",
     )
 }
 
@@ -926,11 +1017,11 @@ fn newtype_of_record_of_tag_of_record_of_tag() {
 fn print_u8s() {
     expect_success(
         indoc!(
-            r#"
+            r"
                 x : U8
                 x = 129
                 x
-                "#
+                "
         ),
         "129 : U8",
     )
@@ -966,17 +1057,17 @@ fn parse_problem() {
 fn issue_2343_complete_mono_with_shadowed_vars() {
     expect_failure(
         indoc!(
-            r#"
+            r"
                 b = False
                 f = \b ->
                     when b is
                         True -> 5
                         False -> 15
                 f b
-                "#
+                "
         ),
         indoc!(
-            r#"
+            r"
                 ── DUPLICATE NAME ──────────────────────────────────────────────────────────────
 
                 The b name is first defined here:
@@ -990,8 +1081,8 @@ fn issue_2343_complete_mono_with_shadowed_vars() {
                              ^
 
                 Since these variables have the same name, it's easy to use the wrong
-                one on accident. Give one of them a new name.
-                "#
+                one by accident. Give one of them a new name.
+                "
         ),
     );
 }
@@ -1030,12 +1121,12 @@ fn tag_with_type_behind_alias() {
 fn issue_2588_record_with_function_and_nonfunction() {
     expect_success(
         indoc!(
-            r#"
+            r"
             x = 1
             f = \n -> n * 2
-            { y: f x, f }"#
+            { y: f x, f }"
         ),
-        r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
+        r"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }",
     )
 }
 
@@ -1043,10 +1134,10 @@ fn issue_2588_record_with_function_and_nonfunction() {
 fn opaque_apply() {
     expect_success(
         indoc!(
-            r#"
+            r"
             Age := U32
 
-            @Age 23"#
+            @Age 23"
         ),
         "@Age 23 : Age",
     )
@@ -1069,14 +1160,14 @@ fn opaque_apply_polymorphic() {
 fn opaque_pattern_and_call() {
     expect_success(
         indoc!(
-            r#"
+            r"
             F t u := [Package t u]
 
             f = \@F (Package A {}) -> @F (Package {} A)
 
-            f (@F (Package A {}))"#
+            f (@F (Package A {}))"
         ),
-        r#"@F (Package {} A) : F {} [A]"#,
+        r"@F (Package {} A) : F {} [A]",
     )
 }
 
@@ -1084,10 +1175,10 @@ fn opaque_pattern_and_call() {
 fn dec_in_repl() {
     expect_success(
         indoc!(
-            r#"
+            r"
             x: Dec
             x=1.23
-            x"#
+            x"
         ),
         "1.23 : Dec",
     )
@@ -1097,12 +1188,12 @@ fn dec_in_repl() {
 fn print_i8_issue_2710() {
     expect_success(
         indoc!(
-            r#"
+            r"
             a : I8
             a = -1
-            a"#
+            a"
         ),
-        r#"-1 : I8"#,
+        r"-1 : I8",
     )
 }
 
@@ -1147,11 +1238,11 @@ fn issue_2582_specialize_result_value() {
 fn issue_2818() {
     expect_success(
         indoc!(
-            r#"
+            r"
             f : {} -> List Str
             f = \_ ->
               x = []
-              x"#
+              x"
         ),
         r"<function> : {} -> List Str",
     )
@@ -1161,7 +1252,7 @@ fn issue_2818() {
 fn issue_2810_recursive_layout_inside_nonrecursive() {
     expect_success(
         indoc!(
-            r#"
+            r"
             Command : [Command Tool]
 
             Job : [Job Command]
@@ -1170,7 +1261,7 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
 
             a : Job
             a = Job (Command (FromJob (Job (Command SystemTool))))
-            a"#
+            a"
         ),
         "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
     )
@@ -1180,12 +1271,12 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
 fn render_nullable_unwrapped_passing_through_alias() {
     expect_success(
         indoc!(
-            r#"
+            r"
             Deep : [L DeepList]
             DeepList : [Nil, Cons Deep]
             v : DeepList
             v = (Cons (L (Cons (L (Cons (L Nil))))))
-            v"#
+            v"
         ),
         "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
@@ -1195,9 +1286,9 @@ fn render_nullable_unwrapped_passing_through_alias() {
 fn opaque_wrap_function() {
     expect_success(
         indoc!(
-            r#"
+            r"
             A a := a
-            List.map [1u8, 2u8, 3u8] @A"#
+            List.map [1u8, 2u8, 3u8] @A"
         ),
         "[@A 1, @A 2, @A 3] : List (A U8)",
     );
@@ -1209,10 +1300,10 @@ fn opaque_wrap_function() {
 fn dict_get_single() {
     expect_success(
         indoc!(
-            r#"
-            Dict.single 0 {a: 1, c: 2} |> Dict.get 0"#
+            r"
+            Dict.single 0 {a: 1, c: 2} |> Dict.get 0"
         ),
-        r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]"#,
+        r"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]",
     )
 }
 
@@ -1223,7 +1314,7 @@ fn record_of_poly_function() {
             r#"
             { a: \_ -> "a" }"#
         ),
-        r#"{ a: <function> } : { a : * -> Str }"#,
+        r"{ a: <function> } : { a : * -> Str }",
     );
 }
 
@@ -1242,18 +1333,18 @@ fn record_of_poly_function_and_string() {
 fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
-            r#"
-            Result.try (Err 42) (\x -> Err (x+1))"#
+            r"
+            Result.try (Err 42) (\x -> Err (x+1))"
         ),
-        r#"Err 42 : Result b (Num *)"#,
+        r"Err 42 : Result b (Num *)",
     );
 
     expect_success(
         indoc!(
-            r#"
-            Result.try (Ok 42) (\x -> Ok (x+1))"#
+            r"
+            Result.try (Ok 42) (\x -> Ok (x+1))"
         ),
-        r#"Ok 43 : Result (Num *) err"#,
+        r"Ok 43 : Result (Num *) err",
     );
 }
 
@@ -1261,10 +1352,138 @@ fn newtype_by_void_is_wrapped() {
 fn enum_tag_union_in_list() {
     expect_success(
         indoc!(
-            r#"
+            r"
             [E, F, G, H]
+            "
+        ),
+        r"[E, F, G, H] : List [E, F, G, H]",
+    );
+}
+
+#[test]
+fn str_to_dec() {
+    expect_success(
+        indoc!(
+            r#"
+            Str.toDec "1234.1234"
             "#
         ),
-        r#"[E, F, G, H] : List [E, F, G, H]"#,
+        r"Ok 1234.1234 : Result Dec [InvalidNumStr]",
+    );
+}
+
+#[test]
+fn tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", 2u32)
+            "#
+        ),
+        r#"("a", 2) : ( Str, U32 )*"#,
+    );
+}
+
+#[test]
+fn nested_tuple() {
+    expect_success(
+        indoc!(
+            r#"
+            ("a", (2u32, 3u32))
+            "#
+        ),
+        r#"("a", (2, 3)) : ( Str, ( U32, U32 )a )a"#,
+    );
+}
+
+#[test]
+fn ordered_tag_union_memory_layout() {
+    expect_success(
+        indoc!(
+            r"
+            Loc : { line: U32, column: U32 }
+
+            Node : [ A Loc, Height U8 Loc ]
+
+            x : Node
+            x = Height 1 { line: 2, column: 3 }
+            x
+            "
+        ),
+        r"Height 1 { column: 3, line: 2 } : Node",
+    );
+}
+
+#[test]
+fn interpolation_with_nested_strings() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Str.joinWith ["a", "b", "c"] ", ") bar"
+            "#
+        ),
+        r#""foo a, b, c bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_num_to_str() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Num.toStr Num.maxI8) bar"
+            "#
+        ),
+        r#""foo 127 bar" : Str"#,
+    );
+}
+
+#[test]
+fn interpolation_with_operator_desugaring() {
+    expect_success(
+        indoc!(
+            r#"
+            "foo \(Num.toStr (1 + 2)) bar"
+            "#
+        ),
+        r#""foo 3 bar" : Str"#,
+    );
+}
+
+// This test doesn't work on wasm because wasm expects <span>s, but
+// the point of the test is the string interpolation behavior.
+#[cfg(not(feature = "wasm"))]
+#[test]
+fn interpolation_with_nested_interpolation() {
+    expect_failure(
+        indoc!(
+            r#"
+            "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+            "#
+        ),
+        indoc!(
+            r#"
+                ── SYNTAX PROBLEM ──────────────────────────────────────────────────────────────
+
+                This string interpolation is invalid:
+
+                4│      "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+                String interpolations cannot contain newlines or other interpolations.
+
+                You can learn more about string interpolation at
+                <https://www.roc-lang.org/tutorial#string-interpolation>
+
+
+                Enter an expression to evaluate, or a definition (like x = 1) to use later.
+
+                  - ctrl-v + ctrl-j makes a newline
+                  - :q quits
+                  - :help shows this text again
+            "#
+        ),
+        // TODO figure out why the tests prints the repl help text at the end, but only after syntax errors or something?
+        // In the actual repl this doesn't happen, only in the test.
     );
 }

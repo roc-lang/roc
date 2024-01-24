@@ -17,7 +17,15 @@ macro_rules! deref_number {
 }
 
 impl ReplAppMemory for ExpectMemory {
-    deref_number!(deref_bool, bool);
+    fn deref_bool(&self, addr: usize) -> bool {
+        let ptr = unsafe { self.start.add(addr) };
+        let value = unsafe { std::ptr::read_unaligned(ptr) };
+
+        // bool values should only ever be 0 or 1
+        debug_assert!(value == 0 || value == 1);
+
+        value != 0
+    }
 
     deref_number!(deref_u8, u8);
     deref_number!(deref_u16, u16);
@@ -51,7 +59,9 @@ impl ReplAppMemory for ExpectMemory {
             roc_str.as_str()
         } else {
             let offset = self.deref_usize(addr);
-            let length = self.deref_usize(addr + std::mem::size_of::<usize>());
+            let seamless_slice_mask = usize::MAX >> 1;
+            let length =
+                self.deref_usize(addr + std::mem::size_of::<usize>()) & seamless_slice_mask;
             let _capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
 
             unsafe {

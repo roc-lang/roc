@@ -87,12 +87,12 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
             architecture: Architecture::X86_64,
             operating_system: OperatingSystem::Darwin,
             ..
-        } => "x86_64-apple-darwin",
+        } => "x86_64-macos-none",
         Triple {
             architecture: Architecture::Aarch64(_),
             operating_system: OperatingSystem::Darwin,
             ..
-        } => "aarch64-apple-darwin",
+        } => "aarch64-macos-none",
         _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
@@ -149,20 +149,29 @@ pub fn target_machine(
 
     init_arch(target);
 
-    let code_model = match target.architecture {
-        // LLVM 12 will not compile our programs without a large code model.
-        // The reason is not totally clear to me, but my guess is a few special-cases in
-        //   llvm/lib/Target/AArch64/AArch64ISelLowering.cpp (instructions)
-        //   llvm/lib/Target/AArch64/AArch64Subtarget.cpp (GoT tables)
-        // Revisit when upgrading to LLVM 13.
-        Architecture::Aarch64(..) => CodeModel::Large,
+    let code_model = match target {
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => {
+            // We used to have a problem that LLVM 12 would not compile our programs without a large code model.
+            // The reason was not totally clear to us, but one guess is a few special-cases in
+            //   llvm/lib/Target/AArch64/AArch64ISelLowering.cpp (instructions)
+            //   llvm/lib/Target/AArch64/AArch64Subtarget.cpp (GoT tables)
+            // Revisit when upgrading to LLVM 13.
+            //
+            // Most recently, we seem to only see this problem on macOS ARM64; removing this
+            // failed macOS CI here: https://github.com/roc-lang/roc/pull/5644
+            CodeModel::Large
+        }
         _ => CodeModel::Default,
     };
 
     Target::from_name(arch).unwrap().create_target_machine(
         &TargetTriple::create(target_triple_str(target)),
         "generic",
-        "", // TODO: this probably should be TargetMachine::get_host_cpu_features() to enable all features.
+        "",
         opt,
         reloc,
         code_model,

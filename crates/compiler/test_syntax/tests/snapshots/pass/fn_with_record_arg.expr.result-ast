@@ -1,0 +1,131 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483649),
+        ],
+        regions: [
+            @0-89,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-5 Identifier(
+                    "table",
+                ),
+                @8-44 Function(
+                    [
+                        @8-35 Record {
+                            fields: [
+                                @14-29 SpaceBefore(
+                                    SpaceAfter(
+                                        RequiredValue(
+                                            @14-20 "height",
+                                            [],
+                                            @23-29 Apply(
+                                                "",
+                                                "Pixels",
+                                                [],
+                                            ),
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                            ext: None,
+                        },
+                    ],
+                    @39-44 Apply(
+                        "",
+                        "Table",
+                        [],
+                    ),
+                ),
+            ),
+            AnnotatedBody {
+                ann_pattern: @0-5 Identifier(
+                    "table",
+                ),
+                ann_type: @8-44 Function(
+                    [
+                        @8-35 Record {
+                            fields: [
+                                @14-29 SpaceBefore(
+                                    SpaceAfter(
+                                        RequiredValue(
+                                            @14-20 "height",
+                                            [],
+                                            @23-29 Apply(
+                                                "",
+                                                "Pixels",
+                                                [],
+                                            ),
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                            ext: None,
+                        },
+                    ],
+                    @39-44 Apply(
+                        "",
+                        "Table",
+                        [],
+                    ),
+                ),
+                comment: None,
+                body_pattern: @45-50 Identifier(
+                    "table",
+                ),
+                body_expr: @53-89 Closure(
+                    [
+                        @54-62 RecordDestructure(
+                            [
+                                @55-61 Identifier(
+                                    "height",
+                                ),
+                            ],
+                        ),
+                    ],
+                    @66-89 Apply(
+                        @66-71 Crash,
+                        [
+                            @72-89 Str(
+                                PlainLine(
+                                    "not implemented",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            },
+        ],
+    },
+    @90-95 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "table",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

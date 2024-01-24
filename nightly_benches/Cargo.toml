@@ -1,17 +1,19 @@
 [package]
 name = "nightly_benches"
-version = "0.0.1"
-edition = "2021"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 
 [dev-dependencies]
-criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 cli_utils = { path = "../cli/cli_utils" }
-criterion-perf-events ={ git = "https://github.com/Anton-4/criterion-perf-events" }
-perfcnt = "0.7.1"
+
+criterion-perf-events.workspace = true
+criterion.workspace = true
+perfcnt.workspace = true
 
 [[bench]]
 name = "events_bench"

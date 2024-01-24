@@ -20,25 +20,25 @@ interface Html.Event
     ]
     imports [
         Action.{ Action },
-        Html.Internal.{ Attribute },
+        Html.Internal.Shared.{ Attribute },
     ]
 
-Handler state : Html.Internal.Handler state
-CyclicStructureAccessor : Html.Internal.CyclicStructureAccessor
+Handler state : Html.Internal.Shared.Handler state
+CyclicStructureAccessor : Html.Internal.Shared.CyclicStructureAccessor
 
 custom : Str, List CyclicStructureAccessor, (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }) -> Attribute state
 custom = \eventName, accessors, callback ->
-    EventListener eventName accessors (Ok (Custom callback))
+    EventListener eventName accessors (Custom callback)
 
 on : Str, List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
 on = \eventName, accessors, callback ->
-    EventListener eventName accessors (Ok (Normal callback))
+    EventListener eventName accessors (Normal callback)
 
 # Internal helper
 curriedOn : Str -> (List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state)
 curriedOn = \eventName ->
     \accessors, callback ->
-        EventListener eventName accessors (Ok (Normal callback))
+        EventListener eventName accessors (Normal callback)
 
 onClick = curriedOn "click"
 onDoubleClick = curriedOn "dblclick"
@@ -61,7 +61,7 @@ onInput = \accessors, callback ->
         preventDefault: Bool.false,
     }
 
-    EventListener "input" accessors (Ok (Custom customCallback))
+    EventListener "input" accessors (Custom customCallback)
 
 onSubmit : List CyclicStructureAccessor, (state, List (List U8) -> Action state) -> Attribute state
 onSubmit = \accessors, callback ->
@@ -71,7 +71,7 @@ onSubmit = \accessors, callback ->
         preventDefault: Bool.true,
     }
 
-    EventListener "submit" accessors (Ok (Custom customCallback))
+    EventListener "submit" accessors (Custom customCallback)
 
 # Notes from Elm:
 #  - stopPropagation causes immediate view update, without waiting for animationFrame,

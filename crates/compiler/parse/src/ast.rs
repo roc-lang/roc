@@ -1,7 +1,8 @@
 use std::fmt::Debug;
+use std::path::Path;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
-use crate::ident::Ident;
+use crate::ident::Accessor;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -35,6 +36,13 @@ impl<'a, T> Spaced<'a, T> {
                 debug_assert!(!spaces.is_empty());
                 true
             }
+        }
+    }
+
+    pub fn item(&self) -> &T {
+        match self {
+            Spaced::Item(answer) => answer,
+            Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
         }
     }
 }
@@ -111,10 +119,11 @@ pub struct WhenPattern<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StrSegment<'a> {
-    Plaintext(&'a str),              // e.g. "foo"
-    Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
-    EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
-    Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
+    Plaintext(&'a str),       // e.g. "foo"
+    Unicode(Loc<&'a str>),    // e.g. "00A0" in "\u(00A0)"
+    EscapedChar(EscapedChar), // e.g. '\n' in "Hello!\n"
+    Interpolated(Loc<&'a Expr<'a>>),
+    DeprecatedInterpolated(Loc<&'a Expr<'a>>), // The old "$(...)" syntax - will be removed someday
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,6 +142,7 @@ pub enum EscapedChar {
     SingleQuote,    // \'
     Backslash,      // \\
     CarriageReturn, // \r
+    Dollar,         // \$
 }
 
 impl EscapedChar {
@@ -147,6 +157,7 @@ impl EscapedChar {
             CarriageReturn => 'r',
             Tab => 't',
             Newline => 'n',
+            Dollar => '$',
         }
     }
 
@@ -160,6 +171,7 @@ impl EscapedChar {
             CarriageReturn => '\r',
             Tab => '\t',
             Newline => '\n',
+            Dollar => '$',
         }
     }
 }
@@ -205,6 +217,7 @@ impl<'a> TryFrom<StrSegment<'a>> for SingleQuoteSegment<'a> {
             StrSegment::Unicode(s) => Ok(SingleQuoteSegment::Unicode(s)),
             StrSegment::EscapedChar(s) => Ok(SingleQuoteSegment::EscapedChar(s)),
             StrSegment::Interpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
+            StrSegment::DeprecatedInterpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
         }
     }
 }
@@ -244,13 +257,12 @@ pub enum Expr<'a> {
 
     /// Look up exactly one field on a record, e.g. `x.foo`.
     RecordAccess(&'a Expr<'a>, &'a str),
-    /// e.g. `.foo`
-    RecordAccessorFunction(&'a str),
+
+    /// e.g. `.foo` or `.0`
+    AccessorFunction(Accessor<'a>),
 
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
-    /// e.g. `.1`
-    TupleAccessorFunction(&'a str),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -263,6 +275,12 @@ pub enum Expr<'a> {
     Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
+
+    // Record Builders
+    RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
+
+    // The name of a file to be ingested directly into a variable.
+    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
 
     // Lookups
     Var {
@@ -288,6 +306,8 @@ pub enum Expr<'a> {
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+    // This form of debug is a desugared call to roc_dbg
+    LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -321,6 +341,8 @@ pub enum Expr<'a> {
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
+    MultipleRecordBuilders(&'a Loc<Expr<'a>>),
+    UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -349,15 +371,15 @@ impl<'a> TypeHeader<'a> {
     }
 }
 
-/// The `has` keyword associated with ability definitions.
+/// The `implements` keyword associated with ability definitions.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Has<'a> {
-    Has,
-    SpaceBefore(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a Has<'a>, &'a [CommentOrNewline<'a>]),
+pub enum Implements<'a> {
+    Implements,
+    SpaceBefore(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a Implements<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-/// An ability demand is a value defining the ability; for example `hash : a -> U64 | a has Hash`
+/// An ability demand is a value defining the ability; for example `hash : a -> U64 where a implements Hash`
 /// for a `Hash` ability.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbilityMember<'a> {
@@ -386,15 +408,15 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<HasAbilities<'a>>>,
+        derived: Option<Loc<ImplementsAbilities<'a>>>,
     },
 
     /// An ability definition. E.g.
-    ///   Hash has
-    ///     hash : a -> U64 | a has Hash
+    ///   Hash implements
+    ///     hash : a -> U64 where a implements Hash
     Ability {
         header: TypeHeader<'a>,
-        loc_has: Loc<Has<'a>>,
+        loc_implements: Loc<Implements<'a>>,
         members: &'a [AbilityMember<'a>],
     },
 }
@@ -530,54 +552,54 @@ impl<'a> Defs<'a> {
 pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct HasClause<'a> {
+pub struct ImplementsClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
     pub abilities: &'a [AbilityName<'a>],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasImpls<'a> {
+pub enum AbilityImpls<'a> {
     // `{ eq: myEq }`
-    HasImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
+    AbilityImpls(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a AbilityImpls<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a AbilityImpls<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 /// `Eq` or `Eq { eq: myEq }`
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasAbility<'a> {
-    HasAbility {
+pub enum ImplementsAbility<'a> {
+    ImplementsAbility {
         /// Should be a zero-argument `Apply` or an error; we'll check this in canonicalization
         ability: Loc<TypeAnnotation<'a>>,
-        impls: Option<Loc<HasImpls<'a>>>,
+        impls: Option<Loc<AbilityImpls<'a>>>,
     },
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ImplementsAbility<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImplementsAbility<'a>, &'a [CommentOrNewline<'a>]),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum HasAbilities<'a> {
-    /// `has [Eq { eq: myEq }, Hash]`
-    Has(Collection<'a, Loc<HasAbility<'a>>>),
+pub enum ImplementsAbilities<'a> {
+    /// `implements [Eq { eq: myEq }, Hash]`
+    Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
 
     // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a HasAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
 }
 
-impl HasAbilities<'_> {
-    pub fn collection(&self) -> &Collection<Loc<HasAbility>> {
+impl ImplementsAbilities<'_> {
+    pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
         let mut it = self;
         loop {
             match it {
                 Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
                     it = inner;
                 }
-                Self::Has(collection) => return collection,
+                Self::Implements(collection) => return collection,
             }
         }
     }
@@ -613,7 +635,7 @@ pub enum TypeAnnotation<'a> {
     },
 
     Tuple {
-        fields: Collection<'a, Loc<TypeAnnotation<'a>>>,
+        elems: Collection<'a, Loc<TypeAnnotation<'a>>>,
         /// The row type variable in an open tuple, e.g. the `r` in `( Str, Str )r`.
         /// This is None if it's a closed tuple annotation like `( Str, Str )`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
@@ -633,8 +655,8 @@ pub enum TypeAnnotation<'a> {
     /// The `*` type variable, e.g. in (List *)
     Wildcard,
 
-    /// A "where" clause demanding abilities designated by a `|`, e.g. `a -> U64 | a has Hash`
-    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<HasClause<'a>>]),
+    /// A "where" clause demanding abilities designated by a `where`, e.g. `a -> U64 where a implements Hash`
+    Where(&'a Loc<TypeAnnotation<'a>>, &'a [Loc<ImplementsClause<'a>>]),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a TypeAnnotation<'a>, &'a [CommentOrNewline<'a>]),
@@ -681,6 +703,30 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecordBuilderField<'a> {
+    // A field with a value, e.g. `{ name: "blah" }`
+    Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+
+    // A field with a function we can apply to build part of the record, e.g. `{ name: <- apply getName }`
+    ApplyValue(
+        Loc<&'a str>,
+        &'a [CommentOrNewline<'a>],
+        &'a [CommentOrNewline<'a>],
+        &'a Loc<Expr<'a>>,
+    ),
+
+    // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
+    LabelOnly(Loc<&'a str>),
+
+    // We preserve this for the formatter; canonicalization ignores it.
+    SpaceBefore(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
+
+    /// A malformed assigned field, which will code gen to a runtime error
+    Malformed(&'a str),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommentOrNewline<'a> {
     Newline,
@@ -711,8 +757,8 @@ impl<'a> CommentOrNewline<'a> {
         use CommentOrNewline::*;
         match self {
             Newline => "\n".to_owned(),
-            LineComment(comment_str) => format!("#{}", comment_str),
-            DocComment(comment_str) => format!("##{}", comment_str),
+            LineComment(comment_str) => format!("#{comment_str}"),
+            DocComment(comment_str) => format!("##{comment_str}"),
         }
     }
 
@@ -807,51 +853,6 @@ pub enum Base {
 }
 
 impl<'a> Pattern<'a> {
-    pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
-        match ident {
-            Ident::Tag(string) => Pattern::Tag(string),
-            Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
-            Ident::Access { module_name, parts } => {
-                if parts.len() == 1 {
-                    // This is valid iff there is no module.
-                    let ident = parts.iter().next().unwrap();
-
-                    if module_name.is_empty() {
-                        Pattern::Identifier(ident)
-                    } else {
-                        Pattern::QualifiedIdentifier { module_name, ident }
-                    }
-                } else {
-                    // This is definitely malformed.
-                    let mut buf =
-                        String::with_capacity_in(module_name.len() + (2 * parts.len()), arena);
-                    let mut any_parts_printed = if module_name.is_empty() {
-                        false
-                    } else {
-                        buf.push_str(module_name);
-
-                        true
-                    };
-
-                    for part in parts.iter() {
-                        if any_parts_printed {
-                            buf.push('.');
-                        } else {
-                            any_parts_printed = true;
-                        }
-
-                        buf.push_str(part);
-                    }
-
-                    Pattern::Malformed(buf.into_bump_str())
-                }
-            }
-            Ident::RecordAccessorFunction(string) => Pattern::Malformed(string),
-            Ident::TupleAccessorFunction(string) => Pattern::Malformed(string),
-            Ident::Malformed(string, _problem) => Pattern::Malformed(string),
-        }
-    }
-
     /// Check that patterns are equivalent, meaning they have the same shape, but may have
     /// different locations/whitespace
     pub fn equivalent(&self, other: &Self) -> bool {
@@ -1240,6 +1241,15 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
 }
 
+impl<'a> Spaceable<'a> for RecordBuilderField<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordBuilderField::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordBuilderField::SpaceAfter(self, spaces)
+    }
+}
+
 impl<'a> Spaceable<'a> for Tag<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Tag::SpaceBefore(self, spaces)
@@ -1249,39 +1259,39 @@ impl<'a> Spaceable<'a> for Tag<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for Has<'a> {
+impl<'a> Spaceable<'a> for Implements<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Has::SpaceBefore(self, spaces)
+        Implements::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        Has::SpaceAfter(self, spaces)
+        Implements::SpaceAfter(self, spaces)
     }
 }
 
-impl<'a> Spaceable<'a> for HasImpls<'a> {
+impl<'a> Spaceable<'a> for AbilityImpls<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasImpls::SpaceBefore(self, spaces)
+        AbilityImpls::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasImpls::SpaceAfter(self, spaces)
+        AbilityImpls::SpaceAfter(self, spaces)
     }
 }
 
-impl<'a> Spaceable<'a> for HasAbility<'a> {
+impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbility::SpaceBefore(self, spaces)
+        ImplementsAbility::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbility::SpaceAfter(self, spaces)
+        ImplementsAbility::SpaceAfter(self, spaces)
     }
 }
 
-impl<'a> Spaceable<'a> for HasAbilities<'a> {
+impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbilities::SpaceBefore(self, spaces)
+        ImplementsAbilities::SpaceBefore(self, spaces)
     }
     fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        HasAbilities::SpaceAfter(self, spaces)
+        ImplementsAbilities::SpaceAfter(self, spaces)
     }
 }
 
@@ -1372,7 +1382,7 @@ impl_extract_spaces!(Pattern);
 impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
-impl_extract_spaces!(HasAbility);
+impl_extract_spaces!(ImplementsAbility);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -1426,44 +1436,427 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     }
 }
 
-impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
+impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
     type Item = Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>;
 
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         match self {
-            HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::AbilityImpls(inner) => Spaces {
                 before: &[],
                 item: *inner,
                 after: &[],
             },
-            HasImpls::SpaceBefore(item, before) => match item {
-                HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::SpaceBefore(item, before) => match item {
+                AbilityImpls::AbilityImpls(inner) => Spaces {
                     before,
                     item: *inner,
                     after: &[],
                 },
-                HasImpls::SpaceBefore(_, _) => todo!(),
-                HasImpls::SpaceAfter(HasImpls::HasImpls(inner), after) => Spaces {
+                AbilityImpls::SpaceBefore(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(AbilityImpls::AbilityImpls(inner), after) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceAfter(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
-            HasImpls::SpaceAfter(item, after) => match item {
-                HasImpls::HasImpls(inner) => Spaces {
+            AbilityImpls::SpaceAfter(item, after) => match item {
+                AbilityImpls::AbilityImpls(inner) => Spaces {
                     before: &[],
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceBefore(HasImpls::HasImpls(inner), before) => Spaces {
+                AbilityImpls::SpaceBefore(AbilityImpls::AbilityImpls(inner), before) => Spaces {
                     before,
                     item: *inner,
                     after,
                 },
-                HasImpls::SpaceBefore(_, _) => todo!(),
-                HasImpls::SpaceAfter(_, _) => todo!(),
+                AbilityImpls::SpaceBefore(_, _) => todo!(),
+                AbilityImpls::SpaceAfter(_, _) => todo!(),
             },
+        }
+    }
+}
+
+pub trait Malformed {
+    /// Returns whether this node is malformed, or contains a malformed node (recursively).
+    fn is_malformed(&self) -> bool;
+}
+
+impl<'a> Malformed for Module<'a> {
+    fn is_malformed(&self) -> bool {
+        self.header.is_malformed()
+    }
+}
+
+impl<'a> Malformed for Header<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Header::Interface(header) => header.is_malformed(),
+            Header::App(header) => header.is_malformed(),
+            Header::Package(header) => header.is_malformed(),
+            Header::Platform(header) => header.is_malformed(),
+            Header::Hosted(header) => header.is_malformed(),
+        }
+    }
+}
+
+impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
+impl<'a> Malformed for Expr<'a> {
+    fn is_malformed(&self) -> bool {
+        use Expr::*;
+
+        match self {
+            Float(_) |
+            Num(_) |
+            NonBase10Int { .. } |
+            AccessorFunction(_) |
+            Var { .. } |
+            Underscore(_) |
+            Tag(_) |
+            OpaqueRef(_) |
+            SingleQuote(_) | // This is just a &str - not a bunch of segments
+            IngestedFile(_, _) |
+            Crash => false,
+
+            Str(inner) => inner.is_malformed(),
+
+            RecordAccess(inner, _) |
+            TupleAccess(inner, _) => inner.is_malformed(),
+
+            List(items) => items.is_malformed(),
+
+            RecordUpdate { update, fields } => update.is_malformed() || fields.is_malformed(),
+            Record(items) => items.is_malformed(),
+            Tuple(items) => items.is_malformed(),
+
+            RecordBuilder(items) => items.is_malformed(),
+
+            Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
+            Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
+            Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
+            Expect(condition, continuation) |
+            Dbg(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
+            UnaryOp(expr, _) => expr.is_malformed(),
+            If(chain, els) => chain.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || els.is_malformed(),
+            When(cond, branches) => cond.is_malformed() || branches.iter().any(|branch| branch.is_malformed()),
+
+            SpaceBefore(expr, _) |
+            SpaceAfter(expr, _) |
+            ParensAround(expr) => expr.is_malformed(),
+
+            MalformedIdent(_, _) |
+            MalformedClosure |
+            PrecedenceConflict(_) |
+            MultipleRecordBuilders(_) |
+            UnappliedRecordBuilder(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for WhenBranch<'a> {
+    fn is_malformed(&self) -> bool {
+        self.patterns.iter().any(|pat| pat.is_malformed())
+            || self.value.is_malformed()
+            || self.guard.map(|g| g.is_malformed()).unwrap_or_default()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for Collection<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.iter().any(|item| item.is_malformed())
+    }
+}
+
+impl<'a> Malformed for StrLiteral<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            StrLiteral::PlainLine(_) => false,
+            StrLiteral::Line(segs) => segs.iter().any(|seg| seg.is_malformed()),
+            StrLiteral::Block(lines) => lines
+                .iter()
+                .any(|segs| segs.iter().any(|seg| seg.is_malformed())),
+        }
+    }
+}
+
+impl<'a> Malformed for StrSegment<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => false,
+            StrSegment::Interpolated(expr) | StrSegment::DeprecatedInterpolated(expr) => {
+                expr.is_malformed()
+            }
+        }
+    }
+}
+
+impl<'a, T: Malformed> Malformed for &'a T {
+    fn is_malformed(&self) -> bool {
+        (*self).is_malformed()
+    }
+}
+
+impl<T: Malformed> Malformed for Loc<T> {
+    fn is_malformed(&self) -> bool {
+        self.value.is_malformed()
+    }
+}
+
+impl<T: Malformed> Malformed for Option<T> {
+    fn is_malformed(&self) -> bool {
+        self.as_ref()
+            .map(|value| value.is_malformed())
+            .unwrap_or_default()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            AssignedField::RequiredValue(_, _, val) | AssignedField::OptionalValue(_, _, val) => {
+                val.is_malformed()
+            }
+            AssignedField::LabelOnly(_) => false,
+            AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
+                field.is_malformed()
+            }
+            AssignedField::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for RecordBuilderField<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            RecordBuilderField::Value(_, _, expr)
+            | RecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
+            RecordBuilderField::LabelOnly(_) => false,
+            RecordBuilderField::SpaceBefore(field, _)
+            | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
+            RecordBuilderField::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for Pattern<'a> {
+    fn is_malformed(&self) -> bool {
+        use Pattern::*;
+
+        match self {
+            Identifier(_) |
+            Tag(_) |
+            OpaqueRef(_) => false,
+            Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
+            RequiredField(_, pat) => pat.is_malformed(),
+            OptionalField(_, expr) => expr.is_malformed(),
+
+            NumLiteral(_) |
+            NonBase10Literal { .. } |
+            Underscore(_) |
+            SingleQuote(_) | // This is just a &str - not a bunch of segments
+            FloatLiteral(_) => false,
+
+            StrLiteral(lit) => lit.is_malformed(),
+            Tuple(items) => items.iter().any(|item| item.is_malformed()),
+            List(items) => items.iter().any(|item| item.is_malformed()),
+            ListRest(_) =>false,
+            As(pat, _) => pat.is_malformed(),
+            SpaceBefore(pat, _) |
+            SpaceAfter(pat, _) => pat.is_malformed(),
+
+            Malformed(_) |
+            MalformedIdent(_, _) |
+            QualifiedIdentifier { .. } => true,
+        }
+    }
+}
+impl<'a> Malformed for Defs<'a> {
+    fn is_malformed(&self) -> bool {
+        self.type_defs.iter().any(|def| def.is_malformed())
+            || self.value_defs.iter().any(|def| def.is_malformed())
+    }
+}
+
+impl<'a> Malformed for TypeDef<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            TypeDef::Alias { header, ann } => header.is_malformed() || ann.is_malformed(),
+            TypeDef::Opaque {
+                header,
+                typ,
+                derived,
+            } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
+            TypeDef::Ability {
+                header,
+                loc_implements,
+                members,
+            } => {
+                header.is_malformed()
+                    || loc_implements.is_malformed()
+                    || members.iter().any(|member| member.is_malformed())
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for AbilityMember<'a> {
+    fn is_malformed(&self) -> bool {
+        self.typ.is_malformed()
+    }
+}
+
+impl<'a> Malformed for Implements<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Implements::Implements => false,
+            Implements::SpaceBefore(has, _) | Implements::SpaceAfter(has, _) => has.is_malformed(),
+        }
+    }
+}
+
+impl<'a> Malformed for ImplementsAbility<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            ImplementsAbility::ImplementsAbility { ability, impls } => {
+                ability.is_malformed() || impls.iter().any(|impl_| impl_.is_malformed())
+            }
+            ImplementsAbility::SpaceBefore(has, _) | ImplementsAbility::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for ImplementsAbilities<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            ImplementsAbilities::Implements(abilities) => {
+                abilities.iter().any(|ability| ability.is_malformed())
+            }
+            ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for AbilityImpls<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            AbilityImpls::AbilityImpls(impls) => impls.iter().any(|ability| ability.is_malformed()),
+            AbilityImpls::SpaceBefore(has, _) | AbilityImpls::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for ValueDef<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            ValueDef::Annotation(pat, annotation) => {
+                pat.is_malformed() || annotation.is_malformed()
+            }
+            ValueDef::Body(pat, expr) => pat.is_malformed() || expr.is_malformed(),
+            ValueDef::AnnotatedBody {
+                ann_pattern,
+                ann_type,
+                comment: _,
+                body_pattern,
+                body_expr,
+            } => {
+                ann_pattern.is_malformed()
+                    || ann_type.is_malformed()
+                    || body_pattern.is_malformed()
+                    || body_expr.is_malformed()
+            }
+            ValueDef::Dbg {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::Expect {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::ExpectFx {
+                condition,
+                preceding_comment: _,
+            } => condition.is_malformed(),
+        }
+    }
+}
+
+impl<'a> Malformed for TypeAnnotation<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            TypeAnnotation::Function(args, ret) => {
+                args.iter().any(|arg| arg.is_malformed()) || ret.is_malformed()
+            }
+            TypeAnnotation::Apply(_, _, args) => args.iter().any(|arg| arg.is_malformed()),
+            TypeAnnotation::BoundVariable(_)
+            | TypeAnnotation::Inferred
+            | TypeAnnotation::Wildcard => false,
+            TypeAnnotation::As(ty, _, head) => ty.is_malformed() || head.is_malformed(),
+            TypeAnnotation::Record { fields, ext } => {
+                fields.iter().any(|field| field.is_malformed())
+                    || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
+            }
+            TypeAnnotation::Tuple { elems: fields, ext } => {
+                fields.iter().any(|field| field.is_malformed())
+                    || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
+            }
+            TypeAnnotation::TagUnion { ext, tags } => {
+                tags.iter().any(|field| field.is_malformed())
+                    || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
+            }
+            TypeAnnotation::Where(ann, clauses) => {
+                ann.is_malformed() || clauses.iter().any(|clause| clause.is_malformed())
+            }
+            TypeAnnotation::SpaceBefore(ty, _) | TypeAnnotation::SpaceAfter(ty, _) => {
+                ty.is_malformed()
+            }
+            TypeAnnotation::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for TypeHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        self.vars.iter().any(|var| var.is_malformed())
+    }
+}
+
+impl<'a> Malformed for Tag<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Tag::Apply { name: _, args } => args.iter().any(|arg| arg.is_malformed()),
+            Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => tag.is_malformed(),
+            Tag::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for ImplementsClause<'a> {
+    fn is_malformed(&self) -> bool {
+        self.abilities.iter().any(|ability| ability.is_malformed())
+    }
+}
+
+impl<'a, T: Malformed> Malformed for Spaced<'a, T> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Spaced::Item(t) => t.is_malformed(),
+            Spaced::SpaceBefore(t, _) | Spaced::SpaceAfter(t, _) => t.is_malformed(),
         }
     }
 }

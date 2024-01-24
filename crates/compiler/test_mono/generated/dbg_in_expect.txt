@@ -1,0 +1,56 @@
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
+
+procedure Inspect.251 (Inspect.252, Inspect.250):
+    let Inspect.327 : Str = "\"";
+    let Inspect.326 : Str = CallByName Inspect.61 Inspect.252 Inspect.327;
+    let Inspect.322 : Str = CallByName Inspect.61 Inspect.326 Inspect.250;
+    let Inspect.323 : Str = "\"";
+    let Inspect.321 : Str = CallByName Inspect.61 Inspect.322 Inspect.323;
+    ret Inspect.321;
+
+procedure Inspect.30 (Inspect.148):
+    ret Inspect.148;
+
+procedure Inspect.34 (Inspect.153):
+    let Inspect.309 : Str = CallByName Inspect.5 Inspect.153;
+    let Inspect.308 : Str = CallByName Inspect.62 Inspect.309;
+    ret Inspect.308;
+
+procedure Inspect.36 (Inspect.305):
+    let Inspect.315 : Str = "";
+    ret Inspect.315;
+
+procedure Inspect.44 (Inspect.250):
+    let Inspect.317 : Str = CallByName Inspect.30 Inspect.250;
+    ret Inspect.317;
+
+procedure Inspect.5 (Inspect.151):
+    let Inspect.316 : Str = CallByName Inspect.44 Inspect.151;
+    let Inspect.313 : {} = Struct {};
+    let Inspect.312 : Str = CallByName Inspect.36 Inspect.313;
+    let Inspect.311 : Str = CallByName Inspect.251 Inspect.312 Inspect.316;
+    ret Inspect.311;
+
+procedure Inspect.61 (Inspect.304, Inspect.300):
+    let Inspect.325 : Str = CallByName Str.3 Inspect.304 Inspect.300;
+    dec Inspect.300;
+    ret Inspect.325;
+
+procedure Inspect.62 (Inspect.306):
+    ret Inspect.306;
+
+procedure Str.3 (#Attr.2, #Attr.3):
+    let Str.251 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.251;
+
+procedure Test.1 ():
+    let Test.4 : Str = "";
+    let Test.0 : Str = CallByName Inspect.34 Test.4;
+    dbg Test.0;
+    dec Test.0;
+    let Test.3 : Int1 = CallByName Bool.2;
+    expect Test.3;
+    let Test.2 : {} = Struct {};
+    ret Test.2;

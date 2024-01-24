@@ -93,8 +93,9 @@ pub fn get_values<'a>(
 mod test {
     use indoc::indoc;
     use pretty_assertions::assert_eq;
+    use roc_error_macros::internal_error;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
-    use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+    use roc_load::{ExecutionMode, FunctionKind, LoadConfig, LoadMonomorphizedError, Threading};
     use roc_packaging::cache::RocCacheDir;
     use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
@@ -112,6 +113,7 @@ mod test {
 
         let opt_level = roc_mono::ir::OptLevel::Normal;
         let target_info = TargetInfo::from(target);
+        let function_kind = FunctionKind::LambdaSet;
 
         // Step 1: compile the app and generate the .o file
         let src_dir = tempfile::tempdir().unwrap();
@@ -121,6 +123,7 @@ mod test {
 
         let load_config = LoadConfig {
             target_info,
+            function_kind,
             render: RenderTarget::ColorTerminal,
             palette: DEFAULT_PALETTE,
             threading: Threading::Single,
@@ -136,9 +139,9 @@ mod test {
         ) {
             Ok(m) => m,
             Err(LoadMonomorphizedError::ErrorModule(m)) => {
-                panic!("{:?}", (m.can_problems, m.type_problems))
+                internal_error!("{:?}", (m.can_problems, m.type_problems))
             }
-            Err(e) => panic!("{e:?}"),
+            Err(e) => internal_error!("{e:?}"),
         };
 
         let mut loaded = loaded;
@@ -199,12 +202,12 @@ mod test {
             let expected = expected.trim_end();
 
             if x != expected {
-                println!("{}", x);
+                println!("{x}");
             }
 
-            assert_eq!(x, expected);
+            assert_eq!(expected, x);
         } else {
-            assert_eq!(actual, expected);
+            assert_eq!(expected, actual);
         }
     }
 
@@ -235,12 +238,12 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│  expect 1 == 2
                     ^^^^^^^^^^^^^
-                "#
+                "
             ),
         );
     }
@@ -262,7 +265,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│>  expect
@@ -278,7 +281,7 @@ mod test {
 
                 b : Num *
                 b = 2
-                "#
+                "
             ),
         );
     }
@@ -377,7 +380,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  5│>  expect
@@ -389,12 +392,12 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                items : List (Num *)
+                items : List (Int Signed64)
                 items = [0, 1]
 
                 expected : Result I64 [OutOfBounds]
                 expected = Ok 42
-                "#
+                "
             ),
         );
     }
@@ -460,7 +463,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│>  expect
@@ -471,12 +474,18 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : U8, y : U8 }
+                vec1 : {
+                    x : U8,
+                    y : U8,
+                }
                 vec1 = { x: 1, y: 2 }
 
-                vec2 : { x : U8, y : U8 }
+                vec2 : {
+                    x : U8,
+                    y : U8,
+                }
                 vec2 = { x: 4, y: 8 }
-                "#
+                "
             ),
         );
     }
@@ -584,7 +593,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : { brillist : Str, utopia : Str }
+                a : {
+                    brillist : Str,
+                    utopia : Str,
+                }
                 a = { brillist: "Profundum et fundamentum", utopia: "Astra mortemque praestare gradatim" }
                 "#
             ),
@@ -657,10 +669,16 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : [Ok Str]
+                a : [
+                    Err Str,
+                    Ok Str,
+                ]
                 a = Ok "Astra mortemque praestare gradatim"
 
-                b : [Err Str]
+                b : [
+                    Err Str,
+                    Ok Str,
+                ]
                 b = Err "Profundum et fundamentum"
                 "#
             ),
@@ -947,12 +965,235 @@ mod test {
     fn issue_i4389() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 expect
                     totalCount = \{} -> 1u8
                     totalCount {} == 96u8
+                "
+            ),
+            indoc!(
+                r"
+                This expectation failed:
+
+                3│>  expect
+                4│>      totalCount = \{} -> 1u8
+                5│>      totalCount {} == 96u8
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn adjacent_lists() {
+        run_expect_test(
+            indoc!(
+                r"
+                interface Test exposes [] imports []
+
+                expect
+                    actual : { headers: List U8, body: List U8, x: List U8 }
+                    actual = {
+                        body: [],
+                        headers: [],
+                        x: [],
+                    }
+
+                    expected : { headers: List U8, body: List U8, x: List U8 }
+                    expected = {
+                        body: [ 42, 43, 44 ],
+                        headers: [15, 16, 17],
+                        x: [115, 116, 117],
+                    }
+                    actual == expected
+                "
+            ),
+            indoc!(
+                r"
+                This expectation failed:
+
+                 3│>  expect
+                 4│>      actual : { headers: List U8, body: List U8, x: List U8 }
+                 5│>      actual = {
+                 6│>          body: [],
+                 7│>          headers: [],
+                 8│>          x: [],
+                 9│>      }
+                10│>
+                11│>      expected : { headers: List U8, body: List U8, x: List U8 }
+                12│>      expected = {
+                13│>          body: [ 42, 43, 44 ],
+                14│>          headers: [15, 16, 17],
+                15│>          x: [115, 116, 117],
+                16│>      }
+                17│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : {
+                    body : List (Int Unsigned8),
+                    headers : List (Int Unsigned8),
+                    x : List (Int Unsigned8),
+                }
+                actual = { body: [], headers: [], x: [] }
+
+                expected : {
+                    body : List (Int Unsigned8),
+                    headers : List (Int Unsigned8),
+                    x : List (Int Unsigned8),
+                }
+                expected = { body: [42, 43, 44], headers: [15, 16, 17], x: [115, 116, 117] }
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn record_field_ordering() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                Request : {
+                    fieldA : [Get, Post],
+                    fieldB : Str,
+                }
+
+                expect
+
+                    actual : Request
+                    actual = {
+                        fieldA: Get,
+                        fieldB: "/things?id=2",
+                    }
+
+                    expected : Request
+                    expected = {
+                        fieldA: Get,
+                        fieldB: "/things?id=1",
+                    }
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 8│>  expect
+                 9│>
+                10│>      actual : Request
+                11│>      actual = {
+                12│>          fieldA: Get,
+                13│>          fieldB: "/things?id=2",
+                14│>      }
+                15│>
+                16│>      expected : Request
+                17│>      expected = {
+                18│>          fieldA: Get,
+                19│>          fieldB: "/things?id=1",
+                20│>      }
+                21│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : Request
+                actual = { fieldA: Get, fieldB: "/things?id=2" }
+
+                expected : Request
+                expected = { fieldA: Get, fieldB: "/things?id=1" }
+
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn tag_payloads_of_different_size() {
+        run_expect_test(
+            indoc!(
+                r"
+                interface Test exposes [] imports []
+
+                actual : [Leftover (List U8), TooShort]
+                actual = Leftover [49, 93]
+
+                expect
+                    expected : [Leftover (List U8), TooShort]
+                    expected = TooShort
+
+                    actual == expected
+                "
+            ),
+            indoc!(
+                r"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      expected : [Leftover (List U8), TooShort]
+                 8│>      expected = TooShort
+                 9│>
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                expected : [
+                    Leftover (List U8),
+                    TooShort,
+                ]
+                expected = TooShort
+                "
+            ),
+        );
+    }
+
+    #[test]
+    fn extra_offset_in_tag_union() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                actual : Result Str U64
+                actual = Err 1
+
+                expect
+                    expected : Result Str U64
+                    expected = Ok "foobar"
+
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      expected : Result Str U64
+                 8│>      expected = Ok "foobar"
+                 9│>
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                expected : Result Str U64
+                expected = Ok "foobar"
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn tuple_access() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    t = ("One", "Two")
+                    t.1 == "One"
                 "#
             ),
             indoc!(
@@ -960,9 +1201,55 @@ mod test {
                 This expectation failed:
 
                 3│>  expect
-                4│>      totalCount = \{} -> 1u8
-                5│>      totalCount {} == 96u8
+                4│>      t = ("One", "Two")
+                5│>      t.1 == "One"
+
+                When it failed, these variables had these values:
+
+                t : (
+                    Str,
+                    Str,
+                )a
+                t = ("One", "Two")
                 "#
+            ),
+        );
+    }
+
+    #[test]
+    fn match_on_opaque_number_type() {
+        run_expect_test(
+            indoc!(
+                r"
+                interface Test exposes [] imports []
+
+                hexToByte : U8, U8 -> U8
+                hexToByte = \upper, lower ->
+                    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
+
+                expect
+                    actual = hexToByte 7 4
+                    expected = 't'
+                    actual == expected
+                "
+            ),
+            indoc!(
+                r"
+                This expectation failed:
+
+                 7│>  expect
+                 8│>      actual = hexToByte 7 4
+                 9│>      expected = 't'
+                10│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : U8
+                actual = 4
+
+                expected : Int Unsigned8
+                expected = 116
+                "
             ),
         );
     }

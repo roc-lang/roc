@@ -7,10 +7,10 @@ The flake in this folder is meant for vscode, feel free to create a PR if you'li
 
 Further steps:
 
-1. Copy the flake.nix and flake.lock file to a new folder outside of the roc repo folder.
+1. Copy the flake.nix and flake.lock file from the devtools folder to a new folder outside of the roc repo folder.
 1. Run `git init` in the new folder.
-1. Execute `git add flake.nix`, nix will error if you don't do this.
-1. Change `roc.url = "path:/home/username/gitrepos/roc1/roc";` to the location of the roc folder on your machine.
+1. Execute `git add flake.nix flake.lock`, nix will error if you don't do this.
+1. Change `roc.url = "path:/home/username/gitrepos/roc";` to the location of the roc folder on your machine.
 1. Follow instructions about vscode extensions [here](#extensions).
 1. add other dev tools you like in the `devInputs` list. You can search for those [here](https://search.nixos.org/packages).
 1. Run `nix develop`.
@@ -31,7 +31,7 @@ eval "$(lorri direnv --shell-file path-to-your-dev-flake-folder/shell.nix)"
 
 ## Extensions
 
-### for those we have some Nix experience
+### for those who have some Nix experience
 
 Add vscode extensions you want to use below `vscodeExtensions = ...`. You can search for extension names [here](https://search.nixos.org/packages?channel=22.05&from=0&size=50&sort=relevance&type=packages&query=vscode-extensions+extensionYouAreSearchingFor). You may not be able to install extensions through the UI in vscode, I'd recommend always adding them to the flake. If you are inside a `nix develop` shell, run `exit` and `nix develop path-to-your-dev-flake-folder` to be able to run vscode with the newly added extensions.
 

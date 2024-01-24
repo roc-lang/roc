@@ -21,11 +21,15 @@ void roc_panic(void* ptr, unsigned int alignment) {
   char* msg = (char*)ptr;
   fprintf(stderr,
           "Application crashed with message\n\n    %s\n\nShutting down\n", msg);
-  exit(0);
+  exit(1);
 }
 
-void* roc_memcpy(void* dest, const void* src, size_t n) {
-  return memcpy(dest, src, n);
+void roc_dbg(char* loc, char* msg, char* src) {
+  fprintf(stderr, "[%s] %s = %s\n", loc, src, msg);
+}
+
+void* roc_memmove(void* dest, const void* src, size_t n){
+  return memmove(dest, src, n);
 }
 
 void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }

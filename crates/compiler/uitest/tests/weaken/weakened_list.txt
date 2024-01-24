@@ -1,0 +1,4 @@
+app "test" provides [main] to "./platform"
+
+main = []
+#^^^^{-1} List w_a

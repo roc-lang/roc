@@ -247,3 +247,48 @@ fn test_f64reinterpreti64() {
         Value::F64(0.01171875),
     );
 }
+
+#[test]
+fn test_i32extend8s() {
+    test_op_example(
+        I32EXTEND8S,
+        [Value::from(0xFFu32 as i32)],
+        Value::I32(0xFFFFFFFFu32 as i32),
+    )
+}
+
+#[test]
+fn test_i32extend16s() {
+    test_op_example(
+        I32EXTEND16S,
+        [Value::from(0xFFFFu32)],
+        Value::I32(0xFFFFFFFFu32 as i32),
+    )
+}
+
+#[test]
+fn test_i64extend8s() {
+    test_op_example(
+        I64EXTEND8S,
+        [Value::from(0xFFu64 as i64)],
+        Value::I64(u64::MAX as i64),
+    )
+}
+
+#[test]
+fn test_i64extend16s() {
+    test_op_example(
+        I64EXTEND16S,
+        [Value::from(0xFFFFu64 as i64)],
+        Value::I64(u64::MAX as i64),
+    )
+}
+
+#[test]
+fn test_i64extend32s() {
+    test_op_example(
+        I64EXTEND32S,
+        [Value::from(0xFFFFFFFFu64 as i64)],
+        Value::I64(u64::MAX as i64),
+    )
+}

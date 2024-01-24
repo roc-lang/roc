@@ -2,9 +2,13 @@ use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
+use roc_mono::ir::CrashTag;
 use roc_mono::ir::SingleEntryPoint;
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
+use roc_solve::FunctionKind;
+use roc_std::RocStr;
+use std::mem::MaybeUninit;
 use tempfile::tempdir;
 
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
@@ -58,6 +62,7 @@ pub fn helper(
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
+        function_kind: FunctionKind::LambdaSet,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
@@ -103,7 +108,7 @@ pub fn helper(
         // println!("=================================\n");
     }
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    debug_assert_eq!(exposed_to_host.top_level_values.len(), 1);
     let entry_point = match loaded.entry_point {
         EntryPoint::Executable {
             exposed_to_host,
@@ -188,9 +193,9 @@ pub fn helper(
     let env = roc_gen_dev::Env {
         arena,
         module_id,
-        exposed_to_host: exposed_to_host.values.keys().copied().collect(),
+        exposed_to_host: exposed_to_host.top_level_values.keys().copied().collect(),
         lazy_literals,
-        generate_allocators: true, // Needed for testing, since we don't have a platform
+        mode: roc_gen_dev::AssemblyBackendMode::Test,
     };
 
     let target = target_lexicon::Triple::host();
@@ -208,7 +213,13 @@ pub fn helper(
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
     let builtins_host_tempfile =
-        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+        roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
+
+    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
+        let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
+        std::fs::copy(&app_o_file, file_path).unwrap();
+    }
 
     let (mut child, dylib_path) = link(
         &target,
@@ -239,10 +250,138 @@ pub fn helper(
     (main_fn_name, delayed_errors, lib)
 }
 
+#[derive(Debug)]
+#[repr(C)]
+pub struct RocCallResult<T> {
+    pub tag: u64,
+    pub error_msg: *mut RocStr,
+    pub value: MaybeUninit<T>,
+}
+
+impl<T> RocCallResult<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            tag: 0,
+            error_msg: std::ptr::null_mut(),
+            value: MaybeUninit::new(value),
+        }
+    }
+}
+
+impl<T: Default> Default for RocCallResult<T> {
+    fn default() -> Self {
+        Self {
+            tag: 0,
+            error_msg: std::ptr::null_mut(),
+            value: MaybeUninit::new(Default::default()),
+        }
+    }
+}
+
+impl<T> RocCallResult<T> {
+    pub fn into_result(self) -> Result<T, (String, CrashTag)> {
+        match self.tag {
+            0 => Ok(unsafe { self.value.assume_init() }),
+            n => Err({
+                let mut msg = RocStr::default();
+
+                unsafe { std::ptr::swap(&mut msg, self.error_msg) };
+
+                let tag = (n - 1) as u32;
+                let tag = tag
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("received illegal tag: {tag} {msg}"));
+
+                (msg.as_str().to_owned(), tag)
+            }),
+        }
+    }
+}
+
+fn get_raw_fn<'a, T>(
+    fn_name: &str,
+    lib: &'a libloading::Library,
+) -> libloading::Symbol<'a, unsafe extern "C" fn() -> T> {
+    unsafe {
+        lib.get(fn_name.as_bytes())
+            .ok()
+            .ok_or(format!("Unable to JIT compile `{fn_name}`"))
+            .expect("errored")
+    }
+}
+
+fn get_test_main_fn<T>(
+    lib: &libloading::Library,
+) -> libloading::Symbol<unsafe extern "C" fn() -> RocCallResult<T>> {
+    get_raw_fn("test_main", lib)
+}
+
+pub(crate) fn run_test_main<T>(lib: &libloading::Library) -> Result<T, (String, CrashTag)> {
+    let main = get_test_main_fn::<T>(lib);
+
+    let result = unsafe { main() };
+
+    result.into_result()
+}
+
+impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
+    fn from(call_result: RocCallResult<T>) -> Self {
+        call_result.into_result()
+    }
+}
+
+// only used in tests
+pub(crate) fn asm_evals_to<T, U, F>(
+    src: &str,
+    expected: U,
+    transform: F,
+    leak: bool,
+    lazy_literals: bool,
+) where
+    U: PartialEq + std::fmt::Debug,
+    F: FnOnce(T) -> U,
+{
+    use bumpalo::Bump;
+
+    let arena = Bump::new();
+    let (_main_fn_name, errors, lib) =
+        crate::helpers::dev::helper(&arena, src, leak, lazy_literals);
+
+    let result = crate::helpers::dev::run_test_main::<T>(&lib);
+
+    if !errors.is_empty() {
+        dbg!(&errors);
+
+        assert_eq!(
+            errors,
+            std::vec::Vec::new(),
+            "Encountered errors: {:?}",
+            errors
+        );
+    }
+
+    match result {
+        Ok(value) => {
+            let expected = expected;
+            #[allow(clippy::redundant_closure_call)]
+            let given = transform(value);
+            assert_eq!(&given, &expected, "output is different");
+        }
+        Err((msg, tag)) => match tag {
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+            CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+        },
+    }
+}
+
+pub(crate) fn identity<T>(x: T) -> T {
+    x
+}
+
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, (|val| val));
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::dev::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
@@ -260,19 +399,13 @@ macro_rules! assert_evals_to {
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
-        use bumpalo::Bump;
-        use roc_gen_dev::run_jit_function_raw;
-
-        let arena = Bump::new();
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
-
-        let transform = |success| {
-            let expected = $expected;
-            let given = $transform(success);
-            assert_eq!(&given, &expected);
-        };
-        run_jit_function_raw!(lib, main_fn_name, $ty, transform, errors)
+        $crate::helpers::dev::asm_evals_to::<$ty, _, _>(
+            $src,
+            $expected,
+            $transform,
+            $leak,
+            $lazy_literals,
+        );
     };
 }
 

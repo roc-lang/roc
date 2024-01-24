@@ -1,4 +1,4 @@
-use roc_utils::zig;
+use roc_command_utils::zig;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -24,7 +24,7 @@ fn main() {
             "--global-cache-dir",
             zig_cache_dir.to_str().unwrap(),
             "src/dummy.c",
-            &format!("-femit-bin={}/dummy.wasm", out_dir),
+            &format!("-femit-bin={out_dir}/dummy.wasm"),
         ])
         .output()
         .unwrap();
@@ -33,12 +33,12 @@ fn main() {
         .unwrap()
         .unwrap();
 
-    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("compiler_rt.o"))
+    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("libcompiler_rt.a"))
         .unwrap()
         .unwrap();
 
     // Copy libc to where Cargo expects the output of this crate
-    fs::copy(&libc_path, &out_file).unwrap();
+    fs::copy(libc_path, &out_file).unwrap();
 
     println!(
         "cargo:rustc-env=WASI_LIBC_PATH={}",

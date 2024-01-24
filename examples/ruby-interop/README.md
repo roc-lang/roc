@@ -17,7 +17,7 @@ Make sure you have the right versions of Ruby and Clang especially! This example
 First, `cd` into this directory and run this in your terminal:
 
 ```sh
-roc build --lib
+roc build --lib libhello.roc
 ```
 
 This compiles your Roc code into a binary library in the current directory. The library's filename will be `libhello` plus an OS-specific extension (e.g. `libhello.dylib` on macOS).

@@ -5,6 +5,7 @@ interface Html
         render,
         renderWithoutDocType,
         element,
+        unclosedElem,
         text,
         attribute,
         html,
@@ -123,7 +124,11 @@ interface Html
     ]
     imports [Html.Attributes]
 
-Node : [Text Str, Element Str Nat (List Attribute) (List Node)]
+Node : [
+    Text Str,
+    Element Str Nat (List Attribute) (List Node),
+    UnclosedElem Str Nat (List Attribute),
+]
 
 Attribute : Html.Attributes.Attribute
 
@@ -156,6 +161,16 @@ element = \tagName ->
 
         Element tagName totalSize attrs children
 
+unclosedElem : Str -> (List Attribute -> Node)
+unclosedElem = \tagName ->
+    \attrs ->
+        # While building the node tree, calculate the size of Str it will render to
+        withTag = 2 * (3 + Str.countUtf8Bytes tagName)
+        totalSize = List.walk attrs withTag \acc, Attribute name val ->
+            acc + Str.countUtf8Bytes name + Str.countUtf8Bytes val + 4
+
+        UnclosedElem tagName totalSize attrs
+
 # internal helper
 nodeSize : Node -> Nat
 nodeSize = \node ->
@@ -163,7 +178,7 @@ nodeSize = \node ->
         Text content ->
             Str.countUtf8Bytes content
 
-        Element _ size _ _ ->
+        Element _ size _ _ | UnclosedElem _ size _ ->
             size
 
 ## Render a Node to an HTML string
@@ -204,6 +219,14 @@ renderHelp = \buffer, node ->
 
             "\(withChildren)</\(tagName)>"
 
+        UnclosedElem tagName _ attrs ->
+            if List.isEmpty attrs then
+                "\(buffer)<\(tagName)>"
+            else
+                attrs
+                |> List.walk "\(buffer)<\(tagName) " renderAttr
+                |> Str.concat ">"
+
 # internal helper
 renderAttr : Str, Attribute -> Str
 renderAttr = \buffer, Attribute key val ->
@@ -215,8 +238,8 @@ html = element "html"
 # Document metadata
 base = element "base"
 head = element "head"
-link = element "link"
-meta = element "meta"
+link = unclosedElem "link"
+meta = unclosedElem "meta"
 style = element "style"
 title = element "title"
 
@@ -289,7 +312,7 @@ wbr = element "wbr"
 # Image and multimedia
 area = element "area"
 audio = element "audio"
-img = element "img"
+img = unclosedElem "img"
 map = element "map"
 track = element "track"
 video = element "video"

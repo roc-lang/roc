@@ -1,0 +1,12 @@
+app "test" provides [main] to "./platform"
+
+Default implements default : {} -> a where a implements Default
+
+A := {} implements [Default {default}]
+default = \{} -> @A {}
+
+main =
+    a : A
+    a = default {}
+#       ^^^^^^^ A#default(4): {} -[[default(4)]]-> A
+    a

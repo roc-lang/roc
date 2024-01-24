@@ -3,7 +3,7 @@ use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_region::all::Position;
+use roc_region::all::{Position, Region};
 
 /// A tag, for example. Must start with an uppercase letter
 /// and then contain only letters and numbers afterwards - no dots allowed!
@@ -41,12 +41,10 @@ pub enum Ident<'a> {
     /// foo or foo.bar or Foo.Bar.baz.qux
     Access {
         module_name: &'a str,
-        parts: &'a [&'a str],
+        parts: &'a [Accessor<'a>],
     },
-    /// .foo { foo: 42 }
-    RecordAccessorFunction(&'a str),
-    /// .1 (1, 2, 3)
-    TupleAccessorFunction(&'a str),
+    /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
+    AccessorFunction(Accessor<'a>),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
 }
@@ -71,8 +69,7 @@ impl<'a> Ident<'a> {
 
                 len - 1
             }
-            RecordAccessorFunction(string) => string.len(),
-            TupleAccessorFunction(string) => string.len(),
+            AccessorFunction(string) => string.len(),
             Malformed(string, _) => string.len(),
         }
     }
@@ -197,7 +194,7 @@ pub fn parse_ident<'a>(
                 if module_name.is_empty() {
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
-                            if first == keyword {
+                            if first == &Accessor::RecordField(keyword) {
                                 return Err((NoProgress, EExpr::Start(initial.pos())));
                             }
                         }
@@ -257,13 +254,21 @@ pub enum BadIdent {
     Start(Position),
     Space(BadInputError, Position),
 
-    Underscore(Position),
+    UnderscoreAlone(Position),
+    UnderscoreInMiddle(Position),
+    UnderscoreAtStart {
+        position: Position,
+        /// If this variable was already declared in a pattern (e.g. \_x -> _x),
+        /// then this is where it was declared.
+        declaration_region: Option<Region>,
+    },
     QualifiedTag(Position),
     WeirdAccessor(Position),
     WeirdDotAccess(Position),
     WeirdDotQualified(Position),
     StrayDot(Position),
     BadOpaqueRef(Position),
+    QualifiedTupleAccessor(Position),
 }
 
 fn is_alnum(ch: char) -> bool {
@@ -288,6 +293,10 @@ fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
         |ch| char::is_ascii_digit(&ch),
         buffer,
     )
+}
+
+fn is_plausible_ident_continue(ch: char) -> bool {
+    ch == '_' || is_alnum(ch)
 }
 
 #[inline(always)]
@@ -317,6 +326,15 @@ where
         }
     }
 
+    if let Ok((next, _width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        // This would mean we have e.g.:
+        // * identifier followed by a _
+        // * an integer followed by an alphabetic char
+        if is_plausible_ident_continue(next) {
+            return Err(NoProgress);
+        }
+    }
+
     if chomped == 0 {
         Err(NoProgress)
     } else {
@@ -326,9 +344,30 @@ where
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Accessor<'a> {
     RecordField(&'a str),
     TupleIndex(&'a str),
+}
+
+impl<'a> Accessor<'a> {
+    pub fn len(&self) -> usize {
+        match self {
+            Accessor::RecordField(name) => name.len(),
+            Accessor::TupleIndex(name) => name.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() > 0
+    }
+
+    pub fn as_inner(&self) -> &'a str {
+        match self {
+            Accessor::RecordField(name) => name,
+            Accessor::TupleIndex(name) => name,
+        }
+    }
 }
 
 /// a `.foo` or `.1` accessor function
@@ -402,13 +441,9 @@ fn chomp_identifier_chain<'a>(
     match char::from_utf8_slice_start(&buffer[chomped..]) {
         Ok((ch, width)) => match ch {
             '.' => match chomp_accessor(&buffer[1..], pos) {
-                Ok(Accessor::RecordField(accessor)) => {
+                Ok(accessor) => {
                     let bytes_parsed = 1 + accessor.len();
-                    return Ok((bytes_parsed as u32, Ident::RecordAccessorFunction(accessor)));
-                }
-                Ok(Accessor::TupleIndex(accessor)) => {
-                    let bytes_parsed = 1 + accessor.len();
-                    return Ok((bytes_parsed as u32, Ident::TupleAccessorFunction(accessor)));
+                    return Ok((bytes_parsed as u32, Ident::AccessorFunction(accessor)));
                 }
                 Err(fail) => return Err((1, fail)),
             },
@@ -461,11 +496,18 @@ fn chomp_identifier_chain<'a>(
 
         if !first_is_uppercase {
             let first_part = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-            parts.push(first_part);
+            parts.push(Accessor::RecordField(first_part));
         }
 
         match chomp_access_chain(&buffer[chomped..], &mut parts) {
             Ok(width) => {
+                if matches!(parts[0], Accessor::TupleIndex(_)) && first_is_uppercase {
+                    return Err((
+                        chomped as u32,
+                        BadIdent::QualifiedTupleAccessor(pos.bump_column(chomped as u32)),
+                    ));
+                }
+
                 chomped += width as usize;
 
                 let ident = Ident::Access {
@@ -494,7 +536,7 @@ fn chomp_identifier_chain<'a>(
         // to give good error messages for this case
         Err((
             chomped as u32 + 1,
-            BadIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
+            BadIdent::UnderscoreInMiddle(pos.bump_column(chomped as u32 + 1)),
         ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a tag
@@ -505,7 +547,7 @@ fn chomp_identifier_chain<'a>(
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
         let ident = Ident::Access {
             module_name: "",
-            parts: arena.alloc([value]),
+            parts: arena.alloc([Accessor::RecordField(value)]),
         };
         Ok((chomped as u32, ident))
     }
@@ -578,7 +620,7 @@ fn chomp_concrete_type(buffer: &[u8]) -> Result<(&str, &str, usize), Progress> {
     }
 }
 
-fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Result<u32, u32> {
+fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, Accessor<'a>>) -> Result<u32, u32> {
     let mut chomped = 0;
 
     while let Some(b'.') = buffer.get(chomped) {
@@ -590,11 +632,23 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Res
                             &buffer[chomped + 1..chomped + 1 + name.len()],
                         )
                     };
-                    parts.push(value);
+                    parts.push(Accessor::RecordField(value));
 
                     chomped += name.len() + 1;
                 }
-                Err(_) => return Err(chomped as u32 + 1),
+                Err(_) => match chomp_integer_part(slice) {
+                    Ok(name) => {
+                        let value = unsafe {
+                            std::str::from_utf8_unchecked(
+                                &buffer[chomped + 1..chomped + 1 + name.len()],
+                            )
+                        };
+                        parts.push(Accessor::TupleIndex(value));
+
+                        chomped += name.len() + 1;
+                    }
+                    Err(_) => return Err(chomped as u32 + 1),
+                },
             },
             None => return Err(chomped as u32 + 1),
         }

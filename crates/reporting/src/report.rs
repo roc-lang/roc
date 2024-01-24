@@ -1,11 +1,16 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use roc_module::symbol::{Interns, ModuleId, PQModuleName, PackageQualified, Symbol};
+use roc_module::symbol::{Interns, ModuleId, ModuleIds, PQModuleName, PackageQualified, Symbol};
 use roc_problem::Severity;
 use roc_region::all::LineColumnRegion;
-use std::fmt;
 use std::path::{Path, PathBuf};
-use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
+use std::{fmt, io};
+use ven_pretty::{text, BoxAllocator, DocAllocator, DocBuilder, Render, RenderAnnotated};
+
+#[cfg(not(target_family = "wasm"))]
+use byte_unit::Byte;
+#[cfg(not(target_family = "wasm"))]
+use roc_packaging::https::Problem;
 
 pub use crate::error::canonicalize::can_problem;
 pub use crate::error::parse::parse_problem;
@@ -77,9 +82,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     .to_str()
     .unwrap();
 
+    let additional_path_display = "in";
+    let additional_path_display_width = additional_path_display.len() + 1;
     let title_width = title.len() + 4;
-    let relative_path_width = relative_path.len() + 3;
-    let available_path_width = HEADER_WIDTH - title_width - 1;
+    let relative_path_width = relative_path.len() + 1;
+    let available_path_width = HEADER_WIDTH - title_width - additional_path_display_width - 1;
 
     // If path is too long to fit in 80 characters with everything else then truncate it
     let path_width = relative_path_width.min(available_path_width);
@@ -91,10 +98,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     };
 
     let header = format!(
-        "── {} {} {} ─",
+        "── {} {} {} {}",
         title,
-        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
-        path
+        additional_path_display,
+        path,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width + additional_path_display_width))
     );
 
     header
@@ -129,7 +137,7 @@ impl<'b> Report<'b> {
     }
 
     /// Render to CI console output, where no colors are available.
-    pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
+    pub fn render_ci(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
         self.pretty(alloc)
@@ -183,6 +191,7 @@ pub struct Palette {
     pub primary: &'static str,
     pub code_block: &'static str,
     pub keyword: &'static str,
+    pub ellipsis: &'static str,
     pub variable: &'static str,
     pub type_variable: &'static str,
     pub structure: &'static str,
@@ -209,6 +218,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         primary: codes.white,
         code_block: codes.white,
         keyword: codes.green,
+        ellipsis: codes.green,
         variable: codes.blue,
         type_variable: codes.yellow,
         structure: codes.green,
@@ -234,6 +244,7 @@ pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE
 pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
 
 /// A machine-readable format for text styles (colors and other styles)
+#[derive(Debug, PartialEq)]
 pub struct StyleCodes {
     pub red: &'static str,
     pub green: &'static str,
@@ -359,6 +370,10 @@ impl<'a> RocDocAllocator<'a> {
         self.text(string).annotate(Annotation::Keyword)
     }
 
+    pub fn ellipsis(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("…").annotate(Annotation::Ellipsis)
+    }
+
     pub fn parser_suggestion(&'a self, string: &'a str) -> DocBuilder<'a, Self, Annotation> {
         self.text(string).annotate(Annotation::ParserSuggestion)
     }
@@ -387,27 +402,28 @@ impl<'a> RocDocAllocator<'a> {
             self.text(symbol.as_str(self.interns))
                 .annotate(Annotation::Symbol)
         } else {
-            self.text(format!(
+            text!(
+                self,
                 "{}.{}",
                 symbol.module_string(self.interns),
                 symbol.as_str(self.interns),
-            ))
+            )
             .annotate(Annotation::Symbol)
         }
     }
     pub fn symbol_qualified(&'a self, symbol: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!(
+        text!(
+            self,
             "{}.{}",
             symbol.module_string(self.interns),
             symbol.as_str(self.interns),
-        ))
+        )
         .annotate(Annotation::Symbol)
     }
 
     /// TODO: remove in favor of tag_name
     pub fn tag(&'a self, uppercase: Uppercase) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", uppercase))
-            .annotate(Annotation::Tag)
+        text!(self, "{}", uppercase).annotate(Annotation::Tag)
     }
 
     pub fn opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
@@ -426,15 +442,17 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn wrapped_opaque_name(&'a self, opaque: Symbol) -> DocBuilder<'a, Self, Annotation> {
-        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {:?}", opaque);
+        debug_assert_eq!(opaque.module_id(), self.home, "Opaque wrappings can only be defined in the same module they're defined in, but this one is defined elsewhere: {opaque:?}");
 
-        self.text(format!("@{}", opaque.as_str(self.interns)))
-            .annotate(Annotation::Opaque)
+        text!(self, "@{}", opaque.as_str(self.interns)).annotate(Annotation::Opaque)
     }
 
     pub fn record_field(&'a self, lowercase: Lowercase) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!(".{}", lowercase))
-            .annotate(Annotation::RecordField)
+        text!(self, ".{}", lowercase).annotate(Annotation::RecordField)
+    }
+
+    pub fn tuple_field(&'a self, index: usize) -> DocBuilder<'a, Self, Annotation> {
+        text!(self, ".{}", index).annotate(Annotation::TupleElem)
     }
 
     pub fn module(&'a self, module_id: ModuleId) -> DocBuilder<'a, Self, Annotation> {
@@ -459,14 +477,13 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn module_name(&'a self, name: ModuleName) -> DocBuilder<'a, Self, Annotation> {
-        let name = if name.is_empty() {
+        if name.is_empty() {
             // Render the app module as "app"
-            "app".to_string()
+            self.text("app")
         } else {
-            name.as_str().to_string()
-        };
-
-        self.text(name).annotate(Annotation::Module)
+            self.text(name.as_str().to_string())
+        }
+        .annotate(Annotation::Module)
     }
 
     pub fn binop(
@@ -474,6 +491,13 @@ impl<'a> RocDocAllocator<'a> {
         content: roc_module::called_via::BinOp,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
+    }
+
+    pub fn unop(
+        &'a self,
+        content: roc_module::called_via::UnaryOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
     }
 
     /// Turns off backticks/colors in a block
@@ -661,7 +685,15 @@ impl<'a> RocDocAllocator<'a> {
             let line_number = line_number_string;
             let this_line_number_length = line_number.len();
 
-            let line: &str = self.src_lines.get(i as usize).unwrap_or(&"");
+            // filter out any escape characters for the current line that could mess up the output.
+            let line: String = self
+                .src_lines
+                .get(i as usize)
+                .unwrap_or(&"")
+                .chars()
+                .filter(|&c| !c.is_ascii_control() || c == '\t')
+                .collect::<String>();
+
             let is_line_empty = line.trim().is_empty();
             let rest_of_line = if !is_line_empty {
                 self.text(line)
@@ -769,8 +801,7 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn ident(&'a self, ident: Ident) -> DocBuilder<'a, Self, Annotation> {
-        self.text(format!("{}", ident.as_inline_str()))
-            .annotate(Annotation::Symbol)
+        text!(self, "{}", ident.as_inline_str()).annotate(Annotation::Symbol)
     }
 
     pub fn int_literal<I>(&'a self, int: I) -> DocBuilder<'a, Self, Annotation>
@@ -812,14 +843,17 @@ pub enum Annotation {
     Emphasized,
     Url,
     Keyword,
+    Ellipsis,
     Tag,
     RecordField,
+    TupleElem,
     TypeVariable,
     Alias,
     Opaque,
     Structure,
     Symbol,
     BinOp,
+    UnaryOp,
     Error,
     GutterBar,
     LineNumber,
@@ -1004,11 +1038,17 @@ where
             BinOp => {
                 self.write_str(self.palette.alias)?;
             }
+            UnaryOp => {
+                self.write_str(self.palette.alias)?;
+            }
             Symbol => {
                 self.write_str(self.palette.variable)?;
             }
             Keyword => {
                 self.write_str(self.palette.keyword)?;
+            }
+            Ellipsis => {
+                self.write_str(self.palette.ellipsis)?;
             }
             GutterBar => {
                 self.write_str(self.palette.gutter_bar)?;
@@ -1037,7 +1077,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | InlineTypeBlock | Tag | RecordField => { /* nothing yet */ }
+            TypeBlock | InlineTypeBlock | Tag | RecordField | TupleElem => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1049,15 +1089,588 @@ where
         match self.style_stack.pop() {
             None => {}
             Some(annotation) => match annotation {
-                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock | PlainText
-                | LineNumber | Tip | Module | Header | Keyword => {
+                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | UnaryOp | Error
+                | GutterBar | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure
+                | CodeBlock | PlainText | LineNumber | Tip | Module | Header | Keyword => {
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | TupleElem => { /* nothing yet */
+                }
             },
         }
         Ok(())
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn to_https_problem_report_string(
+    url: &str,
+    https_problem: Problem,
+    filename: PathBuf,
+) -> String {
+    let src_lines: Vec<&str> = Vec::new();
+
+    let mut module_ids = ModuleIds::default();
+
+    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
+
+    let interns = Interns::default();
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    let report = to_https_problem_report(&alloc, url, https_problem, filename);
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    buf
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn to_https_problem_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    url: &'b str,
+    https_problem: Problem,
+    filename: PathBuf,
+) -> Report<'b> {
+    match https_problem {
+        Problem::UnsupportedEncoding(not_supported_encoding) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
+                alloc.concat([
+                    alloc.reflow(r"But the server replied with a "),
+                    alloc.reflow(r"content encoding").annotate(Annotation::Emphasized),
+                    alloc.reflow(r" that I do not understand ("),
+                    alloc.string(not_supported_encoding).annotate(Annotation::Emphasized),
+                    alloc.reflow(r")."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported content encodings are "),
+                    alloc.keyword(r"br"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r"gzip"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r"deflate"),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Perhaps you can check if the URL is correctly formed, or if the server is correctly configured."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNSUPPORTED ENCODING".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::MultipleEncodings(multiple_encodings) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
+                alloc.concat([
+                    alloc.reflow(r"But the server replied with multiple "),
+                    alloc.reflow(r"content encodings").annotate(Annotation::Emphasized),
+                    alloc.reflow(r": "),
+                    alloc.string(multiple_encodings).annotate(Annotation::Emphasized),
+                    alloc.reflow(r"."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported content encodings are "),
+                    alloc.keyword(r"br"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r"gzip"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r"deflate"),
+                    alloc.reflow(r". However, the server reply can only contain "),
+                    alloc.reflow(r"one").annotate(Annotation::Emphasized),
+                    alloc.reflow(r"."),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Perhaps you can check if the URL is correctly formed, or if the server is correctly configured."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MULTIPLE ENCODINGS".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidContentHash { expected, actual } => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I was able to download this URL:"),
+                alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I use a mechanism to detect if the file might "),
+                    alloc.reflow(r"have been tampered with. This could happen if "),
+                    alloc.reflow(r"the server or domain have been compromised."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"This is the content signature I was "),
+                    alloc.reflow(r"expecting").annotate(Annotation::Emphasized),
+                    alloc.reflow(r":"),
+                ]),
+                alloc.string(expected).annotate(Annotation::PlainText).indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this is the content signature I "),
+                    alloc.reflow(r"obtained").annotate(Annotation::Emphasized),
+                    alloc.reflow(r":"),
+                ]),
+                alloc.string(actual).annotate(Annotation::PlainText).indent(4),
+                alloc.reflow(r"To keep you secure, I will not execute this untrusted code."),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check if the URL is correctly formed and if this is the server you are expecting to connect to."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID CONTENT HASH".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::NotFound => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([alloc.reflow(r"But the file was not found (404).")]),
+                alloc.concat([alloc.tip(), alloc.reflow(r"Is the URL correct?")]),
+            ]);
+            Report {
+                filename,
+                doc,
+                title: "NOTFOUND".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
+        Problem::IoErr(io_error) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.reflow(r"But I encountered an IO (input/output) error:"),
+                alloc
+                    .string(io_error.to_string())
+                    .annotate(Annotation::PlainText)
+                    .indent(4),
+                // TODO: What should the tip for IO errors be?
+                // alloc.concat([
+                //     alloc.tip(),
+                //     alloc.reflow(r"Check the error message."),
+                // ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "IO ERROR".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
+        Problem::FsExtraErr(fs_extra_error) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.reflow(r"But I encountered an IO (input/output) error:"),
+                alloc
+                    .string(fs_extra_error.to_string())
+                    .annotate(Annotation::PlainText)
+                    .indent(4),
+                // TODO: What should the tip for IO errors be?
+                // alloc.concat([
+                //     alloc.tip(),
+                //     alloc.reflow(r"Check the error message."),
+                // ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "IO ERROR".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::HttpErr(reqwest_error) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.reflow(r"But I encountered a network error:"),
+                alloc
+                    .string(reqwest_error.to_string())
+                    .annotate(Annotation::PlainText)
+                    .indent(4),
+                // TODO: What should the tip for HTTP IO errors be?
+                // Should we import reqwest and check stuff like
+                // reqwest_error.{ is_redirect(), is_status(), is_timeout(), ... } ?
+                //
+                // alloc.concat([
+                //     alloc.tip(),
+                //     alloc.reflow(r"Check the error message."),
+                // ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "HTTP ERROR".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::InvalidExtensionSuffix(
+            invalid_suffix,
+        )) => {
+            let (suffix_text, annotation_style) = if invalid_suffix.is_empty() {
+                (r"empty".to_string(), Annotation::PlainText)
+            } else {
+                (invalid_suffix, Annotation::Emphasized)
+            };
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this file's extension ("),
+                    alloc.string(suffix_text).annotate(annotation_style),
+                    alloc.reflow(r") is not a supported extension."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported extensions are "),
+                    alloc.keyword(r".tar"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r".tar.gz"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r".tar.br"),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID EXTENSION SUFFIX".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingTarExt) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this file's extension is not "),
+                    alloc.keyword(r".tar"),
+                    alloc.reflow(r"."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The supported extensions are "),
+                    alloc.keyword(r".tar"),
+                    alloc.reflow(r", "),
+                    alloc.keyword(r".tar.gz"),
+                    alloc.reflow(r" and "),
+                    alloc.keyword(r".tar.br"),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID EXTENSION".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::InvalidFragment(
+            invalid_fragment,
+        )) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"However, this URL's fragment (the part after #) "),
+                    alloc.reflow(r"is not valid. When present, the fragment must point to "),
+                    alloc.reflow(r"an existing "),
+                    alloc.keyword(r".roc"),
+                    alloc.reflow(r" file inside the package. Also, the filename can't be empty, "),
+                    alloc.reflow(r"so a fragment of #.roc would also not be valid. This is the "),
+                    alloc.reflow(r"invalid fragment I encountered: "),
+                ]),
+                alloc
+                    .string(invalid_fragment)
+                    .annotate(Annotation::Emphasized)
+                    .indent(4),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that the fragment points to an existing "),
+                    alloc.keyword(r".roc"),
+                    alloc.reflow(r" file inside the package. You can download this package "),
+                    alloc.reflow(r"and inspect it locally."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID FRAGMENT".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHash) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I use a content hash to detect if the file might "),
+                    alloc.reflow(r"have been tampered with. This could happen if "),
+                    alloc.reflow(r"the server or domain have been compromised."),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"The way this works is that the name of the file "),
+                    alloc.reflow(r"is the BLAKE3 hash of the contents of the "),
+                    alloc.reflow(r"file itself. If someone would tamper with the file, "),
+                    alloc.reflow(r"I could notify and protect you. However, I could "),
+                    alloc.reflow(r"not find the expected hash on the URL above, "),
+                    alloc.reflow(r"so I cannot apply this tamper-check."),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc
+                        .reflow(r"Check that you have the correct URL for this package/platform. "),
+                    alloc.reflow(r"Here is an example of how such a hash looks like: "),
+                    alloc
+                        .string(r"tE4xS_zLdmmxmHwHih9kHWQ7fsXtJr7W7h3425-eZFk".to_string())
+                        .annotate(Annotation::Emphasized),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISSING PACKAGE HASH".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHttps) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"For your security, I will only attempt to download "),
+                    alloc.reflow(r"files from servers which use the "),
+                    alloc.keyword(r"https"),
+                    alloc.reflow(r" protocol."),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "HTTPS MANDATORY".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::InvalidUrl(roc_packaging::https::UrlProblem::MisleadingCharacter) => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"I have found one or more potentially misleading "),
+                    alloc.reflow(r"characters in this URL. Misleading characters are "),
+                    alloc.reflow(r"characters that look like others but aren't the same. "),
+                    alloc.reflow(r"The following characters are classified as misleading: "),
+                    alloc.keyword(r"@"),
+                    alloc.reflow(r", "),
+                    alloc.keyword("\u{2044}"),
+                    alloc.reflow(r" (unicode 2044), "),
+                    alloc.keyword("\u{2215}"),
+                    alloc.reflow(r" (unicode 2215), "),
+                    alloc.keyword("\u{FF0F}"),
+                    alloc.reflow(r" (unicode FF0F) and "),
+                    alloc.keyword("\u{29F8}"),
+                    alloc.reflow(r" (unicode 29F8). "),
+                ]),
+                alloc.concat([
+                    alloc.reflow(r"If you have a use-case for any of these characters we "),
+                    alloc.reflow(r"would like to hear about it. Reach out on "),
+                    alloc
+                        .string(r"https://github.com/roc-lang/roc/issues/5487".to_string())
+                        .annotate(Annotation::Url),
+                ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MISLEADING CHARACTERS".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::DownloadTooBig(content_len) => {
+            let nice_bytes = Byte::from_bytes(content_len.into())
+                .get_appropriate_unit(false)
+                .format(3);
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                    alloc.concat([
+                        alloc.reflow(r"But the server stated this file is "),
+                        alloc.string(nice_bytes).annotate(Annotation::Keyword),
+                        alloc.reflow(r" in size. This is larger that the maximum size I can handle (around 32 GB)."),
+                    ]),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow(r"Check that you have the correct URL for this package/platform. "),
+                    alloc.reflow(r"If you do, you should contact the package/platform's author and "),
+                    alloc.reflow(r"notify them about this issue."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "FILE TOO LARGE".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+    }
+}
+
+pub fn to_file_problem_report_string(filename: PathBuf, error: io::ErrorKind) -> String {
+    let src_lines: Vec<&str> = Vec::new();
+    let mut module_ids = ModuleIds::default();
+    let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
+    let interns = Interns::default();
+
+    // Report parsing and canonicalization problems
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    let report = to_file_problem_report(&alloc, filename, error);
+    report.render_color_terminal(&mut buf, &alloc, &palette);
+
+    buf
+}
+
+pub fn to_file_problem_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    filename: PathBuf,
+    error: io::ErrorKind,
+) -> Report<'b> {
+    let filename_str: String = filename.to_str().unwrap().to_string();
+    match error {
+        io::ErrorKind::NotFound => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I am looking for this file, but it's not there:"),
+                alloc
+                    .string(filename_str)
+                    .annotate(Annotation::ParserSuggestion)
+                    .indent(4),
+                alloc.concat([
+                    alloc.reflow(r"Is the file supposed to be there? "),
+                    alloc.reflow("Maybe there is a typo in the file name?"),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "FILE NOT FOUND".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        io::ErrorKind::PermissionDenied => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I don't have the required permissions to read this file:"),
+                alloc
+                    .string(filename_str)
+                    .annotate(Annotation::ParserSuggestion)
+                    .indent(4),
+                alloc
+                    .concat([alloc.reflow(r"Is it the right file? Maybe change its permissions?")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        _ => {
+            let error = std::io::Error::from(error);
+            let formatted = format!("{error}");
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file:"),
+                alloc
+                    .string(filename_str)
+                    .annotate(Annotation::Error)
+                    .indent(4),
+                alloc.reflow(r"But ran into:"),
+                alloc.text(formatted).annotate(Annotation::Error).indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "FILE PROBLEM".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
     }
 }

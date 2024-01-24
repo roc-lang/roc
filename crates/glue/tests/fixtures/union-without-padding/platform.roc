@@ -11,5 +11,5 @@ platform "test-platform"
 # to store the discriminant. We have to generate glue code accordingly!
 NonRecursive : [Foo Str, Bar I64, Blah I32, Baz]
 
-mainForHost : NonRecursive
-mainForHost = main
+mainForHost : {} -> NonRecursive
+mainForHost = \{} -> main

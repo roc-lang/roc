@@ -21,10 +21,7 @@ impl<T> std::hash::Hash for Index<T> {
 
 impl<T> Clone for Index<T> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 
@@ -70,11 +67,7 @@ pub struct Slice<T> {
 
 impl<T> Clone for Slice<T> {
     fn clone(&self) -> Self {
-        Self {
-            start: self.start,
-            length: self.length,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 
@@ -137,6 +130,10 @@ impl<T> Slice<T> {
     pub fn into_iter(&self) -> impl Iterator<Item = Index<T>> {
         self.indices().map(|i| Index::new(i as _))
     }
+
+    pub const fn at(&self, i: usize) -> Index<T> {
+        Index::new(self.start + i as u32)
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -147,10 +144,7 @@ pub struct EitherIndex<T, U> {
 
 impl<T, U> Clone for EitherIndex<T, U> {
     fn clone(&self) -> Self {
-        Self {
-            index: self.index,
-            _marker: self._marker,
-        }
+        *self
     }
 }
 

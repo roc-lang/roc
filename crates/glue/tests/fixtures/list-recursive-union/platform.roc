@@ -5,13 +5,13 @@ platform "test-platform"
     imports []
     provides [mainForHost]
 
-Tool : [SystemTool { name: Str }]
+Tool : [SystemTool { name : Str }]
 
-Command : [Command { tool : Tool, args: List Str }]
+Command : [Command { tool : Tool, args : List Str }]
 
-Job : [Job { command : Command, job: List Job, inputFiles : List Str }, Blah Str]
+Job : [Job { command : Command, job : List Job, inputFiles : List Str }, Blah Str]
 
-Rbt : { default: Job }
+Rbt : { default : Job }
 
 mainForHost : Rbt
 mainForHost = main

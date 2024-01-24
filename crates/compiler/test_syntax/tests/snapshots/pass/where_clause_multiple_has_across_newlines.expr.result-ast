@@ -4,7 +4,7 @@ Defs(
             Index(2147483648),
         ],
         regions: [
-            @0-67,
+            @0-92,
         ],
         space_before: [
             Slice(start = 0, length = 0),
@@ -19,7 +19,7 @@ Defs(
                 @0-1 Identifier(
                     "f",
                 ),
-                @4-67 Where(
+                @4-92 Where(
                     @4-16 SpaceAfter(
                         Function(
                             [
@@ -43,40 +43,40 @@ Defs(
                         ],
                     ),
                     [
-                        @24-34 HasClause {
-                            var: @24-25 "a",
+                        @28-45 ImplementsClause {
+                            var: @28-29 "a",
                             abilities: [
-                                @30-34 Apply(
+                                @41-45 Apply(
                                     "",
                                     "Hash",
                                     [],
                                 ),
                             ],
                         },
-                        @42-50 HasClause {
-                            var: @42-43 SpaceBefore(
+                        @53-68 ImplementsClause {
+                            var: @53-54 SpaceBefore(
                                 "b",
                                 [
                                     Newline,
                                 ],
                             ),
                             abilities: [
-                                @48-50 Apply(
+                                @66-68 Apply(
                                     "",
                                     "Eq",
                                     [],
                                 ),
                             ],
                         },
-                        @58-67 HasClause {
-                            var: @58-59 SpaceBefore(
+                        @76-92 ImplementsClause {
+                            var: @76-77 SpaceBefore(
                                 "c",
                                 [
                                     Newline,
                                 ],
                             ),
                             abilities: [
-                                @64-67 Apply(
+                                @89-92 Apply(
                                     "",
                                     "Ord",
                                     [],
@@ -88,7 +88,7 @@ Defs(
             ),
         ],
     },
-    @69-70 SpaceBefore(
+    @94-95 SpaceBefore(
         Var {
             module_name: "",
             ident: "f",

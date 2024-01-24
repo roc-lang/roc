@@ -16,12 +16,14 @@
 pub mod decoding;
 pub mod encoding;
 pub mod hash;
+pub mod inspect;
 mod util;
 
 use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};
 use hash::{FlatHash, FlatHashKey};
 
+use inspect::{FlatInspectable, FlatInspectableKey};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
 
@@ -40,6 +42,7 @@ pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
     Decoder(FlatDecodableKey),
     Hash(FlatHashKey),
+    ToInspector(FlatInspectableKey),
 }
 
 impl DeriveKey {
@@ -48,11 +51,12 @@ impl DeriveKey {
             DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
             DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
             DeriveKey::Hash(key) => format!("hash_{}", key.debug_name()),
+            DeriveKey::ToInspector(key) => format!("toInspector_{}", key.debug_name()),
         }
     }
 }
 
-#[derive(Hash, PartialEq, Eq, Debug)]
+#[derive(Hash, Clone, PartialEq, Eq, Debug)]
 pub enum Derived {
     /// If a derived implementation name is well-known ahead-of-time, we can inline the symbol
     /// directly rather than associating a key for an implementation to be made later on.
@@ -77,6 +81,7 @@ pub enum DeriveBuiltin {
     Decoder,
     Hash,
     IsEq,
+    ToInspector,
 }
 
 impl TryFrom<Symbol> for DeriveBuiltin {
@@ -88,6 +93,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
             Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
             Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
+            Symbol::INSPECT_TO_INSPECTOR => Ok(DeriveBuiltin::ToInspector),
             _ => Err(value),
         }
     }
@@ -120,6 +126,46 @@ impl Derived {
                 Ok(Derived::SingleLambdaSetImmediate(
                     Symbol::BOOL_STRUCTURAL_EQ,
                 ))
+            }
+            DeriveBuiltin::ToInspector => match FlatInspectable::from_var(subs, var) {
+                FlatInspectable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatInspectable::Key(repr) => Ok(Derived::Key(DeriveKey::ToInspector(repr))),
+            },
+        }
+    }
+
+    pub fn builtin_with_builtin_symbol(
+        builtin: DeriveBuiltin,
+        symbol: Symbol,
+    ) -> Result<Self, DeriveError> {
+        match builtin {
+            DeriveBuiltin::ToEncoder => match encoding::FlatEncodable::from_builtin_symbol(symbol)?
+            {
+                FlatEncodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatEncodable::Key(repr) => Ok(Derived::Key(DeriveKey::ToEncoder(repr))),
+            },
+            DeriveBuiltin::Decoder => match decoding::FlatDecodable::from_builtin_symbol(symbol)? {
+                FlatDecodable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatDecodable::Key(repr) => Ok(Derived::Key(DeriveKey::Decoder(repr))),
+            },
+            DeriveBuiltin::Hash => match hash::FlatHash::from_builtin_symbol(symbol)? {
+                FlatHash::SingleLambdaSetImmediate(imm) => {
+                    Ok(Derived::SingleLambdaSetImmediate(imm))
+                }
+                FlatHash::Key(repr) => Ok(Derived::Key(DeriveKey::Hash(repr))),
+            },
+            DeriveBuiltin::IsEq => {
+                // If obligation checking passes, we always lower derived implementations of `isEq`
+                // to the `Eq` low-level, to be fulfilled by the backends.
+                Ok(Derived::SingleLambdaSetImmediate(
+                    Symbol::BOOL_STRUCTURAL_EQ,
+                ))
+            }
+            DeriveBuiltin::ToInspector => {
+                match inspect::FlatInspectable::from_builtin_alias(symbol).unwrap() {
+                    FlatInspectable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                    FlatInspectable::Key(repr) => Ok(Derived::Key(DeriveKey::ToInspector(repr))),
+                }
             }
         }
     }

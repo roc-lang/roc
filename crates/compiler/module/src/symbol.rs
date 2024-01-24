@@ -1,6 +1,7 @@
 use crate::ident::{Ident, ModuleName};
 use crate::module_err::{IdentIdNotFoundSnafu, ModuleIdNotFoundSnafu, ModuleResult};
 use roc_collections::{SmallStringInterner, VecMap};
+use roc_error_macros::internal_error;
 use roc_ident::IdentStr;
 use roc_region::all::Region;
 use snafu::OptionExt;
@@ -52,6 +53,10 @@ pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
     (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
     (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
+    (
+        Symbol::INSPECT_INSPECT_ABILITY,
+        &[Symbol::INSPECT_TO_INSPECTOR],
+    ),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -115,7 +120,7 @@ impl Symbol {
             .module_ids
             .get_name(self.module_id())
             .unwrap_or_else(|| {
-                panic!(
+                internal_error!(
                     "module_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
@@ -128,7 +133,7 @@ impl Symbol {
             .all_ident_ids
             .get(&self.module_id())
             .unwrap_or_else(|| {
-                panic!(
+                internal_error!(
                     "ident_string could not find IdentIds for module {:?} in {:?}",
                     self.module_id(),
                     interns
@@ -136,7 +141,7 @@ impl Symbol {
             });
 
         ident_ids.get_name(self.ident_id()).unwrap_or_else(|| {
-            panic!(
+            internal_error!(
                 "ident_string's IdentIds did not contain an entry for {} in module {:?}",
                 self.ident_id().0,
                 self.module_id()
@@ -171,7 +176,7 @@ impl Symbol {
 
     #[cfg(debug_assertions)]
     pub fn contains(self, needle: &str) -> bool {
-        format!("{:?}", self).contains(needle)
+        format!("{self:?}").contains(needle)
     }
 }
 
@@ -193,7 +198,7 @@ impl fmt::Debug for Symbol {
             match DEBUG_IDENT_IDS_BY_MODULE_ID.lock() {
                 Ok(names) => match &names.get(&(module_id.to_zero_indexed() as u32)) {
                     Some(ident_ids) => match ident_ids.get_name(ident_id) {
-                        Some(ident_str) => write!(f, "`{:?}.{}`", module_id, ident_str),
+                        Some(ident_str) => write!(f, "`{module_id:?}.{ident_str}`"),
                         None => fallback_debug_fmt(*self, f),
                     },
                     None => fallback_debug_fmt(*self, f),
@@ -206,7 +211,7 @@ impl fmt::Debug for Symbol {
                     use std::io::Write;
 
                     let mut stderr = std::io::stderr();
-                    writeln!(stderr, "DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {:?}", err).unwrap();
+                    writeln!(stderr, "DEBUG INFO: Failed to acquire lock for Debug reading from DEBUG_IDENT_IDS_BY_MODULE_ID, presumably because a thread panicked: {err:?}").unwrap();
 
                     fallback_debug_fmt(*self, f)
                 }
@@ -228,7 +233,7 @@ impl fmt::Display for Symbol {
         let ident_id = self.ident_id();
 
         match ident_id {
-            IdentId(value) => write!(f, "{:?}.{:?}", module_id, value),
+            IdentId(value) => write!(f, "{module_id:?}.{value:?}"),
         }
     }
 }
@@ -243,7 +248,7 @@ fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     let module_id = symbol.module_id();
     let ident_id = symbol.ident_id();
 
-    write!(f, "`{:?}.{:?}`", module_id, ident_id)
+    write!(f, "`{module_id:?}.{ident_id:?}`")
 }
 
 /// This is used in Debug builds only, to let us have a Debug instance
@@ -267,9 +272,10 @@ impl Interns {
 
     pub fn module_name(&self, module_id: ModuleId) -> &ModuleName {
         self.module_ids.get_name(module_id).unwrap_or_else(|| {
-            panic!(
+            internal_error!(
                 "Unable to find interns entry for module_id {:?} in Interns {:?}",
-                module_id, self
+                module_id,
+                self
             )
         })
     }
@@ -281,16 +287,18 @@ impl Interns {
             Some(ident_ids) => match ident_ids.get_id(ident.as_str()) {
                 Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
-                    panic!(
+                    internal_error!(
                         "Interns::symbol could not find ident entry for {:?} for module {:?}",
-                        ident, module_id
+                        ident,
+                        module_id
                     );
                 }
             },
             None => {
-                panic!(
+                internal_error!(
                     "Interns::symbol could not find entry for module {:?} in Interns {:?}",
-                    module_id, self
+                    module_id,
+                    self
                 );
             }
         }
@@ -308,8 +316,8 @@ pub fn get_module_ident_ids<'a>(
     all_ident_ids
         .get(module_id)
         .with_context(|| ModuleIdNotFoundSnafu {
-            module_id: format!("{:?}", module_id),
-            all_ident_ids: format!("{:?}", all_ident_ids),
+            module_id: format!("{module_id:?}"),
+            all_ident_ids: format!("{all_ident_ids:?}"),
         })
 }
 
@@ -320,7 +328,7 @@ pub fn get_module_ident_ids_mut<'a>(
     all_ident_ids
         .get_mut(module_id)
         .with_context(|| ModuleIdNotFoundSnafu {
-            module_id: format!("{:?}", module_id),
+            module_id: format!("{module_id:?}"),
             all_ident_ids: "I could not return all_ident_ids here because of borrowing issues.",
         })
 }
@@ -374,7 +382,7 @@ impl ModuleId {
         interns
             .module_ids
             .get_name(self)
-            .unwrap_or_else(|| panic!("Could not find ModuleIds for {:?}", self))
+            .unwrap_or_else(|| internal_error!("Could not find ModuleIds for {:?}", self))
     }
 }
 
@@ -396,11 +404,12 @@ impl fmt::Debug for ModuleId {
 
         if PRETTY_PRINT_DEBUG_SYMBOLS {
             match names.try_get(self.to_zero_indexed()) {
-                Some(str_ref) => write!(f, "{}", str_ref),
+                Some(str_ref) => write!(f, "{str_ref}"),
                 None => {
-                    panic!(
+                    internal_error!(
                         "Could not find a Debug name for module ID {} in {:?}",
-                        self.0, names,
+                        self.0,
+                        names,
                     );
                 }
             }
@@ -640,7 +649,7 @@ impl IdentIds {
     pub fn update_key(&mut self, old_name: &str, new_name: &str) -> Result<IdentId, String> {
         match self.interner.find_and_update(old_name, new_name) {
             Some(index) => Ok(IdentId(index as u32)),
-            None => Err(format!("The identifier {:?} is not in IdentIds", old_name)),
+            None => Err(format!("The identifier {old_name:?} is not in IdentIds")),
         }
     }
 
@@ -677,7 +686,7 @@ impl IdentIds {
         self.get_name(ident_id)
             .with_context(|| IdentIdNotFoundSnafu {
                 ident_id,
-                ident_ids_str: format!("{:?}", self),
+                ident_ids_str: format!("{self:?}"),
             })
     }
 
@@ -795,6 +804,7 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
+                    $(#[$ident_meta:meta])*
                     $ident_id:literal $ident_const:ident: $ident_name:literal
                     $(exposed_apply_type=$exposed_apply_type:literal)?
                     $(exposed_type=$exposed_type:literal)?
@@ -832,7 +842,7 @@ macro_rules! define_builtins {
                         if cfg!(debug_assertions) {
                             match LENGTH_CHECK {
                                 None => (),
-                                Some((given, expected)) => panic!(
+                                Some((given, expected)) => internal_error!(
                                     "Symbol {} : {} should have index {} based on the insertion order, try {} : {} instead",
                                     given, NAMES[expected], expected, expected, NAMES[expected],
                                 ),
@@ -842,7 +852,7 @@ macro_rules! define_builtins {
                         if cfg!(debug_assertions) {
                             match DUPLICATE_CHECK {
                                 None => (),
-                                Some((first, second)) => panic!(
+                                Some((first, second)) => internal_error!(
                                     "Symbol {} : {} is duplicated at position {}, try removing the duplicate",
                                     first, NAMES[first], second
                                 ),
@@ -946,6 +956,7 @@ macro_rules! define_builtins {
         impl Symbol {
             $(
                 $(
+                    $(#[$ident_meta])*
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )*
                 $(
@@ -1189,63 +1200,81 @@ define_builtins! {
         88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
         89 NUM_BYTES_TO_U16: "bytesToU16"
         90 NUM_BYTES_TO_U32: "bytesToU32"
-        91 NUM_CAST_TO_NAT: "#castToNat"
-        92 NUM_DIV_CEIL: "divCeil"
-        93 NUM_DIV_CEIL_CHECKED: "divCeilChecked"
-        94 NUM_TO_STR: "toStr"
-        95 NUM_MIN_I8: "minI8"
-        96 NUM_MAX_I8: "maxI8"
-        97 NUM_MIN_U8: "minU8"
-        98 NUM_MAX_U8: "maxU8"
-        99 NUM_MIN_I16: "minI16"
-        100 NUM_MAX_I16: "maxI16"
-        101 NUM_MIN_U16: "minU16"
-        102 NUM_MAX_U16: "maxU16"
-        103 NUM_MIN_I32: "minI32"
-        104 NUM_MAX_I32: "maxI32"
-        105 NUM_MIN_U32: "minU32"
-        106 NUM_MAX_U32: "maxU32"
-        107 NUM_MIN_I64: "minI64"
-        108 NUM_MAX_I64: "maxI64"
-        109 NUM_MIN_U64: "minU64"
-        110 NUM_MAX_U64: "maxU64"
-        111 NUM_MIN_I128: "minI128"
-        112 NUM_MAX_I128: "maxI128"
-        113 NUM_MIN_U128: "minU128"
-        114 NUM_MAX_U128: "maxU128"
-        115 NUM_TO_I8: "toI8"
-        116 NUM_TO_I8_CHECKED: "toI8Checked"
-        117 NUM_TO_I16: "toI16"
-        118 NUM_TO_I16_CHECKED: "toI16Checked"
-        119 NUM_TO_I32: "toI32"
-        120 NUM_TO_I32_CHECKED: "toI32Checked"
-        121 NUM_TO_I64: "toI64"
-        122 NUM_TO_I64_CHECKED: "toI64Checked"
-        123 NUM_TO_I128: "toI128"
-        124 NUM_TO_I128_CHECKED: "toI128Checked"
-        125 NUM_TO_U8: "toU8"
-        126 NUM_TO_U8_CHECKED: "toU8Checked"
-        127 NUM_TO_U16: "toU16"
-        128 NUM_TO_U16_CHECKED: "toU16Checked"
-        129 NUM_TO_U32: "toU32"
-        130 NUM_TO_U32_CHECKED: "toU32Checked"
-        131 NUM_TO_U64: "toU64"
-        132 NUM_TO_U64_CHECKED: "toU64Checked"
-        133 NUM_TO_U128: "toU128"
-        134 NUM_TO_U128_CHECKED: "toU128Checked"
-        135 NUM_TO_NAT: "toNat"
-        136 NUM_TO_NAT_CHECKED: "toNatChecked"
-        137 NUM_TO_F32: "toF32"
-        138 NUM_TO_F32_CHECKED: "toF32Checked"
-        139 NUM_TO_F64: "toF64"
-        140 NUM_TO_F64_CHECKED: "toF64Checked"
-        141 NUM_MAX_F64: "maxF64"
-        142 NUM_MIN_F64: "minF64"
-        143 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
-        144 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
-        145 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
-        146 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
-        147 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        91 NUM_BYTES_TO_U64: "bytesToU64"
+        92 NUM_BYTES_TO_U128: "bytesToU128"
+        93 NUM_CAST_TO_NAT: "#castToNat"
+        94 NUM_DIV_CEIL: "divCeil"
+        95 NUM_DIV_CEIL_CHECKED: "divCeilChecked"
+        96 NUM_TO_STR: "toStr"
+        97 NUM_MIN_I8: "minI8"
+        98 NUM_MAX_I8: "maxI8"
+        99 NUM_MIN_U8: "minU8"
+        100 NUM_MAX_U8: "maxU8"
+        101 NUM_MIN_I16: "minI16"
+        102 NUM_MAX_I16: "maxI16"
+        103 NUM_MIN_U16: "minU16"
+        104 NUM_MAX_U16: "maxU16"
+        105 NUM_MIN_I32: "minI32"
+        106 NUM_MAX_I32: "maxI32"
+        107 NUM_MIN_U32: "minU32"
+        108 NUM_MAX_U32: "maxU32"
+        109 NUM_MIN_I64: "minI64"
+        110 NUM_MAX_I64: "maxI64"
+        111 NUM_MIN_U64: "minU64"
+        112 NUM_MAX_U64: "maxU64"
+        113 NUM_MIN_I128: "minI128"
+        114 NUM_MAX_I128: "maxI128"
+        115 NUM_MIN_U128: "minU128"
+        116 NUM_MAX_U128: "maxU128"
+        117 NUM_TO_I8: "toI8"
+        118 NUM_TO_I8_CHECKED: "toI8Checked"
+        119 NUM_TO_I16: "toI16"
+        120 NUM_TO_I16_CHECKED: "toI16Checked"
+        121 NUM_TO_I32: "toI32"
+        122 NUM_TO_I32_CHECKED: "toI32Checked"
+        123 NUM_TO_I64: "toI64"
+        124 NUM_TO_I64_CHECKED: "toI64Checked"
+        125 NUM_TO_I128: "toI128"
+        126 NUM_TO_I128_CHECKED: "toI128Checked"
+        127 NUM_TO_U8: "toU8"
+        128 NUM_TO_U8_CHECKED: "toU8Checked"
+        129 NUM_TO_U16: "toU16"
+        130 NUM_TO_U16_CHECKED: "toU16Checked"
+        131 NUM_TO_U32: "toU32"
+        132 NUM_TO_U32_CHECKED: "toU32Checked"
+        133 NUM_TO_U64: "toU64"
+        134 NUM_TO_U64_CHECKED: "toU64Checked"
+        135 NUM_TO_U128: "toU128"
+        136 NUM_TO_U128_CHECKED: "toU128Checked"
+        137 NUM_TO_NAT: "toNat"
+        138 NUM_TO_NAT_CHECKED: "toNatChecked"
+        139 NUM_TO_F32: "toF32"
+        140 NUM_TO_F32_CHECKED: "toF32Checked"
+        141 NUM_TO_F64: "toF64"
+        142 NUM_TO_F64_CHECKED: "toF64Checked"
+        143 NUM_MAX_F64: "maxF64"
+        144 NUM_MIN_F64: "minF64"
+        145 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
+        146 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
+        147 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
+        148 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        149 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        150 NUM_BYTES_TO_U64_LOWLEVEL: "bytesToU64Lowlevel"
+        151 NUM_BYTES_TO_U128_LOWLEVEL: "bytesToU128Lowlevel"
+        152 NUM_COUNT_LEADING_ZERO_BITS: "countLeadingZeroBits"
+        153 NUM_COUNT_TRAILING_ZERO_BITS: "countTrailingZeroBits"
+        154 NUM_COUNT_ONE_BITS: "countOneBits"
+        155 NUM_ABS_DIFF: "absDiff"
+        156 NUM_IS_NAN: "isNaN"
+        157 NUM_IS_INFINITE: "isInfinite"
+        158 NUM_IS_FINITE: "isFinite"
+        159 NUM_MIN: "min"
+        160 NUM_MAX: "max"
+        161 NUM_E: "e"
+        162 NUM_PI: "pi"
+        163 NUM_TAU: "tau"
+        164 NUM_BITWISE_NOT: "bitwiseNot"
+        165 NUM_IS_APPROX_EQ: "isApproxEq"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1269,20 +1298,20 @@ define_builtins! {
         3 STR_CONCAT: "concat"
         4 STR_JOIN_WITH: "joinWith"
         5 STR_SPLIT: "split"
-        6 STR_COUNT_GRAPHEMES: "countGraphemes"
+        6 STR_WITH_PREFIX: "withPrefix"
         7 STR_STARTS_WITH: "startsWith"
         8 STR_ENDS_WITH: "endsWith"
         9 STR_FROM_UTF8: "fromUtf8"
         10 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         11 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         12 STR_TO_UTF8: "toUtf8"
-        13 STR_STARTS_WITH_SCALAR: "startsWithScalar"
+        13 STR_WALK_UTF8: "walkUtf8"
         14 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         15 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         16 STR_REPEAT: "repeat"
         17 STR_TRIM: "trim"
-        18 STR_TRIM_LEFT: "trimLeft"
-        19 STR_TRIM_RIGHT: "trimRight"
+        18 STR_TRIM_START: "trimStart"
+        19 STR_TRIM_END: "trimEnd"
         20 STR_TO_DEC: "toDec"
         21 STR_TO_F64: "toF64"
         22 STR_TO_F32: "toF32"
@@ -1297,7 +1326,7 @@ define_builtins! {
         31 STR_TO_I16: "toI16"
         32 STR_TO_U8: "toU8"
         33 STR_TO_I8: "toI8"
-        34 STR_TO_SCALARS: "toScalars"
+        34 STR_CONTAINS: "contains"
         35 STR_GET_UNSAFE: "getUnsafe"
         36 STR_COUNT_UTF8_BYTES: "countUtf8Bytes"
         37 STR_SUBSTRING_UNSAFE: "substringUnsafe"
@@ -1305,20 +1334,14 @@ define_builtins! {
         39 STR_SPLIT_LAST: "splitLast"
         40 STR_WALK_UTF8_WITH_INDEX: "walkUtf8WithIndex"
         41 STR_RESERVE: "reserve"
-        42 STR_APPEND_SCALAR_UNSAFE: "appendScalarUnsafe"
-        43 STR_APPEND_SCALAR: "appendScalar"
-        44 STR_GET_SCALAR_UNSAFE: "getScalarUnsafe"
-        45 STR_WALK_SCALARS: "walkScalars"
-        46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
-        47 STR_TO_NUM: "strToNum"
-        48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
-        49 STR_CAPACITY: "capacity"
-        50 STR_REPLACE_EACH: "replaceEach"
-        51 STR_REPLACE_FIRST: "replaceFirst"
-        52 STR_REPLACE_LAST: "replaceLast"
-        53 STR_WITH_CAPACITY: "withCapacity"
-        54 STR_WITH_PREFIX: "withPrefix"
-        55 STR_GRAPHEMES: "graphemes"
+        42 STR_TO_NUM: "strToNum"
+        43 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
+        44 STR_CAPACITY: "capacity"
+        45 STR_REPLACE_EACH: "replaceEach"
+        46 STR_REPLACE_FIRST: "replaceFirst"
+        47 STR_REPLACE_LAST: "replaceLast"
+        48 STR_WITH_CAPACITY: "withCapacity"
+        49 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1350,7 +1373,7 @@ define_builtins! {
         26 LIST_WALK_UNTIL: "walkUntil"
         27 LIST_RANGE: "range"
         28 LIST_SORT_WITH: "sortWith"
-        29 LIST_DROP: "drop"
+        29 LIST_CHUNKS_OF: "chunksOf"
         30 LIST_SWAP: "swap"
         31 LIST_DROP_AT: "dropAt"
         32 LIST_DROP_LAST: "dropLast"
@@ -1401,6 +1424,14 @@ define_builtins! {
         77 LIST_COUNT_IF: "countIf"
         78 LIST_WALK_FROM: "walkFrom"
         79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
+        80 LIST_ITER_HELP: "iterHelp"
+        81 LIST_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        82 LIST_UPDATE: "update"
+        83 LIST_WALK_WITH_INDEX: "walkWithIndex"
+        84 LIST_APPEND_IF_OK: "appendIfOk"
+        85 LIST_PREPEND_IF_OK: "prependIfOk"
+        86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
+        87 LIST_CLONE: "clone"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
@@ -1442,6 +1473,14 @@ define_builtins! {
         21 DICT_UPDATE: "update"
 
         22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        23 DICT_PSEUDO_SEED: "pseudoSeed"
+        24 DICT_IS_EMPTY: "isEmpty"
+        25 DICT_MAP: "map"
+        26 DICT_JOINMAP: "joinMap"
+        27 DICT_KEEP_IF: "keepIf"
+        28 DICT_DROP_IF: "dropIf"
+        29 DICT_RESERVE: "reserve"
+        30 DICT_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1461,6 +1500,14 @@ define_builtins! {
         14 SET_CONTAINS: "contains"
         15 SET_TO_DICT: "toDict"
         16 SET_CAPACITY: "capacity"
+        17 SET_IS_EMPTY: "isEmpty"
+        18 SET_MAP: "map"
+        19 SET_JOIN_MAP: "joinMap"
+        20 SET_KEEP_IF: "keepIf"
+        21 SET_DROP_IF: "dropIf"
+        22 SET_WITH_CAPACITY: "withCapacity"
+        23 SET_RESERVE: "reserve"
+        24 SET_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
@@ -1489,11 +1536,12 @@ define_builtins! {
         18 ENCODE_STRING: "string"
         19 ENCODE_LIST: "list"
         20 ENCODE_RECORD: "record"
-        21 ENCODE_TAG: "tag"
-        22 ENCODE_CUSTOM: "custom"
-        23 ENCODE_APPEND_WITH: "appendWith"
-        24 ENCODE_APPEND: "append"
-        25 ENCODE_TO_BYTES: "toBytes"
+        21 ENCODE_TUPLE: "tuple"
+        22 ENCODE_TAG: "tag"
+        23 ENCODE_CUSTOM: "custom"
+        24 ENCODE_APPEND_WITH: "appendWith"
+        25 ENCODE_APPEND: "append"
+        26 ENCODE_TO_BYTES: "toBytes"
     }
     12 DECODE: "Decode" => {
         0 DECODE_DECODE_ERROR: "DecodeError" exposed_type=true
@@ -1519,11 +1567,12 @@ define_builtins! {
         20 DECODE_STRING: "string"
         21 DECODE_LIST: "list"
         22 DECODE_RECORD: "record"
-        23 DECODE_CUSTOM: "custom"
-        24 DECODE_DECODE_WITH: "decodeWith"
-        25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
-        26 DECODE_FROM_BYTES: "fromBytes"
-        27 DECODE_MAP_RESULT: "mapResult"
+        23 DECODE_TUPLE: "tuple"
+        24 DECODE_CUSTOM: "custom"
+        25 DECODE_DECODE_WITH: "decodeWith"
+        26 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
+        27 DECODE_FROM_BYTES: "fromBytes"
+        28 DECODE_MAP_RESULT: "mapResult"
     }
     13 HASH: "Hash" => {
         0 HASH_HASH_ABILITY: "Hash" exposed_type=true
@@ -1535,20 +1584,66 @@ define_builtins! {
         6  HASH_ADD_U32: "addU32"
         7  HASH_ADD_U64: "addU64"
         8  HASH_ADD_U128: "addU128"
-        9  HASH_HASH_I8: "hashI8"
-        10 HASH_HASH_I16: "hashI16"
-        11 HASH_HASH_I32: "hashI32"
-        12 HASH_HASH_I64: "hashI64"
-        13 HASH_HASH_I128: "hashI128"
-        14 HASH_HASH_NAT: "hashNat"
-        15 HASH_COMPLETE: "complete"
-        16 HASH_HASH_STR_BYTES: "hashStrBytes"
-        17 HASH_HASH_LIST: "hashList"
-        18 HASH_HASH_UNORDERED: "hashUnordered"
+        9  HASH_HASH_BOOL: "hashBool"
+        10 HASH_HASH_I8: "hashI8"
+        11 HASH_HASH_I16: "hashI16"
+        12 HASH_HASH_I32: "hashI32"
+        13 HASH_HASH_I64: "hashI64"
+        14 HASH_HASH_I128: "hashI128"
+        15 HASH_HASH_NAT: "hashNat"
+        16 I128_OF_DEC: "i128OfDec"
+        17 HASH_HASH_DEC: "hashDec"
+        18 HASH_COMPLETE: "complete"
+        19 HASH_HASH_STR_BYTES: "hashStrBytes"
+        20 HASH_HASH_LIST: "hashList"
+        21 HASH_HASH_UNORDERED: "hashUnordered"
     }
-    14 JSON: "Json" => {
-        0 JSON_JSON: "Json"
+    14 INSPECT: "Inspect" => {
+        0 INSPECT_INSPECT_ABILITY: "Inspect" exposed_type=true
+        1 INSPECT_INSPECTOR: "Inspector" exposed_type=true
+        2 INSPECT_INSPECT_FORMATTER: "InspectFormatter" exposed_type=true
+        3 INSPECT_ELEM_WALKER: "ElemWalker" exposed_type=true
+        4 INSPECT_KEY_VAL_WALKER: "KeyValWalker" exposed_type=true
+        5 INSPECT_INSPECT: "inspect"
+        6 INSPECT_INIT: "init"
+        7 INSPECT_LIST: "list"
+        8 INSPECT_SET: "set"
+        9 INSPECT_DICT: "dict"
+        10 INSPECT_TAG: "tag"
+        11 INSPECT_TUPLE: "tuple"
+        12 INSPECT_RECORD: "record"
+        13 INSPECT_BOOL: "bool"
+        14 INSPECT_STR: "str"
+        15 INSPECT_OPAQUE: "opaque"
+        16 INSPECT_FUNCTION: "function"
+        17 INSPECT_U8: "u8"
+        18 INSPECT_I8: "i8"
+        19 INSPECT_U16: "u16"
+        20 INSPECT_I16: "i16"
+        21 INSPECT_U32: "u32"
+        22 INSPECT_I32: "i32"
+        23 INSPECT_U64: "u64"
+        24 INSPECT_I64: "i64"
+        25 INSPECT_U128: "u128"
+        26 INSPECT_I128: "i128"
+        27 INSPECT_F32: "f32"
+        28 INSPECT_F64: "f64"
+        29 INSPECT_DEC: "dec"
+        30 INSPECT_CUSTOM: "custom"
+        31 INSPECT_APPLY: "apply"
+        32 INSPECT_TO_INSPECTOR: "toInspector"
+        33 INSPECT_NAT: "nat"
+        34 INSPECT_TO_STR: "toStr"
+    }
+    15 JSON: "TotallyNotJson" => {
+        0 JSON_JSON: "TotallyNotJson"
+        1 JSON_FIELD_NAME_MAPPING: "FieldNameMapping"
+        2 JSON_NUMBER_STATE: "NumberState"
+        3 JSON_STRING_STATE: "StringState"
+        4 JSON_ARRAY_OPENING_STATE: "ArrayOpeningState"
+        5 JSON_ARRAY_CLOSING_STATE: "ArrayClosingState"
+        6 JSON_OBJECT_STATE: "ObjectState"
     }
 
-    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 16 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

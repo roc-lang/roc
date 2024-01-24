@@ -22,7 +22,7 @@ Defs(
                 @3-27 Function(
                     [
                         @3-13 Tuple {
-                            fields: [
+                            elems: [
                                 @4-7 Apply(
                                     "",
                                     "Str",
@@ -38,7 +38,7 @@ Defs(
                         },
                     ],
                     @17-27 Tuple {
-                        fields: [
+                        elems: [
                             @18-21 Apply(
                                 "",
                                 "Str",
@@ -61,7 +61,7 @@ Defs(
                 ann_type: @3-27 Function(
                     [
                         @3-13 Tuple {
-                            fields: [
+                            elems: [
                                 @4-7 Apply(
                                     "",
                                     "Str",
@@ -77,7 +77,7 @@ Defs(
                         },
                     ],
                     @17-27 Tuple {
-                        fields: [
+                        elems: [
                             @18-21 Apply(
                                 "",
                                 "Str",

@@ -13,16 +13,16 @@ use indoc::indoc;
 use roc_std::{RocResult, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_default_ok() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 12345
 
             Result.withDefault result 0
-            "#
+            "
         ),
         12345,
         i64
@@ -30,16 +30,16 @@ fn with_default_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_default_err() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
             Result.withDefault result 0
-            "#
+            "
         ),
         0,
         i64
@@ -47,18 +47,18 @@ fn with_default_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn result_map() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 2
 
             result
                 |> Result.map (\x -> x + 1)
                 |> Result.withDefault 0
-            "#
+            "
         ),
         3,
         i64
@@ -66,14 +66,14 @@ fn result_map() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
             result
                 |> Result.map (\x -> x + 1)
                 |> Result.withDefault 0
-            "#
+            "
         ),
         0,
         i64
@@ -81,18 +81,18 @@ fn result_map() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn result_map_err() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result {} I64
             result = Err 2
 
             when Result.mapErr result (\x -> x + 1) is
                 Err n -> n
                 Ok _ -> 0
-            "#
+            "
         ),
         3,
         i64
@@ -100,14 +100,14 @@ fn result_map_err() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result {} I64
             result = Ok {}
 
             when Result.mapErr result (\x -> x + 1) is
                 Err n -> n
                 Ok _ -> 0
-            "#
+            "
         ),
         0,
         i64
@@ -115,14 +115,14 @@ fn result_map_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn err_type_var() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             Result.map (Ok 3) (\x -> x + 1)
                 |> Result.withDefault -1
-            "#
+            "
         ),
         4,
         i64
@@ -130,17 +130,17 @@ fn err_type_var() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn err_type_var_annotation() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             ok : Result I64 *
             ok = Ok 3
 
             Result.map ok (\x -> x + 1)
                 |> Result.withDefault -1
-            "#
+            "
         ),
         4,
         i64
@@ -148,17 +148,17 @@ fn err_type_var_annotation() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn err_empty_tag_union() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             ok : Result I64 []
             ok = Ok 3
 
             Result.map ok (\x -> x + 1)
                 |> Result.withDefault -1
-            "#
+            "
         ),
         4,
         i64
@@ -166,16 +166,16 @@ fn err_empty_tag_union() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn is_ok() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 2
 
             Result.isOk result
-            "#
+            "
         ),
         true,
         bool
@@ -183,12 +183,12 @@ fn is_ok() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
             Result.isOk result
-            "#
+            "
         ),
         false,
         bool
@@ -196,16 +196,16 @@ fn is_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn is_err() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 2
 
             Result.isErr result
-            "#
+            "
         ),
         false,
         bool
@@ -213,12 +213,12 @@ fn is_err() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
             Result.isErr result
-            "#
+            "
         ),
         true,
         bool
@@ -227,18 +227,38 @@ fn is_err() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn roc_result_ok() {
+fn roc_result_ok_i64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 42
 
             result
-            "#
+            "
         ),
         RocResult::ok(42),
         RocResult<i64, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn roc_result_ok_f64() {
+    // NOTE: the dev backend does not currently use float registers when returning a more
+    // complex type, but the rust side does expect it to. Hence this test fails with gen-dev
+
+    assert_evals_to!(
+        indoc!(
+            r"
+            result : Result F64 {}
+            result = Ok 42.0
+
+            result
+            "
+        ),
+        RocResult::ok(42.0),
+        RocResult<f64, ()>
     );
 }
 
@@ -260,7 +280,7 @@ fn roc_result_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
         r#"
@@ -272,7 +292,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_after_on_ok() {
     assert_evals_to!(indoc!(
         r#"
@@ -288,7 +308,7 @@ fn roc_result_after_on_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_after_on_err() {
     assert_evals_to!(indoc!(
         r#"
@@ -304,7 +324,7 @@ fn roc_result_after_on_err() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn roc_result_after_err() {
     assert_evals_to!(
         indoc!(

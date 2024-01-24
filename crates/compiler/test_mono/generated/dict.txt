@@ -1,87 +1,40 @@
-procedure Dict.1 ():
-    let Dict.520 : List {[], []} = Array [];
-    let Dict.527 : U64 = 0i64;
-    let Dict.528 : U64 = 8i64;
-    let Dict.521 : List U64 = CallByName List.11 Dict.527 Dict.528;
-    let Dict.524 : I8 = CallByName Dict.34;
-    let Dict.525 : U64 = 8i64;
-    let Dict.522 : List I8 = CallByName List.11 Dict.524 Dict.525;
-    let Dict.523 : U64 = 0i64;
-    let Dict.519 : {List {[], []}, List U64, List I8, U64} = Struct {Dict.520, Dict.521, Dict.522, Dict.523};
-    ret Dict.519;
+procedure Dict.1 (Dict.726):
+    let Dict.735 : List {U32, U32} = Array [];
+    let Dict.736 : List {[], []} = Array [];
+    let Dict.737 : U64 = 0i64;
+    let Dict.44 : Float32 = CallByName Dict.44;
+    let Dict.45 : U8 = CallByName Dict.45;
+    let Dict.734 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = Struct {Dict.735, Dict.736, Dict.737, Dict.44, Dict.45};
+    ret Dict.734;
 
-procedure Dict.34 ():
-    let Dict.526 : I8 = -128i64;
-    ret Dict.526;
+procedure Dict.4 (Dict.732):
+    let Dict.157 : List {[], []} = StructAtIndex 1 Dict.732;
+    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.732;
+    dec #Derived_gen.0;
+    let Dict.733 : U64 = CallByName List.6 Dict.157;
+    dec Dict.157;
+    ret Dict.733;
 
-procedure Dict.4 (Dict.507):
-    let Dict.85 : U64 = StructAtIndex 3 Dict.507;
-    dec Dict.507;
-    ret Dict.85;
+procedure Dict.44 ():
+    let Dict.741 : Float32 = 0.8f64;
+    ret Dict.741;
 
-procedure List.11 (List.114, List.115):
-    let List.479 : List I8 = CallByName List.68 List.115;
-    let List.478 : List I8 = CallByName List.80 List.114 List.115 List.479;
-    ret List.478;
+procedure Dict.45 ():
+    let Dict.739 : U8 = 64i64;
+    let Dict.740 : U8 = 3i64;
+    let Dict.738 : U8 = CallByName Num.20 Dict.739 Dict.740;
+    ret Dict.738;
 
-procedure List.11 (List.114, List.115):
-    let List.491 : List U64 = CallByName List.68 List.115;
-    let List.490 : List U64 = CallByName List.80 List.114 List.115 List.491;
-    ret List.490;
-
-procedure List.68 (#Attr.2):
-    let List.489 : List I8 = lowlevel ListWithCapacity #Attr.2;
-    ret List.489;
-
-procedure List.68 (#Attr.2):
-    let List.501 : List U64 = lowlevel ListWithCapacity #Attr.2;
-    ret List.501;
-
-procedure List.71 (#Attr.2, #Attr.3):
-    let List.486 : List I8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.486;
-
-procedure List.71 (#Attr.2, #Attr.3):
-    let List.498 : List U64 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.498;
-
-procedure List.80 (List.502, List.503, List.504):
-    joinpoint List.480 List.116 List.117 List.118:
-        let List.488 : U64 = 0i64;
-        let List.482 : Int1 = CallByName Num.24 List.117 List.488;
-        if List.482 then
-            let List.487 : U64 = 1i64;
-            let List.484 : U64 = CallByName Num.20 List.117 List.487;
-            let List.485 : List I8 = CallByName List.71 List.118 List.116;
-            jump List.480 List.116 List.484 List.485;
-        else
-            ret List.118;
-    in
-    jump List.480 List.502 List.503 List.504;
-
-procedure List.80 (List.510, List.511, List.512):
-    joinpoint List.492 List.116 List.117 List.118:
-        let List.500 : U64 = 0i64;
-        let List.494 : Int1 = CallByName Num.24 List.117 List.500;
-        if List.494 then
-            let List.499 : U64 = 1i64;
-            let List.496 : U64 = CallByName Num.20 List.117 List.499;
-            let List.497 : List U64 = CallByName List.71 List.118 List.116;
-            jump List.492 List.116 List.496 List.497;
-        else
-            ret List.118;
-    in
-    jump List.492 List.510 List.511 List.512;
+procedure List.6 (#Attr.2):
+    let List.571 : U64 = lowlevel ListLen #Attr.2;
+    ret List.571;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.257 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.257;
-
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.259 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.259;
+    let Num.297 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.297;
 
 procedure Test.0 ():
-    let Test.2 : {List {[], []}, List U64, List I8, U64} = CallByName Dict.1;
+    let Test.3 : {} = Struct {};
+    let Test.2 : {List {U32, U32}, List {[], []}, U64, Float32, U8} = CallByName Dict.1 Test.3;
     let Test.1 : U64 = CallByName Dict.4 Test.2;
     ret Test.1;

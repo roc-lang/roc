@@ -71,6 +71,12 @@ pub fn create_dylib_macho(
             dummy_obj_file.path().to_str().unwrap(),
             "-o",
             dummy_lib_file.to_str().unwrap(),
+            // Suppress warnings, because otherwise it prints:
+            //
+            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
+            //
+            // We can't disable that option without breaking either x64 mac or ARM mac
+            "-w",
         ])
         .output()
         .unwrap();
@@ -82,12 +88,10 @@ pub fn create_dylib_macho(
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {
             Ok(stderr) => panic!(
-                "Failed to link dummy shared library - stderr of the `ld` command was:\n{}",
-                stderr
+                "Failed to link dummy shared library - stderr of the `ld` command was:\n{stderr}"
             ),
             Err(utf8_err) => panic!(
-                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({:?})",
-                utf8_err
+                "Failed to link dummy shared library  - stderr of the `ld` command was invalid utf8 ({utf8_err:?})"
             ),
         }
     }

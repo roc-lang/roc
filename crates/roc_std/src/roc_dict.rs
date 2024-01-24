@@ -46,7 +46,14 @@ impl<K, V> RocDict<K, V> {
 }
 
 impl<K: Hash, V> RocDict<K, V> {
-    pub fn from_iter<I: Iterator<Item = (K, V)>>(src: I) -> Self {
+    unsafe fn insert_unchecked(&mut self, _key: K, _val: V) {
+        todo!();
+    }
+}
+
+impl<K: Hash, V> FromIterator<(K, V)> for RocDict<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(into_iter: T) -> Self {
+        let src = into_iter.into_iter();
         let mut ret = Self::with_capacity(src.size_hint().0);
 
         for (key, val) in src {
@@ -56,16 +63,6 @@ impl<K: Hash, V> RocDict<K, V> {
         }
 
         ret
-    }
-
-    unsafe fn insert_unchecked(&mut self, _key: K, _val: V) {
-        todo!();
-    }
-}
-
-impl<'a, K: Hash, V> FromIterator<(K, V)> for RocDict<K, V> {
-    fn from_iter<T: IntoIterator<Item = (K, V)>>(into_iter: T) -> Self {
-        RocDict::from_iter(into_iter.into_iter())
     }
 }
 
@@ -132,6 +129,7 @@ impl<K: Debug, V: Debug> Debug for RocDict<K, V> {
 /// contiguously in memory. If we separate them at some point, we'll need to
 /// change this implementation drastically!
 #[derive(Eq)]
+#[repr(C)]
 union RocDictItem<K, V> {
     key_first: ManuallyDrop<KeyFirst<K, V>>,
     value_first: ManuallyDrop<ValueFirst<K, V>>,

@@ -1,0 +1,14 @@
+app "test" provides [main] to "./platform"
+
+entry =
+    OList := [Nil, Cons {} OList]
+
+    lst : [Cons {} OList]
+
+    olist : OList
+    olist = @OList lst
+
+    olist
+
+main = entry
+#      ^^^^^ OList

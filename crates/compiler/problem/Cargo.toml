@@ -1,14 +1,15 @@
 [package]
 name = "roc_problem"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Provides types to describe problems that can occur when compiling Roc code."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
 roc_collections = { path = "../collections" }
-roc_region = { path = "../region" }
 roc_module = { path = "../module" }
-roc_types = { path = "../types" }
 roc_parse = { path = "../parse" }
+roc_region = { path = "../region" }
+roc_types = { path = "../types" }

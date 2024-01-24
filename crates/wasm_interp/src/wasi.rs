@@ -54,7 +54,6 @@ impl<'a> WasiDispatcher<'a> {
         memory: &mut [u8],
     ) -> Option<Value> {
         let success_code = Some(Value::I32(Errno::Success as i32));
-
         match function_name {
             "args_get" => {
                 // uint8_t ** argv,
@@ -89,15 +88,62 @@ impl<'a> WasiDispatcher<'a> {
 
                 success_code
             }
-            "environ_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "environ_sizes_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "environ_get" => {
+                // `environ_sizes_get` always reports 0 environment variables
+                // so we don't have to do anything here.
+
+                success_code
+            }
+            "environ_sizes_get" => {
+                let num_env_ptr = arguments[0].expect_i32().unwrap() as usize;
+                let size_env_ptr = arguments[1].expect_i32().unwrap() as usize;
+
+                // Calculate the total size required for environment variables
+                let total_size = 0;
+                let count = 0;
+
+                write_u32(memory, num_env_ptr, count);
+                write_u32(memory, size_env_ptr, total_size as u32);
+
+                success_code
+            }
             "clock_res_get" => success_code, // this dummy implementation seems to be good enough for some functions
             "clock_time_get" => success_code,
             "fd_advise" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_datasync" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_fdstat_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_fdstat_get" => {
+                // (i32, i32) -> i32
+
+                // file descriptor
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // ptr to a wasi_fdstat_t
+                let stat_mut_ptr = arguments[1].expect_i32().unwrap() as usize;
+
+                match fd {
+                    1 => {
+                        // Tell WASI that stdout is a tty (no seek or tell)
+                        // https://github.com/WebAssembly/wasi-libc/blob/659ff414560721b1660a19685110e484a081c3d4/libc-bottom-half/sources/isatty.c
+                        // *Not* a tty if:
+                        //     (statbuf.fs_filetype != __WASI_FILETYPE_CHARACTER_DEVICE ||
+                        //         (statbuf.fs_rights_base & (__WASI_RIGHTS_FD_SEEK | __WASI_RIGHTS_FD_TELL)) != 0)
+                        // So it's sufficient to set:
+                        //     .fs_filetype = __WASI_FILETYPE_CHARACTER_DEVICE
+                        //     .fs_rights_base = 0
+
+                        const WASI_FILETYPE_CHARACTER_DEVICE: u8 = 2;
+                        memory[stat_mut_ptr] = WASI_FILETYPE_CHARACTER_DEVICE;
+
+                        for b in memory[stat_mut_ptr + 1..stat_mut_ptr + 24].iter_mut() {
+                            *b = 0;
+                        }
+                    }
+                    _ => todo!("WASI {}({:?})", function_name, arguments),
+                }
+
+                success_code
+            }
             "fd_fdstat_set_flags" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_fdstat_set_rights" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_filestat_get" => todo!("WASI {}({:?})", function_name, arguments),
@@ -115,7 +161,7 @@ impl<'a> WasiDispatcher<'a> {
                 if fd < self.files.len() {
                     success_code
                 } else {
-                    println!("WASI warning: file descriptor {} does not exist", fd);
+                    println!("WASI warning: file descriptor {fd} does not exist");
                     Some(Value::I32(Errno::Badf as i32))
                 }
             }
@@ -211,14 +257,16 @@ impl<'a> WasiDispatcher<'a> {
 
                 let mut n_written: i32 = 0;
                 let mut negative_length_count = 0;
-                for _ in 0..iovs_len {
+                let mut write_result = Ok(());
+                for i in 0..iovs_len {
                     // https://man7.org/linux/man-pages/man2/readv.2.html
                     // struct iovec {
                     //     void  *iov_base;    /* Starting address */
                     //     size_t iov_len;     /* Number of bytes to transfer */
                     // };
-                    let iov_base = read_u32(memory, ptr_iovs) as usize;
-                    let iov_len = read_i32(memory, ptr_iovs + 4);
+                    let ptr_iov = ptr_iovs + (8 * i as usize); // index into the array of iovec's
+                    let iov_base = read_u32(memory, ptr_iov) as usize;
+                    let iov_len = read_i32(memory, ptr_iov + 4);
                     if iov_len < 0 {
                         // I found negative-length iov's when I implemented this in JS for the web REPL (see wasi.js)
                         // I'm not sure why, but this solution worked, and it's the same WASI libc - there's only one.
@@ -228,30 +276,29 @@ impl<'a> WasiDispatcher<'a> {
                     }
                     let bytes = &memory[iov_base..][..iov_len as usize];
 
-                    match &mut write_lock {
-                        WriteLock::StdOut(stdout) => {
-                            n_written += stdout.write(bytes).unwrap() as i32;
-                        }
-                        WriteLock::Stderr(stderr) => {
-                            n_written += stderr.write(bytes).unwrap() as i32;
-                        }
-                        WriteLock::RegularFile(content) => {
-                            content.extend_from_slice(bytes);
-                            n_written += bytes.len() as i32;
-                        }
+                    write_result = match &mut write_lock {
+                        WriteLock::StdOut(stdout) => stdout.write_all(bytes),
+                        WriteLock::Stderr(stderr) => stderr.write_all(bytes),
+                        WriteLock::RegularFile(content) => content.write_all(bytes),
+                    };
+                    if write_result.is_err() {
+                        break;
                     }
+                    n_written += bytes.len() as i32;
                 }
 
                 write_i32(memory, ptr_nwritten, n_written);
                 if negative_length_count > 0 {
                     // Let's see if we ever get this message. If not, we can remove this negative-length stuff.
                     eprintln!(
-                        "WASI DEV INFO: found {} negative-length iovecs.",
-                        negative_length_count
+                        "WASI DEV INFO: found {negative_length_count} negative-length iovecs."
                     );
                 }
 
-                success_code
+                match write_result {
+                    Ok(()) => success_code,
+                    Err(_) => Some(Value::I32(Errno::Io as i32)),
+                }
             }
             "path_create_directory" => todo!("WASI {}({:?})", function_name, arguments),
             "path_filestat_get" => todo!("WASI {}({:?})", function_name, arguments),
@@ -283,7 +330,7 @@ impl<'a> WasiDispatcher<'a> {
             "sock_recv" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_send" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_shutdown" => todo!("WASI {}({:?})", function_name, arguments),
-            _ => panic!("Unknown WASI function {}({:?})", function_name, arguments),
+            _ => panic!("Unknown WASI function {function_name}({arguments:?})"),
         }
     }
 }

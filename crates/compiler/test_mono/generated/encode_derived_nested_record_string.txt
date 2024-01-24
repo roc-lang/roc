@@ -1,5 +1,5 @@
 procedure #Derived.0 (#Derived.1):
-    let #Derived_gen.0 : Str = CallByName Encode.22 #Derived.1;
+    let #Derived_gen.0 : Str = CallByName Encode.23 #Derived.1;
     ret #Derived_gen.0;
 
 procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
@@ -7,356 +7,594 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.8 : Str = CallByName #Derived.5 #Derived.1;
     let #Derived_gen.6 : {Str, Str} = Struct {#Derived_gen.7, #Derived_gen.8};
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6];
-    let #Derived_gen.4 : List {Str, Str} = CallByName Json.20 #Derived_gen.5;
-    let #Derived_gen.3 : List U8 = CallByName Encode.23 #Derived.3 #Derived_gen.4 #Derived.4;
+    let #Derived_gen.4 : List {Str, Str} = CallByName TotallyNotJson.29 #Derived_gen.5;
+    let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.4 #Derived.4;
     ret #Derived_gen.3;
 
 procedure #Derived.5 (#Derived.6):
-    let #Derived_gen.14 : Str = CallByName Encode.22 #Derived.6;
-    ret #Derived_gen.14;
+    let #Derived_gen.10 : Str = CallByName Encode.23 #Derived.6;
+    ret #Derived_gen.10;
 
 procedure #Derived.7 (#Derived.8, #Derived.9, #Derived.6):
-    let #Derived_gen.21 : Str = "b";
-    let #Derived_gen.22 : Str = CallByName Json.18 #Derived.6;
-    let #Derived_gen.20 : {Str, Str} = Struct {#Derived_gen.21, #Derived_gen.22};
-    let #Derived_gen.19 : List {Str, Str} = Array [#Derived_gen.20];
-    let #Derived_gen.18 : List {Str, Str} = CallByName Json.20 #Derived_gen.19;
-    let #Derived_gen.17 : List U8 = CallByName Encode.23 #Derived.8 #Derived_gen.18 #Derived.9;
-    ret #Derived_gen.17;
+    let #Derived_gen.17 : Str = "b";
+    let #Derived_gen.18 : Str = CallByName TotallyNotJson.25 #Derived.6;
+    let #Derived_gen.16 : {Str, Str} = Struct {#Derived_gen.17, #Derived_gen.18};
+    let #Derived_gen.15 : List {Str, Str} = Array [#Derived_gen.16];
+    let #Derived_gen.14 : List {Str, Str} = CallByName TotallyNotJson.29 #Derived_gen.15;
+    let #Derived_gen.13 : List U8 = CallByName Encode.24 #Derived.8 #Derived_gen.14 #Derived.9;
+    ret #Derived_gen.13;
 
-procedure Encode.22 (Encode.93):
-    ret Encode.93;
+procedure Encode.23 (Encode.98):
+    ret Encode.98;
 
-procedure Encode.22 (Encode.93):
-    ret Encode.93;
+procedure Encode.23 (Encode.98):
+    ret Encode.98;
 
-procedure Encode.22 (Encode.93):
-    ret Encode.93;
+procedure Encode.23 (Encode.98):
+    ret Encode.98;
 
-procedure Encode.22 (Encode.93):
-    ret Encode.93;
+procedure Encode.23 (Encode.98):
+    ret Encode.98;
 
-procedure Encode.22 (Encode.93):
-    ret Encode.93;
+procedure Encode.23 (Encode.98):
+    ret Encode.98;
 
-procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.106 : List U8 = CallByName #Derived.2 Encode.94 Encode.96 Encode.102;
-    ret Encode.106;
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.111 : List U8 = CallByName #Derived.2 Encode.99 Encode.101 Encode.107;
+    ret Encode.111;
 
-procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.113 : List U8 = CallByName Json.112 Encode.94 Encode.96 Encode.102;
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.113 : List U8 = CallByName TotallyNotJson.201 Encode.99 Encode.101 Encode.107;
     ret Encode.113;
 
-procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.115 : List U8 = CallByName #Derived.7 Encode.94 Encode.96 Encode.102;
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.115 : List U8 = CallByName #Derived.7 Encode.99 Encode.101 Encode.107;
     ret Encode.115;
 
-procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.125 : List U8 = CallByName Json.112 Encode.94 Encode.96 Encode.102;
-    ret Encode.125;
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.117 : List U8 = CallByName TotallyNotJson.201 Encode.99 Encode.101 Encode.107;
+    ret Encode.117;
 
-procedure Encode.23 (Encode.94, Encode.102, Encode.96):
-    let Encode.128 : List U8 = CallByName Json.96 Encode.94 Encode.96 Encode.102;
-    ret Encode.128;
+procedure Encode.24 (Encode.99, Encode.107, Encode.101):
+    let Encode.120 : List U8 = CallByName TotallyNotJson.150 Encode.99 Encode.101 Encode.107;
+    ret Encode.120;
 
-procedure Encode.25 (Encode.100, Encode.101):
-    let Encode.104 : List U8 = Array [];
-    let Encode.105 : Str = CallByName #Derived.0 Encode.100;
-    let Encode.103 : List U8 = CallByName Encode.23 Encode.104 Encode.105 Encode.101;
-    ret Encode.103;
+procedure Encode.26 (Encode.105, Encode.106):
+    let Encode.109 : List U8 = Array [];
+    let Encode.110 : Str = CallByName #Derived.0 Encode.105;
+    let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
+    ret Encode.108;
 
-procedure Json.1 ():
-    let Json.396 : {} = Struct {};
-    ret Json.396;
+procedure List.102 (List.486, List.487, List.488):
+    let List.683 : U64 = 0i64;
+    let List.684 : U64 = CallByName List.6 List.486;
+    let List.682 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.80 List.486 List.487 List.488 List.683 List.684;
+    ret List.682;
 
-procedure Json.112 (Json.113, Json.399, Json.111):
-    let Json.432 : I64 = 123i64;
-    let Json.431 : U8 = CallByName Num.125 Json.432;
-    let Json.115 : List U8 = CallByName List.4 Json.113 Json.431;
-    let Json.430 : U64 = CallByName List.6 Json.111;
-    let Json.407 : {List U8, U64} = Struct {Json.115, Json.430};
-    let Json.408 : {} = Struct {};
-    let Json.406 : {List U8, U64} = CallByName List.18 Json.111 Json.407 Json.408;
-    dec Json.111;
-    let Json.117 : List U8 = StructAtIndex 0 Json.406;
-    inc Json.117;
-    dec Json.406;
-    let Json.405 : I64 = 125i64;
-    let Json.404 : U8 = CallByName Num.125 Json.405;
-    let Json.403 : List U8 = CallByName List.4 Json.117 Json.404;
-    ret Json.403;
-
-procedure Json.112 (Json.113, Json.399, Json.111):
-    let Json.472 : I64 = 123i64;
-    let Json.471 : U8 = CallByName Num.125 Json.472;
-    let Json.115 : List U8 = CallByName List.4 Json.113 Json.471;
-    let Json.470 : U64 = CallByName List.6 Json.111;
-    let Json.447 : {List U8, U64} = Struct {Json.115, Json.470};
-    let Json.448 : {} = Struct {};
-    let Json.446 : {List U8, U64} = CallByName List.18 Json.111 Json.447 Json.448;
-    dec Json.111;
-    let Json.117 : List U8 = StructAtIndex 0 Json.446;
-    inc Json.117;
-    dec Json.446;
-    let Json.445 : I64 = 125i64;
-    let Json.444 : U8 = CallByName Num.125 Json.445;
-    let Json.443 : List U8 = CallByName List.4 Json.117 Json.444;
-    ret Json.443;
-
-procedure Json.114 (Json.401, Json.402):
-    let Json.120 : Str = StructAtIndex 0 Json.402;
-    inc Json.120;
-    let Json.121 : Str = StructAtIndex 1 Json.402;
-    inc Json.121;
-    dec Json.402;
-    let Json.118 : List U8 = StructAtIndex 0 Json.401;
-    inc Json.118;
-    let Json.119 : U64 = StructAtIndex 1 Json.401;
-    dec Json.401;
-    let Json.429 : I64 = 34i64;
-    let Json.428 : U8 = CallByName Num.125 Json.429;
-    let Json.426 : List U8 = CallByName List.4 Json.118 Json.428;
-    let Json.427 : List U8 = CallByName Str.12 Json.120;
-    let Json.423 : List U8 = CallByName List.8 Json.426 Json.427;
-    let Json.425 : I64 = 34i64;
-    let Json.424 : U8 = CallByName Num.125 Json.425;
-    let Json.420 : List U8 = CallByName List.4 Json.423 Json.424;
-    let Json.422 : I64 = 58i64;
-    let Json.421 : U8 = CallByName Num.125 Json.422;
-    let Json.418 : List U8 = CallByName List.4 Json.420 Json.421;
-    let Json.419 : {} = Struct {};
-    let Json.122 : List U8 = CallByName Encode.23 Json.418 Json.121 Json.419;
-    joinpoint Json.413 Json.123:
-        let Json.411 : U64 = 1i64;
-        let Json.410 : U64 = CallByName Num.20 Json.119 Json.411;
-        let Json.409 : {List U8, U64} = Struct {Json.123, Json.410};
-        ret Json.409;
-    in
-    let Json.417 : U64 = 1i64;
-    let Json.414 : Int1 = CallByName Num.24 Json.119 Json.417;
-    if Json.414 then
-        let Json.416 : I64 = 44i64;
-        let Json.415 : U8 = CallByName Num.125 Json.416;
-        let Json.412 : List U8 = CallByName List.4 Json.122 Json.415;
-        jump Json.413 Json.412;
-    else
-        jump Json.413 Json.122;
-
-procedure Json.114 (Json.401, Json.402):
-    let Json.120 : Str = StructAtIndex 0 Json.402;
-    inc Json.120;
-    let Json.121 : Str = StructAtIndex 1 Json.402;
-    inc Json.121;
-    dec Json.402;
-    let Json.118 : List U8 = StructAtIndex 0 Json.401;
-    inc Json.118;
-    let Json.119 : U64 = StructAtIndex 1 Json.401;
-    dec Json.401;
-    let Json.469 : I64 = 34i64;
-    let Json.468 : U8 = CallByName Num.125 Json.469;
-    let Json.466 : List U8 = CallByName List.4 Json.118 Json.468;
-    let Json.467 : List U8 = CallByName Str.12 Json.120;
-    let Json.463 : List U8 = CallByName List.8 Json.466 Json.467;
-    let Json.465 : I64 = 34i64;
-    let Json.464 : U8 = CallByName Num.125 Json.465;
-    let Json.460 : List U8 = CallByName List.4 Json.463 Json.464;
-    let Json.462 : I64 = 58i64;
-    let Json.461 : U8 = CallByName Num.125 Json.462;
-    let Json.458 : List U8 = CallByName List.4 Json.460 Json.461;
-    let Json.459 : {} = Struct {};
-    let Json.122 : List U8 = CallByName Encode.23 Json.458 Json.121 Json.459;
-    joinpoint Json.453 Json.123:
-        let Json.451 : U64 = 1i64;
-        let Json.450 : U64 = CallByName Num.20 Json.119 Json.451;
-        let Json.449 : {List U8, U64} = Struct {Json.123, Json.450};
-        ret Json.449;
-    in
-    let Json.457 : U64 = 1i64;
-    let Json.454 : Int1 = CallByName Num.24 Json.119 Json.457;
-    if Json.454 then
-        let Json.456 : I64 = 44i64;
-        let Json.455 : U8 = CallByName Num.125 Json.456;
-        let Json.452 : List U8 = CallByName List.4 Json.122 Json.455;
-        jump Json.453 Json.452;
-    else
-        jump Json.453 Json.122;
-
-procedure Json.18 (Json.95):
-    let Json.473 : Str = CallByName Encode.22 Json.95;
-    ret Json.473;
-
-procedure Json.20 (Json.111):
-    let Json.397 : List {Str, Str} = CallByName Encode.22 Json.111;
-    ret Json.397;
-
-procedure Json.20 (Json.111):
-    let Json.439 : List {Str, Str} = CallByName Encode.22 Json.111;
-    ret Json.439;
-
-procedure Json.96 (Json.97, Json.475, Json.95):
-    let Json.484 : I64 = 34i64;
-    let Json.483 : U8 = CallByName Num.125 Json.484;
-    let Json.481 : List U8 = CallByName List.4 Json.97 Json.483;
-    let Json.482 : List U8 = CallByName Str.12 Json.95;
-    let Json.478 : List U8 = CallByName List.8 Json.481 Json.482;
-    let Json.480 : I64 = 34i64;
-    let Json.479 : U8 = CallByName Num.125 Json.480;
-    let Json.477 : List U8 = CallByName List.4 Json.478 Json.479;
-    ret Json.477;
-
-procedure List.138 (List.139, List.140, List.137):
-    let List.519 : {List U8, U64} = CallByName Json.114 List.139 List.140;
-    ret List.519;
-
-procedure List.138 (List.139, List.140, List.137):
-    let List.592 : {List U8, U64} = CallByName Json.114 List.139 List.140;
+procedure List.18 (List.158, List.159, List.160):
+    let List.593 : U64 = 0i64;
+    let List.594 : U64 = CallByName List.6 List.158;
+    let List.592 : {List U8, U64} = CallByName List.90 List.158 List.159 List.160 List.593 List.594;
     ret List.592;
 
-procedure List.18 (List.135, List.136, List.137):
-    let List.500 : {List U8, U64} = CallByName List.90 List.135 List.136 List.137;
-    ret List.500;
+procedure List.18 (List.158, List.159, List.160):
+    let List.627 : U64 = 0i64;
+    let List.628 : U64 = CallByName List.6 List.158;
+    let List.626 : {List U8, U64} = CallByName List.90 List.158 List.159 List.160 List.627 List.628;
+    ret List.626;
 
-procedure List.18 (List.135, List.136, List.137):
-    let List.573 : {List U8, U64} = CallByName List.90 List.135 List.136 List.137;
-    ret List.573;
+procedure List.18 (List.158, List.159, List.160):
+    let List.639 : U64 = 0i64;
+    let List.640 : U64 = CallByName List.6 List.158;
+    let List.638 : List U8 = CallByName List.90 List.158 List.159 List.160 List.639 List.640;
+    ret List.638;
 
-procedure List.4 (List.106, List.107):
-    let List.572 : U64 = 1i64;
-    let List.571 : List U8 = CallByName List.70 List.106 List.572;
-    let List.570 : List U8 = CallByName List.71 List.571 List.107;
-    ret List.570;
+procedure List.26 (List.199, List.200, List.201):
+    let List.676 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.102 List.199 List.200 List.201;
+    let List.679 : U8 = 1i64;
+    let List.680 : U8 = GetTagId List.676;
+    let List.681 : Int1 = lowlevel Eq List.679 List.680;
+    if List.681 then
+        let List.202 : {U64, Int1} = UnionAtIndex (Id 1) (Index 0) List.676;
+        ret List.202;
+    else
+        let List.203 : {U64, Int1} = UnionAtIndex (Id 0) (Index 0) List.676;
+        ret List.203;
+
+procedure List.4 (List.122, List.123):
+    let List.625 : U64 = 1i64;
+    let List.624 : List U8 = CallByName List.70 List.122 List.625;
+    let List.623 : List U8 = CallByName List.71 List.624 List.123;
+    ret List.623;
+
+procedure List.49 (List.418, List.419):
+    let List.667 : U64 = StructAtIndex 1 List.419;
+    let List.668 : U64 = StructAtIndex 0 List.419;
+    let List.666 : List U8 = CallByName List.72 List.418 List.667 List.668;
+    ret List.666;
+
+procedure List.52 (List.433, List.434):
+    let List.435 : U64 = CallByName List.6 List.433;
+    joinpoint List.674 List.436:
+        let List.672 : U64 = 0i64;
+        let List.671 : {U64, U64} = Struct {List.436, List.672};
+        inc List.433;
+        let List.437 : List U8 = CallByName List.49 List.433 List.671;
+        let List.670 : U64 = CallByName Num.75 List.435 List.436;
+        let List.665 : {U64, U64} = Struct {List.670, List.436};
+        let List.438 : List U8 = CallByName List.49 List.433 List.665;
+        let List.664 : {List U8, List U8} = Struct {List.437, List.438};
+        ret List.664;
+    in
+    let List.675 : Int1 = CallByName Num.24 List.435 List.434;
+    if List.675 then
+        jump List.674 List.434;
+    else
+        jump List.674 List.435;
 
 procedure List.6 (#Attr.2):
-    let List.478 : U64 = lowlevel ListLen #Attr.2;
-    ret List.478;
+    let List.605 : U64 = lowlevel ListLen #Attr.2;
+    ret List.605;
 
 procedure List.6 (#Attr.2):
-    let List.521 : U64 = lowlevel ListLen #Attr.2;
-    ret List.521;
+    let List.659 : U64 = lowlevel ListLen #Attr.2;
+    ret List.659;
 
 procedure List.6 (#Attr.2):
-    let List.595 : U64 = lowlevel ListLen #Attr.2;
-    ret List.595;
+    let List.661 : U64 = lowlevel ListLen #Attr.2;
+    ret List.661;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.516 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.516;
+    let List.602 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.602;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.589 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.589;
+    let List.636 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.636;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.648 : U8 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.648;
+
+procedure List.68 (#Attr.2):
+    let List.663 : List U8 = lowlevel ListWithCapacity #Attr.2;
+    ret List.663;
 
 procedure List.70 (#Attr.2, #Attr.3):
-    let List.551 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
-    ret List.551;
+    let List.610 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.610;
 
 procedure List.71 (#Attr.2, #Attr.3):
-    let List.549 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.549;
+    let List.608 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.608;
+
+procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
+    let List.669 : List U8 = lowlevel ListSublist #Attr.2 #Attr.3 #Attr.4;
+    ret List.669;
 
 procedure List.8 (#Attr.2, #Attr.3):
-    let List.594 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
-    ret List.594;
+    let List.658 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.658;
 
-procedure List.90 (List.426, List.427, List.428):
-    let List.504 : U64 = 0i64;
-    let List.505 : U64 = CallByName List.6 List.426;
-    let List.503 : {List U8, U64} = CallByName List.91 List.426 List.427 List.428 List.504 List.505;
-    ret List.503;
-
-procedure List.90 (List.426, List.427, List.428):
-    let List.577 : U64 = 0i64;
-    let List.578 : U64 = CallByName List.6 List.426;
-    let List.576 : {List U8, U64} = CallByName List.91 List.426 List.427 List.428 List.577 List.578;
-    ret List.576;
-
-procedure List.91 (List.531, List.532, List.533, List.534, List.535):
-    joinpoint List.506 List.429 List.430 List.431 List.432 List.433:
-        let List.508 : Int1 = CallByName Num.22 List.432 List.433;
-        if List.508 then
-            let List.515 : {Str, Str} = CallByName List.66 List.429 List.432;
-            let List.509 : {List U8, U64} = CallByName List.138 List.430 List.515 List.431;
-            let List.512 : U64 = 1i64;
-            let List.511 : U64 = CallByName Num.19 List.432 List.512;
-            jump List.506 List.429 List.509 List.431 List.511 List.433;
+procedure List.80 (#Derived_gen.50, #Derived_gen.51, #Derived_gen.52, #Derived_gen.53, #Derived_gen.54):
+    joinpoint List.685 List.489 List.490 List.491 List.492 List.493:
+        let List.687 : Int1 = CallByName Num.22 List.492 List.493;
+        if List.687 then
+            let List.696 : U8 = CallByName List.66 List.489 List.492;
+            let List.688 : [C {U64, Int1}, C {U64, Int1}] = CallByName TotallyNotJson.157 List.490 List.696;
+            let List.693 : U8 = 1i64;
+            let List.694 : U8 = GetTagId List.688;
+            let List.695 : Int1 = lowlevel Eq List.693 List.694;
+            if List.695 then
+                let List.494 : {U64, Int1} = UnionAtIndex (Id 1) (Index 0) List.688;
+                let List.691 : U64 = 1i64;
+                let List.690 : U64 = CallByName Num.51 List.492 List.691;
+                jump List.685 List.489 List.494 List.491 List.690 List.493;
+            else
+                dec List.489;
+                let List.495 : {U64, Int1} = UnionAtIndex (Id 0) (Index 0) List.688;
+                let List.692 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) List.495;
+                ret List.692;
         else
-            ret List.430;
+            dec List.489;
+            let List.686 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.490;
+            ret List.686;
     in
-    jump List.506 List.531 List.532 List.533 List.534 List.535;
+    jump List.685 #Derived_gen.50 #Derived_gen.51 #Derived_gen.52 #Derived_gen.53 #Derived_gen.54;
 
-procedure List.91 (List.605, List.606, List.607, List.608, List.609):
-    joinpoint List.579 List.429 List.430 List.431 List.432 List.433:
-        let List.581 : Int1 = CallByName Num.22 List.432 List.433;
-        if List.581 then
-            let List.588 : {Str, Str} = CallByName List.66 List.429 List.432;
-            let List.582 : {List U8, U64} = CallByName List.138 List.430 List.588 List.431;
-            let List.585 : U64 = 1i64;
-            let List.584 : U64 = CallByName Num.19 List.432 List.585;
-            jump List.579 List.429 List.582 List.431 List.584 List.433;
+procedure List.90 (#Derived_gen.26, #Derived_gen.27, #Derived_gen.28, #Derived_gen.29, #Derived_gen.30):
+    joinpoint List.641 List.161 List.162 List.163 List.164 List.165:
+        let List.643 : Int1 = CallByName Num.22 List.164 List.165;
+        if List.643 then
+            let List.647 : U8 = CallByName List.66 List.161 List.164;
+            let List.166 : List U8 = CallByName TotallyNotJson.183 List.162 List.647;
+            let List.646 : U64 = 1i64;
+            let List.645 : U64 = CallByName Num.51 List.164 List.646;
+            jump List.641 List.161 List.166 List.163 List.645 List.165;
         else
-            ret List.430;
+            dec List.161;
+            ret List.162;
     in
-    jump List.579 List.605 List.606 List.607 List.608 List.609;
+    jump List.641 #Derived_gen.26 #Derived_gen.27 #Derived_gen.28 #Derived_gen.29 #Derived_gen.30;
 
-procedure Num.125 (#Attr.2):
-    let Num.282 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.282;
+procedure List.90 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_gen.43, #Derived_gen.44):
+    joinpoint List.595 List.161 List.162 List.163 List.164 List.165:
+        let List.597 : Int1 = CallByName Num.22 List.164 List.165;
+        if List.597 then
+            let List.601 : {Str, Str} = CallByName List.66 List.161 List.164;
+            inc List.601;
+            let List.166 : {List U8, U64} = CallByName TotallyNotJson.203 List.162 List.601;
+            let List.600 : U64 = 1i64;
+            let List.599 : U64 = CallByName Num.51 List.164 List.600;
+            jump List.595 List.161 List.166 List.163 List.599 List.165;
+        else
+            dec List.161;
+            ret List.162;
+    in
+    jump List.595 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
+
+procedure List.90 (#Derived_gen.45, #Derived_gen.46, #Derived_gen.47, #Derived_gen.48, #Derived_gen.49):
+    joinpoint List.629 List.161 List.162 List.163 List.164 List.165:
+        let List.631 : Int1 = CallByName Num.22 List.164 List.165;
+        if List.631 then
+            let List.635 : {Str, Str} = CallByName List.66 List.161 List.164;
+            inc List.635;
+            let List.166 : {List U8, U64} = CallByName TotallyNotJson.203 List.162 List.635;
+            let List.634 : U64 = 1i64;
+            let List.633 : U64 = CallByName Num.51 List.164 List.634;
+            jump List.629 List.161 List.166 List.163 List.633 List.165;
+        else
+            dec List.161;
+            ret List.162;
+    in
+    jump List.629 #Derived_gen.45 #Derived_gen.46 #Derived_gen.47 #Derived_gen.48 #Derived_gen.49;
+
+procedure Num.127 (#Attr.2):
+    let Num.312 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.312;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.285 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.285;
+    let Num.316 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.316;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.313 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.313;
+
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.318 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.318;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.286;
+    let Num.324 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.324;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.284 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.326 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.326;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.321 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.321;
+
+procedure Num.75 (#Attr.2, #Attr.3):
+    let Num.325 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.325;
+
+procedure Num.94 (#Attr.2, #Attr.3):
+    let Num.317 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
+    ret Num.317;
 
 procedure Str.12 (#Attr.2):
-    let Str.282 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.282;
+    let Str.263 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.263;
 
-procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.274 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.274;
+procedure Str.43 (#Attr.2, #Attr.3, #Attr.4):
+    let Str.260 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.260;
 
-procedure Str.9 (Str.76):
-    let Str.272 : U64 = 0i64;
-    let Str.273 : U64 = CallByName List.6 Str.76;
-    let Str.77 : {U64, Str, Int1, U8} = CallByName Str.48 Str.76 Str.272 Str.273;
-    let Str.269 : Int1 = StructAtIndex 2 Str.77;
-    if Str.269 then
-        let Str.271 : Str = StructAtIndex 1 Str.77;
-        inc Str.271;
-        dec Str.77;
-        let Str.270 : [C {U64, U8}, C Str] = TagId(1) Str.271;
-        ret Str.270;
+procedure Str.9 (Str.68):
+    let Str.258 : U64 = 0i64;
+    let Str.259 : U64 = CallByName List.6 Str.68;
+    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.258 Str.259;
+    let Str.255 : Int1 = StructAtIndex 2 Str.69;
+    if Str.255 then
+        let Str.257 : Str = StructAtIndex 1 Str.69;
+        let Str.256 : [C {U64, U8}, C Str] = TagId(1) Str.257;
+        ret Str.256;
     else
-        let Str.267 : U8 = StructAtIndex 3 Str.77;
-        let Str.268 : U64 = StructAtIndex 0 Str.77;
-        dec Str.77;
-        let Str.266 : {U64, U8} = Struct {Str.268, Str.267};
-        let Str.265 : [C {U64, U8}, C Str] = TagId(0) Str.266;
-        ret Str.265;
+        let Str.253 : U8 = StructAtIndex 3 Str.69;
+        let Str.254 : U64 = StructAtIndex 0 Str.69;
+        let #Derived_gen.55 : Str = StructAtIndex 1 Str.69;
+        dec #Derived_gen.55;
+        let Str.252 : {U64, U8} = Struct {Str.254, Str.253};
+        let Str.251 : [C {U64, U8}, C Str] = TagId(0) Str.252;
+        ret Str.251;
+
+procedure TotallyNotJson.150 (TotallyNotJson.151, TotallyNotJson.1043, TotallyNotJson.149):
+    let TotallyNotJson.1046 : List U8 = CallByName TotallyNotJson.26 TotallyNotJson.149;
+    let TotallyNotJson.1045 : List U8 = CallByName List.8 TotallyNotJson.151 TotallyNotJson.1046;
+    ret TotallyNotJson.1045;
+
+procedure TotallyNotJson.157 (TotallyNotJson.1094, TotallyNotJson.160):
+    let TotallyNotJson.158 : U64 = StructAtIndex 0 TotallyNotJson.1094;
+    let TotallyNotJson.159 : Int1 = StructAtIndex 1 TotallyNotJson.1094;
+    switch TotallyNotJson.160:
+        case 34:
+            let TotallyNotJson.1097 : Int1 = false;
+            let TotallyNotJson.1096 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1097};
+            let TotallyNotJson.1095 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1096;
+            ret TotallyNotJson.1095;
+    
+        case 92:
+            let TotallyNotJson.1100 : Int1 = false;
+            let TotallyNotJson.1099 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1100};
+            let TotallyNotJson.1098 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1099;
+            ret TotallyNotJson.1098;
+    
+        case 47:
+            let TotallyNotJson.1103 : Int1 = false;
+            let TotallyNotJson.1102 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1103};
+            let TotallyNotJson.1101 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1102;
+            ret TotallyNotJson.1101;
+    
+        case 8:
+            let TotallyNotJson.1106 : Int1 = false;
+            let TotallyNotJson.1105 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1106};
+            let TotallyNotJson.1104 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1105;
+            ret TotallyNotJson.1104;
+    
+        case 12:
+            let TotallyNotJson.1109 : Int1 = false;
+            let TotallyNotJson.1108 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1109};
+            let TotallyNotJson.1107 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1108;
+            ret TotallyNotJson.1107;
+    
+        case 10:
+            let TotallyNotJson.1112 : Int1 = false;
+            let TotallyNotJson.1111 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1112};
+            let TotallyNotJson.1110 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1111;
+            ret TotallyNotJson.1110;
+    
+        case 13:
+            let TotallyNotJson.1115 : Int1 = false;
+            let TotallyNotJson.1114 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1115};
+            let TotallyNotJson.1113 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1114;
+            ret TotallyNotJson.1113;
+    
+        case 9:
+            let TotallyNotJson.1118 : Int1 = false;
+            let TotallyNotJson.1117 : {U64, Int1} = Struct {TotallyNotJson.158, TotallyNotJson.1118};
+            let TotallyNotJson.1116 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1117;
+            ret TotallyNotJson.1116;
+    
+        default:
+            let TotallyNotJson.1122 : U64 = 1i64;
+            let TotallyNotJson.1121 : U64 = CallByName Num.19 TotallyNotJson.158 TotallyNotJson.1122;
+            let TotallyNotJson.1120 : {U64, Int1} = Struct {TotallyNotJson.1121, TotallyNotJson.159};
+            let TotallyNotJson.1119 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) TotallyNotJson.1120;
+            ret TotallyNotJson.1119;
+    
+
+procedure TotallyNotJson.183 (TotallyNotJson.184, TotallyNotJson.185):
+    let TotallyNotJson.1065 : List U8 = CallByName TotallyNotJson.27 TotallyNotJson.185;
+    let TotallyNotJson.1064 : List U8 = CallByName List.8 TotallyNotJson.184 TotallyNotJson.1065;
+    ret TotallyNotJson.1064;
+
+procedure TotallyNotJson.201 (TotallyNotJson.202, TotallyNotJson.973, TotallyNotJson.200):
+    let TotallyNotJson.1006 : I64 = 123i64;
+    let TotallyNotJson.1005 : U8 = CallByName Num.127 TotallyNotJson.1006;
+    let TotallyNotJson.204 : List U8 = CallByName List.4 TotallyNotJson.202 TotallyNotJson.1005;
+    let TotallyNotJson.1004 : U64 = CallByName List.6 TotallyNotJson.200;
+    let TotallyNotJson.981 : {List U8, U64} = Struct {TotallyNotJson.204, TotallyNotJson.1004};
+    let TotallyNotJson.982 : {} = Struct {};
+    let TotallyNotJson.980 : {List U8, U64} = CallByName List.18 TotallyNotJson.200 TotallyNotJson.981 TotallyNotJson.982;
+    let TotallyNotJson.206 : List U8 = StructAtIndex 0 TotallyNotJson.980;
+    let TotallyNotJson.979 : I64 = 125i64;
+    let TotallyNotJson.978 : U8 = CallByName Num.127 TotallyNotJson.979;
+    let TotallyNotJson.977 : List U8 = CallByName List.4 TotallyNotJson.206 TotallyNotJson.978;
+    ret TotallyNotJson.977;
+
+procedure TotallyNotJson.201 (TotallyNotJson.202, TotallyNotJson.973, TotallyNotJson.200):
+    let TotallyNotJson.1040 : I64 = 123i64;
+    let TotallyNotJson.1039 : U8 = CallByName Num.127 TotallyNotJson.1040;
+    let TotallyNotJson.204 : List U8 = CallByName List.4 TotallyNotJson.202 TotallyNotJson.1039;
+    let TotallyNotJson.1038 : U64 = CallByName List.6 TotallyNotJson.200;
+    let TotallyNotJson.1015 : {List U8, U64} = Struct {TotallyNotJson.204, TotallyNotJson.1038};
+    let TotallyNotJson.1016 : {} = Struct {};
+    let TotallyNotJson.1014 : {List U8, U64} = CallByName List.18 TotallyNotJson.200 TotallyNotJson.1015 TotallyNotJson.1016;
+    let TotallyNotJson.206 : List U8 = StructAtIndex 0 TotallyNotJson.1014;
+    let TotallyNotJson.1013 : I64 = 125i64;
+    let TotallyNotJson.1012 : U8 = CallByName Num.127 TotallyNotJson.1013;
+    let TotallyNotJson.1011 : List U8 = CallByName List.4 TotallyNotJson.206 TotallyNotJson.1012;
+    ret TotallyNotJson.1011;
+
+procedure TotallyNotJson.203 (TotallyNotJson.975, TotallyNotJson.976):
+    let TotallyNotJson.209 : Str = StructAtIndex 0 TotallyNotJson.976;
+    let TotallyNotJson.210 : Str = StructAtIndex 1 TotallyNotJson.976;
+    let TotallyNotJson.207 : List U8 = StructAtIndex 0 TotallyNotJson.975;
+    let TotallyNotJson.208 : U64 = StructAtIndex 1 TotallyNotJson.975;
+    let TotallyNotJson.1003 : I64 = 34i64;
+    let TotallyNotJson.1002 : U8 = CallByName Num.127 TotallyNotJson.1003;
+    let TotallyNotJson.1000 : List U8 = CallByName List.4 TotallyNotJson.207 TotallyNotJson.1002;
+    let TotallyNotJson.1001 : List U8 = CallByName Str.12 TotallyNotJson.209;
+    let TotallyNotJson.997 : List U8 = CallByName List.8 TotallyNotJson.1000 TotallyNotJson.1001;
+    let TotallyNotJson.999 : I64 = 34i64;
+    let TotallyNotJson.998 : U8 = CallByName Num.127 TotallyNotJson.999;
+    let TotallyNotJson.994 : List U8 = CallByName List.4 TotallyNotJson.997 TotallyNotJson.998;
+    let TotallyNotJson.996 : I64 = 58i64;
+    let TotallyNotJson.995 : U8 = CallByName Num.127 TotallyNotJson.996;
+    let TotallyNotJson.992 : List U8 = CallByName List.4 TotallyNotJson.994 TotallyNotJson.995;
+    let TotallyNotJson.993 : {} = Struct {};
+    let TotallyNotJson.212 : List U8 = CallByName Encode.24 TotallyNotJson.992 TotallyNotJson.210 TotallyNotJson.993;
+    joinpoint TotallyNotJson.987 TotallyNotJson.213:
+        let TotallyNotJson.985 : U64 = 1i64;
+        let TotallyNotJson.984 : U64 = CallByName Num.20 TotallyNotJson.208 TotallyNotJson.985;
+        let TotallyNotJson.983 : {List U8, U64} = Struct {TotallyNotJson.213, TotallyNotJson.984};
+        ret TotallyNotJson.983;
+    in
+    let TotallyNotJson.991 : U64 = 1i64;
+    let TotallyNotJson.988 : Int1 = CallByName Num.24 TotallyNotJson.208 TotallyNotJson.991;
+    if TotallyNotJson.988 then
+        let TotallyNotJson.990 : I64 = 44i64;
+        let TotallyNotJson.989 : U8 = CallByName Num.127 TotallyNotJson.990;
+        let TotallyNotJson.986 : List U8 = CallByName List.4 TotallyNotJson.212 TotallyNotJson.989;
+        jump TotallyNotJson.987 TotallyNotJson.986;
+    else
+        jump TotallyNotJson.987 TotallyNotJson.212;
+
+procedure TotallyNotJson.203 (TotallyNotJson.975, TotallyNotJson.976):
+    let TotallyNotJson.209 : Str = StructAtIndex 0 TotallyNotJson.976;
+    let TotallyNotJson.210 : Str = StructAtIndex 1 TotallyNotJson.976;
+    let TotallyNotJson.207 : List U8 = StructAtIndex 0 TotallyNotJson.975;
+    let TotallyNotJson.208 : U64 = StructAtIndex 1 TotallyNotJson.975;
+    let TotallyNotJson.1037 : I64 = 34i64;
+    let TotallyNotJson.1036 : U8 = CallByName Num.127 TotallyNotJson.1037;
+    let TotallyNotJson.1034 : List U8 = CallByName List.4 TotallyNotJson.207 TotallyNotJson.1036;
+    let TotallyNotJson.1035 : List U8 = CallByName Str.12 TotallyNotJson.209;
+    let TotallyNotJson.1031 : List U8 = CallByName List.8 TotallyNotJson.1034 TotallyNotJson.1035;
+    let TotallyNotJson.1033 : I64 = 34i64;
+    let TotallyNotJson.1032 : U8 = CallByName Num.127 TotallyNotJson.1033;
+    let TotallyNotJson.1028 : List U8 = CallByName List.4 TotallyNotJson.1031 TotallyNotJson.1032;
+    let TotallyNotJson.1030 : I64 = 58i64;
+    let TotallyNotJson.1029 : U8 = CallByName Num.127 TotallyNotJson.1030;
+    let TotallyNotJson.1026 : List U8 = CallByName List.4 TotallyNotJson.1028 TotallyNotJson.1029;
+    let TotallyNotJson.1027 : {} = Struct {};
+    let TotallyNotJson.212 : List U8 = CallByName Encode.24 TotallyNotJson.1026 TotallyNotJson.210 TotallyNotJson.1027;
+    joinpoint TotallyNotJson.1021 TotallyNotJson.213:
+        let TotallyNotJson.1019 : U64 = 1i64;
+        let TotallyNotJson.1018 : U64 = CallByName Num.20 TotallyNotJson.208 TotallyNotJson.1019;
+        let TotallyNotJson.1017 : {List U8, U64} = Struct {TotallyNotJson.213, TotallyNotJson.1018};
+        ret TotallyNotJson.1017;
+    in
+    let TotallyNotJson.1025 : U64 = 1i64;
+    let TotallyNotJson.1022 : Int1 = CallByName Num.24 TotallyNotJson.208 TotallyNotJson.1025;
+    if TotallyNotJson.1022 then
+        let TotallyNotJson.1024 : I64 = 44i64;
+        let TotallyNotJson.1023 : U8 = CallByName Num.127 TotallyNotJson.1024;
+        let TotallyNotJson.1020 : List U8 = CallByName List.4 TotallyNotJson.212 TotallyNotJson.1023;
+        jump TotallyNotJson.1021 TotallyNotJson.1020;
+    else
+        jump TotallyNotJson.1021 TotallyNotJson.212;
+
+procedure TotallyNotJson.25 (TotallyNotJson.149):
+    let TotallyNotJson.1041 : Str = CallByName Encode.23 TotallyNotJson.149;
+    ret TotallyNotJson.1041;
+
+procedure TotallyNotJson.26 (TotallyNotJson.152):
+    let TotallyNotJson.153 : List U8 = CallByName Str.12 TotallyNotJson.152;
+    let TotallyNotJson.1123 : U64 = 0i64;
+    let TotallyNotJson.1124 : Int1 = true;
+    let TotallyNotJson.154 : {U64, Int1} = Struct {TotallyNotJson.1123, TotallyNotJson.1124};
+    let TotallyNotJson.1093 : {} = Struct {};
+    inc TotallyNotJson.153;
+    let TotallyNotJson.155 : {U64, Int1} = CallByName List.26 TotallyNotJson.153 TotallyNotJson.154 TotallyNotJson.1093;
+    let TotallyNotJson.1047 : Int1 = StructAtIndex 1 TotallyNotJson.155;
+    let TotallyNotJson.1091 : Int1 = true;
+    let TotallyNotJson.1092 : Int1 = lowlevel Eq TotallyNotJson.1091 TotallyNotJson.1047;
+    if TotallyNotJson.1092 then
+        let TotallyNotJson.1057 : U64 = CallByName List.6 TotallyNotJson.153;
+        let TotallyNotJson.1058 : U64 = 2i64;
+        let TotallyNotJson.1056 : U64 = CallByName Num.19 TotallyNotJson.1057 TotallyNotJson.1058;
+        let TotallyNotJson.1053 : List U8 = CallByName List.68 TotallyNotJson.1056;
+        let TotallyNotJson.1055 : U8 = 34i64;
+        let TotallyNotJson.1054 : List U8 = Array [TotallyNotJson.1055];
+        let TotallyNotJson.1052 : List U8 = CallByName List.8 TotallyNotJson.1053 TotallyNotJson.1054;
+        let TotallyNotJson.1049 : List U8 = CallByName List.8 TotallyNotJson.1052 TotallyNotJson.153;
+        let TotallyNotJson.1051 : U8 = 34i64;
+        let TotallyNotJson.1050 : List U8 = Array [TotallyNotJson.1051];
+        let TotallyNotJson.1048 : List U8 = CallByName List.8 TotallyNotJson.1049 TotallyNotJson.1050;
+        ret TotallyNotJson.1048;
+    else
+        inc TotallyNotJson.153;
+        let TotallyNotJson.1090 : U64 = StructAtIndex 0 TotallyNotJson.155;
+        let TotallyNotJson.1089 : {List U8, List U8} = CallByName List.52 TotallyNotJson.153 TotallyNotJson.1090;
+        let TotallyNotJson.179 : List U8 = StructAtIndex 0 TotallyNotJson.1089;
+        let TotallyNotJson.181 : List U8 = StructAtIndex 1 TotallyNotJson.1089;
+        let TotallyNotJson.1087 : U64 = CallByName List.6 TotallyNotJson.153;
+        dec TotallyNotJson.153;
+        let TotallyNotJson.1088 : U64 = 120i64;
+        let TotallyNotJson.1085 : U64 = CallByName Num.21 TotallyNotJson.1087 TotallyNotJson.1088;
+        let TotallyNotJson.1086 : U64 = 100i64;
+        let TotallyNotJson.1084 : U64 = CallByName Num.94 TotallyNotJson.1085 TotallyNotJson.1086;
+        let TotallyNotJson.1081 : List U8 = CallByName List.68 TotallyNotJson.1084;
+        let TotallyNotJson.1083 : U8 = 34i64;
+        let TotallyNotJson.1082 : List U8 = Array [TotallyNotJson.1083];
+        let TotallyNotJson.1080 : List U8 = CallByName List.8 TotallyNotJson.1081 TotallyNotJson.1082;
+        let TotallyNotJson.182 : List U8 = CallByName List.8 TotallyNotJson.1080 TotallyNotJson.179;
+        let TotallyNotJson.1063 : {} = Struct {};
+        let TotallyNotJson.1060 : List U8 = CallByName List.18 TotallyNotJson.181 TotallyNotJson.182 TotallyNotJson.1063;
+        let TotallyNotJson.1062 : U8 = 34i64;
+        let TotallyNotJson.1061 : List U8 = Array [TotallyNotJson.1062];
+        let TotallyNotJson.1059 : List U8 = CallByName List.8 TotallyNotJson.1060 TotallyNotJson.1061;
+        ret TotallyNotJson.1059;
+
+procedure TotallyNotJson.27 (TotallyNotJson.186):
+    switch TotallyNotJson.186:
+        case 34:
+            let TotallyNotJson.1066 : List U8 = Array [92i64, 34i64];
+            ret TotallyNotJson.1066;
+    
+        case 92:
+            let TotallyNotJson.1067 : List U8 = Array [92i64, 92i64];
+            ret TotallyNotJson.1067;
+    
+        case 47:
+            let TotallyNotJson.1068 : List U8 = Array [92i64, 47i64];
+            ret TotallyNotJson.1068;
+    
+        case 8:
+            let TotallyNotJson.1070 : U8 = 98i64;
+            let TotallyNotJson.1069 : List U8 = Array [92i64, TotallyNotJson.1070];
+            ret TotallyNotJson.1069;
+    
+        case 12:
+            let TotallyNotJson.1072 : U8 = 102i64;
+            let TotallyNotJson.1071 : List U8 = Array [92i64, TotallyNotJson.1072];
+            ret TotallyNotJson.1071;
+    
+        case 10:
+            let TotallyNotJson.1074 : U8 = 110i64;
+            let TotallyNotJson.1073 : List U8 = Array [92i64, TotallyNotJson.1074];
+            ret TotallyNotJson.1073;
+    
+        case 13:
+            let TotallyNotJson.1076 : U8 = 114i64;
+            let TotallyNotJson.1075 : List U8 = Array [92i64, TotallyNotJson.1076];
+            ret TotallyNotJson.1075;
+    
+        case 9:
+            let TotallyNotJson.1078 : U8 = 114i64;
+            let TotallyNotJson.1077 : List U8 = Array [92i64, TotallyNotJson.1078];
+            ret TotallyNotJson.1077;
+    
+        default:
+            let TotallyNotJson.1079 : List U8 = Array [TotallyNotJson.186];
+            ret TotallyNotJson.1079;
+    
+
+procedure TotallyNotJson.29 (TotallyNotJson.200):
+    let TotallyNotJson.1007 : List {Str, Str} = CallByName Encode.23 TotallyNotJson.200;
+    ret TotallyNotJson.1007;
+
+procedure TotallyNotJson.29 (TotallyNotJson.200):
+    let TotallyNotJson.971 : List {Str, Str} = CallByName Encode.23 TotallyNotJson.200;
+    ret TotallyNotJson.971;
+
+procedure TotallyNotJson.8 ():
+    let TotallyNotJson.970 : {} = Struct {};
+    ret TotallyNotJson.970;
 
 procedure Test.0 ():
     let Test.12 : Str = "bar";
-    let Test.10 : {} = CallByName Json.1;
-    let Test.8 : List U8 = CallByName Encode.25 Test.12 Test.10;
+    let Test.10 : {} = CallByName TotallyNotJson.8;
+    let Test.8 : List U8 = CallByName Encode.26 Test.12 Test.10;
     let Test.1 : [C {U64, U8}, C Str] = CallByName Str.9 Test.8;
     let Test.5 : U8 = 1i64;
     let Test.6 : U8 = GetTagId Test.1;
     let Test.7 : Int1 = lowlevel Eq Test.5 Test.6;
     if Test.7 then
         let Test.2 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
-        inc Test.2;
-        dec Test.1;
         ret Test.2;
     else
         dec Test.1;

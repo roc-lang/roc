@@ -58,6 +58,11 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
+    TupleDestructure {
+        whole_var: Variable,
+        ext_var: Variable,
+        destructs: Vec<Loc<TupleDestruct>>,
+    },
     List {
         list_var: Variable,
         elem_var: Variable,
@@ -71,7 +76,7 @@ pub enum Pattern {
     Underscore,
 
     /// An identifier that marks a specialization of an ability member.
-    /// For example, given an ability member definition `hash : a -> U64 | a has Hash`,
+    /// For example, given an ability member definition `hash : a -> U64 where a implements Hash`,
     /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
     /// new symbol for the specialized "hash" identifier.
     AbilityMemberSpecialization {
@@ -100,6 +105,7 @@ impl Pattern {
             AppliedTag { whole_var, .. } => Some(*whole_var),
             UnwrappedOpaque { whole_var, .. } => Some(*whole_var),
             RecordDestructure { whole_var, .. } => Some(*whole_var),
+            TupleDestructure { whole_var, .. } => Some(*whole_var),
             List {
                 list_var: whole_var,
                 ..
@@ -130,7 +136,21 @@ impl Pattern {
             | UnsupportedPattern(..)
             | MalformedPattern(..)
             | AbilityMemberSpecialization { .. } => true,
-            RecordDestructure { destructs, .. } => destructs.is_empty(),
+
+            RecordDestructure { destructs, .. } => {
+                // If all destructs are surely exhaustive, then this is surely exhaustive.
+                destructs.iter().all(|d| match &d.value.typ {
+                    DestructType::Required | DestructType::Optional(_, _) => true,
+                    DestructType::Guard(_, pat) => pat.value.surely_exhaustive(),
+                })
+            }
+            TupleDestructure { destructs, .. } => {
+                // If all destructs are surely exhaustive, then this is surely exhaustive.
+                destructs
+                    .iter()
+                    .all(|d| d.value.typ.1.value.surely_exhaustive())
+            }
+
             As(pattern, _identifier) => pattern.value.surely_exhaustive(),
             List { patterns, .. } => patterns.surely_exhaustive(),
             AppliedTag { .. }
@@ -160,6 +180,7 @@ impl Pattern {
             UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
             RecordDestructure { destructs, .. } if destructs.is_empty() => C::EmptyRecord,
             RecordDestructure { .. } => C::Record,
+            TupleDestructure { .. } => C::Tuple,
             List { .. } => C::List,
             NumLiteral(..) => C::Num,
             IntLiteral(..) => C::Int,
@@ -213,6 +234,13 @@ pub struct RecordDestruct {
     pub label: Lowercase,
     pub symbol: Symbol,
     pub typ: DestructType,
+}
+
+#[derive(Clone, Debug)]
+pub struct TupleDestruct {
+    pub var: Variable,
+    pub destruct_index: usize,
+    pub typ: (Variable, Loc<Pattern>),
 }
 
 #[derive(Clone, Debug)]
@@ -293,8 +321,8 @@ pub fn canonicalize_def_header_pattern<'a>(
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct PermitShadows(pub bool);
 
-fn canonicalize_pattern_symbol<'a>(
-    env: &mut Env<'a>,
+fn canonicalize_pattern_symbol(
+    env: &mut Env,
     scope: &mut Scope,
     output: &mut Output,
     region: Region,
@@ -350,6 +378,12 @@ pub fn canonicalize_pattern<'a>(
                 Ok(symbol) => Pattern::Identifier(symbol),
                 Err(pattern) => pattern,
             }
+        }
+        Underscore(name) => {
+            // An underscored identifier can't be used, but we'll still add it to the scope
+            // for better error messages if someone tries to use it.
+            scope.introduce_ignored_local(name, region);
+            Pattern::Underscore
         }
         Tag(name) => {
             // Canonicalize the tag's name.
@@ -451,8 +485,6 @@ pub fn canonicalize_pattern<'a>(
             ptype => unsupported_pattern(env, ptype, region),
         },
 
-        Underscore(_) => Pattern::Underscore,
-
         &NumLiteral(str) => match pattern_type {
             WhenBranch => match finish_parsing_num(str) {
                 Err(_error) => {
@@ -499,7 +531,7 @@ pub fn canonicalize_pattern<'a>(
                     use std::ops::Neg;
 
                     let sign_str = if is_negative { "-" } else { "" };
-                    let int_str = format!("{}{}", sign_str, int).into_boxed_str();
+                    let int_str = format!("{sign_str}{int}").into_boxed_str();
                     let i = match int {
                         // Safety: this is fine because I128::MAX = |I128::MIN| - 1
                         IntValue::I128(n) if is_negative => {
@@ -554,8 +586,38 @@ pub fn canonicalize_pattern<'a>(
             )
         }
 
-        Tuple(_patterns) => {
-            todo!("canonicalize_pattern: Tuple")
+        Tuple(patterns) => {
+            let ext_var = var_store.fresh();
+            let whole_var = var_store.fresh();
+            let mut destructs = Vec::with_capacity(patterns.len());
+
+            for (i, loc_pattern) in patterns.iter().enumerate() {
+                let can_guard = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    permit_shadows,
+                );
+
+                destructs.push(Loc {
+                    region: loc_pattern.region,
+                    value: TupleDestruct {
+                        destruct_index: i,
+                        var: var_store.fresh(),
+                        typ: (var_store.fresh(), can_guard),
+                    },
+                });
+            }
+
+            Pattern::TupleDestructure {
+                whole_var,
+                ext_var,
+                destructs,
+            }
         }
 
         RecordDestructure(patterns) => {
@@ -861,7 +923,8 @@ pub enum BindingsFromPattern<'a> {
 
 pub enum BindingsFromPatternWork<'a> {
     Pattern(&'a Loc<Pattern>),
-    Destruct(&'a Loc<RecordDestruct>),
+    RecordDestruct(&'a Loc<RecordDestruct>),
+    TupleDestruct(&'a Loc<TupleDestruct>),
 }
 
 impl<'a> BindingsFromPattern<'a> {
@@ -911,8 +974,12 @@ impl<'a> BindingsFromPattern<'a> {
                             let (_, loc_arg) = &**argument;
                             stack.push(Pattern(loc_arg));
                         }
+                        TupleDestructure { destructs, .. } => {
+                            let it = destructs.iter().rev().map(TupleDestruct);
+                            stack.extend(it);
+                        }
                         RecordDestructure { destructs, .. } => {
-                            let it = destructs.iter().rev().map(Destruct);
+                            let it = destructs.iter().rev().map(RecordDestruct);
                             stack.extend(it);
                         }
                         NumLiteral(..)
@@ -930,7 +997,7 @@ impl<'a> BindingsFromPattern<'a> {
                         }
                     }
                 }
-                BindingsFromPatternWork::Destruct(loc_destruct) => {
+                BindingsFromPatternWork::RecordDestruct(loc_destruct) => {
                     match &loc_destruct.value.typ {
                         DestructType::Required | DestructType::Optional(_, _) => {
                             return Some((loc_destruct.value.symbol, loc_destruct.region));
@@ -940,6 +1007,10 @@ impl<'a> BindingsFromPattern<'a> {
                             stack.push(BindingsFromPatternWork::Pattern(inner))
                         }
                     }
+                }
+                BindingsFromPatternWork::TupleDestruct(loc_destruct) => {
+                    let inner = &loc_destruct.value.typ.1;
+                    stack.push(BindingsFromPatternWork::Pattern(inner))
                 }
             }
         }
@@ -1000,7 +1071,7 @@ fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
                 Unicode(loc_digits) => {
                     todo!("parse unicode digits {:?}", loc_digits);
                 }
-                Interpolated(loc_expr) => {
+                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
                     return Pattern::UnsupportedPattern(loc_expr.region);
                 }
                 EscapedChar(escaped) => buf.push(escaped.unescape()),

@@ -12,8 +12,8 @@ use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
-use ven_pretty::DocAllocator;
+use crate::report::{to_file_problem_report, Annotation, Report, RocDocAllocator, RocDocBuilder};
+use ven_pretty::{text, DocAllocator};
 
 const SYNTAX_PROBLEM: &str = "SYNTAX PROBLEM";
 const NAMING_PROBLEM: &str = "NAMING PROBLEM";
@@ -42,9 +42,9 @@ const OPAQUE_NOT_APPLIED: &str = "OPAQUE TYPE NOT APPLIED";
 const OPAQUE_OVER_APPLIED: &str = "OPAQUE TYPE APPLIED TO TOO MANY ARGS";
 const INVALID_EXTENSION_TYPE: &str = "INVALID_EXTENSION_TYPE";
 const ABILITY_HAS_TYPE_VARIABLES: &str = "ABILITY HAS TYPE VARIABLES";
-const HAS_CLAUSE_IS_NOT_AN_ABILITY: &str = "HAS CLAUSE IS NOT AN ABILITY";
-const ILLEGAL_HAS_CLAUSE: &str = "ILLEGAL HAS CLAUSE";
-const ABILITY_MEMBER_MISSING_HAS_CLAUSE: &str = "ABILITY MEMBER MISSING HAS CLAUSE";
+const IMPLEMENTS_CLAUSE_IS_NOT_AN_ABILITY: &str = "IMPLEMENTS CLAUSE IS NOT AN ABILITY";
+const ILLEGAL_IMPLEMENTS_CLAUSE: &str = "ILLEGAL IMPLEMENTS CLAUSE";
+const ABILITY_MEMBER_MISSING_IMPLEMENTS_CLAUSE: &str = "ABILITY MEMBER MISSING IMPLEMENTS CLAUSE";
 const ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES: &str = "ABILITY MEMBER BINDS MULTIPLE VARIABLES";
 const ABILITY_NOT_ON_TOPLEVEL: &str = "ABILITY NOT ON TOP-LEVEL";
 const SPECIALIZATION_NOT_ON_TOPLEVEL: &str = "SPECIALIZATION NOT ON TOP-LEVEL";
@@ -352,7 +352,7 @@ pub fn can_problem<'b>(
                     alloc.reflow("The definition of "),
                     alloc.symbol_unqualified(alias),
                     alloc.reflow(" has "),
-                    alloc.text(format!("{}", num_unbound)),
+                    text!(alloc, "{}", num_unbound),
                     alloc.reflow(" unbound type variables."),
                 ]));
                 stack.push(alloc.reflow("Here is one occurrence:"));
@@ -557,14 +557,8 @@ pub fn can_problem<'b>(
             doc = alloc.stack([
                 alloc.reflow("This string interpolation is invalid:"),
                 alloc.region(lines.convert_region(region)),
-                alloc.concat([
-                    alloc.reflow(r"I was expecting an identifier, like "),
-                    alloc.parser_suggestion("\\u(message)"),
-                    alloc.reflow(" or "),
-                    alloc.parser_suggestion("\\u(LoremIpsum.text)"),
-                    alloc.text("."),
-                ]),
-                alloc.reflow(r"Learn more about string interpolation at TODO"),
+                alloc.reflow(r"String interpolations cannot contain newlines or other interpolations."),
+                alloc.reflow(r"You can learn more about string interpolation at <https://www.roc-lang.org/tutorial#string-interpolation>"),
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
@@ -648,35 +642,37 @@ pub fn can_problem<'b>(
             title = ABILITY_HAS_TYPE_VARIABLES.to_string();
         }
 
-        Problem::HasClauseIsNotAbility {
+        Problem::ImplementsClauseIsNotAbility {
             region: clause_region,
         } => {
             doc = alloc.stack([
-                alloc.reflow(r#"The type referenced in this "has" clause is not an ability:"#),
+                alloc.reflow(
+                    r#"The type referenced in this "implements" clause is not an ability:"#,
+                ),
                 alloc.region(lines.convert_region(clause_region)),
             ]);
-            title = HAS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
+            title = IMPLEMENTS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
         }
 
-        Problem::IllegalHasClause { region } => {
+        Problem::IllegalImplementsClause { region } => {
             doc = alloc.stack([
                 alloc.concat([
-                    alloc.reflow("A "),
-                    alloc.keyword("has"),
+                    alloc.reflow("An "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause is not allowed here:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(
                         " clauses can only be specified on the top-level type annotations.",
                     ),
                 ]),
             ]);
-            title = ILLEGAL_HAS_CLAUSE.to_string();
+            title = ILLEGAL_IMPLEMENTS_CLAUSE.to_string();
         }
 
-        Problem::DuplicateHasAbility { ability, region } => {
+        Problem::DuplicateImplementsAbility { ability, region } => {
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("I already saw that this type variable is bound to the "),
@@ -685,15 +681,15 @@ pub fn can_problem<'b>(
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.reflow("Abilities only need to bound to a type variable once in a "),
-                    alloc.keyword("has"),
+                    alloc.reflow("Abilities only need to bound to a type variable once in an "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause!"),
                 ]),
             ]);
             title = "DUPLICATE BOUND ABILITY".to_string();
         }
 
-        Problem::AbilityMemberMissingHasClause {
+        Problem::AbilityMemberMissingImplementsClause {
             member,
             ability,
             region,
@@ -702,35 +698,35 @@ pub fn can_problem<'b>(
                 alloc.concat([
                     alloc.reflow("The definition of the ability member "),
                     alloc.symbol_unqualified(member),
-                    alloc.reflow(" does not include a "),
-                    alloc.keyword("has"),
+                    alloc.reflow(" does not include an "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause binding a type variable to the ability "),
                     alloc.symbol_unqualified(ability),
                     alloc.reflow(":"),
                 ]),
                 alloc.region(lines.convert_region(region)),
                 alloc.concat([
-                    alloc.reflow("Ability members must include a "),
-                    alloc.keyword("has"),
+                    alloc.reflow("Ability members must include an "),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.reflow(" clause binding a type variable to an ability, like"),
                 ]),
                 alloc.type_block(alloc.concat([
                     alloc.type_variable("a".into()),
                     alloc.space(),
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_unqualified(ability),
                 ])),
                 alloc.concat([alloc
                     .reflow("Otherwise, the function does not need to be part of the ability!")]),
             ]);
-            title = ABILITY_MEMBER_MISSING_HAS_CLAUSE.to_string();
+            title = ABILITY_MEMBER_MISSING_IMPLEMENTS_CLAUSE.to_string();
         }
 
         Problem::AbilityMemberMultipleBoundVars {
             member,
             ability,
-            span_has_clauses,
+            span_implements_clauses: span_has_clauses,
             mut bound_var_names,
         } => {
             doc = alloc.stack([
@@ -778,13 +774,13 @@ pub fn can_problem<'b>(
                 ),
                 alloc
                     .hint("")
-                    .append(alloc.reflow("Perhaps you meant to include a "))
-                    .append(alloc.keyword("has"))
+                    .append(alloc.reflow("Perhaps you meant to include an "))
+                    .append(alloc.keyword(roc_parse::keyword::IMPLEMENTS))
                     .append(alloc.reflow(" annotation, like")),
                 alloc.type_block(alloc.concat([
                     alloc.type_variable(suggested_var_name),
                     alloc.space(),
-                    alloc.keyword("has"),
+                    alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
                     alloc.symbol_unqualified(ability),
                 ])),
@@ -843,7 +839,7 @@ pub fn can_problem<'b>(
                     alloc.reflow("An implementation of "), alloc.symbol_unqualified(member), alloc.reflow(" could not be found in this scope:"),
                 ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {}: my{} }}", member_str, member_str))]))
+                alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {member_str}: my{member_str} }}"))]))
             ]);
             title = IMPLEMENTATION_NOT_FOUND.to_string();
         }
@@ -851,7 +847,7 @@ pub fn can_problem<'b>(
             let hint = if ability.is_builtin() {
                 alloc.hint("").append(
                     alloc.reflow("if you want this implementation to be derived, don't include a record of implementations. For example,")
-                        .append(alloc.type_block(alloc.concat([alloc.type_str("has ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
+                        .append(alloc.type_block(alloc.concat([alloc.type_str(roc_parse::keyword::IMPLEMENTS), alloc.type_str(" ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
                         .append(alloc.reflow(" will attempt to derive ").append(alloc.symbol_unqualified(ability))))
             } else {
                 alloc.nil()
@@ -1093,6 +1089,11 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERAPPLIED CRASH".to_string();
         }
+        Problem::FileProblem { filename, error } => {
+            let report = to_file_problem_report(alloc, filename, error);
+            doc = report.doc;
+            title = report.title;
+        }
     };
 
     Report {
@@ -1176,7 +1177,7 @@ fn to_bad_ident_expr_report<'b>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([
-                alloc.reflow(r"I trying to parse a record field access here:"),
+                alloc.reflow(r"I am trying to parse a record field access here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow("So I expect to see a lowercase letter next, like "),
@@ -1218,6 +1219,21 @@ fn to_bad_ident_expr_report<'b>(
                 ]),
             ])
         }
+        QualifiedTupleAccessor(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("This looks like a tuple accessor on a module or tag name,"),
+                    alloc.reflow(r"but neither modules nor tags can have tuple elements! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
         QualifiedTag(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1234,16 +1250,46 @@ fn to_bad_ident_expr_report<'b>(
             ])
         }
 
-        Underscore(pos) => {
-            let region = Region::new(surroundings.start(), pos);
+        UnderscoreAlone(_pos) => {
+            alloc.stack([
+                alloc.reflow("An underscore is being used as a variable here:"),
+                alloc.region(lines.convert_region(surroundings)),
+                alloc.concat([alloc
+                    .reflow(r"An underscore can be used to ignore a value when pattern matching, but it cannot be used as a variable.")]),
+            ])
+        }
+
+        UnderscoreInMiddle(_pos) => {
             alloc.stack([
                 alloc.reflow("Underscores are not allowed in identifier names:"),
-                alloc.region_with_subregion(
-                    lines.convert_region(surroundings),
-                    lines.convert_region(region),
-                ),
+                alloc.region(lines.convert_region(surroundings)),
                 alloc.concat([alloc
                     .reflow(r"I recommend using camelCase. It's the standard style in Roc code!")]),
+            ])
+        }
+
+        UnderscoreAtStart {
+            position: _pos,
+            declaration_region,
+        } => {
+            let line = "This variable's name starts with an underscore:";
+            alloc.stack([
+                match declaration_region {
+                    None => alloc.reflow(line),
+                    Some(declaration_region) => alloc.stack([
+                        alloc.reflow(line),
+                        alloc.region(lines.convert_region(declaration_region)),
+                        alloc.reflow("But then it is used here:"),
+                    ])
+                },
+                alloc.region(lines.convert_region(surroundings)),
+                alloc.concat([
+                    alloc.reflow(r"A variable's name can only start with an underscore if the variable is unused. "),
+                    match declaration_region {
+                        None => alloc.reflow(r"But it looks like the variable is being used here!"),
+                        Some(_) => alloc.reflow(r"Since you are using this variable, you could remove the underscore from its name in both places."),
+                    }
+                ]),
             ])
         }
 
@@ -1331,7 +1377,7 @@ fn to_bad_ident_pattern_report<'b>(
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([
-                alloc.reflow(r"I trying to parse a record field accessor here:"),
+                alloc.reflow(r"I am trying to parse a record field accessor here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow("Something like "),
@@ -1358,7 +1404,7 @@ fn to_bad_ident_pattern_report<'b>(
             ]),
         ]),
 
-        WeirdDotQualified(pos) => {
+        QualifiedTupleAccessor(pos) | WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([
@@ -1389,7 +1435,13 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        Underscore(pos) => {
+        UnderscoreAlone(..) | UnderscoreAtStart { .. } => {
+            unreachable!(
+                "it's fine to have an underscore at the beginning of an identifier in a pattern"
+            )
+        }
+
+        UnderscoreInMiddle(pos) => {
             let region = Region::from_pos(pos.sub(1));
 
             alloc.stack([
@@ -1524,7 +1576,7 @@ fn report_shadowing<'b>(
             alloc.concat([
                 alloc.reflow("Since these "),
                 alloc.reflow(what_plural),
-                alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
+                alloc.reflow(" have the same name, it's easy to use the wrong one by accident. Give one of them a new name."),
             ]),
         ])
     };
@@ -1560,8 +1612,19 @@ fn pretty_runtime_error<'b>(
             (title, doc) = report_shadowing(alloc, lines, original_region, shadow, kind);
         }
 
-        RuntimeError::LookupNotInScope(loc_name, options) => {
-            doc = not_found(alloc, lines, loc_name.region, &loc_name.value, options);
+        RuntimeError::LookupNotInScope {
+            loc_name,
+            suggestion_options: options,
+            underscored_suggestion_region,
+        } => {
+            doc = not_found(
+                alloc,
+                lines,
+                loc_name.region,
+                &loc_name.value,
+                options,
+                underscored_suggestion_region,
+            );
             title = UNRECOGNIZED_NAME;
         }
         RuntimeError::CircularDef(entries) => {
@@ -1728,9 +1791,9 @@ fn pretty_runtime_error<'b>(
                 alloc.concat([
                     alloc
                         .reflow("Roc uses signed 64-bit floating points, allowing values between "),
-                    alloc.text(format!("{:e}", f64::MIN)),
+                    text!(alloc, "{:e}", f64::MIN),
                     alloc.reflow(" and "),
-                    alloc.text(format!("{:e}", f64::MAX)),
+                    text!(alloc, "{:e}", f64::MAX),
                 ]),
                 tip,
             ]);
@@ -2113,6 +2176,32 @@ fn pretty_runtime_error<'b>(
 
             title = "DEGENERATE BRANCH";
         }
+        RuntimeError::MultipleRecordBuilders(region) => {
+            let tip = alloc
+                .tip()
+                .append(alloc.reflow("You can combine them or apply them separately."));
+
+            doc = alloc.stack([
+                alloc.reflow("This function is applied to multiple record builders:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.note("Functions can only take at most one record builder!"),
+                tip,
+            ]);
+
+            title = "MULTIPLE RECORD BUILDERS";
+        }
+        RuntimeError::UnappliedRecordBuilder(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This record builder was not applied to a function:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("However, we need a function to construct the record."),
+                alloc.note(
+                    "Functions must be applied directly. The pipe operator (|>) cannot be used.",
+                ),
+            ]);
+
+            title = "UNAPPLIED RECORD BUILDER";
+        }
     }
 
     (doc, title)
@@ -2173,6 +2262,7 @@ fn not_found<'b>(
     region: roc_region::all::Region,
     name: &Ident,
     options: MutSet<Box<str>>,
+    underscored_suggestion_region: Option<Region>,
 ) -> RocDocBuilder<'b> {
     let mut suggestions = suggest::sort(
         name.as_inline_str().as_str(),
@@ -2188,7 +2278,15 @@ fn not_found<'b>(
         alloc.reflow(" missing up-top"),
     ]);
 
-    let default_yes = alloc.reflow("Did you mean one of these?");
+    let default_yes = match underscored_suggestion_region {
+        Some(underscored_region) => alloc.stack([
+            alloc.reflow("There is an ignored identifier of a similar name here:"),
+            alloc.region(lines.convert_region(underscored_region)),
+            alloc.reflow("Did you mean to remove the leading underscore?"),
+            alloc.reflow("If not, did you mean one of these?"),
+        ]),
+        None => alloc.reflow("Did you mean one of these?"),
+    };
 
     let to_details = |no_suggestion_details, yes_suggestion_details| {
         if suggestions.is_empty() {

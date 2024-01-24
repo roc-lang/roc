@@ -3,11 +3,27 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
-# print all found executable files in the dir examples 
-fd --type executable . './examples'
+# this makes the binaries a lot smaller
+strip ./target/release-with-lto/roc
+strip ./target/release-with-lto/roc_ls
 
-# remove all executables from the dir examples
-fd --type executable . './examples' -X rm
+# to be able to delete "target" later
+cp target/release-with-lto/roc ./roc
+cp target/release-with-lto/roc_ls ./roc_lang_server
 
-cp target/release/roc ./roc # to be able to exclude "target" later in the tar command
-tar -czvf $1 --exclude="target" --exclude="zig-cache" --exclude='*.o' roc LICENSE LEGAL_DETAILS examples/helloWorld.roc examples/platform-switching examples/cli crates/roc_std crates/compiler/builtins/bitcode/src
+# delete unnecessary files and folders
+git clean -fdx --exclude roc --exclude roc_lang_server
+
+mkdir $1
+
+
+mv roc roc_lang_server LICENSE LEGAL_DETAILS $1
+
+mkdir $1/examples
+mv examples/helloWorld.roc examples/platform-switching examples/cli $1/examples
+
+mkdir -p $1/crates/compiler/builtins/bitcode
+mv crates/roc_std $1/crates
+mv crates/compiler/builtins/bitcode/src $1/crates/compiler/builtins/bitcode
+ 
+tar -czvf "$1.tar.gz" $1

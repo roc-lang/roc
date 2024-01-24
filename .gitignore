@@ -1,3 +1,27 @@
+### Do not modify these first three ignore rules.  Needed to ignore files with no extension ###
+# Ignore all files including binary files that have no extension
+*
+# Unignore all files with extensions
+!*.*
+# Unignore all directories
+!*/
+
+# Specifically keep these files with no extension
+!Earthfile
+!AUTHORS
+!LICENSE*
+!LEGAL*
+!Dockerfile
+# .reuse/dep5 see https://reuse.software/
+!dep5
+# NotARocFile is used for formatter test
+!NotARocFile
+# also includes keeping one exe benchmark file
+!dynhost_benchmarks*
+
+### Add specific file extensions and directories below ###
+
+# Ignore the following directories and file extensions
 target
 generated-docs
 zig-cache
@@ -5,8 +29,11 @@ zig-cache
 .envrc
 *.rs.bk
 *.o
+*.so
+*.so.*
 *.obj
 *.dll
+*.dylib
 *.lib
 *.def
 *.tmp
@@ -22,11 +49,10 @@ zig-cache
 vgcore.*
 
 # roc cache files
-*.rh1
-*.rm1
+*.rh*
+*.rm*
 preprocessedhost
 metadata
-roc-cheaty-lib.so
 
 #editors
 .idea/
@@ -35,18 +61,6 @@ roc-cheaty-lib.so
 .exrc
 .vimrc
 .nvimrc
-
-#files too big to track in git
-editor/benches/resources/100000_lines.roc
-editor/benches/resources/10000_lines.roc
-editor/benches/resources/1000_lines.roc
-editor/benches/resources/100_lines.roc
-editor/benches/resources/25000000_lines.roc
-editor/benches/resources/50000_lines.roc
-editor/benches/resources/500_lines.roc
-
-# file editor creates when no arg is passed
-roc-projects
 
 # rust cache (sccache folder)
 sccache_dir
@@ -71,5 +85,35 @@ roc_linux_x86_64.tar.gz
 # nix
 result
 
-# tutorial
-www/src/roc-tutorial
+# Only keep Cargo.lock dependencies for the main compiler.
+# Examples and test only crates should be fine to be unlocked.
+# This remove unnecessary lock file versioning.
+# It also ensures the compiler can always pull in 1 version of things and doesn't get restricted by sub lockfiles.
+/**/Cargo.lock
+!/Cargo.lock
+!/examples/static-site-gen/platform/Cargo.lock
+# static-site-gen exception is because of https://github.com/tkaitchuck/aHash/issues/195
+
+# snapshot tests temp file
+*.pending-snap
+
+# checkmate
+checkmate_*.json
+
+www/build/
+www/main
+www/dist
+
+# ignore the examples folder in the WIP website, this is copied from roc-lang/examples in when building the site
+www/content/examples
+www/examples-main.zip
+www/examples-main
+
+examples/static-site-gen/**/*.html
+
+# glue auto-generated fixture code
+crates/glue/tests/fixtures/*/Cargo.toml
+crates/glue/tests/fixtures/*/build.rs
+crates/glue/tests/fixtures/*/host.c
+crates/glue/tests/fixtures/*/src/main.rs
+crates/glue/tests/fixtures/*/test_glue/

@@ -6,9 +6,9 @@ app "app"
 main = {
     default: Job {
         command: Command {
-            tool: SystemTool { name: "test", num: 42 }
+            tool: SystemTool { name: "test", num: 42 },
         },
-        inputFiles : ["foo"]
-    }
+        inputFiles: ["foo"],
+    },
 }
 

@@ -3,15 +3,15 @@ procedure Bool.2 ():
     ret Bool.23;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.256 : U32 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.256;
+    let Num.297 : U32 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.297;
 
 procedure Test.1 (Test.2):
     let Test.8 : U32 = 0i64;
     let Test.7 : U32 = CallByName Test.3 Test.8 Test.2;
     ret Test.7;
 
-procedure Test.3 (Test.17, Test.18):
+procedure Test.3 (#Derived_gen.0, #Derived_gen.1):
     joinpoint Test.9 Test.4 Test.2:
         let Test.13 : Int1 = CallByName Bool.2;
         if Test.13 then
@@ -20,7 +20,7 @@ procedure Test.3 (Test.17, Test.18):
             let Test.11 : U32 = CallByName Num.19 Test.4 Test.2;
             jump Test.9 Test.11 Test.2;
     in
-    jump Test.9 Test.17 Test.18;
+    jump Test.9 #Derived_gen.0 #Derived_gen.1;
 
 procedure Test.0 ():
     let Test.6 : U32 = 6i64;

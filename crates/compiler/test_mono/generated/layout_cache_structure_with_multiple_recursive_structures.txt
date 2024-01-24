@@ -1,0 +1,49 @@
+procedure List.18 (List.158, List.159, List.160):
+    let List.572 : U64 = 0i64;
+    let List.573 : U64 = CallByName List.6 List.158;
+    let List.571 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.90 List.158 List.159 List.160 List.572 List.573;
+    ret List.571;
+
+procedure List.6 (#Attr.2):
+    let List.582 : U64 = lowlevel ListLen #Attr.2;
+    ret List.582;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.581 : [<rnu>C *self, <null>] = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.581;
+
+procedure List.90 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+    joinpoint List.574 List.161 List.162 List.163 List.164 List.165:
+        let List.576 : Int1 = CallByName Num.22 List.164 List.165;
+        if List.576 then
+            let List.580 : [<rnu>C *self, <null>] = CallByName List.66 List.161 List.164;
+            inc List.580;
+            let List.166 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName Test.7 List.162 List.580;
+            let List.579 : U64 = 1i64;
+            let List.578 : U64 = CallByName Num.51 List.164 List.579;
+            jump List.574 List.161 List.166 List.163 List.578 List.165;
+        else
+            dec List.161;
+            ret List.162;
+    in
+    jump List.574 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.298 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.298;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.297 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.297;
+
+procedure Test.7 (Test.11, Test.12):
+    let Test.17 : {[<rnu>C *self, <null>], [<rnu><null>, C {[<rnu>C *self, <null>], *self}]} = Struct {Test.12, Test.11};
+    let Test.16 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = TagId(0) Test.17;
+    ret Test.16;
+
+procedure Test.0 ():
+    let Test.6 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = TagId(1) ;
+    let Test.8 : List [<rnu>C *self, <null>] = Array [];
+    let Test.15 : {} = Struct {};
+    let Test.9 : [<rnu><null>, C {[<rnu>C *self, <null>], *self}] = CallByName List.18 Test.8 Test.6 Test.15;
+    ret Test.9;

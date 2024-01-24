@@ -1,0 +1,8 @@
+app "test" provides [zeroEncoder] to "./platform"
+
+MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
+
+Format implements it : fmt -> {} where fmt implements Format
+
+zeroEncoder = @MEncoder \lst, _ -> lst
+#^^^^^^^^^^^{-1} MEncoder a where a implements Format

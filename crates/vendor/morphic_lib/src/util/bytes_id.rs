@@ -15,7 +15,7 @@ macro_rules! bytes_id {
         $owned_vis struct $owned($owned_vis ::smallvec::SmallVec<[u8; 23]>);
 
         impl $owned {
-            fn borrowed<'a>(&'a self) -> $borrowed<'a> {
+            fn borrowed(&self) -> $borrowed<'_> {
                 $borrowed(&self.0)
             }
         }

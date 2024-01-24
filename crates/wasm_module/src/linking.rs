@@ -144,7 +144,7 @@ impl Parse<()> for RelocationEntry {
 
         Err(ParseError {
             offset: *cursor,
-            message: format!("Unknown relocation type 0x{:2x}", type_id_byte),
+            message: format!("Unknown relocation type 0x{type_id_byte:2x}"),
         })
     }
 }
@@ -491,7 +491,7 @@ impl Parse<()> for SymType {
             5 => Ok(Self::Table),
             x => Err(ParseError {
                 offset,
-                message: format!("Invalid symbol info type in linking section: {}", x),
+                message: format!("Invalid symbol info type in linking section: {x}"),
             }),
         }
     }
@@ -536,7 +536,7 @@ impl Parse<()> for SubSectionId {
             8 => Ok(Self::SymbolTable),
             x => Err(ParseError {
                 offset,
-                message: format!("Invalid linking subsection ID {}", x),
+                message: format!("Invalid linking subsection ID {x}"),
             }),
         }
     }
@@ -578,10 +578,7 @@ impl<'a> LinkingSection<'a> {
             .iter()
             .position(|sym| sym.name() == Some(target_name))
             .ok_or_else(|| {
-                format!(
-                    "Linking failed! Can't find `{}` in host symbol table",
-                    target_name
-                )
+                format!("Linking failed! Can't find `{target_name}` in host symbol table")
             })
     }
 
@@ -596,7 +593,7 @@ impl<'a> LinkingSection<'a> {
                 _ => false,
             })
             .map(|sym_index| sym_index as u32)
-            .ok_or_else(|| format!("Can't find fn #{} in host symbol table", fn_index))
+            .ok_or_else(|| format!("Can't find fn #{fn_index} in host symbol table"))
     }
 
     pub fn find_and_reindex_imported_fn(
@@ -619,10 +616,7 @@ impl<'a> LinkingSection<'a> {
             })
             .map(|sym_index| sym_index as u32)
             .ok_or_else(|| {
-                format!(
-                    "Linking failed! Can't find fn #{} in host symbol table",
-                    old_fn_index
-                )
+                format!("Linking failed! Can't find fn #{old_fn_index} in host symbol table")
             })
     }
 }
@@ -650,8 +644,7 @@ impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
             return Err(ParseError {
                 offset: *cursor,
                 message: format!(
-                    "This file uses version {} of Wasm linking data, but only version {} is supported.",
-                    linking_version, LINKING_VERSION
+                    "This file uses version {linking_version} of Wasm linking data, but only version {LINKING_VERSION} is supported."
                 ),
             });
         }

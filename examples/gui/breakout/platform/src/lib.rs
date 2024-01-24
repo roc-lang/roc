@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 mod graphics;
 mod gui;
 mod roc;

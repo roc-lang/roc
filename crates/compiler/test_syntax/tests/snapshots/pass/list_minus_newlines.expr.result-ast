@@ -1,0 +1,23 @@
+BinOps(
+    [
+        (
+            @0-5 List(
+                Collection {
+                    items: [
+                        @1-2 Tag(
+                            "K",
+                        ),
+                    ],
+                    final_comments: [
+                        Newline,
+                    ],
+                },
+            ),
+            @5-6 Minus,
+        ),
+    ],
+    @6-7 Var {
+        module_name: "",
+        ident: "i",
+    },
+)

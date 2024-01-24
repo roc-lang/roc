@@ -17,8 +17,10 @@ mod helpers;
 use crate::helpers::fixtures_dir;
 use bumpalo::Bump;
 use roc_can::module::ExposedByModule;
-use roc_load_internal::file::{ExecutionMode, LoadConfig, Threading};
-use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem};
+use roc_load_internal::file::{
+    ExecutionMode, LoadConfig, LoadResult, LoadStart, LoadingProblem, Threading,
+};
+use roc_load_internal::module::LoadedModule;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_packaging::cache::RocCacheDir;
@@ -27,6 +29,7 @@ use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
 use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
+use roc_solve::FunctionKind;
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
@@ -38,6 +41,7 @@ fn load_and_typecheck(
     filename: PathBuf,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
+    function_kind: FunctionKind,
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
@@ -50,6 +54,7 @@ fn load_and_typecheck(
     )?;
     let load_config = LoadConfig {
         target_info,
+        function_kind,
         render: RenderTarget::Generic,
         palette: DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -104,9 +109,9 @@ fn multiple_modules(subdir: &str, files: Vec<(&str, &str)>) -> Result<LoadedModu
     let arena = &arena;
 
     match multiple_modules_help(subdir, arena, files) {
-        Err(io_error) => panic!("IO trouble: {:?}", io_error),
+        Err(io_error) => panic!("IO trouble: {io_error:?}"),
         Ok(Err(LoadingProblem::FormattedReport(buf))) => Err(buf),
-        Ok(Err(loading_problem)) => Err(format!("{:?}", loading_problem)),
+        Ok(Err(loading_problem)) => Err(format!("{loading_problem:?}")),
         Ok(Ok(mut loaded_module)) => {
             let home = loaded_module.module_id;
             let (filepath, src) = loaded_module.sources.get(&home).unwrap();
@@ -146,7 +151,7 @@ fn multiple_modules_help<'a>(
     // Use a deterministic temporary directory.
     // We can't have all tests use "tmp" because tests run in parallel,
     // so append the test name to the tmp path.
-    let tmp = format!("tmp/{}", subdir);
+    let tmp = format!("tmp/{subdir}");
     let dir = roc_test_utils::TmpDir::new(&tmp);
 
     let app_module = files.pop().unwrap();
@@ -160,7 +165,7 @@ fn multiple_modules_help<'a>(
         fs::create_dir_all(file_path.parent().unwrap())?;
 
         let mut file = File::create(file_path)?;
-        writeln!(file, "{}", source)?;
+        writeln!(file, "{source}")?;
         file_handles.push(file);
     }
 
@@ -171,10 +176,16 @@ fn multiple_modules_help<'a>(
         let file_path = dir.path().join(filename);
         let full_file_path = file_path.clone();
         let mut file = File::create(file_path)?;
-        writeln!(file, "{}", source)?;
+        writeln!(file, "{source}")?;
         file_handles.push(file);
 
-        load_and_typecheck(arena, full_file_path, Default::default(), TARGET_INFO)
+        load_and_typecheck(
+            arena,
+            full_file_path,
+            Default::default(),
+            TARGET_INFO,
+            FunctionKind::LambdaSet,
+        )
     };
 
     Ok(result)
@@ -186,16 +197,22 @@ fn load_fixture(
     subs_by_module: ExposedByModule,
 ) -> LoadedModule {
     let src_dir = fixtures_dir().join(dir_name);
-    let filename = src_dir.join(format!("{}.roc", module_name));
+    let filename = src_dir.join(format!("{module_name}.roc"));
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
     let mut loaded_module = match loaded {
         Ok(x) => x,
         Err(roc_load_internal::file::LoadingProblem::FormattedReport(report)) => {
-            println!("{}", report);
+            println!("{report}");
             panic!("{}", report);
         }
-        Err(e) => panic!("{:?}", e),
+        Err(e) => panic!("{e:?}"),
     };
 
     let home = loaded_module.module_id;
@@ -256,7 +273,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
                 let expected_type = expected_types
                     .remove(fully_qualified.as_str())
                     .unwrap_or_else(|| {
-                        panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                        panic!("Defs included an unexpected symbol: {fully_qualified:?}")
                     });
 
                 assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
@@ -271,7 +288,7 @@ fn expect_types(mut loaded_module: LoadedModule, mut expected_types: HashMap<&st
                     let expected_type = expected_types
                         .remove(fully_qualified.as_str())
                         .unwrap_or_else(|| {
-                            panic!("Defs included an unexpected symbol: {:?}", fully_qualified)
+                            panic!("Defs included an unexpected symbol: {fully_qualified:?}")
                         });
 
                     assert_eq!((&symbol, expected_type), (&symbol, actual_str.as_str()));
@@ -308,7 +325,7 @@ fn import_transitive_alias() {
         (
             "RBTree",
             indoc!(
-                r#"
+                r"
                         interface RBTree exposes [RedBlackTree, empty] imports []
 
                         # The color of a node. Leaves are considered Black.
@@ -320,18 +337,18 @@ fn import_transitive_alias() {
                         empty : RedBlackTree k v
                         empty =
                             Empty
-                    "#
+                    "
             ),
         ),
         (
             "Other",
             indoc!(
-                r#"
+                r"
                         interface Other exposes [empty] imports [RBTree]
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
-                    "#
+                    "
             ),
         ),
     ];
@@ -345,7 +362,13 @@ fn interface_with_deps() {
     let src_dir = fixtures_dir().join("interface_with_deps");
     let filename = src_dir.join("Primary.roc");
     let arena = Bump::new();
-    let loaded = load_and_typecheck(&arena, filename, subs_by_module, TARGET_INFO);
+    let loaded = load_and_typecheck(
+        &arena,
+        filename,
+        subs_by_module,
+        TARGET_INFO,
+        FunctionKind::LambdaSet,
+    );
 
     let mut loaded_module = loaded.expect("Test module failed to load");
     let home = loaded_module.module_id;
@@ -422,14 +445,14 @@ fn test_load_and_typecheck() {
         loaded_module,
         hashmap! {
             "floatTest" => "F64",
-            "divisionFn" => "Float a, Float a -> Float a",
-            "x" => "Float *",
+            "divisionFn" => "Frac a, Frac a -> Frac a",
+            "x" => "Frac *",
             "divisionTest" => "F64",
             "intTest" => "I64",
             "constantNum" => "Num *",
             "divisionTest" => "F64",
-            "divDep1ByDep2" => "Float a",
-            "fromDep2" => "Float *",
+            "divDep1ByDep2" => "Frac a",
+            "fromDep2" => "Frac a",
         },
     );
 }
@@ -491,12 +514,12 @@ fn load_astar() {
     expect_types(
         loaded_module,
         hashmap! {
-            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] | position has Hash & Eq",
-            "initialModel" => "position -> Model position | position has Hash & Eq",
-            "reconstructPath" => "Dict position position, position -> List position | position has Hash & Eq",
-            "updateCost" => "position, position, Model position -> Model position | position has Hash & Eq",
-            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] | position has Hash & Eq",
-            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Hash & Eq",
+            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] where position implements Hash & Eq",
+            "initialModel" => "position -> Model position where position implements Hash & Eq",
+            "reconstructPath" => "Dict position position, position -> List position where position implements Hash & Eq",
+            "updateCost" => "position, position, Model position -> Model position where position implements Hash & Eq",
+            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
+            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] where position implements Hash & Eq",
         },
     );
 }
@@ -523,12 +546,12 @@ fn iface_dep_types() {
     expect_types(
         loaded_module,
         hashmap! {
-            "blah2" => "Float *",
+            "blah2" => "Frac *",
             "blah3" => "Str",
             "str" => "Str",
-            "alwaysThree" => "* -> Float *",
+            "alwaysThree" => "* -> Frac *",
             "identity" => "a -> a",
-            "z" => "Float *",
+            "z" => "Frac *",
             "w" => "Dep1.Identity {}",
             "succeed" => "a -> Dep1.Identity a",
             "yay" => "Res.Res {} err",
@@ -545,12 +568,12 @@ fn app_dep_types() {
     expect_types(
         loaded_module,
         hashmap! {
-            "blah2" => "Float *",
+            "blah2" => "Frac *",
             "blah3" => "Str",
             "str" => "Str",
-            "alwaysThree" => "* -> Float *",
+            "alwaysThree" => "* -> Frac *",
             "identity" => "a -> a",
-            "z" => "Float *",
+            "z" => "Frac *",
             "w" => "Dep1.Identity {}",
             "succeed" => "a -> Dep1.Identity a",
             "yay" => "Res.Res {} err",
@@ -573,15 +596,43 @@ fn imported_dep_regression() {
 }
 
 #[test]
+fn ingested_file() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("interface_with_deps", "IngestedFile", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "foo" => "Str",
+            "str" => "Str",
+        },
+    );
+}
+
+#[test]
+fn ingested_file_bytes() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("interface_with_deps", "IngestedFileBytes", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "foo" => "List U8",
+            "str" => "Str",
+        },
+    );
+}
+
+#[test]
 fn parse_problem() {
     let modules = vec![(
         "Main",
         indoc!(
-            r#"
+            r"
                 interface Main exposes [main] imports []
 
                 main = [
-                "#
+                "
         ),
     )];
 
@@ -590,7 +641,7 @@ fn parse_problem() {
             report,
             indoc!(
                 "
-                    ── UNFINISHED LIST ──────────────────────────────────── tmp/parse_problem/Main ─
+                    ── UNFINISHED LIST in tmp/parse_problem/Main ───────────────────────────────────
 
                     I am partway through started parsing a list, but I got stuck here:
 
@@ -640,6 +691,20 @@ fn imported_file_not_found() {
 }
 
 #[test]
+#[should_panic(expected = "FILE NOT FOUND")]
+fn ingested_file_not_found() {
+    let subs_by_module = Default::default();
+    let loaded_module = load_fixture("no_deps", "MissingIngestedFile", subs_by_module);
+
+    expect_types(
+        loaded_module,
+        hashmap! {
+            "str" => "Str",
+        },
+    );
+}
+
+#[test]
 fn platform_does_not_exist() {
     let modules = vec![(
         "Main",
@@ -661,8 +726,7 @@ fn platform_does_not_exist() {
             // assert!(report.contains("FILE NOT FOUND"), "report=({})", report);
             assert!(
                 report.contains("zzz-does-not-exist/main.roc"),
-                "report=({})",
-                report
+                "report=({report})"
             );
         }
         Ok(_) => unreachable!("we expect failure here"),
@@ -756,23 +820,23 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         (
             "Age",
             indoc!(
-                r#"
+                r"
                     interface Age exposes [Age] imports []
 
                     Age := U32
-                    "#
+                    "
             ),
         ),
         (
             "Main",
             indoc!(
-                r#"
+                r"
                     interface Main exposes [twenty, readAge] imports [Age.{ Age }]
 
                     twenty = @Age 20
 
                     readAge = \@Age n -> n
-                    "#
+                    "
             ),
         ),
     ];
@@ -782,8 +846,8 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+            r"
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE in ...apped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -797,7 +861,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE in ...apped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -811,7 +875,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
+                ── UNUSED IMPORT in tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ──
 
                 Nothing from Age is used in this module.
 
@@ -819,7 +883,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                                                                       ^^^^^^^^^^^
 
                 Since Age isn't used, you don't need to import it.
-                "#
+                "
         ),
         "\n{}",
         err
@@ -866,7 +930,7 @@ fn issue_2863_module_type_does_not_exist() {
                 report,
                 indoc!(
                     "
-                        ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
+                        ── UNRECOGNIZED NAME in tmp/issue_2863_module_type_does_not_exist/Main ─────────
 
                         Nothing is named `DoesNotExist` in this scope.
 
@@ -876,8 +940,8 @@ fn issue_2863_module_type_does_not_exist() {
                         Did you mean one of these?
 
                             Decoding
-                            Result
                             Dict
+                            Result
                             DecodeError
                         "
                       )
@@ -929,11 +993,11 @@ fn module_doesnt_match_file_path() {
     let modules = vec![(
         "Age",
         indoc!(
-            r#"
+            r"
                 interface NotAge exposes [Age] imports []
 
                 Age := U32
-                "#
+                "
         ),
     )];
 
@@ -941,8 +1005,8 @@ fn module_doesnt_match_file_path() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── WEIRD MODULE NAME ─────────────────── tmp/module_doesnt_match_file_path/Age ─
+            r"
+            ── WEIRD MODULE NAME in tmp/module_doesnt_match_file_path/Age ──────────────────
 
             This module name does not correspond with the file path it is defined
             in:
@@ -952,7 +1016,7 @@ fn module_doesnt_match_file_path() {
 
             Module names must correspond with the file paths they are defined in.
             For example, I expect to see BigNum defined in BigNum.roc, or Math.Sin
-            defined in Math/Sin.roc."#
+            defined in Math/Sin.roc."
         ),
         "\n{}",
         err
@@ -964,9 +1028,9 @@ fn module_cyclic_import_itself() {
     let modules = vec![(
         "Age",
         indoc!(
-            r#"
+            r"
             interface Age exposes [] imports [Age]
-            "#
+            "
         ),
     )];
 
@@ -974,8 +1038,8 @@ fn module_cyclic_import_itself() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── IMPORT CYCLE ────────────────────────── tmp/module_cyclic_import_itself/Age ─
+            r"
+            ── IMPORT CYCLE in tmp/module_cyclic_import_itself/Age ─────────────────────────
 
             I can't compile Age because it depends on itself through the following
             chain of module imports:
@@ -988,30 +1052,29 @@ fn module_cyclic_import_itself() {
 
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
-            itself?"#
+            itself?"
         ),
         "\n{}",
         err
     );
 }
-
 #[test]
 fn module_cyclic_import_transitive() {
     let modules = vec![
         (
             "Age",
             indoc!(
-                r#"
+                r"
                 interface Age exposes [] imports [Person]
-                "#
+                "
             ),
         ),
         (
             "Person",
             indoc!(
-                r#"
+                r"
                 interface Person exposes [] imports [Age]
-                "#
+                "
             ),
         ),
     ];
@@ -1020,8 +1083,8 @@ fn module_cyclic_import_transitive() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── IMPORT CYCLE ────────────────── tmp/module_cyclic_import_transitive/Age.roc ─
+            r"
+            ── IMPORT CYCLE in tmp/module_cyclic_import_transitive/Age.roc ─────────────────
 
             I can't compile Age because it depends on itself through the following
             chain of module imports:
@@ -1036,7 +1099,7 @@ fn module_cyclic_import_transitive() {
 
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
-            itself?"#
+            itself?"
         ),
         "\n{}",
         err
@@ -1049,17 +1112,17 @@ fn nested_module_has_incorrect_name() {
         (
             "Dep/Foo.roc",
             indoc!(
-                r#"
+                r"
                 interface Foo exposes [] imports []
-                "#
+                "
             ),
         ),
         (
             "I.roc",
             indoc!(
-                r#"
+                r"
                 interface I exposes [] imports [Dep.Foo]
-                "#
+                "
             ),
         ),
     ];
@@ -1068,8 +1131,8 @@ fn nested_module_has_incorrect_name() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── INCORRECT MODULE NAME ──── tmp/nested_module_has_incorrect_name/Dep/Foo.roc ─
+            r"
+            ── INCORRECT MODULE NAME in tmp/nested_module_has_incorrect_name/Dep/Foo.roc ───
 
             This module has a different name than I expected:
 
@@ -1078,7 +1141,59 @@ fn nested_module_has_incorrect_name() {
 
             Based on the nesting and use of this module, I expect it to have name
 
-                Dep.Foo"#
+                Dep.Foo"
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn module_interface_with_qualified_import() {
+    let modules = vec![(
+        "A",
+        indoc!(
+            r"
+            interface A exposes [] imports [b.T]
+            "
+        ),
+    )];
+
+    let err = multiple_modules("module_interface_with_qualified_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'b' that you are using in the 'imports' section of the header of module 'tmp/module_interface_with_qualified_import/A' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header.
+            This module is an interface, because of a bug in the compiler we are unable to directly typecheck interface modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file."#
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn app_missing_package_import() {
+    let modules = vec![(
+        "Main",
+        indoc!(
+            r#"
+                app "example"
+                    packages { pack: "./package/main.roc" }
+                    imports [notpack.Mod]
+                    provides [] to pack
+
+                main = ""
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("app_missing_package_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'notpack' that you are using in the 'imports' section of the header of module 'tmp/app_missing_package_import/Main' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
         ),
         "\n{}",
         err

@@ -1,6 +1,9 @@
-use std::collections::hash_map::{Entry, HashMap};
+use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use std::ops::Deref;
+
+// use std::collections::HashMap;
+use roc_collections::MutMap as HashMap;
 
 use crate::util::id_type::Id;
 use crate::util::id_vec::IdVec;
@@ -32,7 +35,7 @@ impl<K: Id, V: Hash + Eq + Clone> IdBiMap<K, V> {
     pub fn new() -> Self {
         IdBiMap {
             key_to_val: IdVec::new(),
-            val_to_key: HashMap::new(),
+            val_to_key: HashMap::default(),
         }
     }
 

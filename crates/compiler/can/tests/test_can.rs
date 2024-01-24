@@ -14,8 +14,10 @@ mod helpers;
 mod test_can {
     use crate::helpers::{can_expr_with, test_home, CanExprOut};
     use bumpalo::Bump;
+    use core::panic;
     use roc_can::expr::Expr::{self, *};
     use roc_can::expr::{ClosureData, IntValue, Recursive};
+    use roc_module::symbol::Symbol;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
     use roc_region::all::{Position, Region};
     use std::{f64, i64};
@@ -278,12 +280,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 f = \ a -> a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -294,12 +296,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
                 f = \ a -> a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -310,12 +312,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 g = \ a -> a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -330,7 +332,7 @@ mod test_can {
             matches!(
                 problem,
                 Problem::SignatureDefMismatch { .. }
-                    | Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _))
+                    | Problem::RuntimeError(RuntimeError::LookupNotInScope { .. })
             )
         }));
     }
@@ -338,12 +340,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
                 g = \ a -> a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -358,7 +360,7 @@ mod test_can {
             matches!(
                 problem,
                 Problem::SignatureDefMismatch { .. }
-                    | Problem::RuntimeError(RuntimeError::LookupNotInScope(_, _))
+                    | Problem::RuntimeError(RuntimeError::LookupNotInScope { .. })
             )
         }));
     }
@@ -366,13 +368,13 @@ mod test_can {
     #[test]
     fn separated_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
                 f = \ a -> a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -387,13 +389,13 @@ mod test_can {
     #[test]
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 # comment
                 f = \ a -> a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -408,19 +410,19 @@ mod test_can {
     #[test]
     fn shadowed_annotation() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
                 f : Num.Int * -> Num.Int *
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 2);
-        println!("{:#?}", problems);
+        println!("{problems:#?}");
         assert!(problems.iter().any(|problem| matches!(
             problem,
             Problem::RuntimeError(RuntimeError::Shadowing { .. })
@@ -430,7 +432,7 @@ mod test_can {
     #[test]
     fn correct_nested_unannotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g = 42
@@ -438,7 +440,7 @@ mod test_can {
                     g + 1
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -449,7 +451,7 @@ mod test_can {
     #[test]
     fn correct_nested_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g : Num.Int *
@@ -458,7 +460,7 @@ mod test_can {
                     g + 1
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -469,7 +471,7 @@ mod test_can {
     #[test]
     fn correct_nested_body_annotated_multiple_lines() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g : Num.Int *
@@ -480,7 +482,7 @@ mod test_can {
                     g + h + z
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -491,7 +493,7 @@ mod test_can {
     #[test]
     fn correct_nested_body_unannotated_multiple_lines() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g = 42
@@ -501,7 +503,7 @@ mod test_can {
                     g + h + z
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -511,7 +513,7 @@ mod test_can {
     #[test]
     fn correct_double_nested_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g =
@@ -521,7 +523,7 @@ mod test_can {
 
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -532,13 +534,13 @@ mod test_can {
     #[test]
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
-            r#"
+            r"
                 F : Str
 
                 x = 1
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -552,7 +554,7 @@ mod test_can {
     #[test]
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
-            r#"
+            r"
                 G : Str
 
                 F : {}
@@ -560,7 +562,7 @@ mod test_can {
                 x = 1
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -579,11 +581,11 @@ mod test_can {
     //     // it only exists in the closure's arguments.
     //     let arena = Bump::new();
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //         func = \arg -> arg
 
     //         func 2
-    //     "#
+    //     "
     //     );
     //     let (_actual, output, problems, _var_store, _vars, _constraint) =
     //         can_expr_with(&arena, test_home(), src);
@@ -606,13 +608,13 @@ mod test_can {
     // fn call_by_pointer_for_fn_args() {
     //     // This function will get passed in as a pointer.
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //         apply = \f, x -> f x
 
     //         identity = \a -> a
 
     //         apply identity 5
-    //     "#
+    //     "
     //     );
     //     let arena = Bump::new();
     //     let (_actual, output, problems, _var_store, _vars, _constraint) =
@@ -635,9 +637,9 @@ mod test_can {
     #[test]
     fn incorrect_optional_value() {
         let src = indoc!(
-            r#"
+            r"
                 { x ? 42 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -652,6 +654,212 @@ mod test_can {
         assert!(matches!(
             loc_expr.value,
             Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue { .. })
+        ));
+    }
+
+    // RECORD BUILDERS
+    #[test]
+    fn record_builder_desugar() {
+        let src = indoc!(
+            r#"
+                succeed = \_ -> crash "succeed"
+                apply = \_ -> crash "get"
+
+                d = 3
+
+                succeed {
+                    a: 1,
+                    b: <- apply "b",
+                    c: <- apply "c",
+                    d
+                }
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        // Assert that we desugar to:
+        //
+        // (apply "c") ((apply "b") (succeed \b -> \c -> { a: 1, b, c, d }))
+
+        // (apply "c") ..
+        let (apply_c, c_to_b) = simplify_curried_call(&out.loc_expr.value);
+        assert_apply_call(apply_c, "c", &out.interns);
+
+        // (apply "b") ..
+        let (apply_b, b_to_succeed) = simplify_curried_call(c_to_b);
+        assert_apply_call(apply_b, "b", &out.interns);
+
+        // (succeed ..)
+        let (succeed, b_closure) = simplify_curried_call(b_to_succeed);
+
+        match succeed {
+            Var(sym, _) => assert_eq!(sym.as_str(&out.interns), "succeed"),
+            _ => panic!("Not calling succeed: {:?}", succeed),
+        }
+
+        // \b -> ..
+        let (b_sym, c_closure) = simplify_builder_closure(b_closure);
+
+        // \c -> ..
+        let (c_sym, c_body) = simplify_builder_closure(c_closure);
+
+        // { a: 1, b, c, d }
+        match c_body {
+            Record { fields, .. } => {
+                match get_field_expr(fields, "a") {
+                    Num(_, num_str, _, _) => {
+                        assert_eq!(num_str.to_string(), "1");
+                    }
+                    expr => panic!("a is not a Num: {:?}", expr),
+                }
+
+                assert_eq!(get_field_var_sym(fields, "b"), b_sym);
+                assert_eq!(get_field_var_sym(fields, "c"), c_sym);
+                assert_eq!(get_field_var_sym(fields, "d").as_str(&out.interns), "d");
+            }
+            _ => panic!("Closure body wasn't a Record: {:?}", c_body),
+        }
+    }
+
+    fn simplify_curried_call(expr: &Expr) -> (&Expr, &Expr) {
+        match expr {
+            LetNonRec(_, loc_expr) => simplify_curried_call(&loc_expr.value),
+            Call(fun, args, _) => (&fun.1.value, &args[0].1.value),
+            _ => panic!("Final Expr is not a Call: {:?}", expr),
+        }
+    }
+
+    fn assert_apply_call(expr: &Expr, expected: &str, interns: &roc_module::symbol::Interns) {
+        match simplify_curried_call(expr) {
+            (Var(sym, _), Str(val)) => {
+                assert_eq!(sym.as_str(interns), "apply");
+                assert_eq!(val.to_string(), expected);
+            }
+            call => panic!("Not a valid (get {}) call: {:?}", expected, call),
+        };
+    }
+
+    fn simplify_builder_closure(expr: &Expr) -> (Symbol, &Expr) {
+        use roc_can::pattern::Pattern::*;
+
+        match expr {
+            Closure(closure) => match &closure.arguments[0].2.value {
+                Identifier(sym) => (*sym, &closure.loc_body.value),
+                pattern => panic!("Not an identifier pattern: {:?}", pattern),
+            },
+            _ => panic!("Not a closure: {:?}", expr),
+        }
+    }
+
+    fn get_field_expr<'a>(
+        fields: &'a roc_collections::SendMap<roc_module::ident::Lowercase, roc_can::expr::Field>,
+        name: &'a str,
+    ) -> &'a Expr {
+        let ident = roc_module::ident::Lowercase::from(name);
+
+        &fields.get(&ident).unwrap().loc_expr.value
+    }
+
+    fn get_field_var_sym(
+        fields: &roc_collections::SendMap<roc_module::ident::Lowercase, roc_can::expr::Field>,
+        name: &str,
+    ) -> roc_module::symbol::Symbol {
+        match get_field_expr(fields, name) {
+            Var(sym, _) => *sym,
+            expr => panic!("Not a var: {:?}", expr),
+        }
+    }
+
+    #[test]
+    fn record_builder_field_names_do_not_shadow() {
+        let src = indoc!(
+            r#"
+            succeed = \_ -> crash "succeed"
+            parse = \_ -> crash "parse"
+
+            number = "42"
+
+            succeed {
+                number: <- parse number,
+                raw: number,
+            }
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems.len(), 0);
+
+        let (_, number_to_succeed) = simplify_curried_call(&out.loc_expr.value);
+        let (_, number_closure) = simplify_curried_call(number_to_succeed);
+        let (apply_number_sym, record) = simplify_builder_closure(number_closure);
+
+        match record {
+            Record { fields, .. } => {
+                assert_eq!(get_field_var_sym(fields, "number"), apply_number_sym);
+
+                match get_field_expr(fields, "raw") {
+                    Var(number_sym, _) => {
+                        assert_ne!(number_sym.ident_id(), apply_number_sym.ident_id());
+                        assert_eq!(number_sym.as_str(&out.interns), "number")
+                    }
+                    expr => panic!("a is not a Num: {:?}", expr),
+                }
+            }
+            _ => panic!("Closure body wasn't a Record: {:?}", record),
+        }
+    }
+
+    #[test]
+    fn multiple_record_builders_error() {
+        let src = indoc!(
+            r#"
+                succeed
+                    { a: <- apply "a" }
+                    { b: <- apply "b" }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+        )));
+
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
+        ));
+    }
+
+    #[test]
+    fn hanging_record_builder() {
+        let src = indoc!(
+            r#"
+                { a: <- apply "a" }
+            "#
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            problems, loc_expr, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems.len(), 1);
+        assert!(problems.iter().all(|problem| matches!(
+            problem,
+            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
+        )));
+
+        assert!(matches!(
+            loc_expr.value,
+            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
         ));
     }
 
@@ -703,7 +911,7 @@ mod test_can {
     #[test]
     fn recognize_tail_calls() {
         let src = indoc!(
-            r#"
+            r"
                 g = \x ->
                     when x is
                         0 -> 0
@@ -728,7 +936,7 @@ mod test_can {
                         { x: p, y: h }
                     )
                 )
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -755,7 +963,7 @@ mod test_can {
     // #[test]
     // fn reproduce_incorrect_unused_defs() {
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //             g = \x ->
     //                 when x is
     //                     0 -> 0
@@ -775,7 +983,7 @@ mod test_can {
     //             # variables must be (indirectly) referenced in the body for analysis to work
     //             # { x: p, y: h }
     //             g
-    //         "#
+    //         "
     //     );
     //     let arena = Bump::new();
     //     let CanExprOut {
@@ -804,14 +1012,14 @@ mod test_can {
     #[test]
     fn when_tail_call() {
         let src = indoc!(
-            r#"
+            r"
                 g = \x ->
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
 
                 g 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -826,11 +1034,11 @@ mod test_can {
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
-            r#"
+            r"
                 f = \x -> f x
 
                 f 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -847,13 +1055,13 @@ mod test_can {
     #[test]
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
-            r#"
+            r"
             q = \x ->
                     when q x is
                         _ -> 0
 
             q 0
-        "#
+        "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -868,7 +1076,7 @@ mod test_can {
     #[test]
     fn good_mutual_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 q = \x ->
                         when x is
                             0 -> 0
@@ -880,7 +1088,7 @@ mod test_can {
                             _ -> q (x - 1)
 
                 q p
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -899,11 +1107,11 @@ mod test_can {
     #[test]
     fn valid_self_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 boom = \_ -> boom {}
 
                 boom
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -920,13 +1128,13 @@ mod test_can {
     #[test]
     fn invalid_mutual_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 x = y
                 y = z
                 z = x
 
                 x
-            "#
+            "
         );
         let home = test_home();
         let arena = Bump::new();
@@ -968,11 +1176,11 @@ mod test_can {
     #[test]
     fn dict() {
         let src = indoc!(
-            r#"
-                x = Dict.empty
+            r"
+                x = Dict.empty {}
 
                 Dict.len x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -983,7 +1191,7 @@ mod test_can {
     #[test]
     fn unused_def_regression() {
         let src = indoc!(
-            r#"
+            r"
                 Booly : [Yes, No, Maybe]
 
                 y : Booly
@@ -997,7 +1205,7 @@ mod test_can {
                 x = [y]
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1008,14 +1216,14 @@ mod test_can {
     #[test]
     fn optional_field_not_unused() {
         let src = indoc!(
-            r#"
+            r"
                 fallbackZ = 3
 
                 fn = \{ x, y, z ? fallbackZ } ->
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1026,12 +1234,12 @@ mod test_can {
     #[test]
     fn issue_2534() {
         let src = indoc!(
-            r#"
+            r"
             x = { a: 1 }
             {
                 x & a: 2
             }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1044,13 +1252,13 @@ mod test_can {
     //    // "local" should be used, because the closure used it.
     //    // However, "unused" should be unused.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        local = 5
     //        unused = 6
     //        func = \arg -> arg + local
 
     //        3 + func 2
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1075,13 +1283,13 @@ mod test_can {
     //fn unused_closure() {
     //    // "unused" should be unused because it's in func, which is unused.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        local = 5
     //        unused = 6
     //        func = \arg -> arg + unused
 
     //        local
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1108,9 +1316,9 @@ mod test_can {
     //     #[test]
     //     fn basic_unrecognized_constant() {
     //         let (expr, output, problems, _) = can_expr(indoc!(
-    //             r#"
+    //             r"
     //             x
-    //         "#
+    //         "
     //         ));
 
     //         assert_eq!(
@@ -1134,12 +1342,12 @@ mod test_can {
     //#[test]
     //fn complex_unrecognized_constant() {
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = 5
     //        b = 6
 
     //        a + b * z
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1160,20 +1368,20 @@ mod test_can {
     //    );
     //}
 
-    //// UNUSED
+    // // UNUSED
 
     //#[test]
     //fn mutual_unused_circular_vars() {
     //    // This should report that both a and b are unused, since the return expr never references them.
     //    // It should not report them as circular, since we haven't solved the halting problem here.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = \arg -> if arg > 0 then b 7 else 0
     //        b = \arg -> if arg > 0 then a (arg - 1) else 0
     //        c = 5
 
     //        c
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![unused("a"), unused("b")]);
@@ -1192,7 +1400,7 @@ mod test_can {
     //#[test]
     //fn can_fibonacci() {
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        fibonacci = \num ->
     //            if num < 2 then
     //                num
@@ -1200,7 +1408,7 @@ mod test_can {
     //                fibonacci (num - 1) + fibonacci (num - 2)
 
     //        fibonacci 9
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1222,7 +1430,7 @@ mod test_can {
     //    // is considered a tail call, even though it only
     //    // calls itself from one branch!
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        factorial = \num ->
     //            factorialHelp num 0
 
@@ -1233,7 +1441,7 @@ mod test_can {
     //                factorialHelp (num - 1) (total * num)
 
     //        factorial 9
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1254,12 +1462,12 @@ mod test_can {
     //    // This should report that neither a nor b are unused,
     //    // since if you never call a function but do return it, that's okay!
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = \_ -> 42
     //        b = a
 
     //        b
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, Vec::new());
@@ -1275,19 +1483,19 @@ mod test_can {
     //    );
     //}
 
-    //// ASSIGNMENT REORDERING
+    // // ASSIGNMENT REORDERING
 
     //#[test]
     //fn reorder_assignments() {
     //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        increment = \arg -> arg + 1
     //        z = (increment 2) + y
     //        y = x + 1
     //        x = 9
 
     //        z * 3
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1318,7 +1526,7 @@ mod test_can {
     //#[test]
     //fn reorder_closed_over_assignments() {
     //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        z = func1 x
     //        x = 9
     //        y = func2 3
@@ -1326,7 +1534,7 @@ mod test_can {
     //        func2 = \arg -> arg + x
 
     //        z
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1415,19 +1623,19 @@ mod test_can {
     //    }
     //}
 
-    //// CIRCULAR ASSIGNMENT
+    // // CIRCULAR ASSIGNMENT
 
     //#[test]
     //fn circular_assignment() {
     //    let (_, _, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        c = d + 3
     //        b = 2 + c
     //        d = a + 7
     //        a = b + 1
 
     //        2 + d
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1447,82 +1655,82 @@ mod test_can {
     //    // There was a bug where this reported UnusedArgument("val")
     //    // since it was used only in the returned function only.
     //    let (_, _, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        \val -> \_ -> val
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
     //}
 
-    //// TODO verify that Apply handles output.references.calls correctly
+    // // TODO verify that Apply handles output.references.calls correctly
 
-    //// UNSUPPORTED PATTERNS
+    // // UNSUPPORTED PATTERNS
 
-    //// TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
+    // // TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
 
-    //// OPERATOR PRECEDENCE
+    // // OPERATOR PRECEDENCE
 
-    //// fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
-    ////     parse_without_loc(input)
-    ////         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
-    //// }
+    // // fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+    // //     parse_without_loc(input)
+    // //         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
+    // // }
 
-    //// #[test]
-    //// fn two_operator_precedence() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x + y * 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(var("x")),
-    ////                 loc(Plus),
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("y")),
-    ////                         loc(Star),
-    ////                         loc_box(Int(5))
-    ////                     )
-    ////                 ),
-    ////             ),
-    ////         ""))
-    ////     );
+    // // #[test]
+    // // fn two_operator_precedence() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x + y * 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(var("x")),
+    // //                 loc(Plus),
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("y")),
+    // //                         loc(Star),
+    // //                         loc_box(Int(5))
+    // //                     )
+    // //                 ),
+    // //             ),
+    // //         ""))
+    // //     );
 
-    ////     assert_eq!(
-    ////         parse_with_precedence("x * y + 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(Star),
-    ////                         loc_box(var("y")),
-    ////                     )
-    ////                 ),
-    ////                 loc(Plus),
-    ////                 loc_box(Int(5))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // //     assert_eq!(
+    // //         parse_with_precedence("x * y + 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(Star),
+    // //                         loc_box(var("y")),
+    // //                     )
+    // //                 ),
+    // //                 loc(Plus),
+    // //                 loc_box(Int(5))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// #[test]
-    //// fn compare_and() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x > 1 || True"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(GreaterThan),
-    ////                         loc_box(Int(1))
-    ////                     )
-    ////                 ),
-    ////                 loc(Or),
-    ////                 loc_box(ApplyVariant(vname("True"), None))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // // #[test]
+    // // fn compare_and() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x > 1 || True"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(GreaterThan),
+    // //                         loc_box(Int(1))
+    // //                     )
+    // //                 ),
+    // //                 loc(Or),
+    // //                 loc_box(ApplyVariant(vname("True"), None))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// HELPERS
+    // // HELPERS
 
     //#[test]
     //fn sort_cyclic_idents() {
@@ -1614,18 +1822,18 @@ mod test_can {
     //         );
     //     }
 
-    //     #[test]
-    //     fn string_with_escaped_interpolation() {
-    //         assert_parses_to(
-    //             // This should NOT be string interpolation, because of the \\
-    //             indoc!(
-    //                 r#"
-    //                      "abcd\\(efg)hij"
+    // #[test]
+    // fn string_with_escaped_interpolation() {
+    //     assert_parses_to(
+    //         // This should NOT be string interpolation, because of the \\
+    //         indoc!(
+    //             r#"
+    //                      "abcd\$(efg)hij"
     //                      "#
-    //             ),
-    //             Str(r#"abcd\(efg)hij"#.into()),
-    //         );
-    //     }
+    //         ),
+    //         Str(r"abcd\(efg)hij".into()),
+    //     );
+    // }
 
     //     #[test]
     //     fn string_without_escape() {
@@ -1640,7 +1848,7 @@ mod test_can {
 
     //     #[test]
     //     fn string_with_special_escapes() {
-    //         expect_parsed_str(r#"x\x"#, r#""x\\x""#);
+    //         expect_parsed_str(r"x\x", r#""x\\x""#);
     //         expect_parsed_str(r#"x"x"#, r#""x\"x""#);
     //         expect_parsed_str("x\tx", r#""x\tx""#);
     //         expect_parsed_str("x\rx", r#""x\rx""#);

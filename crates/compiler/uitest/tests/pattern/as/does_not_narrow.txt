@@ -1,0 +1,14 @@
+app "test" provides [main] to "./platform"
+
+input : [A Str, B Str]
+input = A "foo"
+
+drop : a -> {}
+drop = \_ -> {}
+
+main = when input is
+    #       ^^^^^ [A Str, B Str]
+    A _ as a -> drop a
+    #                ^ [A Str, B Str]
+    B _ as b -> drop b
+    #                ^ [A Str, B Str]

@@ -1,0 +1,39 @@
+BinOps(
+    [
+        (
+            @0-1 Var {
+                module_name: "",
+                ident: "i",
+            },
+            @1-2 GreaterThan,
+        ),
+    ],
+    @2-10 Apply(
+        @2-7 SpaceAfter(
+            Closure(
+                [
+                    @3-4 Identifier(
+                        "s",
+                    ),
+                ],
+                @6-7 Var {
+                    module_name: "",
+                    ident: "s",
+                },
+            ),
+            [
+                Newline,
+            ],
+        ),
+        [
+            @8-10 UnaryOp(
+                @9-10 Var {
+                    module_name: "",
+                    ident: "a",
+                },
+                @8-9 Negate,
+            ),
+        ],
+        Space,
+    ),
+)

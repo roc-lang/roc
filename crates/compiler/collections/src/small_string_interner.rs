@@ -48,9 +48,9 @@ enum Kind {
 impl Debug for Kind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Generated(arg0) => write!(f, "Generated({})", arg0),
+            Self::Generated(arg0) => write!(f, "Generated({arg0})"),
             Self::Empty => write!(f, "Empty"),
-            Self::Interned(arg0) => write!(f, "Interned({})", arg0),
+            Self::Interned(arg0) => write!(f, "Interned({arg0})"),
         }
     }
 }
@@ -155,7 +155,7 @@ impl SmallStringInterner {
         let index = self.lengths.len();
 
         let offset = self.buffer.len();
-        write!(self.buffer, "{}", index).unwrap();
+        write!(self.buffer, "{index}").unwrap();
 
         // this is a generated name, so store it as a negative length
         let length = Length(-((self.buffer.len() - offset) as i16));

@@ -37,8 +37,7 @@ pub struct CanExprOut {
 pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut {
     let loc_expr = roc_parse::test_helpers::parse_loc_with(arena, expr_str).unwrap_or_else(|e| {
         panic!(
-            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{:?} {:?}",
-            expr_str, e
+            "can_expr_with() got a parse error when attempting to canonicalize:\n\n{expr_str:?} {e:?}"
         )
     });
 
@@ -53,7 +52,13 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar_expr(arena, &loc_expr);
+    let loc_expr = operator::desugar_expr(
+        arena,
+        &loc_expr,
+        expr_str,
+        &mut None,
+        arena.alloc("TestPath"),
+    );
 
     let mut scope = Scope::new(home, IdentIds::default(), Default::default());
     scope.add_alias(

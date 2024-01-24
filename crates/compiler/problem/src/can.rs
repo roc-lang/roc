@@ -1,3 +1,6 @@
+use std::io;
+use std::path::PathBuf;
+
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
@@ -114,17 +117,17 @@ pub enum Problem {
         name: Symbol,
         variables_region: Region,
     },
-    HasClauseIsNotAbility {
+    ImplementsClauseIsNotAbility {
         region: Region,
     },
-    IllegalHasClause {
+    IllegalImplementsClause {
         region: Region,
     },
-    DuplicateHasAbility {
+    DuplicateImplementsAbility {
         ability: Symbol,
         region: Region,
     },
-    AbilityMemberMissingHasClause {
+    AbilityMemberMissingImplementsClause {
         member: Symbol,
         ability: Symbol,
         region: Region,
@@ -132,7 +135,7 @@ pub enum Problem {
     AbilityMemberMultipleBoundVars {
         member: Symbol,
         ability: Symbol,
-        span_has_clauses: Region,
+        span_implements_clauses: Region,
         bound_var_names: Vec<Lowercase>,
     },
     AbilityNotOnToplevel {
@@ -204,11 +207,15 @@ pub enum Problem {
     OverAppliedCrash {
         region: Region,
     },
+    FileProblem {
+        filename: PathBuf,
+        error: io::ErrorKind,
+    },
 }
 
 impl Problem {
     pub fn severity(&self) -> Severity {
-        use Severity::{RuntimeError, Warning};
+        use Severity::{Fatal, RuntimeError, Warning};
 
         match self {
             Problem::UnusedDef(_, _) => Warning,
@@ -238,10 +245,10 @@ impl Problem {
             Problem::NestedDatatype { .. } => RuntimeError,
             Problem::InvalidExtensionType { .. } => RuntimeError,
             Problem::AbilityHasTypeVariables { .. } => RuntimeError,
-            Problem::HasClauseIsNotAbility { .. } => RuntimeError,
-            Problem::IllegalHasClause { .. } => RuntimeError,
-            Problem::DuplicateHasAbility { .. } => Warning,
-            Problem::AbilityMemberMissingHasClause { .. } => RuntimeError,
+            Problem::ImplementsClauseIsNotAbility { .. } => RuntimeError,
+            Problem::IllegalImplementsClause { .. } => RuntimeError,
+            Problem::DuplicateImplementsAbility { .. } => Warning,
+            Problem::AbilityMemberMissingImplementsClause { .. } => RuntimeError,
             Problem::AbilityMemberMultipleBoundVars { .. } => RuntimeError,
             Problem::AbilityNotOnToplevel { .. } => RuntimeError, // Ideally, could be compiled
             Problem::AbilityUsedAsType(_, _, _) => RuntimeError,
@@ -269,6 +276,7 @@ impl Problem {
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
+            Problem::FileProblem { .. } => Fatal,
         }
     }
 
@@ -327,7 +335,11 @@ impl Problem {
             })
             | Problem::RuntimeError(RuntimeError::UnsupportedPattern(region))
             | Problem::RuntimeError(RuntimeError::MalformedPattern(_, region))
-            | Problem::RuntimeError(RuntimeError::LookupNotInScope(Loc { region, .. }, _))
+            | Problem::RuntimeError(RuntimeError::LookupNotInScope {
+                loc_name: Loc { region, .. },
+                suggestion_options: _,
+                underscored_suggestion_region: _,
+            })
             | Problem::RuntimeError(RuntimeError::OpaqueNotDefined {
                 usage: Loc { region, .. },
                 ..
@@ -353,6 +365,8 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
             | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
             | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
+            | Problem::RuntimeError(RuntimeError::MultipleRecordBuilders(region))
+            | Problem::RuntimeError(RuntimeError::UnappliedRecordBuilder(region))
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::InvalidHexadecimal(region)
@@ -365,12 +379,12 @@ impl Problem {
                 variables_region: region,
                 ..
             }
-            | Problem::HasClauseIsNotAbility { region }
-            | Problem::IllegalHasClause { region }
-            | Problem::DuplicateHasAbility { region, .. }
-            | Problem::AbilityMemberMissingHasClause { region, .. }
+            | Problem::ImplementsClauseIsNotAbility { region }
+            | Problem::IllegalImplementsClause { region }
+            | Problem::DuplicateImplementsAbility { region, .. }
+            | Problem::AbilityMemberMissingImplementsClause { region, .. }
             | Problem::AbilityMemberMultipleBoundVars {
-                span_has_clauses: region,
+                span_implements_clauses: region,
                 ..
             }
             | Problem::AbilityNotOnToplevel { region }
@@ -414,6 +428,7 @@ impl Problem {
             | Problem::RuntimeError(RuntimeError::VoidValue)
             | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
             | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
+            | Problem::FileProblem { .. }
             | Problem::ExposedButNotDefined(_) => None,
         }
     }
@@ -428,6 +443,14 @@ pub enum ExtensionTypeKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrecedenceProblem {
     BothNonAssociative(Region, Loc<BinOp>, Loc<BinOp>),
+}
+
+impl PrecedenceProblem {
+    pub fn region(&self) -> Region {
+        match self {
+            PrecedenceProblem::BothNonAssociative(region, _, _) => *region,
+        }
+    }
 }
 
 /// Enum to store the various types of errors that can cause parsing an integer to fail.
@@ -494,7 +517,14 @@ pub enum RuntimeError {
     UnresolvedTypeVar,
     ErroneousType,
 
-    LookupNotInScope(Loc<Ident>, MutSet<Box<str>>),
+    LookupNotInScope {
+        loc_name: Loc<Ident>,
+        /// All of the names in scope (for the error message)
+        suggestion_options: MutSet<Box<str>>,
+        /// If the unfound variable is `name` and there's an ignored variable called `_name`,
+        /// this is the region where `_name` is defined (for the error message)
+        underscored_suggestion_region: Option<Region>,
+    },
     OpaqueNotDefined {
         usage: Loc<Ident>,
         opaques_in_scope: MutSet<Box<str>>,
@@ -579,6 +609,9 @@ pub enum RuntimeError {
     MultipleCharsInSingleQuote(Region),
 
     DegenerateBranch(Region),
+
+    MultipleRecordBuilders(Region),
+    UnappliedRecordBuilder(Region),
 }
 
 impl RuntimeError {
@@ -588,11 +621,51 @@ impl RuntimeError {
         match self {
             DegenerateBranch(region) => {
                 format!(
-                    "Hit a branch pattern that does not bind all symbols its body needs, at {:?}",
-                    region
+                    "Hit a branch pattern that does not bind all symbols its body needs, at {region:?}"
                 )
             }
-            err => format!("{:?}", err),
+            err => format!("{err:?}"),
+        }
+    }
+
+    pub fn region(&self) -> Region {
+        match self {
+            RuntimeError::Shadowing { shadow, .. } => shadow.region,
+            RuntimeError::InvalidOptionalValue { field_region, .. } => *field_region,
+            RuntimeError::UnsupportedPattern(region)
+            | RuntimeError::MalformedPattern(_, region)
+            | RuntimeError::OpaqueOutsideScope {
+                referenced_region: region,
+                ..
+            }
+            | RuntimeError::OpaqueAppliedToMultipleArgs(region)
+            | RuntimeError::ValueNotExposed { region, .. }
+            | RuntimeError::ModuleNotImported { region, .. }
+            | RuntimeError::InvalidPrecedence(_, region)
+            | RuntimeError::MalformedIdentifier(_, _, region)
+            | RuntimeError::MalformedTypeName(_, region)
+            | RuntimeError::MalformedClosure(region)
+            | RuntimeError::InvalidRecordUpdate { region }
+            | RuntimeError::InvalidFloat(_, region, _)
+            | RuntimeError::InvalidInt(_, _, region, _)
+            | RuntimeError::EmptySingleQuote(region)
+            | RuntimeError::MultipleCharsInSingleQuote(region)
+            | RuntimeError::DegenerateBranch(region)
+            | RuntimeError::InvalidInterpolation(region)
+            | RuntimeError::InvalidHexadecimal(region)
+            | RuntimeError::MultipleRecordBuilders(region)
+            | RuntimeError::UnappliedRecordBuilder(region)
+            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
+            RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
+            RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
+            RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,
+            RuntimeError::OpaqueNotApplied(ident) => ident.region,
+            RuntimeError::CircularDef(cycle) => cycle[0].symbol_region,
+            RuntimeError::NonExhaustivePattern => Region::zero(),
+            RuntimeError::NoImplementationNamed { .. }
+            | RuntimeError::NoImplementation
+            | RuntimeError::VoidValue
+            | RuntimeError::ExposedButNotDefined(_) => Region::zero(),
         }
     }
 }

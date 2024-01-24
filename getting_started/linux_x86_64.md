@@ -3,23 +3,43 @@
 ## How to install Roc
 
 In order to develop in Roc, you need to install the Roc CLI,
-which includes the Roc compiler and various helpful utilities.
+which includes the Roc compiler and some helpful utilities.
 
 1. Download the latest nightly from the assets [here](https://github.com/roc-lang/roc/releases).
 
 1. Untar the archive:
 
     ```sh
-    tar -xf roc_nightly-linux_x86_64-<VERSION>.tar.gz --one-top-level
+    tar -xf roc_nightly-linux_x86_64-latest.tar.gz
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
-1. To be able to run the `roc` command anywhere on your system, add the line below to your shell startup script (.profile, .zshrc, ...):
+1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+
     ```sh
     export PATH=$PATH:~/path/to/roc_nightly-linux_x86_64-<VERSION>
     ```
 
 1. Check everything worked by executing `roc version`
+
+1. Install libc development files and ld (binutils) if you'd like to use the repl (`roc repl`):
+   - On Ubuntu/Debian:
+
+    ```sh
+    sudo apt install libc-dev binutils
+    ```
+
+   - On ArchLinux/Manjaro:
+
+   ```sh
+   sudo pacman -S glibc binutils
+   ```
+
+   - on Fedora:
+
+   ```sh
+   sudo dnf install glibc-devel binutils
+   ```
 
 ## How to install Roc platform dependencies
 
@@ -33,13 +53,7 @@ you'll need to install one or more of these platform languages too.
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. Install the Zig compiler, for apps with Zig-based platforms:
-
-    ```sh
-    wget https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz
-    tar -xf zig-linux-x86_64-0.9.1.tar.xz
-    sudo ln -s  $(pwd)/zig-linux-x86_64-0.9.1/zig /usr/local/bin/zig
-    ```
+1. For Zig-based platforms: [download zig 0.11.0](https://ziglang.org/download/0.11.0/zig-linux-x86_64-0.11.0.tar.xz), extract the archive and add export PATH=$PATH:~/path/to/zig to your shell startup script (.profile, .zshrc, …).
 
 1. Install a C compiler, for apps with C-based platforms:
 

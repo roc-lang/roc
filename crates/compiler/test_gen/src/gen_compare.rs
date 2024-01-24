@@ -27,7 +27,7 @@ fn eq_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn neq_i64() {
     assert_evals_to!(
         indoc!(
@@ -61,7 +61,7 @@ fn eq_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn neq_u64() {
     assert_evals_to!(
         indoc!(
@@ -78,7 +78,7 @@ fn neq_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -95,7 +95,7 @@ fn eq_bool_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn neq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -109,6 +109,52 @@ fn neq_bool_tag() {
         false,
         bool
     );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn bool_logic() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bool1 = Bool.true
+                bool2 = Bool.false
+                bool3 = !bool1
+
+                (bool1 && bool2) || bool2 && bool3
+                "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn and_bool() {
+    assert_evals_to!("Bool.true && Bool.true", true, bool);
+    assert_evals_to!("Bool.true && Bool.false", false, bool);
+    assert_evals_to!("Bool.false && Bool.true", false, bool);
+    assert_evals_to!("Bool.false && Bool.false", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn or_bool() {
+    assert_evals_to!("Bool.true || Bool.true", true, bool);
+    assert_evals_to!("Bool.true || Bool.false", true, bool);
+    assert_evals_to!("Bool.false || Bool.true", true, bool);
+    assert_evals_to!("Bool.false || Bool.false", false, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn not_bool() {
+    assert_evals_to!("!Bool.true", false, bool);
+    assert_evals_to!("!Bool.false", true, bool);
+
+    assert_evals_to!("!(!Bool.true)", true, bool);
+    assert_evals_to!("!(!Bool.false)", false, bool);
 }
 
 #[test]
@@ -152,7 +198,7 @@ fn unit() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn newtype() {
     assert_evals_to!("Identity 42 == Identity 42", true, bool);
     assert_evals_to!("Identity 42 != Identity 42", false, bool);

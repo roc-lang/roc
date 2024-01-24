@@ -80,7 +80,7 @@ impl AbilityMemberData<Resolved> {
 
 /// Solved lambda sets for an ability member specialization. For example, if we have
 ///
-///   Default has default : {} -[[] + a:default:1]-> a | a has Default
+///   Default implements default : {} -[[] + a:default:1]-> a where a implements Default
 ///
 ///   A := {}
 ///   default = \{} -[[closA]]-> @A {}
@@ -90,7 +90,7 @@ impl AbilityMemberData<Resolved> {
 pub type SpecializationLambdaSets = VecMap<u8, Variable>;
 
 /// A particular specialization of an ability member.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberSpecializationInfo<Phase: ResolvePhase> {
     _phase: std::marker::PhantomData<Phase>,
     pub symbol: Symbol,
@@ -144,7 +144,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     ///
     /// For example, in the program
     ///
-    ///   Hash has hash : a -> U64 | a has Hash
+    ///   Hash implements hash : a -> U64 where a implements Hash
     ///
     ///   Id := {} implements [Hash {hash: myHash}]
     ///   myHash = \@Id n -> n
@@ -155,7 +155,7 @@ pub struct IAbilitiesStore<Phase: ResolvePhase> {
     /// Information about all members composing abilities.
     ability_members: MutMap<Symbol, AbilityMemberData<Phase>>,
 
-    /// Maps a tuple (member, type) specifying that `type` has an implementation of an ability
+    /// Maps a tuple (member, type) specifying that `type` implements an ability
     /// member `member`, to how that implementation is defined.
     declared_implementations: MutMap<ImplKey, MemberImpl>,
 
@@ -284,7 +284,7 @@ impl<Phase: ResolvePhase> IAbilitiesStore<Phase> {
     }
 
     /// Finds the implementation key for a symbol specializing the ability member, if it specializes any.
-    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 where a implements Hash`.
     /// Calling this with `hashId` would retrieve (hash, hashId).
     pub fn impl_key(&self, specializing_symbol: Symbol) -> Option<&ImplKey> {
         self.specialization_to_root.get(&specializing_symbol)
@@ -392,7 +392,7 @@ pub enum MarkError {
 impl IAbilitiesStore<Resolved> {
     /// Finds the symbol name and ability member definition for a symbol specializing the ability
     /// member, if it specializes any.
-    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 | a has Hash`.
+    /// For example, suppose `hashId : Id -> U64` specializes `hash : a -> U64 where a implements Hash`.
     /// Calling this with `hashId` would retrieve the ability member data for `hash`, and what type
     /// `hashId` is specializing for.
     pub fn impl_key_and_def(
@@ -414,7 +414,7 @@ impl IAbilitiesStore<Resolved> {
     }
 
     /// Returns an iterator over pairs ((ability member, type), implementation) specifying that
-    /// the give type has an implementation of an ability member.
+    /// the given type implements an ability member.
     pub fn iter_declared_implementations(
         &self,
     ) -> impl Iterator<Item = (ImplKey, &MemberImpl)> + '_ {
@@ -469,8 +469,7 @@ impl IAbilitiesStore<Resolved> {
 
         debug_assert!(
             old_specialization.is_none(),
-            "Existing resolution: {:?}",
-            old_specialization
+            "Existing resolution: {old_specialization:?}"
         );
     }
 

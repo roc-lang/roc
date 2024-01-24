@@ -1,12 +1,13 @@
 [package]
 name = "roc_target"
-version = "0.0.1"
-authors = ["The Roc Contributors"]
-license = "UPL-1.0"
-edition = "2021"
 description = "Provides types and helpers for compiler targets such as default_x86_64."
 
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
 [dependencies]
-target-lexicon = "0.12.3"
-strum = "0.24.0"
-strum_macros = "0.24"
+strum.workspace = true
+strum_macros.workspace = true
+target-lexicon.workspace = true

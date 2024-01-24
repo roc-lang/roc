@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(not(windows))]
 use bumpalo::Bump;
+use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
-use roc_packaging::cache::RocCacheDir;
 
 const SKIP_SUBS_CACHE: bool = {
     match option_env!("ROC_SKIP_SUBS_CACHE") {
@@ -25,7 +24,8 @@ const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::ENCODE, "Encode.roc"),
     (ModuleId::DECODE, "Decode.roc"),
     (ModuleId::HASH, "Hash.roc"),
-    (ModuleId::JSON, "Json.roc"),
+    (ModuleId::INSPECT, "Inspect.roc"),
+    (ModuleId::JSON, "TotallyNotJson.roc"),
 ];
 
 fn main() {
@@ -46,18 +46,10 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     output_path.extend([filename]);
     output_path.set_extension("dat");
 
-    #[cfg(not(windows))]
     if SKIP_SUBS_CACHE {
         write_types_for_module_dummy(&output_path)
     } else {
         write_types_for_module_real(module_id, filename, &output_path)
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = SKIP_SUBS_CACHE;
-        let _ = module_id;
-        write_types_for_module_dummy(&output_path)
     }
 }
 
@@ -66,16 +58,17 @@ fn write_types_for_module_dummy(output_path: &Path) {
     std::fs::write(output_path, []).unwrap();
 }
 
-#[cfg(not(windows))]
 fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path: &Path) {
     use roc_can::module::TypeState;
     use roc_load_internal::file::{LoadingProblem, Threading};
+    use roc_packaging::cache::RocCacheDir;
     use roc_reporting::cli::report_problems;
 
     let arena = Bump::new();
     let cwd = std::env::current_dir().unwrap();
     let source = roc_builtins::roc::module_source(module_id);
     let target_info = roc_target::TargetInfo::default_x86_64();
+    let function_kind = roc_solve::FunctionKind::LambdaSet;
 
     let res_module = roc_load_internal::file::load_and_typecheck_str(
         &arena,
@@ -84,6 +77,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         cwd,
         Default::default(),
         target_info,
+        function_kind,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
         RocCacheDir::Disallowed,
@@ -93,15 +87,14 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     let mut module = match res_module {
         Ok(v) => v,
         Err(LoadingProblem::FormattedReport(report)) => {
-            panic!("{}", report);
+            internal_error!("{}", report);
         }
         Err(other) => {
-            panic!("build_file failed with error:\n{:?}", other);
+            internal_error!("build_file failed with error:\n{:?}", other);
         }
     };
 
     let problems = report_problems(
-        module.total_problems(),
         &module.sources,
         &module.interns,
         &mut module.can_problems,
@@ -109,7 +102,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     );
 
     if problems.errors + problems.warnings > 0 {
-        panic!("Problems were found! Refusing to build cached subs.");
+        internal_error!("Problems were found! Refusing to build cached subs.");
     }
 
     let subs = module.solved.into_inner();

@@ -1,12 +1,12 @@
 const std = @import("std");
-const str = @import("str");
+const str = @import("glue").str;
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
 
 const Align = extern struct { a: usize, b: usize };
-extern fn malloc(size: usize) callconv(.C) ?*align(@alignOf(Align)) anyopaque;
-extern fn realloc(c_ptr: [*]align(@alignOf(Align)) u8, size: usize) callconv(.C) ?*anyopaque;
-extern fn free(c_ptr: [*]align(@alignOf(Align)) u8) callconv(.C) void;
+extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
+extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
+extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dest: *anyopaque, src: *anyopaque, count: usize) *anyopaque;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
@@ -19,25 +19,32 @@ export fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
     _ = old_size;
     _ = alignment;
 
-    return realloc(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)), new_size);
+    return realloc(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))), new_size);
 }
 
 export fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void {
     _ = alignment;
 
-    free(@alignCast(@alignOf(Align), @ptrCast([*]u8, c_ptr)));
+    free(@as([*]align(Align) u8, @alignCast(@ptrCast(c_ptr))));
 }
 
-export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.C) void {
-    _ = memcpy(dest, src, count);
-}
-
-export fn roc_panic(message: RocStr, tag_id: u32) callconv(.C) void {
-    _ = tag_id;
-    const msg = @ptrCast([*:0]const u8, c_ptr);
+export fn roc_panic(msg: *RocStr, tag_id: u32) callconv(.C) void {
     const stderr = std.io.getStdErr().writer();
-    stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg}) catch unreachable;
-    std.process.exit(0);
+    switch (tag_id) {
+        0 => {
+            stderr.print("Roc standard library crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        1 => {
+            stderr.print("Application crashed with message\n\n    {s}\n\nShutting down\n", .{msg.asSlice()}) catch unreachable;
+        },
+        else => unreachable,
+    }
+    std.process.exit(1);
+}
+
+export fn roc_dbg(loc: *RocStr, msg: *RocStr, src: *RocStr) callconv(.C) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("[{s}] {s} = {s}\n", .{ loc.asSlice(), src.asSlice(), msg.asSlice() }) catch unreachable;
 }
 
 const RocList = extern struct {

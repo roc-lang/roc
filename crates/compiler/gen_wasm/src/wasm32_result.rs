@@ -7,9 +7,8 @@ The user needs to analyse the Wasm module's memory to decode the result.
 use bumpalo::{collections::Vec, Bump};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Builtin, Layout, LayoutInterner, UnionLayout};
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
-use roc_target::TargetInfo;
+use roc_mono::layout::{Builtin, InLayout, LayoutInterner, LayoutRepr, UnionLayout};
+use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
     ValueType, WasmModule,
@@ -42,10 +41,10 @@ pub fn insert_wrapper_for_layout<'a>(
     module: &mut WasmModule<'a>,
     wrapper_name: &'static str,
     main_fn_index: u32,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) {
     let mut stack_data_structure = || {
-        let size = layout.stack_size(interner, TargetInfo::default_wasm32());
+        let size = interner.stack_size(layout);
         if size == 0 {
             <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         } else {
@@ -56,30 +55,30 @@ pub fn insert_wrapper_for_layout<'a>(
         }
     };
 
-    match layout {
-        Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
+    match interner.get_repr(layout) {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
             i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U16 | IntWidth::I16)) => {
             i16::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U32 | IntWidth::I32)) => {
             i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
+        LayoutRepr::Builtin(Builtin::Int(IntWidth::U64 | IntWidth::I64)) => {
             i64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+        LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
             f32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+        LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
             f64::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Builtin(Builtin::Bool) => {
+        LayoutRepr::Builtin(Builtin::Bool) => {
             bool::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
-        Layout::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
-        Layout::Union(_) | Layout::Boxed(_) => {
+        LayoutRepr::Union(UnionLayout::NonRecursive(_)) => stack_data_structure(),
+        LayoutRepr::Union(_) => {
             i32::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }
         _ => stack_data_structure(),
@@ -123,7 +122,7 @@ macro_rules! build_wrapper_body_primitive {
             let frame_size = 8;
 
             code_builder.get_local(frame_pointer_id);
-            code_builder.call(main_function_index, 0, true);
+            code_builder.call(main_function_index);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -150,7 +149,7 @@ fn build_wrapper_body_stack_memory(
     let frame_pointer = Some(local_id);
 
     code_builder.get_local(local_id);
-    code_builder.call(main_function_index, 0, true);
+    code_builder.call(main_function_index);
     code_builder.get_local(local_id);
     code_builder.build_fn_header_and_footer(local_types, size as i32, frame_pointer);
 }
@@ -204,6 +203,13 @@ impl<T: Wasm32Result> Wasm32Result for RocList<T> {
     }
 }
 
+impl<T: Wasm32Result> Wasm32Result for RocBox<T> {
+    fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
+        // treat box as if it's just a isize value
+        <i32 as Wasm32Result>::build_wrapper_body(code_builder, main_function_index)
+    }
+}
+
 impl<T: Wasm32Sized, E: Wasm32Sized> Wasm32Result for RocResult<T, E> {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(
@@ -230,7 +236,7 @@ where
 
 impl Wasm32Result for () {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        code_builder.call(main_function_index, 0, false);
+        code_builder.call(main_function_index);
         code_builder.get_global(0);
         code_builder.build_fn_header_and_footer(&[], 0, None);
     }
@@ -238,7 +244,7 @@ impl Wasm32Result for () {
 
 impl Wasm32Result for std::convert::Infallible {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        code_builder.call(main_function_index, 0, false);
+        code_builder.call(main_function_index);
         code_builder.get_global(0);
         code_builder.build_fn_header_and_footer(&[], 0, None);
     }

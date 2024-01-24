@@ -1,0 +1,11 @@
+app "test" provides [main] to "./platform"
+
+main =
+  h = \{} -> (getX {})
+  #^{-1} {}* -[[h(1) Str]]-> Str
+
+  getX = \{} -> x
+
+  x = "abc"
+
+  h {}

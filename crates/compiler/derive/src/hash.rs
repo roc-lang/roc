@@ -19,8 +19,8 @@ use roc_types::{
     num::int_lit_width_to_variable,
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-        RedundantMark, Subs, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable,
-        VariableSubsSlice,
+        RedundantMark, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UnionLambdas, UnionTags,
+        Variable, VariableSubsSlice,
     },
     types::RecordField,
 };
@@ -30,6 +30,7 @@ use crate::{synth_var, util::Env, DerivedBody};
 pub(crate) fn derive_hash(env: &mut Env<'_>, key: FlatHashKey, def_symbol: Symbol) -> DerivedBody {
     let (body_type, body) = match key {
         FlatHashKey::Record(fields) => hash_record(env, def_symbol, fields),
+        FlatHashKey::Tuple(arity) => hash_tuple(env, def_symbol, arity),
         FlatHashKey::TagUnion(tags) => {
             if tags.len() == 1 {
                 hash_newtype_tag_union(env, def_symbol, tags.into_iter().next().unwrap())
@@ -74,7 +75,7 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
 
     // Now, a hasher for this record is
     //
-    // hash_rcd : hasher, { f1: t1, ..., fn: tn } -> hasher | hasher has Hasher
+    // hash_rcd : hasher, { f1: t1, ..., fn: tn } -> hasher where hasher implements Hasher
     // hash_rcd = \hasher, rcd ->
     //   Hash.hash (
     //      Hash.hash
@@ -96,7 +97,7 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
             let field_name = env.subs[field_name].clone();
             let field_var = env.subs[field_var];
 
-            let field_access = Expr::Access {
+            let field_access = Expr::RecordAccess {
                 record_var,
                 field_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),
@@ -118,6 +119,75 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
         fn_name,
         (hasher_var, hasher_sym),
         (record_var, Pattern::Identifier(rcd_sym)),
+        (body_var, body),
+    )
+}
+
+fn hash_tuple(env: &mut Env<'_>, fn_name: Symbol, arity: u32) -> (Variable, Expr) {
+    // Suppose tup = (v1, ..., vn).
+    // Build a generalized type t_tup = (t1, ..., tn), with fresh t1, ..., tn,
+    // so that we can re-use the derived impl for many tuples of the same arity.
+    let (tuple_var, tuple_elems) = {
+        // TODO: avoid an allocation here by pre-allocating the indices and variables `TupleElems`
+        // will be instantiated with.
+        let flex_elems: Vec<_> = (0..arity)
+            .map(|i| (i as usize, env.subs.fresh_unnamed_flex_var()))
+            .collect();
+        let elems = TupleElems::insert_into_subs(env.subs, flex_elems);
+        let tuple_var = synth_var(
+            env.subs,
+            Content::Structure(FlatType::Tuple(elems, Variable::EMPTY_TUPLE)),
+        );
+
+        (tuple_var, elems)
+    };
+
+    // Now, a hasher for this tuple is
+    //
+    // hash_tup : hasher, (t1, ..., tn) -> hasher where hasher implements Hasher
+    // hash_tup = \hasher, tup ->
+    //   Hash.hash (
+    //      Hash.hash
+    //          ...
+    //          (Hash.hash hasher tup.0)
+    //          ...
+    //      tup.n1)
+    //   tup.n
+    //
+    // So, just a build a fold travelling up the elements.
+    let tup_sym = env.new_symbol("tup");
+
+    let hasher_sym = env.new_symbol("hasher");
+    let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
+
+    let (body_var, body) = tuple_elems.iter_all().fold(
+        (hasher_var, Expr::Var(hasher_sym, hasher_var)),
+        |total_hasher, (elem_idx, elem_var)| {
+            let index = env.subs[elem_idx];
+            let elem_var = env.subs[elem_var];
+
+            let elem_access = Expr::TupleAccess {
+                tuple_var,
+                elem_var,
+                ext_var: env.subs.fresh_unnamed_flex_var(),
+                loc_expr: Box::new(Loc::at_zero(Expr::Var(
+                    tup_sym,
+                    env.subs.fresh_unnamed_flex_var(),
+                ))),
+                index,
+            };
+
+            call_hash_hash(env, total_hasher, (elem_var, elem_access))
+        },
+    );
+
+    // Finally, build the closure
+    // \hasher, rcd -> body
+    build_outer_derived_closure(
+        env,
+        fn_name,
+        (hasher_var, hasher_sym),
+        (tuple_var, Pattern::Identifier(tup_sym)),
         (body_var, body),
     )
 }
@@ -146,7 +216,10 @@ fn hash_tag_union(
         let union_tags = UnionTags::insert_slices_into_subs(env.subs, flex_tag_labels);
         let tag_union_var = synth_var(
             env.subs,
-            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            Content::Structure(FlatType::TagUnion(
+                union_tags,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            )),
         );
 
         (tag_union_var, union_tags)
@@ -154,7 +227,7 @@ fn hash_tag_union(
 
     // Now, a hasher for this tag union is
     //
-    // hash_union : hasher, [ A t11 .. t1n, ..., Q tq1 .. tqm ] -> hasher | hasher has Hasher
+    // hash_union : hasher, [ A t11 .. t1n, ..., Q tq1 .. tqm ] -> hasher where hasher implements Hasher
     // hash_union = \hasher, union ->
     //   when union is
     //      A x11 .. x1n -> Hash.hash (... (Hash.hash (Hash.uN hasher 0) x11) ...) x1n
@@ -225,7 +298,7 @@ fn hash_tag_union(
                     Expr::Int(
                         discr_num_var,
                         discr_precision_var,
-                        format!("{}", discr_n).into_boxed_str(),
+                        format!("{discr_n}").into_boxed_str(),
                         IntValue::I128((discr_n as i128).to_ne_bytes()),
                         IntBound::Exact(discr_width),
                     ),
@@ -305,7 +378,10 @@ fn hash_newtype_tag_union(
         let union_tags = UnionTags::from_slices(tag_name_index.as_slice(), variables_slices_slice);
         let tag_union_var = synth_var(
             env.subs,
-            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            Content::Structure(FlatType::TagUnion(
+                union_tags,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            )),
         );
 
         (
@@ -317,14 +393,14 @@ fn hash_newtype_tag_union(
 
     // Now, a hasher for this tag union is
     //
-    // hash_union : hasher, [ A t1 .. tn ] -> hasher | hasher has Hasher
+    // hash_union : hasher, [ A t1 .. tn ] -> hasher where hasher implements Hasher
     // hash_union = \hasher, A x1 .. xn ->
     //   Hash.hash (... (Hash.hash discrHasher x1) ...) xn
     let hasher_sym = env.new_symbol("hasher");
     let hasher_var = synth_var(env.subs, Content::FlexAbleVar(None, Subs::AB_HASHER));
 
     // A
-    let tag_name = tag_name;
+    // let tag_name = tag_name;
     // t1 .. tn
     let payload_vars = payload_variables;
     // x11 .. x1n
@@ -386,7 +462,7 @@ fn call_hash_ability_member(
 
     // build `member ...` function type. `member` here is `Hash.hash` or `Hash.addU16`.
     //
-    // hasher, val -[uls]-> hasher | hasher has Hasher, val has Hash
+    // hasher, val -[uls]-> hasher where hasher implements Hasher, val implements Hash
     let exposed_hash_fn_var = env.import_builtin_symbol_var(member);
 
     // (typeof body), (typeof field) -[clos]-> hasher_result
@@ -403,11 +479,11 @@ fn call_hash_ability_member(
         )),
     );
 
-    //   hasher,        val            -[uls]->  hasher | hasher has Hasher, val has Hash
+    //   hasher,        val            -[uls]->  hasher where hasher implements Hasher, val implements Hash
     // ~ (typeof body), (typeof field) -[clos]-> hasher_result
     env.unify(exposed_hash_fn_var, this_hash_fn_var);
 
-    // Hash.hash : hasher, (typeof field) -[clos]-> hasher | hasher has Hasher, (typeof field) has Hash
+    // Hash.hash : hasher, (typeof field) -[clos]-> hasher where hasher implements Hasher, (typeof field) implements Hash
     let hash_fn_head = Expr::AbilityMember(member, None, this_hash_fn_var);
     let hash_fn_data = Box::new((
         this_hash_fn_var,

@@ -1,0 +1,9 @@
+app "test" provides [main] to "./platform"
+
+x : Result Str []
+x = Ok "abc"
+
+Ok str = x
+
+main = str
+#      ^^^ Str

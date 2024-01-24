@@ -1,8 +1,0 @@
-app
-*.o
-*.dSYM
-dynhost
-libapp.so
-metadata
-preprocessedhost
-packages-test
