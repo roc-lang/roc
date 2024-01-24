@@ -1,6 +1,6 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.291 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.297 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.297;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.253 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
