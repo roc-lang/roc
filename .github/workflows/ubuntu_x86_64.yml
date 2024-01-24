@@ -47,11 +47,8 @@ jobs:
       - name: test gen-wasm single threaded # gen-wasm has some multithreading problems to do with the wasmer runtime
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-wasm -- --test-threads=1 && sccache --show-stats
 
-      - name: run `roc test` on Str builtins
-        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
-
-      - name: run `roc test` on Dict builtins
-        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Dict.roc && sccache --show-stats
+      - name: roc test all builtins
+        run: ./ci/roc_test_builtins.sh
 
       - name: wasm repl test
         run: crates/repl_test/test_wasm.sh && sccache --show-stats

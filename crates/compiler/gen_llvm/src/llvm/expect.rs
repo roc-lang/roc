@@ -469,6 +469,8 @@ fn build_clone_tag<'a, 'ctx>(
             let subprogram = env.new_subprogram(&fn_name);
             function_value.set_subprogram(subprogram);
 
+            debug_info_init!(env, function_value);
+
             env.dibuilder.finalize();
 
             build_clone_tag_help(

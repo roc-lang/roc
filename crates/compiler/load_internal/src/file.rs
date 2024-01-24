@@ -371,6 +371,18 @@ fn start_phase<'a>(
                         checkmate: _,
                 } = typechecked;
 
+                let our_exposed_types = state
+                    .exposed_types
+                    .get(&module_id)
+                    .unwrap_or_else(|| internal_error!("Exposed types for {:?} missing", module_id))
+                    .clone();
+
+                state.world_abilities.insert(
+                    module_id,
+                    abilities_store.clone(),
+                    our_exposed_types.exposed_types_storage_subs,
+                );
+
                 let mut imported_module_thunks = bumpalo::collections::Vec::new_in(arena);
 
                 if let Some(imports) = state.module_cache.imports.get(&module_id) {
@@ -397,7 +409,7 @@ fn start_phase<'a>(
                     decls,
                     ident_ids,
                     exposed_to_host: state.exposed_to_host.clone(),
-                    abilities_store,
+                    world_abilities: state.world_abilities.clone_ref(),
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
@@ -457,23 +469,8 @@ fn start_phase<'a>(
                         procs_base,
                         layout_cache,
                         module_timing,
-                        abilities_store,
                         expectations,
                     } = found_specializations;
-                    let our_exposed_types = state
-                        .exposed_types
-                        .get(&module_id)
-                        .unwrap_or_else(|| {
-                            internal_error!("Exposed types for {:?} missing", module_id)
-                        })
-                        .clone();
-
-                    // Add our abilities to the world.
-                    state.world_abilities.insert(
-                        module_id,
-                        abilities_store,
-                        our_exposed_types.exposed_types_storage_subs,
-                    );
 
                     (
                         ident_ids,
@@ -598,7 +595,6 @@ enum Msg<'a> {
         procs_base: ProcsBase<'a>,
         solved_subs: Solved<Subs>,
         module_timing: ModuleTiming,
-        abilities_store: AbilitiesStore,
         toplevel_expects: ToplevelExpects,
         expectations: Option<Expectations>,
     },
@@ -688,6 +684,7 @@ impl MakeSpecializationsPass {
 struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
+    pub root_path: PathBuf,
     pub cache_dir: PathBuf,
     /// If the root is an app module, the shorthand specified in its header's `to` field
     pub opt_platform_shorthand: Option<&'a str>,
@@ -756,6 +753,7 @@ impl<'a> State<'a> {
 
     fn new(
         root_id: ModuleId,
+        root_path: PathBuf,
         opt_platform_shorthand: Option<&'a str>,
         target_info: TargetInfo,
         function_kind: FunctionKind,
@@ -774,6 +772,7 @@ impl<'a> State<'a> {
 
         Self {
             root_id,
+            root_path,
             root_subs: None,
             opt_platform_shorthand,
             cache_dir,
@@ -906,7 +905,7 @@ enum BuildTask<'a> {
         decls: Declarations,
         exposed_to_host: ExposedToHost,
         exposed_by_module: ExposedByModule,
-        abilities_store: AbilitiesStore,
+        world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
         expectations: Option<Expectations>,
         build_expects: bool,
@@ -1081,8 +1080,9 @@ pub struct LoadStart<'a> {
     arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     root_id: ModuleId,
-    opt_platform_shorthand: Option<&'a str>,
+    root_path: PathBuf,
     root_msg: Msg<'a>,
+    opt_platform_shorthand: Option<&'a str>,
     src_dir: PathBuf,
 }
 
@@ -1105,7 +1105,7 @@ impl<'a> LoadStart<'a> {
 
             let res_loaded = load_filename(
                 arena,
-                filename,
+                filename.clone(),
                 true,
                 None,
                 None,
@@ -1140,6 +1140,7 @@ impl<'a> LoadStart<'a> {
             ident_ids_by_module,
             src_dir,
             root_id: header_output.module_id,
+            root_path: filename,
             root_msg: header_output.msg,
             opt_platform_shorthand: header_output.opt_platform_shorthand,
         })
@@ -1166,7 +1167,7 @@ impl<'a> LoadStart<'a> {
 
             let header_output = load_from_str(
                 arena,
-                filename,
+                filename.clone(),
                 src,
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
@@ -1182,6 +1183,7 @@ impl<'a> LoadStart<'a> {
             src_dir,
             ident_ids_by_module,
             root_id,
+            root_path: filename,
             root_msg,
             opt_platform_shorthand: opt_platform_id,
         })
@@ -1356,6 +1358,7 @@ pub fn load_single_threaded<'a>(
         arc_modules,
         ident_ids_by_module,
         root_id,
+        root_path,
         root_msg,
         src_dir,
         opt_platform_shorthand,
@@ -1371,6 +1374,7 @@ pub fn load_single_threaded<'a>(
     let number_of_workers = 1;
     let mut state = State::new(
         root_id,
+        root_path,
         opt_platform_shorthand,
         target_info,
         function_kind,
@@ -1507,7 +1511,7 @@ fn state_thread_step<'a>(
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
                 Msg::FailedToReadFile { filename, error } => {
-                    let buf = to_file_problem_report_string(&filename, error);
+                    let buf = to_file_problem_report_string(filename, error);
                     Err(LoadingProblem::FormattedReport(buf))
                 }
 
@@ -1658,7 +1662,7 @@ pub fn report_loading_problem(
         }
         LoadingProblem::FormattedReport(report) => report,
         LoadingProblem::FileProblem { filename, error } => {
-            to_file_problem_report_string(&filename, error)
+            to_file_problem_report_string(filename, error)
         }
         err => todo!("Loading error: {:?}", err),
     }
@@ -1681,6 +1685,7 @@ fn load_multi_threaded<'a>(
         arc_modules,
         ident_ids_by_module,
         root_id,
+        root_path,
         root_msg,
         src_dir,
         opt_platform_shorthand,
@@ -1711,6 +1716,7 @@ fn load_multi_threaded<'a>(
 
     let mut state = State::new(
         root_id,
+        root_path,
         opt_platform_shorthand,
         target_info,
         function_kind,
@@ -2168,6 +2174,38 @@ fn report_unused_imported_modules(
     }
 }
 
+///Generates an errorfor modules that are imported from packages that don't exist
+///TODO. This is temporary. Remove this once module params is implemented
+fn check_for_missing_package_shorthand_in_cache<'a>(
+    header: &ModuleHeader,
+    shorthands: &Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
+) -> Result<(), LoadingProblem<'a>> {
+    header.package_qualified_imported_modules
+            .iter()
+            .find_map(|pqim| match pqim {
+                PackageQualified::Unqualified(_) => None,
+                PackageQualified::Qualified(shorthand, _) => {
+                    if!(shorthands.lock().iter().any(|(short,_)|short==shorthand)){
+                        let module_path=header.module_path.to_str().unwrap_or("");
+                        Some(LoadingProblem::FormattedReport(
+                        match header.header_type {
+                            HeaderType::Hosted { ..} |
+                            HeaderType::Builtin {..} |
+                            HeaderType::Interface {..} =>
+                            {
+                                let mod_type= header.header_type.to_string();
+                                format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.\nThis module is an {mod_type}, because of a bug in the compiler we are unable to directly typecheck {mod_type} modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file.")
+                            },
+                            _=>
+                                format!("The package shorthand '{shorthand}' that you are using in the 'imports' section of the header of module '{module_path}' doesn't exist.\nCheck that package shorthand is correct or reference the package in an 'app' or 'package' header.")
+                        }))
+                    } else {
+                        None
+                    }
+                }
+            }).map_or(Ok(()),Err)
+}
+
 fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
     header
         .package_qualified_imported_modules
@@ -2242,6 +2280,7 @@ fn update<'a>(
                                     let buf = to_https_problem_report_string(
                                         url,
                                         Problem::InvalidUrl(url_err),
+                                        header.module_path,
                                     );
                                     return Err(LoadingProblem::FormattedReport(buf));
                                 }
@@ -2250,7 +2289,9 @@ fn update<'a>(
 
                         #[cfg(target_family = "wasm")]
                         {
-                            panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                            panic!(
+                                "Specifying packages via URLs is currently unsupported in wasm."
+                            );
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
@@ -2380,6 +2421,7 @@ fn update<'a>(
                 }
             }
 
+            check_for_missing_package_shorthand_in_cache(&header, &state.arc_shorthands)?;
             // store an ID to name mapping, so we know the file to read when fetching dependencies' headers
             for (name, id) in header.deps_by_name.iter() {
                 state.module_cache.module_names.insert(*id, name.clone());
@@ -2730,7 +2772,6 @@ fn update<'a>(
             ident_ids,
             layout_cache,
             module_timing,
-            abilities_store,
             toplevel_expects,
             expectations,
         } => {
@@ -2754,7 +2795,6 @@ fn update<'a>(
                 procs_base,
                 subs,
                 module_timing,
-                abilities_store,
                 expectations,
             };
 
@@ -3165,7 +3205,7 @@ fn finish_specialization<'a>(
                     }
                     Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
                     other => {
-                        let buf = to_missing_platform_report(state.root_id, other);
+                        let buf = report_cannot_run(state.root_id, state.root_path, other);
                         return Err(LoadingProblem::FormattedReport(buf));
                     }
                 };
@@ -3519,9 +3559,7 @@ fn load_builtin_module_help<'a>(
 ) -> (HeaderInfo<'a>, roc_parse::state::State<'a>) {
     let is_root_module = false;
     let opt_shorthand = None;
-
     let filename = PathBuf::from(filename);
-
     let parse_state = roc_parse::state::State::new(src_bytes.as_bytes());
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
 
@@ -3933,6 +3971,11 @@ fn parse_header<'a>(
             } else {
                 &[]
             };
+            let imports = if let Some(imports) = header.imports {
+                unspace(arena, imports.item.items)
+            } else {
+                &[]
+            };
 
             let mut provides = bumpalo::collections::Vec::new_in(arena);
 
@@ -3952,11 +3995,7 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages,
-                imports: if let Some(imports) = header.imports {
-                    unspace(arena, imports.item.items)
-                } else {
-                    &[]
-                },
+                imports,
                 header_type: HeaderType::App {
                     provides: provides.into_bump_slice(),
                     output_name: header.name.value,
@@ -3974,6 +4013,7 @@ fn parse_header<'a>(
                 module_timing,
             )?;
 
+            let filename = resolved_header.module_path.clone();
             let mut messages = Vec::with_capacity(packages.len() + 1);
 
             // It's important that the app header is first in the list!
@@ -3988,6 +4028,7 @@ fn parse_header<'a>(
                 module_id,
                 module_ids,
                 ident_ids_by_module,
+                filename,
             );
 
             // Look at the app module's `to` keyword to determine which package was the platform.
@@ -4090,6 +4131,7 @@ fn load_packages<'a>(
     module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
+    filename: PathBuf,
 ) {
     // Load all the packages
     for Loc { value: entry, .. } in packages.iter() {
@@ -4127,7 +4169,7 @@ fn load_packages<'a>(
                         }
                     }
                     Err(problem) => {
-                        let buf = to_https_problem_report_string(src, problem);
+                        let buf = to_https_problem_report_string(src, problem, filename);
 
                         load_messages.push(Msg::FailedToLoad(LoadingProblem::FormattedReport(buf)));
                         return;
@@ -4137,7 +4179,7 @@ fn load_packages<'a>(
 
             #[cfg(target_family = "wasm")]
             {
-                panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                panic!("Specifying packages via URLs is currently unsupported in wasm.");
             }
         } else {
             cwd.join(src)
@@ -5264,6 +5306,8 @@ fn canonicalize_and_constrain<'a>(
 
     let ParsedModule {
         module_id,
+        module_path,
+        src,
         header_type,
         exposed_ident_ids,
         parsed_defs,
@@ -5286,6 +5330,8 @@ fn canonicalize_and_constrain<'a>(
         parsed_defs,
         &header_type,
         module_id,
+        &*arena.alloc(module_path.to_string_lossy()),
+        src,
         module_ids,
         exposed_ident_ids,
         &dep_idents,
@@ -5701,7 +5747,7 @@ fn build_pending_specializations<'a>(
     target_info: TargetInfo,
     exposed_to_host: ExposedToHost,
     exposed_by_module: &ExposedByModule,
-    abilities_store: AbilitiesStore,
+    world_abilities: WorldAbilities,
     derived_module: SharedDerivedModule,
     mut expectations: Option<Expectations>,
     build_expects: bool,
@@ -5734,7 +5780,7 @@ fn build_pending_specializations<'a>(
         // NB: for getting pending specializations the module view is enough because we only need
         // to know the types and abilities in our modules. Only for building *all* specializations
         // do we need a global view.
-        abilities: AbilitiesView::Module(&abilities_store),
+        abilities: AbilitiesView::World(&world_abilities),
         exposed_by_module,
         derived_module: &derived_module,
         struct_indexing: UsageTrackingMap::default(),
@@ -6134,7 +6180,6 @@ fn build_pending_specializations<'a>(
         layout_cache,
         procs_base,
         module_timing,
-        abilities_store,
         toplevel_expects,
         expectations,
     }
@@ -6374,7 +6419,7 @@ fn run_task<'a>(
             solved_subs,
             imported_module_thunks,
             exposed_to_host,
-            abilities_store,
+            world_abilities,
             exposed_by_module,
             derived_module,
             expectations,
@@ -6391,7 +6436,7 @@ fn run_task<'a>(
             target_info,
             exposed_to_host,
             &exposed_by_module,
-            abilities_store,
+            world_abilities,
             derived_module,
             expectations,
             build_expects,
@@ -6584,7 +6629,11 @@ fn to_parse_problem_report<'a>(
     buf
 }
 
-fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> String {
+fn report_cannot_run(
+    module_id: ModuleId,
+    filename: PathBuf,
+    platform_path: &PlatformPath,
+) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
@@ -6594,20 +6643,20 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
     let alloc = RocDocAllocator::new(&[], module_id, &interns);
 
     let report = {
-        match other {
+        match platform_path {
             Valid(_) => unreachable!(),
             NotSpecified => {
                 let doc = alloc.stack([
                     alloc.reflow("I could not find a platform based on your input file."),
-                    alloc.reflow(r"Does the module header contain an entry that looks like this:"),
+                    alloc.reflow(r"Does the module header have an entry that looks like this?"),
                     alloc
-                        .parser_suggestion(" packages { pf: \"platform\" }")
+                        .parser_suggestion("packages { blah: \"…path or URL to platform…\" }")
                         .indent(4),
-                    alloc.reflow("See also TODO."),
+                    alloc.reflow("Tip: The following part of the tutorial has an example of specifying a platform:\n\n<https://www.roc-lang.org/tutorial#building-an-application>"),
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
@@ -6622,7 +6671,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
@@ -6637,7 +6686,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,
@@ -6652,7 +6701,7 @@ fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> Stri
                 ]);
 
                 Report {
-                    filename: "UNKNOWN.roc".into(),
+                    filename,
                     doc,
                     title: "NO PLATFORM".to_string(),
                     severity: Severity::RuntimeError,

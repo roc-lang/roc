@@ -78,9 +78,8 @@ mod glue_cli_run {
 
     fixtures! {
         basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
-        // TODO: re-enable this test. Currently it is flaking on macos x86-64 with a bad exit code.
-        // nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
-        // enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
+        nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
+        enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
         single_tag_union:"single-tag-union" => indoc!(r#"
             tag_union was: SingleTagUnion::OneTag
         "#),
@@ -129,9 +128,13 @@ mod glue_cli_run {
         multiple_modules:"multiple-modules" => indoc!(r#"
             combined was: Combined { s1: DepStr1::S("hello"), s2: DepStr2::R("world") }
         "#),
-        arguments:"arguments" => indoc!(r#"
-            Answer was: 84
-        "#),
+        // issue https://github.com/roc-lang/roc/issues/6121
+        // TODO: re-enable this test. Currently it is flaking on macos x86-64 with a bad exit code.
+        // nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
+        // enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
+        //        arguments:"arguments" => indoc!(r#"
+        //            Answer was: 84
+        //        "#),
         closures:"closures" => indoc!(r#"
             Answer was: 672
         "#),

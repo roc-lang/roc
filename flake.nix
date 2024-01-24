@@ -2,7 +2,7 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=676fe5e01b9a41fa14aaa48d87685677664104b1";
+    nixpkgs.url = "github:nixos/nixpkgs?rev=886c9aee6ca9324e127f9c2c4e6f68c2641c8256";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -27,11 +27,16 @@
   };
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, nixgl, ... }@inputs:
-    let supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
-    in flake-utils.lib.eachSystem supportedSystems (system:
+    let
+      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+
+      templates = import ./nix/templates { };
+    in
+    { inherit templates; } //
+    flake-utils.lib.eachSystem supportedSystems (system:
       let
         overlays = [ (import rust-overlay) ]
-          ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
+        ++ (if system == "x86_64-linux" then [ nixgl.overlay ] else [ ]);
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
@@ -64,29 +69,6 @@
               curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
             ]);
 
-        # For debugging LLVM IR
-        debugir = pkgs.stdenv.mkDerivation {
-          name = "debugir";
-          src = pkgs.fetchFromGitHub {
-            owner = "vaivaswatha";
-            repo = "debugir";
-            rev = "b981e0b74872d9896ba447dd6391dfeb63332b80";
-            sha256 = "Gzey0SF0NZkpiObk5e29nbc41dn4Olv1dx+6YixaZH0=";
-          };
-          buildInputs = with pkgs; [ cmake libxml2 llvmPkgs.llvm.dev ];
-          buildPhase = ''
-            mkdir build
-            cd build
-            cmake -DLLVM_DIR=${llvmPkgs.llvm.dev} -DCMAKE_BUILD_TYPE=Release ../
-            cmake --build ../
-            cp ../debugir .
-          '';
-          installPhase = ''
-            mkdir -p $out/bin
-            cp debugir $out/bin
-          '';
-        };
-
         sharedInputs = (with pkgs; [
           # build libraries
           cmake
@@ -102,6 +84,7 @@
           # faster builds - see https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#use-lld-for-the-linker
           llvmPkgs.lld
           rocBuild.rust-shell
+          perl # ./ci/update_basic_cli_url.sh
         ]);
 
         sharedDevInputs = (with pkgs; [
@@ -109,13 +92,12 @@
           python3
           libiconv # for examples/gui
           libxkbcommon # for examples/gui
-          # debugir needs to be updated to llvm 15
-          # debugir # used in crates/compiler/build/src/program.rs
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
+          zls # zig language server
         ]);
 
         aliases = ''
@@ -129,7 +111,7 @@
 
         devShell = pkgs.mkShell {
           buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs
-            ++ (if system == "x86_64-linux" then
+          ++ (if system == "x86_64-linux" then
             [ pkgs.nixgl.nixVulkanIntel ]
           else
             [ ]);
@@ -145,14 +127,16 @@
           LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
-                ++ linuxDevInputs);
+              ++ linuxDevInputs);
           NIXPKGS_ALLOW_UNFREE =
             1; # to run the GUI examples with NVIDIA's closed source drivers
 
           shellHook = ''
             export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
             ${aliases}
-          '';
+          '' + pkgs.lib.optionalString (system == "aarch64-darwin") ''
+            export RUSTFLAGS="-C link-arg=-lc++abi"
+          ''; # lc++abi as workaround for github.com/NixOS/nixpkgs/issues/166205, see also github.com/roc-lang/roc/issues/6303
         };
 
         formatter = pkgs.nixpkgs-fmt;
@@ -160,12 +144,19 @@
         # You can build this package (the roc CLI) with the `nix build` command.
         packages = {
           default = rocBuild.roc-cli;
-          
+
           # all rust crates in workspace.members of Cargo.toml
           full = rocBuild.roc-full;
           # only the CLI crate = executable provided in nightly releases
           cli = rocBuild.roc-cli;
           lang-server = rocBuild.roc-lang-server;
+        };
+
+        apps = {
+          default = {
+            type = "app";
+            program = "${rocBuild.roc-cli}/bin/roc";
+          };
         };
       });
 }

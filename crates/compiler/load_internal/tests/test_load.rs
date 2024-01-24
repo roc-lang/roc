@@ -325,7 +325,7 @@ fn import_transitive_alias() {
         (
             "RBTree",
             indoc!(
-                r#"
+                r"
                         interface RBTree exposes [RedBlackTree, empty] imports []
 
                         # The color of a node. Leaves are considered Black.
@@ -337,18 +337,18 @@ fn import_transitive_alias() {
                         empty : RedBlackTree k v
                         empty =
                             Empty
-                    "#
+                    "
             ),
         ),
         (
             "Other",
             indoc!(
-                r#"
+                r"
                         interface Other exposes [empty] imports [RBTree]
 
                         empty : RBTree.RedBlackTree I64 I64
                         empty = RBTree.empty
-                    "#
+                    "
             ),
         ),
     ];
@@ -628,11 +628,11 @@ fn parse_problem() {
     let modules = vec![(
         "Main",
         indoc!(
-            r#"
+            r"
                 interface Main exposes [main] imports []
 
                 main = [
-                "#
+                "
         ),
     )];
 
@@ -641,7 +641,7 @@ fn parse_problem() {
             report,
             indoc!(
                 "
-                    ── UNFINISHED LIST ──────────────────────────────────── tmp/parse_problem/Main ─
+                    ── UNFINISHED LIST in tmp/parse_problem/Main ───────────────────────────────────
 
                     I am partway through started parsing a list, but I got stuck here:
 
@@ -820,23 +820,23 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
         (
             "Age",
             indoc!(
-                r#"
+                r"
                     interface Age exposes [Age] imports []
 
                     Age := U32
-                    "#
+                    "
             ),
         ),
         (
             "Main",
             indoc!(
-                r#"
+                r"
                     interface Main exposes [twenty, readAge] imports [Age.{ Age }]
 
                     twenty = @Age 20
 
                     readAge = \@Age n -> n
-                    "#
+                    "
             ),
         ),
     ];
@@ -846,8 +846,8 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+            r"
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE in ...apped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -861,7 +861,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE ─ ...rapped_outside_defining_module/Main ─
+                ── OPAQUE TYPE DECLARED OUTSIDE SCOPE in ...apped_outside_defining_module/Main ─
 
                 The unwrapped opaque type Age referenced here:
 
@@ -875,7 +875,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 Note: Opaque types can only be wrapped and unwrapped in the module they are defined in!
 
-                ── UNUSED IMPORT ─── tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ─
+                ── UNUSED IMPORT in tmp/opaque_wrapped_unwrapped_outside_defining_module/Main ──
 
                 Nothing from Age is used in this module.
 
@@ -883,7 +883,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
                                                                       ^^^^^^^^^^^
 
                 Since Age isn't used, you don't need to import it.
-                "#
+                "
         ),
         "\n{}",
         err
@@ -930,7 +930,7 @@ fn issue_2863_module_type_does_not_exist() {
                 report,
                 indoc!(
                     "
-                        ── UNRECOGNIZED NAME ────────── tmp/issue_2863_module_type_does_not_exist/Main ─
+                        ── UNRECOGNIZED NAME in tmp/issue_2863_module_type_does_not_exist/Main ─────────
 
                         Nothing is named `DoesNotExist` in this scope.
 
@@ -993,11 +993,11 @@ fn module_doesnt_match_file_path() {
     let modules = vec![(
         "Age",
         indoc!(
-            r#"
+            r"
                 interface NotAge exposes [Age] imports []
 
                 Age := U32
-                "#
+                "
         ),
     )];
 
@@ -1005,8 +1005,8 @@ fn module_doesnt_match_file_path() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── WEIRD MODULE NAME ─────────────────── tmp/module_doesnt_match_file_path/Age ─
+            r"
+            ── WEIRD MODULE NAME in tmp/module_doesnt_match_file_path/Age ──────────────────
 
             This module name does not correspond with the file path it is defined
             in:
@@ -1016,7 +1016,7 @@ fn module_doesnt_match_file_path() {
 
             Module names must correspond with the file paths they are defined in.
             For example, I expect to see BigNum defined in BigNum.roc, or Math.Sin
-            defined in Math/Sin.roc."#
+            defined in Math/Sin.roc."
         ),
         "\n{}",
         err
@@ -1028,9 +1028,9 @@ fn module_cyclic_import_itself() {
     let modules = vec![(
         "Age",
         indoc!(
-            r#"
+            r"
             interface Age exposes [] imports [Age]
-            "#
+            "
         ),
     )];
 
@@ -1038,8 +1038,8 @@ fn module_cyclic_import_itself() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── IMPORT CYCLE ────────────────────────── tmp/module_cyclic_import_itself/Age ─
+            r"
+            ── IMPORT CYCLE in tmp/module_cyclic_import_itself/Age ─────────────────────────
 
             I can't compile Age because it depends on itself through the following
             chain of module imports:
@@ -1052,30 +1052,29 @@ fn module_cyclic_import_itself() {
 
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
-            itself?"#
+            itself?"
         ),
         "\n{}",
         err
     );
 }
-
 #[test]
 fn module_cyclic_import_transitive() {
     let modules = vec![
         (
             "Age",
             indoc!(
-                r#"
+                r"
                 interface Age exposes [] imports [Person]
-                "#
+                "
             ),
         ),
         (
             "Person",
             indoc!(
-                r#"
+                r"
                 interface Person exposes [] imports [Age]
-                "#
+                "
             ),
         ),
     ];
@@ -1084,8 +1083,8 @@ fn module_cyclic_import_transitive() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── IMPORT CYCLE ────────────────── tmp/module_cyclic_import_transitive/Age.roc ─
+            r"
+            ── IMPORT CYCLE in tmp/module_cyclic_import_transitive/Age.roc ─────────────────
 
             I can't compile Age because it depends on itself through the following
             chain of module imports:
@@ -1100,7 +1099,7 @@ fn module_cyclic_import_transitive() {
 
             Cyclic dependencies are not allowed in Roc! Can you restructure a
             module in this import chain so that it doesn't have to depend on
-            itself?"#
+            itself?"
         ),
         "\n{}",
         err
@@ -1113,17 +1112,17 @@ fn nested_module_has_incorrect_name() {
         (
             "Dep/Foo.roc",
             indoc!(
-                r#"
+                r"
                 interface Foo exposes [] imports []
-                "#
+                "
             ),
         ),
         (
             "I.roc",
             indoc!(
-                r#"
+                r"
                 interface I exposes [] imports [Dep.Foo]
-                "#
+                "
             ),
         ),
     ];
@@ -1132,8 +1131,8 @@ fn nested_module_has_incorrect_name() {
     assert_eq!(
         err,
         indoc!(
-            r#"
-            ── INCORRECT MODULE NAME ──── tmp/nested_module_has_incorrect_name/Dep/Foo.roc ─
+            r"
+            ── INCORRECT MODULE NAME in tmp/nested_module_has_incorrect_name/Dep/Foo.roc ───
 
             This module has a different name than I expected:
 
@@ -1142,7 +1141,59 @@ fn nested_module_has_incorrect_name() {
 
             Based on the nesting and use of this module, I expect it to have name
 
-                Dep.Foo"#
+                Dep.Foo"
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn module_interface_with_qualified_import() {
+    let modules = vec![(
+        "A",
+        indoc!(
+            r"
+            interface A exposes [] imports [b.T]
+            "
+        ),
+    )];
+
+    let err = multiple_modules("module_interface_with_qualified_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'b' that you are using in the 'imports' section of the header of module 'tmp/module_interface_with_qualified_import/A' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header.
+            This module is an interface, because of a bug in the compiler we are unable to directly typecheck interface modules with package imports so this error may not be correct. Please start checking at an app, package or platform file that imports this file."#
+        ),
+        "\n{}",
+        err
+    );
+}
+#[test]
+fn app_missing_package_import() {
+    let modules = vec![(
+        "Main",
+        indoc!(
+            r#"
+                app "example"
+                    packages { pack: "./package/main.roc" }
+                    imports [notpack.Mod]
+                    provides [] to pack
+
+                main = ""
+                "#
+        ),
+    )];
+
+    let err = multiple_modules("app_missing_package_import", modules).unwrap_err();
+    assert_eq!(
+        err,
+        indoc!(
+            r#"
+            The package shorthand 'notpack' that you are using in the 'imports' section of the header of module 'tmp/app_missing_package_import/Main' doesn't exist.
+            Check that package shorthand is correct or reference the package in an 'app' or 'package' header."#
         ),
         "\n{}",
         err

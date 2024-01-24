@@ -166,7 +166,13 @@ pub fn can_expr_with<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar_expr(arena, &loc_expr);
+    let loc_expr = operator::desugar_expr(
+        arena,
+        &loc_expr,
+        expr_str,
+        &mut None,
+        arena.alloc("TestPath"),
+    );
 
     let mut scope = Scope::new(home, IdentIds::default(), Default::default());
 

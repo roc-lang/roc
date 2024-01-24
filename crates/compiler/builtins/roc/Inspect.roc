@@ -34,8 +34,7 @@ interface Inspect
         custom,
         apply,
         toInspector,
-        DbgFormatter,
-        toDbgStr,
+        toStr,
     ]
     imports [
         Bool.{ Bool },
@@ -98,6 +97,12 @@ inspect : val -> f where val implements Inspect, f implements InspectFormatter
 inspect = \val ->
     (@Inspector valFn) = toInspector val
     valFn (init {})
+
+toStr : val -> Str where val implements Inspect
+toStr = \val ->
+    val
+    |> inspect
+    |> toDbgStr
 
 # The current default formatter for inspect.
 # This just returns a simple string for debugging.

@@ -48,6 +48,7 @@ interface Num
         isLte,
         isGt,
         isGte,
+        isApproxEq,
         sin,
         cos,
         tan,
@@ -560,8 +561,6 @@ tau = 2 * pi
 # ------- Functions
 ## Convert a number to a [Str].
 ##
-## This is the same as calling `Num.format {}` - so for more details on
-## exact formatting, see `Num.format`.
 ## ```
 ## Num.toStr 42
 ## ```
@@ -573,7 +572,6 @@ tau = 2 * pi
 ## When this function is given a non-[finite](Num.isFinite)
 ## [F64] or [F32] value, the returned string will be `"NaN"`, `"∞"`, or `"-∞"`.
 ##
-## To get strings in hexadecimal, octal, or binary format, use `Num.format`.
 toStr : Num * -> Str
 intCast : Int a -> Int b
 
@@ -663,6 +661,22 @@ isLte : Num a, Num a -> Bool
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
+
+## Returns `Bool.true` if the first number and second number are within a specific threshold
+##
+## A specific relative and absolute tolerance can be provided to change the threshold
+##
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
+isApproxEq = \value, refValue, { rtol ? 0.00001, atol ? 0.00000001 } -> value
+    <= refValue
+    && value
+    >= refValue
+    || Num.absDiff value refValue
+    <= atol
+    + rtol
+    * Num.abs refValue
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
@@ -1054,7 +1068,7 @@ shiftLeftBy : Int a, U8 -> Int a
 ##
 ## The most significant bits are copied from the current.
 ## ```
-## shiftRightBy 0b0000_0011 2 == 0b0000_1100
+## shiftRightBy 0b0000_1100 2 == 0b0000_0011
 ##
 ## 0b0001_0100 |> shiftRightBy 2 == 0b0000_0101
 ##
@@ -1065,16 +1079,16 @@ shiftRightBy : Int a, U8 -> Int a
 
 ## Bitwise logical right shift of a number by another
 ##
-## The most significant bits always become 0. This means that shifting left is
+## The most significant bits always become 0. This means that shifting right is
 ## like dividing by factors of two for unsigned integers.
 ## ```
-## shiftRightBy 0b0010_1000 2 == 0b0000_1010
+## shiftRightZfBy 0b0010_1000 2 == 0b0000_1010
 ##
-## 0b0010_1000 |> shiftRightBy 2 == 0b0000_1010
+## 0b0010_1000 |> shiftRightZfBy 2 == 0b0000_1010
 ##
-## 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
+## 0b1001_0000 |> shiftRightZfBy 2 == 0b0010_0100
 ## ```
-## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
+## In some languages `shiftRightZfBy` is implemented as a binary operator `>>`.
 shiftRightZfBy : Int a, U8 -> Int a
 
 ## Round off the given fraction to the nearest integer.
@@ -1112,7 +1126,7 @@ powInt : Int a, Int a -> Int a
 ##
 ## 8
 ## ```
-countLeadingZeroBits : Int a -> Nat
+countLeadingZeroBits : Int a -> U8
 
 ## Counts the number of least-significant (trailing in a big-Endian sense) zeroes in an integer.
 ##
@@ -1125,7 +1139,7 @@ countLeadingZeroBits : Int a -> Nat
 ##
 ## 8
 ## ```
-countTrailingZeroBits : Int a -> Nat
+countTrailingZeroBits : Int a -> U8
 
 ## Counts the number of set bits in an integer.
 ##
@@ -1138,7 +1152,7 @@ countTrailingZeroBits : Int a -> Nat
 ##
 ## 0
 ## ```
-countOneBits : Int a -> Nat
+countOneBits : Int a -> U8
 
 addWrap : Int range, Int range -> Int range
 
@@ -1433,12 +1447,11 @@ toU32 : Int * -> U32
 toU64 : Int * -> U64
 toU128 : Int * -> U128
 
-## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
+## Converts an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated!
 ## Since [Nat] has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
-## `Num.maxU32`. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
+## For example, on a 32-bit system, calling `Num.toNat 9_000_000_000` on a 32-bit
 ## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
 ## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
 ##

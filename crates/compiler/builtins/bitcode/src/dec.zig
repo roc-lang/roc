@@ -252,7 +252,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_panic("Decimal addition overflowed!", 0);
-            unreachable;
         } else {
             return answer.value;
         }
@@ -283,7 +282,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_panic("Decimal subtraction overflowed!", 0);
-            unreachable;
         } else {
             return answer.value;
         }
@@ -347,7 +345,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_panic("Decimal multiplication overflowed!", 0);
-            unreachable;
         } else {
             return answer.value;
         }
@@ -369,7 +366,7 @@ pub const RocDec = extern struct {
 
         // (n / 0) is an error
         if (denominator_i128 == 0) {
-            @panic("TODO runtime exception for dividing by 0!");
+            roc_panic("Decimal division by 0!", 0);
         }
 
         // If they're both negative, or if neither is negative, the final answer
@@ -397,7 +394,7 @@ pub const RocDec = extern struct {
             if (denominator_i128 == one_point_zero_i128) {
                 return self;
             } else {
-                @panic("TODO runtime exception for overflow when dividing!");
+                roc_panic("Decimal division overflow in numerator!", 0);
             }
         };
         const numerator_u128 = @as(u128, @intCast(numerator_abs_i128));
@@ -410,7 +407,7 @@ pub const RocDec = extern struct {
             if (numerator_i128 == one_point_zero_i128) {
                 return other;
             } else {
-                @panic("TODO runtime exception for overflow when dividing!");
+                roc_panic("Decimal division overflow in denominator!", 0);
             }
         };
         const denominator_u128 = @as(u128, @intCast(denominator_abs_i128));
@@ -422,7 +419,7 @@ pub const RocDec = extern struct {
         if (answer.hi == 0 and answer.lo <= math.maxInt(i128)) {
             unsigned_answer = @as(i128, @intCast(answer.lo));
         } else {
-            @panic("TODO runtime exception for overflow when dividing!");
+            roc_panic("Decimal division overflow!", 0);
         }
 
         return RocDec{ .num = if (is_answer_negative) -unsigned_answer else unsigned_answer };
@@ -461,6 +458,10 @@ pub const RocDec = extern struct {
         }
 
         return RocDec{ .num = out };
+    }
+
+    pub fn log(self: RocDec) RocDec {
+        return fromF64(@log(self.toF64())).?;
     }
 
     // I belive the output of the trig functions is always in range of Dec.
@@ -632,7 +633,7 @@ fn mul_and_decimalize(a: u128, b: u128) i128 {
     const d = answer[0];
 
     if (overflowed == 1) {
-        @panic("TODO runtime exception for overflow!");
+        roc_panic("Decimal multiplication overflow!", 0);
     }
 
     // Final 512bit value is d, c, b, a
@@ -1190,6 +1191,10 @@ test "div: 500 / 1000" {
     try expectEqual(RocDec.fromStr(roc_str), number1.div(number2));
 }
 
+test "log: 1" {
+    try expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1)));
+}
+
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
@@ -1208,7 +1213,7 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
     } else {
-        @panic("TODO runtime exception failing convert f64 to RocDec");
+        roc_panic("Decimal conversion from f64 failed!", 0);
     }
 }
 
@@ -1217,7 +1222,7 @@ pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
         return dec.num;
     } else {
-        @panic("TODO runtime exception failing convert f64 to RocDec");
+        roc_panic("Decimal conversion from f32!", 0);
     }
 }
 
@@ -1232,7 +1237,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
 
             const answer = @mulWithOverflow(this, RocDec.one_point_zero_i128);
             if (answer[1] == 1) {
-                @panic("TODO runtime exception failing convert integer to RocDec");
+                roc_panic("Decimal conversion from Integer failed!", 0);
             } else {
                 return answer[0];
             }
@@ -1258,11 +1263,15 @@ pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
 }
 
 pub fn negateC(arg: RocDec) callconv(.C) i128 {
-    return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else @panic("TODO overflow for negating RocDec");
+    return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
+        roc_panic("Decimal negation overflow!", 0);
+    };
 }
 
 pub fn absC(arg: RocDec) callconv(.C) i128 {
-    const result = @call(.always_inline, RocDec.abs, .{arg}) catch @panic("TODO overflow for calling absolute value on RocDec");
+    const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
+        roc_panic("Decimal absolute value overflow!", 0);
+    };
     return result.num;
 }
 
@@ -1280,6 +1289,10 @@ pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
 
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
+}
+
+pub fn logC(arg: RocDec) callconv(.C) i128 {
+    return @call(.always_inline, RocDec.log, .{arg}).num;
 }
 
 pub fn sinC(arg: RocDec) callconv(.C) i128 {

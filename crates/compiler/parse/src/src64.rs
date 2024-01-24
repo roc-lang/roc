@@ -82,7 +82,7 @@ impl<'a> Src64<'a> {
         }
 
         // Safety: we got capacity by rounding up to the nearest 64B
-        let dest = unsafe { allocate_chunks(arena, capacity)? }.as_ptr() as *mut u8;
+        let dest = unsafe { allocate_chunks(arena, capacity)? }.as_ptr();
 
         // Safety: `dest` has a length of `capacity`, which has been rounded up to a multiple of 64.
         unsafe {
@@ -264,8 +264,7 @@ impl<'a> Src64<'a> {
 
                 // Safety: bytes_ptr came from an allocation of `capacity` bytes, it's had
                 // newlines filled at the end, and `file_size` bytes written over the rest.
-                let bytes =
-                    unsafe { core::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, capacity) };
+                let bytes = unsafe { core::slice::from_raw_parts_mut(buf.as_ptr(), capacity) };
 
                 Ok(Self { bytes })
             }

@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
+set -euxo pipefail
+
 # Use this script to for testing the WIP site locally without downloading assets every time.
 
 # NOTE run `bash www/build.sh` to cache local copy of fonts, and repl assets etc
@@ -15,4 +18,4 @@ cp -r build dist/
 cp -r public/* dist/
 roc run main.roc -- content/ dist/
 
-npx http-server dist/ -p 8080 -c-1 --cors
+simple-http-server -p 8080 --nocache --cors --index -- dist/

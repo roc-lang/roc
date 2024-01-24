@@ -6,7 +6,7 @@
 - [**tutorial**](https://roc-lang.org/tutorial)
 - [**docs** for the standard library](https://www.roc-lang.org/builtins)
 - [**examples**](https://github.com/roc-lang/examples/tree/main/examples)
-- [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
+- [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/www/content/faq.md)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
 If you'd like to contribute, check out [good first issues](https://github.com/roc-lang/roc/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!
@@ -17,14 +17,17 @@ You can 💜 **sponsor** 💜 Roc on:
 - [GitHub](https://github.com/sponsors/roc-lang)
 - [Liberapay](https://liberapay.com/roc_lang)
 
-We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), [Tweede golf](https://tweedegolf.nl/en), and [ohne-makler](https://www.ohne-makler.net):
+We are very grateful for our corporate sponsors [Vendr](https://www.vendr.com/), [RWX](https://www.rwx.com), [Tweede golf](https://tweedegolf.nl/en), [ohne-makler](https://www.ohne-makler.net), and [Decem](https://www.decem.com.au):
 
 [<img src="https://user-images.githubusercontent.com/1094080/223597445-81755626-a080-4299-a38c-3c92e7548489.png" height="60" alt="Vendr logo"/>](https://www.vendr.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://github.com/roc-lang/roc/assets/1094080/82c0868e-d23f-42a0-ac2d-c6e6b2e16575" height="60" alt="RWX logo"/>](https://www.rwx.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
+&nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://www.ohne-makler.net/static/img/brand/logo.svg" height="60" alt="ohne-makler logo"/>](https://www.ohne-makler.net)
+&nbsp;&nbsp;&nbsp;&nbsp;
+[<img src="https://github.com/roc-lang/roc/assets/1094080/fd2a759c-7f6d-4f57-9eca-9601deba87b6" height="60" alt="Decem logo"/>](https://www.decem.com.au)
 
 If you would like your company to become a corporate sponsor of Roc's development, please [DM Richard Feldman on Zulip](https://roc.zulipchat.com/#narrow/pm-with/281383-user281383)!
 
@@ -39,7 +42,7 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 * [Lucas Rosa](https://github.com/rvcas)
 * [Jonas Schell](https://github.com/Ocupe)
 * [Christopher Dolan](https://github.com/cdolan)
-* [Nick Gravgaard](https://github.com/nickgravgaard)
+* [Nick Gravgaard](https://github.com/nick-gravgaard)
 * [Zeljko Nesic](https://github.com/popara)
 * [Shritesh Bhattarai](https://github.com/shritesh)
 * [Richard Feldman](https://github.com/rtfeldman)

@@ -341,13 +341,10 @@ pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
 pub const STR_SPLIT: &str = "roc_builtins.str.str_split";
-pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
-pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
 pub const STR_IS_EMPTY: &str = "roc_builtins.str.is_empty";
 pub const STR_CAPACITY: &str = "roc_builtins.str.capacity";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
-pub const STR_STARTS_WITH_SCALAR: &str = "roc_builtins.str.starts_with_scalar";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.from_int");
@@ -365,12 +362,9 @@ pub const STR_TRIM_START: &str = "roc_builtins.str.trim_start";
 pub const STR_TRIM_END: &str = "roc_builtins.str.trim_end";
 pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
-pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
-pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
 pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
-pub const STR_GRAPHEMES: &str = "roc_builtins.str.graphemes";
-pub const STR_REFCOUNT_PTR: &str = "roc_builtins.str.refcount_ptr";
+pub const STR_ALLOCATION_PTR: &str = "roc_builtins.str.allocation_ptr";
 pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
@@ -386,11 +380,12 @@ pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_REPLACE: &str = "roc_builtins.list.replace";
 pub const LIST_REPLACE_IN_PLACE: &str = "roc_builtins.list.replace_in_place";
 pub const LIST_IS_UNIQUE: &str = "roc_builtins.list.is_unique";
+pub const LIST_CLONE: &str = "roc_builtins.list.clone";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_APPEND_UNSAFE: &str = "roc_builtins.list.append_unsafe";
 pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";
 pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
-pub const LIST_REFCOUNT_PTR: &str = "roc_builtins.list.refcount_ptr";
+pub const LIST_ALLOCATION_PTR: &str = "roc_builtins.list.allocation_ptr";
 pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
 
 pub const DEC_ABS: &str = "roc_builtins.dec.abs";
@@ -408,6 +403,7 @@ pub const DEC_FROM_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.dec.fro
 pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_int");
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
+pub const DEC_LOG: &str = "roc_builtins.dec.log";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
@@ -421,6 +417,7 @@ pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
 
+pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
 pub const UTILS_INCREF_RC_PTR: &str = "roc_builtins.utils.incref_rc_ptr";
@@ -442,6 +439,9 @@ pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect"
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";
+
+pub const UTILS_WINDOWS_SETJMP: &str = "windows_setjmp";
+pub const UTILS_WINDOWS_LONGJMP: &str = "windows_longjmp";
 
 #[derive(Debug, Default)]
 pub struct IntToIntrinsicName {

@@ -21,16 +21,18 @@ const SEAMLESS_SLICE_BIT: usize =
 pub const RocList = extern struct {
     bytes: ?[*]u8,
     length: usize,
-    // This technically points to directly after the refcount.
-    // This is an optimization that enables use one code path for regular lists and slices for geting the refcount ptr.
-    capacity_or_ref_ptr: usize,
+    // For normal lists, contains the capacity.
+    // For seamless slices contains the pointer to the original allocation.
+    // This pointer is to the first element of the original list.
+    // Note we storing an allocation pointer, the pointer must be right shifted by one.
+    capacity_or_alloc_ptr: usize,
 
     pub inline fn len(self: RocList) usize {
         return self.length;
     }
 
     pub fn getCapacity(self: RocList) usize {
-        const list_capacity = self.capacity_or_ref_ptr;
+        const list_capacity = self.capacity_or_alloc_ptr;
         const slice_capacity = self.length;
         const slice_mask = self.seamlessSliceMask();
         const capacity = (list_capacity & ~slice_mask) | (slice_capacity & slice_mask);
@@ -38,14 +40,14 @@ pub const RocList = extern struct {
     }
 
     pub fn isSeamlessSlice(self: RocList) bool {
-        return @as(isize, @bitCast(self.capacity_or_ref_ptr)) < 0;
+        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
     }
 
     // This returns all ones if the list is a seamless slice.
     // Otherwise, it returns all zeros.
     // This is done without branching for optimization purposes.
     pub fn seamlessSliceMask(self: RocList) usize {
-        return @as(usize, @bitCast(@as(isize, @bitCast(self.capacity_or_ref_ptr)) >> (@bitSizeOf(isize) - 1)));
+        return @as(usize, @bitCast(@as(isize, @bitCast(self.capacity_or_alloc_ptr)) >> (@bitSizeOf(isize) - 1)));
     }
 
     pub fn isEmpty(self: RocList) bool {
@@ -53,7 +55,7 @@ pub const RocList = extern struct {
     }
 
     pub fn empty() RocList {
-        return RocList{ .bytes = null, .length = 0, .capacity_or_ref_ptr = 0 };
+        return RocList{ .bytes = null, .length = 0, .capacity_or_alloc_ptr = 0 };
     }
 
     pub fn eql(self: RocList, other: RocList) bool {
@@ -99,21 +101,22 @@ pub const RocList = extern struct {
         return list;
     }
 
-    // returns a pointer to just after the refcount.
-    // It is just after the refcount as an optimization for other shared code paths.
-    // For regular list, it just returns their bytes pointer.
-    // For seamless slices, it returns the pointer stored in capacity_or_ref_ptr.
-    pub fn getRefcountPtr(self: RocList) ?[*]u8 {
-        const list_ref_ptr = @intFromPtr(self.bytes);
-        const slice_ref_ptr = self.capacity_or_ref_ptr << 1;
+    // returns a pointer to the original allocation.
+    // This pointer points to the first element of the allocation.
+    // The pointer is to just after the refcount.
+    // For big lists, it just returns their bytes pointer.
+    // For seamless slices, it returns the pointer stored in capacity_or_alloc_ptr.
+    pub fn getAllocationPtr(self: RocList) ?[*]u8 {
+        const list_alloc_ptr = @intFromPtr(self.bytes);
+        const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
-        const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
-        return @as(?[*]u8, @ptrFromInt(ref_ptr));
+        const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+        return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
     pub fn decref(self: RocList, alignment: u32) void {
         // We use the raw capacity to ensure we always decrement the refcount of seamless slices.
-        utils.decref(self.getRefcountPtr(), self.capacity_or_ref_ptr, alignment);
+        utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, alignment);
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -187,7 +190,7 @@ pub const RocList = extern struct {
         return RocList{
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
-            .capacity_or_ref_ptr = capacity,
+            .capacity_or_alloc_ptr = capacity,
         };
     }
 
@@ -204,7 +207,7 @@ pub const RocList = extern struct {
         return RocList{
             .bytes = utils.allocateWithRefcount(data_bytes, alignment),
             .length = length,
-            .capacity_or_ref_ptr = length,
+            .capacity_or_alloc_ptr = length,
         };
     }
 
@@ -216,13 +219,13 @@ pub const RocList = extern struct {
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique() and !self.isSeamlessSlice()) {
-                const capacity = self.capacity_or_ref_ptr;
+                const capacity = self.capacity_or_alloc_ptr;
                 if (capacity >= new_length) {
-                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_ref_ptr = capacity };
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity_or_alloc_ptr = capacity };
                 } else {
                     const new_capacity = utils.calculateCapacity(capacity, new_length, element_width);
                     const new_source = utils.unsafeReallocate(source_ptr, alignment, capacity, new_capacity, element_width);
-                    return RocList{ .bytes = new_source, .length = new_length, .capacity_or_ref_ptr = new_capacity };
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
                 }
             }
             return self.reallocateFresh(alignment, new_length, element_width);
@@ -500,8 +503,8 @@ pub fn listReleaseExcessCapacity(
     update_mode: UpdateMode,
 ) callconv(.C) RocList {
     const old_length = list.len();
-    // We use the direct list.capacity_or_ref_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
-    if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_ref_ptr == old_length) {
+    // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
+    if ((update_mode == .InPlace or list.isUnique()) and list.capacity_or_alloc_ptr == old_length) {
         return list;
     } else if (old_length == 0) {
         list.decref(alignment);
@@ -649,14 +652,14 @@ pub fn listSublist(
             output.length = keep_len;
             return output;
         } else {
-            const list_ref_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
-            const slice_ref_ptr = list.capacity_or_ref_ptr;
+            const list_alloc_ptr = (@intFromPtr(source_ptr) >> 1) | SEAMLESS_SLICE_BIT;
+            const slice_alloc_ptr = list.capacity_or_alloc_ptr;
             const slice_mask = list.seamlessSliceMask();
-            const ref_ptr = (list_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
+            const alloc_ptr = (list_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
             return RocList{
                 .bytes = source_ptr + start * element_width,
                 .length = keep_len,
-                .capacity_or_ref_ptr = ref_ptr,
+                .capacity_or_alloc_ptr = alloc_ptr,
             };
         }
     }
@@ -959,16 +962,24 @@ pub fn listIsUnique(
     return list.isEmpty() or list.isUnique();
 }
 
+pub fn listClone(
+    list: RocList,
+    alignment: u32,
+    element_width: usize,
+) callconv(.C) RocList {
+    return list.makeUnique(alignment, element_width);
+}
+
 pub fn listCapacity(
     list: RocList,
 ) callconv(.C) usize {
     return list.getCapacity();
 }
 
-pub fn listRefcountPtr(
+pub fn listAllocationPtr(
     list: RocList,
 ) callconv(.C) ?[*]u8 {
-    return list.getRefcountPtr();
+    return list.getAllocationPtr();
 }
 
 test "listConcat: non-unique with unique overlapping" {

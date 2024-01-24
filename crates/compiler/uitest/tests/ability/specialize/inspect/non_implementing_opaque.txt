@@ -2,5 +2,5 @@ app "test" provides [main] to "./platform"
 
 Op := {}
 
-main = Inspect.toInspector (@Op {}) |> Inspect.apply (Inspect.init {}) |> Inspect.toDbgStr
-#      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): Op -[[Inspect.dbgOpaque(45)]]-> Inspector DbgFormatter
+main = Inspect.toInspector (@Op {}) |> Inspect.apply (Inspect.init {})
+#      ^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.toInspector(32): Op -[[] + f:Inspect.opaque(15):1]-> Inspector f where f implements InspectFormatter

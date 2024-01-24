@@ -670,6 +670,23 @@ fn to_expr_report<'a>(
         EExpr::Dbg(e_expect, _position) => {
             to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
         }
+        EExpr::TrailingOperator(pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("TODO provide more context.")]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "TRAILING OPERATOR".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
 }

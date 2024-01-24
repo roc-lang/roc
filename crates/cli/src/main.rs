@@ -145,7 +145,7 @@ fn main() -> io::Result<()> {
             let triple = target.to_triple();
             let function_kind = FunctionKind::LambdaSet;
             let (platform_path, stub_lib, stub_dll_symbols) = roc_linker::generate_stub_lib(
-                &input_path,
+                input_path,
                 RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &triple,
                 function_kind,
@@ -333,7 +333,10 @@ fn main() -> io::Result<()> {
                                 }
                             }
                             FormatMode::WriteToStdout => {
-                                std::io::stdout().lock().write_all(src.as_bytes()).unwrap();
+                                std::io::stdout()
+                                    .lock()
+                                    .write_all(formatted_src.as_bytes())
+                                    .unwrap();
 
                                 0
                             }

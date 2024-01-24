@@ -2,9 +2,14 @@ interface Set
     exposes [
         Set,
         empty,
+        withCapacity,
+        reserve,
+        releaseExcessCapacity,
         single,
         walk,
         walkUntil,
+        keepIf,
+        dropIf,
         insert,
         len,
         isEmpty,
@@ -43,7 +48,7 @@ Set k := Dict.Dict k {} where k implements Hash & Eq
         },
     ]
 
-isEq : Set k, Set k -> Bool where k implements Hash & Eq
+isEq : Set k, Set k -> Bool
 isEq = \xs, ys ->
     if len xs != len ys then
         Bool.false
@@ -54,7 +59,7 @@ isEq = \xs, ys ->
             else
                 Break Bool.false
 
-hashSet : hasher, Set k -> hasher where k implements Hash & Eq, hasher implements Hasher
+hashSet : hasher, Set k -> hasher where hasher implements Hasher
 hashSet = \hasher, @Set inner -> Hash.hash hasher inner
 
 toInspectorSet : Set k -> Inspector f where k implements Inspect & Hash & Eq, f implements InspectFormatter
@@ -72,12 +77,24 @@ toInspectorSet = \set ->
 empty : {} -> Set *
 empty = \{} -> @Set (Dict.empty {})
 
-## Return a dictionary with space allocated for a number of entries. This
+## Return a set with space allocated for a number of entries. This
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
 withCapacity : Nat -> Set *
 withCapacity = \cap ->
     @Set (Dict.withCapacity cap)
+
+## Enlarge the set for at least capacity additional elements
+reserve : Set k, Nat -> Set k
+reserve = \@Set dict, requested ->
+    @Set (Dict.reserve dict requested)
+
+## Shrink the memory footprint of a set such that capacity is as small as possible.
+## This function will require regenerating the metadata if the size changes.
+## There will still be some overhead due to dictionary metadata always being a power of 2.
+releaseExcessCapacity : Set k -> Set k
+releaseExcessCapacity = \@Set dict ->
+    @Set (Dict.releaseExcessCapacity dict)
 
 ## Creates a new `Set` with a single value.
 ## ```
@@ -86,7 +103,7 @@ withCapacity = \cap ->
 ##
 ## expect countValues == 1
 ## ```
-single : k -> Set k where k implements Hash & Eq
+single : k -> Set k
 single = \key ->
     Dict.single key {} |> @Set
 
@@ -102,7 +119,7 @@ single = \key ->
 ##
 ## expect countValues == 3
 ## ```
-insert : Set k, k -> Set k where k implements Hash & Eq
+insert : Set k, k -> Set k
 insert = \@Set dict, key ->
     Dict.insert dict key {} |> @Set
 
@@ -187,7 +204,7 @@ expect
 ## expect has10 == Bool.false
 ## expect has20 == Bool.true
 ## ```
-remove : Set k, k -> Set k where k implements Hash & Eq
+remove : Set k, k -> Set k
 remove = \@Set dict, key ->
     Dict.remove dict key |> @Set
 
@@ -206,7 +223,7 @@ remove = \@Set dict, key ->
 ## expect hasApple == Bool.true
 ## expect hasBanana == Bool.false
 ## ```
-contains : Set k, k -> Bool where k implements Hash & Eq
+contains : Set k, k -> Bool
 contains = \@Set dict, key ->
     Dict.contains dict key
 
@@ -219,7 +236,7 @@ contains = \@Set dict, key ->
 ##
 ## expect Set.toList numbers == values
 ## ```
-toList : Set k -> List k where k implements Hash & Eq
+toList : Set k -> List k
 toList = \@Set dict ->
     Dict.keys dict
 
@@ -233,11 +250,12 @@ toList = \@Set dict ->
 ##
 ## expect Set.fromList [Pear, Apple, Banana] == values
 ## ```
-fromList : List k -> Set k where k implements Hash & Eq
+fromList : List k -> Set k
 fromList = \list ->
-    initial = @Set (Dict.withCapacity (List.len list))
-
-    List.walk list initial insert
+    list
+    |> List.map \k -> (k, {})
+    |> Dict.fromList
+    |> @Set
 
 ## Combine two `Set` collection by keeping the
 ## [union](https://en.wikipedia.org/wiki/Union_(set_theory))
@@ -249,7 +267,7 @@ fromList = \list ->
 ##
 ## expect Set.union set1 set2 == Set.fromList [Left, Right]
 ## ```
-union : Set k, Set k -> Set k where k implements Hash & Eq
+union : Set k, Set k -> Set k
 union = \@Set dict1, @Set dict2 ->
     Dict.insertAll dict1 dict2 |> @Set
 
@@ -262,7 +280,7 @@ union = \@Set dict1, @Set dict2 ->
 ##
 ## expect Set.intersection set1 set2 == Set.single Left
 ## ```
-intersection : Set k, Set k -> Set k where k implements Hash & Eq
+intersection : Set k, Set k -> Set k
 intersection = \@Set dict1, @Set dict2 ->
     Dict.keepShared dict1 dict2 |> @Set
 
@@ -276,7 +294,7 @@ intersection = \@Set dict1, @Set dict2 ->
 ##
 ## expect Set.difference first second == Set.fromList [Up, Down]
 ## ```
-difference : Set k, Set k -> Set k where k implements Hash & Eq
+difference : Set k, Set k -> Set k
 difference = \@Set dict1, @Set dict2 ->
     Dict.removeAll dict1 dict2 |> @Set
 
@@ -299,14 +317,14 @@ difference = \@Set dict1, @Set dict2 ->
 ##
 ## expect result == 2
 ## ```
-walk : Set k, state, (state, k -> state) -> state where k implements Hash & Eq
+walk : Set k, state, (state, k -> state) -> state
 walk = \@Set dict, state, step ->
     Dict.walk dict state (\s, k, _ -> step s k)
 
 ## Convert each value in the set to something new, by calling a conversion
 ## function on each of them which receives the old value. Then return a
 ## new set containing the converted values.
-map : Set a, (a -> b) -> Set b where a implements Hash & Eq, b implements Hash & Eq
+map : Set a, (a -> b) -> Set b
 map = \set, transform ->
     init = withCapacity (capacity set)
 
@@ -318,7 +336,7 @@ map = \set, transform ->
 ## (using [Set.union]) into one set.
 ##
 ## You may know a similar function named `concatMap` in other languages.
-joinMap : Set a, (a -> Set b) -> Set b where a implements Hash & Eq, b implements Hash & Eq
+joinMap : Set a, (a -> Set b) -> Set b
 joinMap = \set, transform ->
     init = withCapacity (capacity set) # Might be a pessimization
 
@@ -340,9 +358,31 @@ joinMap = \set, transform ->
 ##
 ## expect result == FoundTheAnswer
 ## ```
-walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state where k implements Hash & Eq
+walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state
 walkUntil = \@Set dict, state, step ->
     Dict.walkUntil dict state (\s, k, _ -> step s k)
+
+## Run the given function on each element in the `Set`, and return
+## a `Set` with just the elements for which the function returned `Bool.true`.
+## ```
+## expect Set.fromList [1,2,3,4,5]
+##     |> Set.keepIf \k -> k >= 3
+##     |> Bool.isEq (Set.fromList [3,4,5])
+## ```
+keepIf : Set k, (k -> Bool) -> Set k
+keepIf = \@Set dict, predicate ->
+    @Set (Dict.keepIf dict (\(k, _v) -> predicate k))
+
+## Run the given function on each element in the `Set`, and return
+## a `Set` with just the elements for which the function returned `Bool.false`.
+## ```
+## expect Set.fromList [1,2,3,4,5]
+##     |> Set.dropIf \k -> k >= 3
+##     |> Bool.isEq (Set.fromList [1,2])
+## ```
+dropIf : Set k, (k -> Bool) -> Set k
+dropIf = \@Set dict, predicate ->
+    @Set (Dict.dropIf dict (\(k, _v) -> predicate k))
 
 expect
     first =
@@ -443,3 +483,13 @@ expect
         |> insert orderOne
 
     wrapperOne == wrapperTwo
+
+expect
+    Set.fromList [1, 2, 3, 4, 5]
+    |> Set.keepIf \k -> k >= 3
+    |> Bool.isEq (Set.fromList [3, 4, 5])
+
+expect
+    Set.fromList [1, 2, 3, 4, 5]
+    |> Set.dropIf \k -> k >= 3
+    |> Bool.isEq (Set.fromList [1, 2])

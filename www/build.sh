@@ -99,6 +99,10 @@ $roc version
 echo 'Building site markdown content'
 $roc run www/main.roc -- www/content/ www/build/
 
+echo "Adding github link to examples' html..."
+source www/scripts/add-github-link-to-examples.sh
+add_github_link_to_examples www/build/examples
+
 # cleanup
 rm -rf roc_nightly roc_releases.json
 
@@ -111,7 +115,7 @@ rm -rf ./downloaded-basic-cli
 
 git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
-cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+cargo run --bin roc-docs downloaded-basic-cli/platform/main.roc
 
 rm -rf ./downloaded-basic-cli
 

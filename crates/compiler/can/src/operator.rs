@@ -11,7 +11,7 @@ use roc_parse::ast::{
     AssignedField, Collection, Pattern, RecordBuilderField, StrLiteral, StrSegment, ValueDef,
     WhenBranch,
 };
-use roc_region::all::{Loc, Region};
+use roc_region::all::{LineInfo, Loc, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
 // https://github.com/gluon-lang/gluon - license information can be found in
@@ -67,13 +67,19 @@ fn new_op_call_expr<'a>(
     Loc { region, value }
 }
 
-fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a> {
+fn desugar_value_def<'a>(
+    arena: &'a Bump,
+    def: &'a ValueDef<'a>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> ValueDef<'a> {
     use ValueDef::*;
 
     match def {
         Body(loc_pattern, loc_expr) => Body(
-            desugar_loc_pattern(arena, loc_pattern),
-            desugar_expr(arena, loc_expr),
+            desugar_loc_pattern(arena, loc_pattern, src, line_info, module_path),
+            desugar_expr(arena, loc_expr, src, line_info, module_path),
         ),
         ann @ Annotation(_, _) => *ann,
         AnnotatedBody {
@@ -87,13 +93,14 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             ann_type,
             comment: *comment,
             body_pattern,
-            body_expr: desugar_expr(arena, body_expr),
+            body_expr: desugar_expr(arena, body_expr, src, line_info, module_path),
         },
         Dbg {
             condition,
             preceding_comment,
         } => {
-            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            let desugared_condition =
+                &*arena.alloc(desugar_expr(arena, condition, src, line_info, module_path));
             Dbg {
                 condition: desugared_condition,
                 preceding_comment: *preceding_comment,
@@ -103,7 +110,8 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             condition,
             preceding_comment,
         } => {
-            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            let desugared_condition =
+                &*arena.alloc(desugar_expr(arena, condition, src, line_info, module_path));
             Expect {
                 condition: desugared_condition,
                 preceding_comment: *preceding_comment,
@@ -113,7 +121,8 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             condition,
             preceding_comment,
         } => {
-            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            let desugared_condition =
+                &*arena.alloc(desugar_expr(arena, condition, src, line_info, module_path));
             ExpectFx {
                 condition: desugared_condition,
                 preceding_comment: *preceding_comment,
@@ -122,15 +131,27 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
     }
 }
 
-pub fn desugar_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
+pub fn desugar_defs<'a>(
+    arena: &'a Bump,
+    defs: &mut roc_parse::ast::Defs<'a>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) {
     for value_def in defs.value_defs.iter_mut() {
-        *value_def = desugar_value_def(arena, arena.alloc(*value_def));
+        *value_def = desugar_value_def(arena, arena.alloc(*value_def), src, line_info, module_path);
     }
 }
 
 /// Reorder the expression tree based on operator precedence and associativity rules,
 /// then replace the BinOp nodes with Apply nodes. Also drop SpaceBefore and SpaceAfter nodes.
-pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc<Expr<'a>> {
+pub fn desugar_expr<'a>(
+    arena: &'a Bump,
+    loc_expr: &'a Loc<Expr<'a>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> &'a Loc<Expr<'a>> {
     match &loc_expr.value {
         Float(..)
         | Num(..)
@@ -153,16 +174,22 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             StrLiteral::PlainLine(_) => loc_expr,
             StrLiteral::Line(segments) => {
                 let region = loc_expr.region;
-                let value = Str(StrLiteral::Line(desugar_str_segments(arena, segments)));
+                let value = Str(StrLiteral::Line(desugar_str_segments(
+                    arena,
+                    segments,
+                    src,
+                    line_info,
+                    module_path,
+                )));
 
                 arena.alloc(Loc { region, value })
             }
             StrLiteral::Block(lines) => {
                 let region = loc_expr.region;
                 let new_lines = Vec::from_iter_in(
-                    lines
-                        .iter()
-                        .map(|segments| desugar_str_segments(arena, segments)),
+                    lines.iter().map(|segments| {
+                        desugar_str_segments(arena, segments, src, line_info, module_path)
+                    }),
                     arena,
                 );
                 let value = Str(StrLiteral::Block(new_lines.into_bump_slice()));
@@ -177,7 +204,17 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 region,
                 value: **sub_expr,
             };
-            let value = TupleAccess(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
+            let value = TupleAccess(
+                &desugar_expr(
+                    arena,
+                    arena.alloc(loc_sub_expr),
+                    src,
+                    line_info,
+                    module_path,
+                )
+                .value,
+                paths,
+            );
 
             arena.alloc(Loc { region, value })
         }
@@ -187,7 +224,17 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 region,
                 value: **sub_expr,
             };
-            let value = RecordAccess(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
+            let value = RecordAccess(
+                &desugar_expr(
+                    arena,
+                    arena.alloc(loc_sub_expr),
+                    src,
+                    line_info,
+                    module_path,
+                )
+                .value,
+                paths,
+            );
 
             arena.alloc(Loc { region, value })
         }
@@ -195,7 +242,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             let mut new_items = Vec::with_capacity_in(items.len(), arena);
 
             for item in items.iter() {
-                new_items.push(desugar_expr(arena, item));
+                new_items.push(desugar_expr(arena, item, src, line_info, module_path));
             }
             let new_items = new_items.into_bump_slice();
             let value: Expr<'a> = List(items.replace_items(new_items));
@@ -205,32 +252,47 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 value,
             })
         }
-        Record(fields) => arena.alloc(Loc {
-            region: loc_expr.region,
-            value: Record(fields.map_items(arena, |field| {
-                let value = desugar_field(arena, &field.value);
-                Loc {
+        Record(fields) => {
+            let mut allocated = Vec::with_capacity_in(fields.len(), arena);
+            for field in fields.iter() {
+                let value = desugar_field(arena, &field.value, src, line_info, module_path);
+                allocated.push(Loc {
                     value,
                     region: field.region,
-                }
-            })),
-        }),
-        Tuple(fields) => arena.alloc(Loc {
-            region: loc_expr.region,
-            value: Tuple(fields.map_items(arena, |field| desugar_expr(arena, field))),
-        }),
+                });
+            }
+            let fields = fields.replace_items(allocated.into_bump_slice());
+            arena.alloc(Loc {
+                region: loc_expr.region,
+                value: Record(fields),
+            })
+        }
+        Tuple(fields) => {
+            let mut allocated = Vec::with_capacity_in(fields.len(), arena);
+            for field in fields.iter() {
+                let expr = desugar_expr(arena, field, src, line_info, module_path);
+                allocated.push(expr);
+            }
+            let fields = fields.replace_items(allocated.into_bump_slice());
+            arena.alloc(Loc {
+                region: loc_expr.region,
+                value: Tuple(fields),
+            })
+        }
         RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after
-            let new_update = desugar_expr(arena, update);
+            let new_update = desugar_expr(arena, update, src, line_info, module_path);
 
-            let new_fields = fields.map_items(arena, |field| {
-                let value = desugar_field(arena, &field.value);
-                Loc {
+            let mut allocated = Vec::with_capacity_in(fields.len(), arena);
+            for field in fields.iter() {
+                let value = desugar_field(arena, &field.value, src, line_info, module_path);
+                allocated.push(Loc {
                     value,
                     region: field.region,
-                }
-            });
+                });
+            }
+            let new_fields = fields.replace_items(allocated.into_bump_slice());
 
             arena.alloc(Loc {
                 region: loc_expr.region,
@@ -243,8 +305,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         Closure(loc_patterns, loc_ret) => arena.alloc(Loc {
             region: loc_expr.region,
             value: Closure(
-                desugar_loc_patterns(arena, loc_patterns),
-                desugar_expr(arena, loc_ret),
+                desugar_loc_patterns(arena, loc_patterns, src, line_info, module_path),
+                desugar_expr(arena, loc_ret, src, line_info, module_path),
             ),
         }),
         Backpassing(loc_patterns, loc_body, loc_ret) => {
@@ -253,10 +315,11 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             // loc_ret
 
             // first desugar the body, because it may contain |>
-            let desugared_body = desugar_expr(arena, loc_body);
+            let desugared_body = desugar_expr(arena, loc_body, src, line_info, module_path);
 
-            let desugared_ret = desugar_expr(arena, loc_ret);
-            let desugared_loc_patterns = desugar_loc_patterns(arena, loc_patterns);
+            let desugared_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
+            let desugared_loc_patterns =
+                desugar_loc_patterns(arena, loc_patterns, src, line_info, module_path);
             let closure = Expr::Closure(desugared_loc_patterns, desugared_ret);
             let loc_closure = Loc::at(loc_expr.region, closure);
 
@@ -289,12 +352,20 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             value: UnappliedRecordBuilder(loc_expr),
             region: loc_expr.region,
         }),
-        BinOps(lefts, right) => desugar_bin_ops(arena, loc_expr.region, lefts, right),
+        BinOps(lefts, right) => desugar_bin_ops(
+            arena,
+            loc_expr.region,
+            lefts,
+            right,
+            src,
+            line_info,
+            module_path,
+        ),
         Defs(defs, loc_ret) => {
             let mut defs = (*defs).clone();
-            desugar_defs(arena, &mut defs);
+            desugar_defs(arena, &mut defs, src, line_info, module_path);
 
-            let loc_ret = desugar_expr(arena, loc_ret);
+            let loc_ret = desugar_expr(arena, loc_ret, src, line_info, module_path);
 
             arena.alloc(Loc::at(loc_expr.region, Defs(arena.alloc(defs), loc_ret)))
         }
@@ -326,13 +397,17 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     }
                 };
 
-                desugared_args.push(desugar_expr(arena, arg));
+                desugared_args.push(desugar_expr(arena, arg, src, line_info, module_path));
             }
 
             let desugared_args = desugared_args.into_bump_slice();
 
             let mut apply: &Loc<Expr> = arena.alloc(Loc {
-                value: Apply(desugar_expr(arena, loc_fn), desugared_args, *called_via),
+                value: Apply(
+                    desugar_expr(arena, loc_fn, src, line_info, module_path),
+                    desugared_args,
+                    *called_via,
+                ),
                 region: loc_expr.region,
             });
 
@@ -341,7 +416,7 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
 
                 Some(apply_exprs) => {
                     for expr in apply_exprs {
-                        let desugared_expr = desugar_expr(arena, expr);
+                        let desugared_expr = desugar_expr(arena, expr, src, line_info, module_path);
 
                         let args = std::slice::from_ref(arena.alloc(apply));
 
@@ -356,15 +431,23 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             apply
         }
         When(loc_cond_expr, branches) => {
-            let loc_desugared_cond = &*arena.alloc(desugar_expr(arena, loc_cond_expr));
+            let loc_desugared_cond = &*arena.alloc(desugar_expr(
+                arena,
+                loc_cond_expr,
+                src,
+                line_info,
+                module_path,
+            ));
             let mut desugared_branches = Vec::with_capacity_in(branches.len(), arena);
 
             for branch in branches.iter() {
-                let desugared_expr = desugar_expr(arena, &branch.value);
-                let desugared_patterns = desugar_loc_patterns(arena, branch.patterns);
+                let desugared_expr =
+                    desugar_expr(arena, &branch.value, src, line_info, module_path);
+                let desugared_patterns =
+                    desugar_loc_patterns(arena, branch.patterns, src, line_info, module_path);
 
                 let desugared_guard = if let Some(guard) = &branch.guard {
-                    Some(*desugar_expr(arena, guard))
+                    Some(*desugar_expr(arena, guard, src, line_info, module_path))
                 } else {
                     None
                 };
@@ -402,7 +485,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 },
             };
             let loc_fn_var = arena.alloc(Loc { region, value });
-            let desugared_args = arena.alloc([desugar_expr(arena, loc_arg)]);
+            let desugared_args =
+                arena.alloc([desugar_expr(arena, loc_arg, src, line_info, module_path)]);
 
             arena.alloc(Loc {
                 value: Apply(loc_fn_var, desugared_args, CalledVia::UnaryOp(op)),
@@ -418,6 +502,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     value: **expr,
                     region: loc_expr.region,
                 }),
+                src,
+                line_info,
+                module_path,
             )
         }
         ParensAround(expr) => {
@@ -427,6 +514,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                     value: **expr,
                     region: loc_expr.region,
                 }),
+                src,
+                line_info,
+                module_path,
             );
 
             arena.alloc(Loc {
@@ -436,14 +526,20 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         }
         If(if_thens, final_else_branch) => {
             // If does not get desugared into `when` so we can give more targeted error messages during type checking.
-            let desugared_final_else = &*arena.alloc(desugar_expr(arena, final_else_branch));
+            let desugared_final_else = &*arena.alloc(desugar_expr(
+                arena,
+                final_else_branch,
+                src,
+                line_info,
+                module_path,
+            ));
 
             let mut desugared_if_thens = Vec::with_capacity_in(if_thens.len(), arena);
 
             for (condition, then_branch) in if_thens.iter() {
                 desugared_if_thens.push((
-                    *desugar_expr(arena, condition),
-                    *desugar_expr(arena, then_branch),
+                    *desugar_expr(arena, condition, src, line_info, module_path),
+                    *desugar_expr(arena, then_branch, src, line_info, module_path),
                 ));
             }
 
@@ -453,67 +549,106 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             })
         }
         Expect(condition, continuation) => {
-            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
-            let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
+            let desugared_condition =
+                &*arena.alloc(desugar_expr(arena, condition, src, line_info, module_path));
+            let desugared_continuation = &*arena.alloc(desugar_expr(
+                arena,
+                continuation,
+                src,
+                line_info,
+                module_path,
+            ));
             arena.alloc(Loc {
                 value: Expect(desugared_condition, desugared_continuation),
                 region: loc_expr.region,
             })
         }
         Dbg(condition, continuation) => {
-            // Desugars a `dbg x` statement into
-            // `roc_dbg (Inspect.toDbgStr (Inspect.inspect x))`
-            let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
+            // Desugars a `dbg x` statement into essentially
+            // Inspect.toStr x |> LowLevelDbg
+            let desugared_continuation = &*arena.alloc(desugar_expr(
+                arena,
+                continuation,
+                src,
+                line_info,
+                module_path,
+            ));
 
             let region = condition.region;
-            // TODO desugar this in canonicalization instead, so we can work
-            // in terms of integers exclusively and not need to create strings
-            // which canonicalization then needs to look up, check if they're exposed, etc
-            let inspect = Var {
+            // Inspect.toStr x
+            let inspect_fn = Var {
                 module_name: ModuleName::INSPECT,
-                ident: "inspect",
+                ident: "toStr",
             };
             let loc_inspect_fn_var = arena.alloc(Loc {
-                value: inspect,
+                value: inspect_fn,
                 region,
             });
-            let desugared_inspect_args = arena.alloc([desugar_expr(arena, condition)]);
+            let desugared_inspect_args =
+                arena.alloc([desugar_expr(arena, condition, src, line_info, module_path)]);
 
-            let inspector = arena.alloc(Loc {
+            let dbg_str = arena.alloc(Loc {
                 value: Apply(loc_inspect_fn_var, desugared_inspect_args, CalledVia::Space),
                 region,
             });
 
-            let to_dbg_str = Var {
-                module_name: ModuleName::INSPECT,
-                ident: "toDbgStr",
-            };
-            let loc_to_dbg_str_fn_var = arena.alloc(Loc {
-                value: to_dbg_str,
-                region,
-            });
-            let to_dbg_str_args = arena.alloc([&*inspector]);
-            let dbg_str = arena.alloc(Loc {
-                value: Apply(loc_to_dbg_str_fn_var, to_dbg_str_args, CalledVia::Space),
-                region,
-            });
+            // line_info is an option so that we can lazily calculate it.
+            // That way it there are no `dbg` statements, we never pay the cast of scanning the source an extra time.
+            if matches!(line_info, None) {
+                *line_info = Some(LineInfo::new(src));
+            }
+            let line_col = line_info.as_ref().unwrap().convert_pos(region.start());
+
+            let dbg_src = src
+                .split_at(region.start().offset as usize)
+                .1
+                .split_at((region.end().offset - region.start().offset) as usize)
+                .0;
+
+            // |> LowLevelDbg
             arena.alloc(Loc {
-                value: LowLevelDbg(dbg_str, desugared_continuation),
+                value: LowLevelDbg(
+                    arena.alloc((
+                        &*arena.alloc_str(&format!("{}:{}", module_path, line_col.line + 1)),
+                        &*arena.alloc_str(dbg_src),
+                    )),
+                    dbg_str,
+                    desugared_continuation,
+                ),
                 region: loc_expr.region,
             })
         }
-        LowLevelDbg(_, _) => unreachable!("Only exists after desugaring"),
+        LowLevelDbg(_, _, _) => unreachable!("Only exists after desugaring"),
     }
 }
 
 fn desugar_str_segments<'a>(
     arena: &'a Bump,
     segments: &'a [StrSegment<'a>],
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
 ) -> &'a [StrSegment<'a>] {
     Vec::from_iter_in(
         segments.iter().map(|segment| match segment {
             StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => {
                 *segment
+            }
+            StrSegment::DeprecatedInterpolated(loc_expr) => {
+                let loc_desugared = desugar_expr(
+                    arena,
+                    arena.alloc(Loc {
+                        region: loc_expr.region,
+                        value: *loc_expr.value,
+                    }),
+                    src,
+                    line_info,
+                    module_path,
+                );
+                StrSegment::DeprecatedInterpolated(Loc {
+                    region: loc_desugared.region,
+                    value: arena.alloc(loc_desugared.value),
+                })
             }
             StrSegment::Interpolated(loc_expr) => {
                 let loc_desugared = desugar_expr(
@@ -522,6 +657,9 @@ fn desugar_str_segments<'a>(
                         region: loc_expr.region,
                         value: *loc_expr.value,
                     }),
+                    src,
+                    line_info,
+                    module_path,
                 );
                 StrSegment::Interpolated(Loc {
                     region: loc_desugared.region,
@@ -537,6 +675,9 @@ fn desugar_str_segments<'a>(
 fn desugar_field<'a>(
     arena: &'a Bump,
     field: &'a AssignedField<'a, Expr<'a>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
 ) -> AssignedField<'a, Expr<'a>> {
     use roc_parse::ast::AssignedField::*;
 
@@ -547,7 +688,7 @@ fn desugar_field<'a>(
                 region: loc_str.region,
             },
             spaces,
-            desugar_expr(arena, loc_expr),
+            desugar_expr(arena, loc_expr, src, line_info, module_path),
         ),
         OptionalValue(loc_str, spaces, loc_expr) => OptionalValue(
             Loc {
@@ -555,7 +696,7 @@ fn desugar_field<'a>(
                 region: loc_str.region,
             },
             spaces,
-            desugar_expr(arena, loc_expr),
+            desugar_expr(arena, loc_expr, src, line_info, module_path),
         ),
         LabelOnly(loc_str) => {
             // Desugar { x } into { x: x }
@@ -573,11 +714,11 @@ fn desugar_field<'a>(
                     region: loc_str.region,
                 },
                 &[],
-                desugar_expr(arena, arena.alloc(loc_expr)),
+                desugar_expr(arena, arena.alloc(loc_expr), src, line_info, module_path),
             )
         }
-        SpaceBefore(field, _spaces) => desugar_field(arena, field),
-        SpaceAfter(field, _spaces) => desugar_field(arena, field),
+        SpaceBefore(field, _spaces) => desugar_field(arena, field, src, line_info, module_path),
+        SpaceAfter(field, _spaces) => desugar_field(arena, field, src, line_info, module_path),
 
         Malformed(string) => Malformed(string),
     }
@@ -586,11 +727,14 @@ fn desugar_field<'a>(
 fn desugar_loc_patterns<'a>(
     arena: &'a Bump,
     loc_patterns: &'a [Loc<Pattern<'a>>],
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
 ) -> &'a [Loc<Pattern<'a>>] {
     Vec::from_iter_in(
         loc_patterns.iter().map(|loc_pattern| Loc {
             region: loc_pattern.region,
-            value: desugar_pattern(arena, loc_pattern.value),
+            value: desugar_pattern(arena, loc_pattern.value, src, line_info, module_path),
         }),
         arena,
     )
@@ -600,14 +744,23 @@ fn desugar_loc_patterns<'a>(
 fn desugar_loc_pattern<'a>(
     arena: &'a Bump,
     loc_pattern: &'a Loc<Pattern<'a>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
 ) -> &'a Loc<Pattern<'a>> {
     arena.alloc(Loc {
         region: loc_pattern.region,
-        value: desugar_pattern(arena, loc_pattern.value),
+        value: desugar_pattern(arena, loc_pattern.value, src, line_info, module_path),
     })
 }
 
-fn desugar_pattern<'a>(arena: &'a Bump, pattern: Pattern<'a>) -> Pattern<'a> {
+fn desugar_pattern<'a>(
+    arena: &'a Bump,
+    pattern: Pattern<'a>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
+) -> Pattern<'a> {
     use roc_parse::ast::Pattern::*;
 
     match pattern {
@@ -630,7 +783,7 @@ fn desugar_pattern<'a>(arena: &'a Bump, pattern: Pattern<'a>) -> Pattern<'a> {
             let desugared_arg_patterns = Vec::from_iter_in(
                 arg_patterns.iter().map(|arg_pattern| Loc {
                     region: arg_pattern.region,
-                    value: desugar_pattern(arena, arg_pattern.value),
+                    value: desugar_pattern(arena, arg_pattern.value, src, line_info, module_path),
                 }),
                 arena,
             )
@@ -639,26 +792,62 @@ fn desugar_pattern<'a>(arena: &'a Bump, pattern: Pattern<'a>) -> Pattern<'a> {
             Apply(tag, desugared_arg_patterns)
         }
         RecordDestructure(field_patterns) => {
-            RecordDestructure(field_patterns.map_items(arena, |field_pattern| Loc {
-                region: field_pattern.region,
-                value: desugar_pattern(arena, field_pattern.value),
-            }))
+            let mut allocated = Vec::with_capacity_in(field_patterns.len(), arena);
+            for field_pattern in field_patterns.iter() {
+                let value =
+                    desugar_pattern(arena, field_pattern.value, src, line_info, module_path);
+                allocated.push(Loc {
+                    value,
+                    region: field_pattern.region,
+                });
+            }
+            let field_patterns = field_patterns.replace_items(allocated.into_bump_slice());
+
+            RecordDestructure(field_patterns)
         }
-        RequiredField(name, field_pattern) => {
-            RequiredField(name, desugar_loc_pattern(arena, field_pattern))
+        RequiredField(name, field_pattern) => RequiredField(
+            name,
+            desugar_loc_pattern(arena, field_pattern, src, line_info, module_path),
+        ),
+        OptionalField(name, expr) => {
+            OptionalField(name, desugar_expr(arena, expr, src, line_info, module_path))
         }
-        OptionalField(name, expr) => OptionalField(name, desugar_expr(arena, expr)),
-        Tuple(patterns) => Tuple(patterns.map_items(arena, |elem_pattern| Loc {
-            region: elem_pattern.region,
-            value: desugar_pattern(arena, elem_pattern.value),
-        })),
-        List(patterns) => List(patterns.map_items(arena, |elem_pattern| Loc {
-            region: elem_pattern.region,
-            value: desugar_pattern(arena, elem_pattern.value),
-        })),
-        As(sub_pattern, symbol) => As(desugar_loc_pattern(arena, sub_pattern), symbol),
-        SpaceBefore(sub_pattern, _spaces) => desugar_pattern(arena, *sub_pattern),
-        SpaceAfter(sub_pattern, _spaces) => desugar_pattern(arena, *sub_pattern),
+        Tuple(patterns) => {
+            let mut allocated = Vec::with_capacity_in(patterns.len(), arena);
+            for pattern in patterns.iter() {
+                let value = desugar_pattern(arena, pattern.value, src, line_info, module_path);
+                allocated.push(Loc {
+                    value,
+                    region: pattern.region,
+                });
+            }
+            let patterns = patterns.replace_items(allocated.into_bump_slice());
+
+            Tuple(patterns)
+        }
+        List(patterns) => {
+            let mut allocated = Vec::with_capacity_in(patterns.len(), arena);
+            for pattern in patterns.iter() {
+                let value = desugar_pattern(arena, pattern.value, src, line_info, module_path);
+                allocated.push(Loc {
+                    value,
+                    region: pattern.region,
+                });
+            }
+            let patterns = patterns.replace_items(allocated.into_bump_slice());
+
+            List(patterns)
+        }
+        As(sub_pattern, symbol) => As(
+            desugar_loc_pattern(arena, sub_pattern, src, line_info, module_path),
+            symbol,
+        ),
+        SpaceBefore(sub_pattern, _spaces) => {
+            desugar_pattern(arena, *sub_pattern, src, line_info, module_path)
+        }
+        SpaceAfter(sub_pattern, _spaces) => {
+            desugar_pattern(arena, *sub_pattern, src, line_info, module_path)
+        }
     }
 }
 
@@ -787,19 +976,22 @@ fn desugar_bin_ops<'a>(
     whole_region: Region,
     lefts: &'a [(Loc<Expr<'_>>, Loc<BinOp>)],
     right: &'a Loc<Expr<'_>>,
+    src: &'a str,
+    line_info: &mut Option<LineInfo>,
+    module_path: &str,
 ) -> &'a Loc<Expr<'a>> {
     let mut arg_stack: Vec<&'a Loc<Expr>> = Vec::with_capacity_in(lefts.len() + 1, arena);
     let mut op_stack: Vec<Loc<BinOp>> = Vec::with_capacity_in(lefts.len(), arena);
 
     for (loc_expr, loc_op) in lefts {
-        arg_stack.push(desugar_expr(arena, loc_expr));
+        arg_stack.push(desugar_expr(arena, loc_expr, src, line_info, module_path));
         match run_binop_step(arena, whole_region, &mut arg_stack, &mut op_stack, *loc_op) {
             Err(problem) => return problem,
             Ok(()) => continue,
         }
     }
 
-    let mut expr = desugar_expr(arena, right);
+    let mut expr = desugar_expr(arena, right, src, line_info, module_path);
 
     for (left, loc_op) in arg_stack.into_iter().zip(op_stack.into_iter()).rev() {
         expr = arena.alloc(new_op_call_expr(arena, left, loc_op, expr));

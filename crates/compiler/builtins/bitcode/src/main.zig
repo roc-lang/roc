@@ -4,11 +4,7 @@ const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
 const panic_utils = @import("panic.zig");
-
-comptime {
-    _ = @import("compiler_rt.zig");
-    _ = @import("libc.zig");
-}
+const dbg_utils = @import("dbg.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -16,6 +12,13 @@ const STR = "str";
 
 // Dec Module
 const dec = @import("dec.zig");
+
+var FLTUSED: i32 = 0;
+comptime {
+    if (builtin.os.tag == .windows) {
+        @export(FLTUSED, .{ .name = "_fltused", .linkage = .Weak });
+    }
+}
 
 comptime {
     exportDecFn(dec.absC, "abs");
@@ -32,6 +35,7 @@ comptime {
     exportDecFn(dec.fromF64C, "from_float.f64");
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.fromU64C, "from_u64");
+    exportDecFn(dec.logC, "log");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
@@ -71,8 +75,9 @@ comptime {
     exportListFn(list.listReplaceInPlace, "replace_in_place");
     exportListFn(list.listSwap, "swap");
     exportListFn(list.listIsUnique, "is_unique");
+    exportListFn(list.listClone, "clone");
     exportListFn(list.listCapacity, "capacity");
-    exportListFn(list.listRefcountPtr, "refcount_ptr");
+    exportListFn(list.listAllocationPtr, "allocation_ptr");
     exportListFn(list.listReleaseExcessCapacity, "release_excess_capacity");
 }
 
@@ -92,19 +97,6 @@ comptime {
 
     exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
     exportNumFn(num.shiftRightZeroFillU128, "shift_right_zero_fill.u128");
-
-    exportNumFn(num.compareI128, "compare.i128");
-    exportNumFn(num.compareU128, "compare.u128");
-
-    exportNumFn(num.lessThanI128, "less_than.i128");
-    exportNumFn(num.lessThanOrEqualI128, "less_than_or_equal.i128");
-    exportNumFn(num.greaterThanI128, "greater_than.i128");
-    exportNumFn(num.greaterThanOrEqualI128, "greater_than_or_equal.i128");
-
-    exportNumFn(num.lessThanU128, "less_than.u128");
-    exportNumFn(num.lessThanOrEqualU128, "less_than_or_equal.u128");
-    exportNumFn(num.greaterThanU128, "greater_than.u128");
-    exportNumFn(num.greaterThanOrEqualU128, "greater_than_or_equal.u128");
 
     exportNumFn(num.compareI128, "compare.i128");
     exportNumFn(num.compareU128, "compare.u128");
@@ -186,15 +178,12 @@ comptime {
 const str = @import("str.zig");
 comptime {
     exportStrFn(str.init, "init");
-    exportStrFn(str.strToScalarsC, "to_scalars");
     exportStrFn(str.strSplit, "str_split");
     exportStrFn(str.countSegments, "count_segments");
-    exportStrFn(str.countGraphemeClusters, "count_grapheme_clusters");
     exportStrFn(str.countUtf8Bytes, "count_utf8_bytes");
     exportStrFn(str.isEmpty, "is_empty");
     exportStrFn(str.getCapacity, "capacity");
     exportStrFn(str.startsWith, "starts_with");
-    exportStrFn(str.startsWithScalar, "starts_with_scalar");
     exportStrFn(str.endsWith, "ends_with");
     exportStrFn(str.strConcatC, "concat");
     exportStrFn(str.strJoinWithC, "joinWith");
@@ -203,8 +192,6 @@ comptime {
     exportStrFn(str.substringUnsafe, "substring_unsafe");
     exportStrFn(str.getUnsafe, "get_unsafe");
     exportStrFn(str.reserve, "reserve");
-    exportStrFn(str.getScalarUnsafe, "get_scalar_unsafe");
-    exportStrFn(str.appendScalar, "append_scalar");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8RangeC, "from_utf8_range");
     exportStrFn(str.repeat, "repeat");
@@ -213,8 +200,7 @@ comptime {
     exportStrFn(str.strTrimEnd, "trim_end");
     exportStrFn(str.strCloneTo, "clone_to");
     exportStrFn(str.withCapacity, "with_capacity");
-    exportStrFn(str.strGraphemes, "graphemes");
-    exportStrFn(str.strRefcountPtr, "refcount_ptr");
+    exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
 
     inline for (INTEGERS) |T| {
@@ -244,6 +230,7 @@ comptime {
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
     @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+    @export(dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .Weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
@@ -259,6 +246,9 @@ comptime {
     if (builtin.target.cpu.arch == .aarch64) {
         @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
         @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+    } else if (builtin.os.tag == .windows) {
+        @export(__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
+        @export(__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
     }
 }
 
@@ -274,12 +264,101 @@ pub extern fn _longjmp([*c]c_int, c_int) noreturn;
 pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
 pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
 pub extern fn longjmperror() void;
+
 // Zig won't expose the externs (and hence link correctly) unless we force them to be used.
 fn __roc_force_setjmp(it: [*c]c_int) callconv(.C) c_int {
     return setjmp(it);
 }
+
 fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
     longjmp(a0, a1);
+}
+
+pub extern fn windows_setjmp([*c]c_int) c_int;
+pub extern fn windows_longjmp([*c]c_int, c_int) noreturn;
+
+fn __roc_force_setjmp_windows(it: [*c]c_int) callconv(.C) c_int {
+    return windows_setjmp(it);
+}
+
+fn __roc_force_longjmp_windows(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
+    windows_longjmp(a0, a1);
+}
+
+comptime {
+    if (builtin.os.tag == .windows) {
+        asm (
+            \\.global windows_longjmp;
+            \\windows_longjmp:
+            \\  movq 0x00(%rcx), %rdx
+            \\  movq 0x08(%rcx), %rbx
+            \\  # note 0x10 is not used yet!
+            \\  movq 0x18(%rcx), %rbp
+            \\  movq 0x20(%rcx), %rsi
+            \\  movq 0x28(%rcx), %rdi
+            \\  movq 0x30(%rcx), %r12
+            \\  movq 0x38(%rcx), %r13
+            \\  movq 0x40(%rcx), %r14
+            \\  movq 0x48(%rcx), %r15
+            \\
+            \\  # restore stack pointer
+            \\  movq 0x10(%rcx), %rsp
+            \\
+            \\  # load jmp address
+            \\  movq 0x50(%rcx), %r8
+            \\
+            \\  # set up return value
+            \\  movq %rbx, %rax
+            \\
+            \\  movdqu 0x60(%rcx), %xmm6
+            \\  movdqu 0x70(%rcx), %xmm7
+            \\  movdqu 0x80(%rcx), %xmm8
+            \\  movdqu 0x90(%rcx), %xmm9
+            \\  movdqu 0xa0(%rcx), %xmm10
+            \\  movdqu 0xb0(%rcx), %xmm11
+            \\  movdqu 0xc0(%rcx), %xmm12
+            \\  movdqu 0xd0(%rcx), %xmm13
+            \\  movdqu 0xe0(%rcx), %xmm14
+            \\  movdqu 0xf0(%rcx), %xmm15
+            \\
+            \\  jmp *%r8
+            \\
+            \\.global windows_setjmp;
+            \\windows_setjmp:
+            \\  movq %rdx, 0x00(%rcx)
+            \\  movq %rbx, 0x08(%rcx)
+            \\  # note 0x10 is not used yet!
+            \\  movq %rbp, 0x18(%rcx)
+            \\  movq %rsi, 0x20(%rcx)
+            \\  movq %rdi, 0x28(%rcx)
+            \\  movq %r12, 0x30(%rcx)
+            \\  movq %r13, 0x38(%rcx)
+            \\  movq %r14, 0x40(%rcx)
+            \\  movq %r15, 0x48(%rcx)
+            \\
+            \\  # the stack location right after the windows_setjmp call
+            \\  leaq 0x08(%rsp), %r8
+            \\  movq %r8, 0x10(%rcx)
+            \\
+            \\  movq (%rsp), %r8
+            \\  movq %r8, 0x50(%rcx)
+            \\
+            \\  movdqu %xmm6,  0x60(%rcx)
+            \\  movdqu %xmm7,  0x70(%rcx)
+            \\  movdqu %xmm8,  0x80(%rcx)
+            \\  movdqu %xmm9,  0x90(%rcx)
+            \\  movdqu %xmm10, 0xa0(%rcx)
+            \\  movdqu %xmm11, 0xb0(%rcx)
+            \\  movdqu %xmm12, 0xc0(%rcx)
+            \\  movdqu %xmm13, 0xd0(%rcx)
+            \\  movdqu %xmm14, 0xe0(%rcx)
+            \\  movdqu %xmm15, 0xf0(%rcx)
+            \\
+            \\  xorl %eax, %eax
+            \\  ret
+            \\
+        );
+    }
 }
 
 // Export helpers - Must be run inside a comptime

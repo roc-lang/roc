@@ -30,12 +30,25 @@ pub fn call_bitcode_fn<'ctx>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    call_bitcode_fn_help(env, args, fn_name)
+    let ret = call_bitcode_fn_help(env, args, fn_name)
         .try_as_basic_value()
         .left()
         .unwrap_or_else(|| {
             panic!("LLVM error: Did not get return value from bitcode function {fn_name:?}")
-        })
+        });
+
+    if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // On windows zig uses a vector type <2xi64> instead of a i128 value
+        let vec_type = env.context.i64_type().vec_type(2);
+        if ret.get_type() == vec_type.into() {
+            return env
+                .builder
+                .build_bitcast(ret, env.context.i128_type(), "return_i128")
+                .unwrap();
+        }
+    }
+
+    ret
 }
 
 pub fn call_void_bitcode_fn<'ctx>(
@@ -54,7 +67,35 @@ fn call_bitcode_fn_help<'ctx>(
     args: &[BasicValueEnum<'ctx>],
     fn_name: &str,
 ) -> CallSiteValue<'ctx> {
-    let it = args.iter().map(|x| (*x).into());
+    let it = args
+        .iter()
+        .map(|x| {
+            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+                if x.get_type() == env.context.i128_type().into() {
+                    let parent = env
+                        .builder
+                        .get_insert_block()
+                        .and_then(|b| b.get_parent())
+                        .unwrap();
+
+                    let alloca = create_entry_block_alloca(
+                        env,
+                        parent,
+                        x.get_type(),
+                        "pass_u128_by_reference",
+                    );
+
+                    env.builder.build_store(alloca, *x).unwrap();
+
+                    alloca.into()
+                } else {
+                    *x
+                }
+            } else {
+                *x
+            }
+        })
+        .map(|x| (x).into());
     let arguments = bumpalo::collections::Vec::from_iter_in(it, env.arena);
 
     let fn_val = env

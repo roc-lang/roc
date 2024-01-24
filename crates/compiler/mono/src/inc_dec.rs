@@ -689,6 +689,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             })
         }
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -703,6 +705,8 @@ fn insert_refcount_operations_stmt<'v, 'a>(
             );
 
             arena.alloc(Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: newer_remainder,
@@ -1043,8 +1047,8 @@ fn insert_refcount_operations_binding<'a>(
 
                     closure_env_layout: _,
 
-                    /// update mode of the higher order lowlevel itself
-                        update_mode: _,
+                    // update mode of the higher order lowlevel itself
+                    update_mode: _,
 
                     passed_function,
                 }) => {
@@ -1279,8 +1283,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
     match op {
         Unreachable => arena.alloc_slice_copy(&[irrelevant]),
         DictPseudoSeed => arena.alloc_slice_copy(&[irrelevant]),
-        ListLen | StrIsEmpty | StrToScalars | StrCountGraphemes | StrGraphemes
-        | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
+        ListLen | StrIsEmpty | StrCountUtf8Bytes | StrGetCapacity | ListGetCapacity => {
             arena.alloc_slice_copy(&[borrowed])
         }
         ListWithCapacity | StrWithCapacity => arena.alloc_slice_copy(&[irrelevant]),
@@ -1288,10 +1291,8 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         StrGetUnsafe | ListGetUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         ListConcat => arena.alloc_slice_copy(&[owned, owned]),
         StrConcat => arena.alloc_slice_copy(&[owned, borrowed]),
-        StrSubstringUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant, irrelevant]),
+        StrSubstringUnsafe => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         StrReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
-        StrAppendScalar => arena.alloc_slice_copy(&[owned, irrelevant]),
-        StrGetScalarUnsafe => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrTrim => arena.alloc_slice_copy(&[owned]),
         StrTrimStart => arena.alloc_slice_copy(&[owned]),
         StrTrimEnd => arena.alloc_slice_copy(&[owned]),
@@ -1304,7 +1305,6 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         ListMap3 => arena.alloc_slice_copy(&[owned, owned, owned, function, closure_data]),
         ListMap4 => arena.alloc_slice_copy(&[owned, owned, owned, owned, function, closure_data]),
         ListSortWith => arena.alloc_slice_copy(&[owned, function, closure_data]),
-
         ListAppendUnsafe => arena.alloc_slice_copy(&[owned, owned]),
         ListReserve => arena.alloc_slice_copy(&[owned, irrelevant]),
         ListSublist => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
@@ -1354,7 +1354,6 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         NumBytesToU64 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         NumBytesToU128 => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrStartsWith | StrEndsWith => arena.alloc_slice_copy(&[borrowed, borrowed]),
-        StrStartsWithScalar => arena.alloc_slice_copy(&[borrowed, irrelevant]),
         StrFromUtf8Range => arena.alloc_slice_copy(&[owned, irrelevant, irrelevant]),
         StrToUtf8 => arena.alloc_slice_copy(&[owned]),
         StrRepeat => arena.alloc_slice_copy(&[borrowed, irrelevant]),
@@ -1362,6 +1361,7 @@ fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[Ownership] {
         Hash => arena.alloc_slice_copy(&[borrowed, irrelevant]),
 
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
+        ListClone => arena.alloc_slice_copy(&[owned]),
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")

@@ -670,11 +670,15 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
         },
 
         Dbg {
+            source_location,
+            source,
             loc_message,
             loc_continuation,
             variable,
             symbol,
         } => Dbg {
+            source_location: source_location.clone(),
+            source: source.clone(),
             loc_message: Box::new(loc_message.map(|e| go_help!(e))),
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             variable: sub!(*variable),
@@ -1108,7 +1112,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                 }
                 for uls_index in unspecialized {
                     let Uls(var, _, _) = env.source()[uls_index];
-                    descend_var!(var);
+                    let _ignored = descend_var!(var);
                 }
                 let new_ambient_function = descend_var!(ambient_function);
 

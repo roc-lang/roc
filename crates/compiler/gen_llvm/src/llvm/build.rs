@@ -710,7 +710,7 @@ impl LlvmBackendMode {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => false,
-            LlvmBackendMode::BinaryGlue => false,
+            LlvmBackendMode::BinaryGlue => true,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -910,16 +910,19 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         &self,
         env: &Env<'a, 'ctx, 'env>,
         location: BasicValueEnum<'ctx>,
+        source: BasicValueEnum<'ctx>,
         message: BasicValueEnum<'ctx>,
     ) {
         let function = self.module.get_function("roc_dbg").unwrap();
 
         let loc = self.string_to_arg(env, location);
+        let src = self.string_to_arg(env, source);
         let msg = self.string_to_arg(env, message);
 
-        let call = self
-            .builder
-            .new_build_call(function, &[loc.into(), msg.into()], "roc_dbg");
+        // TODO: at some point it will be a breaking change, but flip order to (loc, src, msg)
+        let call =
+            self.builder
+                .new_build_call(function, &[loc.into(), msg.into(), src.into()], "roc_dbg");
 
         call.set_call_convention(C_CALL_CONV);
     }
@@ -946,6 +949,12 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
     }
 
     pub fn new_debug_info(module: &Module<'ctx>) -> (DebugInfoBuilder<'ctx>, DICompileUnit<'ctx>) {
+        let debug_metadata_version = module.get_context().i32_type().const_int(3, false);
+        module.add_basic_value_flag(
+            "Debug Info Version",
+            inkwell::module::FlagBehavior::Warning,
+            debug_metadata_version,
+        );
         module.create_debug_info_builder(
             true,
             /* language */ inkwell::debug_info::DWARFSourceLanguage::C,
@@ -1054,6 +1063,55 @@ pub fn module_from_builtins<'ctx>(
 
     let module = Module::parse_bitcode_from_buffer(&memory_buffer, ctx)
         .unwrap_or_else(|err| panic!("Unable to import builtins bitcode. LLVM error: {err:?}"));
+
+    // In testing, this adds about 20ms extra to compilation.
+    // Long term it would be best if we could do this on the zig side.
+    // The core issue is that we have to properly labael certain functions as private and DCE them.
+    // Otherwise, now that zig bundles all of compiler-rt, we would optimize and compile the entire library.
+    // Anything not depended on by a `roc_builtin.` function could already by DCE'd theoretically.
+    // That said, this workaround is good enough and fixes compilations times.
+
+    // Also, must_keep is the functions we depend on that would normally be provide by libc.
+    // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
+    let must_keep = [
+        "_fltused",
+        "floorf",
+        "memcpy",
+        "memset",
+        // I have no idea why this function is special.
+        // Without it, some tests hang on M1 mac outside of nix.
+        "__muloti4",
+        // fixes `Undefined Symbol in relocation`
+        "__udivti3",
+        // Roc special functions
+        "__roc_force_longjmp",
+        "__roc_force_setjmp",
+        "set_shared_buffer",
+    ];
+    for func in module.get_functions() {
+        let has_definition = func.count_basic_blocks() > 0;
+        let name = func.get_name().to_string_lossy();
+        if has_definition
+            && !name.starts_with("roc_builtins.")
+            && !must_keep.contains(&name.as_ref())
+        {
+            func.set_linkage(Linkage::Private);
+        }
+    }
+
+    // Note, running DCE here is faster then waiting until full app DCE.
+    let mpm = PassManager::create(());
+    mpm.add_global_dce_pass();
+    mpm.run_on(&module);
+
+    // Now that the unused compiler-rt functions have been removed,
+    // mark that the builtin functions are allowed to be DCE'd if they aren't used.
+    for func in module.get_functions() {
+        let name = func.get_name().to_string_lossy();
+        if name.starts_with("roc_builtins.") {
+            func.set_linkage(Linkage::Private);
+        }
+    }
 
     // Add LLVM intrinsics.
     add_intrinsics(ctx, &module);
@@ -1226,6 +1284,8 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
 
         let subprogram = env.new_subprogram(main_fn_name);
         c_function.set_subprogram(subprogram);
+
+        debug_info_init!(env, c_function);
 
         // STEP 2: build the exposed function's body
         let builder = env.builder;
@@ -3527,17 +3587,17 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
         }
 
         Dbg {
+            source_location,
+            source,
             symbol,
             variable: _,
             remainder,
         } => {
             if env.mode.runs_expects() {
-                // TODO: Change location to `filename:line_number`
-                // let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
-                let location =
-                    build_string_literal(env, parent, symbol.module_string(&env.interns));
+                let location = build_string_literal(env, parent, source_location);
+                let source = build_string_literal(env, parent, source);
                 let message = scope.load_symbol(symbol);
-                env.call_dbg(env, location, message);
+                env.call_dbg(env, location, source, message);
             }
 
             build_exp_stmt(
@@ -4050,7 +4110,6 @@ fn const_i128<'ctx>(env: &Env<'_, 'ctx, '_>, value: i128) -> IntValue<'ctx> {
 
 fn const_u128<'ctx>(env: &Env<'_, 'ctx, '_>, value: u128) -> IntValue<'ctx> {
     // truncate the lower 64 bits
-    let value = value;
     let a = value as u64;
 
     // get the upper 64 bits
@@ -4364,6 +4423,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, c_function);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
@@ -4371,8 +4432,6 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
-
-    debug_info_init!(env, c_function);
 
     // drop the first argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
@@ -4414,29 +4473,68 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         }
     }
 
-    let arguments_for_call = &arguments_for_call.into_bump_slice();
-
     let call_result = if env.mode.returns_roc_result() {
-        debug_assert_eq!(args.len(), roc_function.get_params().len());
+        if args.len() == roc_function.get_params().len() {
+            let arguments_for_call = &arguments_for_call.into_bump_slice();
 
-        let roc_wrapper_function =
-            make_exception_catcher(env, layout_interner, roc_function, return_layout);
-        debug_assert_eq!(
-            arguments_for_call.len(),
-            roc_wrapper_function.get_params().len()
-        );
+            let dbg_loc = builder.get_current_debug_location().unwrap();
+            let roc_wrapper_function =
+                make_exception_catcher(env, layout_interner, roc_function, return_layout);
+            debug_assert_eq!(
+                arguments_for_call.len(),
+                roc_wrapper_function.get_params().len()
+            );
 
-        builder.position_at_end(entry);
+            builder.position_at_end(entry);
+            builder.set_current_debug_location(dbg_loc);
 
-        let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
-        call_direct_roc_function(
-            env,
-            layout_interner,
-            roc_function,
-            wrapped_layout,
-            arguments_for_call,
-        )
+            let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
+            call_direct_roc_function(
+                env,
+                layout_interner,
+                roc_function,
+                wrapped_layout,
+                arguments_for_call,
+            )
+        } else {
+            debug_assert_eq!(args.len() + 1, roc_function.get_params().len());
+
+            arguments_for_call.push(args[0]);
+
+            let arguments_for_call = &arguments_for_call.into_bump_slice();
+
+            let dbg_loc = builder.get_current_debug_location().unwrap();
+            let roc_wrapper_function =
+                make_exception_catcher(env, layout_interner, roc_function, return_layout);
+
+            builder.position_at_end(entry);
+            builder.set_current_debug_location(dbg_loc);
+
+            let wrapped_layout = roc_call_result_layout(env.arena, return_layout);
+            let call_result = call_direct_roc_function(
+                env,
+                layout_interner,
+                roc_wrapper_function,
+                wrapped_layout,
+                arguments_for_call,
+            );
+
+            let output_arg_index = 0;
+
+            let output_arg = c_function
+                .get_nth_param(output_arg_index as u32)
+                .unwrap()
+                .into_pointer_value();
+
+            env.builder.new_build_store(output_arg, call_result);
+
+            builder.new_build_return(None);
+
+            return c_function;
+        }
     } else {
+        let arguments_for_call = &arguments_for_call.into_bump_slice();
+
         call_direct_roc_function(
             env,
             layout_interner,
@@ -4460,6 +4558,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
         output_arg,
         call_result,
     );
+
     builder.new_build_return(None);
 
     c_function
@@ -4512,6 +4611,8 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, c_function);
+
     // STEP 2: build the exposed function's body
     let builder = env.builder;
     let context = env.context;
@@ -4519,8 +4620,6 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let entry = context.append_basic_block(c_function, "entry");
 
     builder.position_at_end(entry);
-
-    debug_info_init!(env, c_function);
 
     // drop the final argument, which is the pointer we write the result into
     let args_vector = c_function.get_params();
@@ -4568,10 +4667,12 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let (call_result, call_result_layout) = {
         let last_block = builder.get_insert_block().unwrap();
 
+        let dbg_loc = builder.get_current_debug_location().unwrap();
         let roc_wrapper_function =
             make_exception_catcher(env, layout_interner, roc_function, return_layout);
 
         builder.position_at_end(last_block);
+        builder.set_current_debug_location(dbg_loc);
 
         let wrapper_result = roc_call_result_layout(env.arena, return_layout);
 
@@ -4623,11 +4724,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let subprogram = env.new_subprogram(&size_function_name);
     size_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, size_function);
+
     let entry = context.append_basic_block(size_function, "entry");
 
     builder.position_at_end(entry);
-
-    debug_info_init!(env, size_function);
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
     builder.new_build_return(Some(&size));
@@ -4713,6 +4814,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
 
     let subprogram = env.new_subprogram(c_function_name);
     c_function.set_subprogram(subprogram);
+
+    debug_info_init!(env, c_function);
 
     // STEP 2: build the exposed function's body
     let builder = env.builder;
@@ -4942,11 +5045,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
     let subprogram = env.new_subprogram(&size_function_name);
     size_function.set_subprogram(subprogram);
 
+    debug_info_init!(env, size_function);
+
     let entry = env.context.append_basic_block(size_function, "entry");
 
     env.builder.position_at_end(entry);
-
-    debug_info_init!(env, size_function);
 
     let return_type = match env.mode {
         LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
@@ -4969,6 +5072,11 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
 }
 
 pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
+    let word_type = match env.target_info.ptr_width() {
+        PtrWidth::Bytes4 => env.context.i32_type(),
+        PtrWidth::Bytes8 => env.context.i64_type(),
+    };
+
     // The size of jump_buf is target-dependent.
     //   - AArch64 needs 3 machine-sized words
     //   - LLVM says the following about the SJLJ intrinsic:
@@ -4980,11 +5088,15 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
     //     The following three words are available for use in a target-specific manner.
     //
     // So, let's create a 5-word buffer.
-    let word_type = match env.target_info.ptr_width() {
-        PtrWidth::Bytes4 => env.context.i32_type(),
-        PtrWidth::Bytes8 => env.context.i64_type(),
+    let size = if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // Due to https://github.com/llvm/llvm-project/issues/72908
+        // on windows, we store the register contents into this buffer directly!
+        30
+    } else {
+        5
     };
-    let type_ = word_type.array_type(5);
+
+    let type_ = word_type.array_type(size);
 
     let global = match env.module.get_global("roc_sjlj_buffer") {
         Some(global) => global,
@@ -5002,9 +5114,12 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
 
 pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> {
     let jmp_buf = get_sjlj_buffer(env);
-    if cfg!(target_arch = "aarch64") {
+    if env.target_info.architecture == roc_target::Architecture::Aarch64 {
         // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_SETJMP)
+    } else if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+        // Due to https://github.com/llvm/llvm-project/issues/72908, we use a setjmp defined as asm in Zig
+        call_bitcode_fn(env, &[jmp_buf.into()], bitcode::UTILS_WINDOWS_SETJMP)
     } else {
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
@@ -5343,6 +5458,8 @@ fn make_exception_catching_wrapper<'a, 'ctx>(
 
     let subprogram = env.new_subprogram(wrapper_function_name);
     wrapper_function.set_subprogram(subprogram);
+
+    debug_info_init!(env, wrapper_function);
 
     // The exposed main function must adhere to the C calling convention, but the wrapper can still be fastcc.
     wrapper_function.set_call_conventions(FAST_CALL_CONV);
@@ -5819,6 +5936,8 @@ fn build_proc_header<'a, 'ctx>(
 
     let subprogram = env.new_subprogram(&fn_name);
     fn_val.set_subprogram(subprogram);
+
+    debug_info_init!(env, fn_val);
 
     if env.exposed_to_host.contains(&symbol) {
         let arguments = Vec::from_iter_in(proc.args.iter().map(|(layout, _)| *layout), env.arena);

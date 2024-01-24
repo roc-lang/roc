@@ -166,6 +166,10 @@ hr {
     height: 4.5rem;
 }
 
+#sponsor-logos .logo-decem .cls-1 {
+    fill:#04021e;
+}
+
 #sponsor-logos + p {
     margin-bottom: 3em;
 }
@@ -869,6 +873,10 @@ li {
 
     .home-goals-content:hover {
         background-color: #481870 !important;
+    }
+
+    #sponsor-logos .logo-decem .cls-1 {
+        fill: #fff;
     }
 }
 

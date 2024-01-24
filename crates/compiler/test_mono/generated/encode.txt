@@ -1,16 +1,16 @@
-procedure List.4 (List.119, List.120):
-    let List.556 : U64 = 1i64;
-    let List.554 : List U8 = CallByName List.70 List.119 List.556;
-    let List.553 : List U8 = CallByName List.71 List.554 List.120;
-    ret List.553;
+procedure List.4 (List.122, List.123):
+    let List.574 : U64 = 1i64;
+    let List.572 : List U8 = CallByName List.70 List.122 List.574;
+    let List.571 : List U8 = CallByName List.71 List.572 List.123;
+    ret List.571;
 
 procedure List.70 (#Attr.2, #Attr.3):
-    let List.557 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
-    ret List.557;
+    let List.575 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.575;
 
 procedure List.71 (#Attr.2, #Attr.3):
-    let List.555 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.555;
+    let List.573 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.573;
 
 procedure Test.23 (Test.24, Test.35, Test.22):
     let Test.37 : List U8 = CallByName List.4 Test.24 Test.22;

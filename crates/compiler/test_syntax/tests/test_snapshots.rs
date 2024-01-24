@@ -246,8 +246,8 @@ mod test_snapshots {
         fail/when_outdented_branch.expr,
         fail/when_over_indented_int.expr,
         fail/when_over_indented_underscore.expr,
-        fail/wild_case_arrow.expr,
         fail/where_type_variable.expr,
+        fail/wild_case_arrow.expr,
         malformed/bad_opaque_ref.expr,
         malformed/malformed_ident_due_to_underscore.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
@@ -296,6 +296,7 @@ mod test_snapshots {
         pass/control_characters_in_scalar.expr,
         pass/crash.expr,
         pass/dbg.expr,
+        pass/dbg_multiline.expr,
         pass/def_without_newline.expr,
         pass/destructure_tag_assignment.expr,
         pass/empty_app_header.header,
@@ -489,9 +490,9 @@ mod test_snapshots {
         pass/where_clause_multiple_has_across_newlines.expr,
         pass/where_clause_non_function.expr,
         pass/where_clause_on_newline.expr,
+        pass/where_ident.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
-        pass/where_ident.expr,
         // END SNAPSHOTS (for automatic test detection via `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test`)
     }
 
@@ -730,7 +731,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_middle() {
-        assert_segments(r#""Hi, \(name)!""#, |arena| {
+        assert_segments(r#""Hi, $(name)!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -746,7 +747,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""\(name), hi!""#, |arena| {
+        assert_segments(r#""$(name), hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -761,7 +762,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello \(name)""#, |arena| {
+        assert_segments(r#""Hello $(name)""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -776,7 +777,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, \(name)! How is \(project) going?""#, |arena| {
+        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",

@@ -668,14 +668,22 @@ trait Backend<'a> {
             &Literal::Int((crash_tag as u128).to_ne_bytes()),
         );
 
+        // this function gets a RocStr, but the roc_panic defined by a platform expects a `*RocStr`.
+        // we store the value in a global variable and then use a pointer to this global
+        let panic_msg_ptr = self.debug_symbol("panic_msg_ptr");
+        let ignored = self.debug_symbol("ignored");
+        self.build_data_pointer(&panic_msg_ptr, "panic_msg".to_string());
+        self.load_literal_symbols(&[msg]);
+        self.build_ptr_store(ignored, panic_msg_ptr, msg, Layout::STR);
+
         // Now that the arguments are needed, load them if they are literals.
-        let arguments = &[msg, error_message];
+        let arguments = &[panic_msg_ptr, error_message];
         self.load_literal_symbols(arguments);
         self.build_fn_call(
             &Symbol::DEV_TMP2,
             String::from("roc_panic"),
             arguments,
-            &[Layout::STR, Layout::U32],
+            &[Layout::U64, Layout::U32],
             &Layout::UNIT,
         );
 
@@ -1002,7 +1010,7 @@ trait Backend<'a> {
                     arg_layouts[0], *ret_layout,
                     "NumAdd: expected to have the same argument and return layout"
                 );
-                self.build_num_add(sym, &args[0], &args[1], ret_layout)
+                self.build_num_add_wrap(sym, &args[0], &args[1], ret_layout)
             }
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
@@ -1072,13 +1080,84 @@ trait Backend<'a> {
                 );
                 self.build_num_neg(sym, &args[0], ret_layout)
             }
-            LowLevel::NumPowInt => self.build_fn_call(
-                sym,
-                bitcode::NUM_POW_INT[IntWidth::I64].to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
+            LowLevel::NumPowInt => {
+                let repr = self.interner().get_repr(arg_layouts[0]);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid layout for NumPowInt")
+                };
+
+                self.build_fn_call(
+                    sym,
+                    bitcode::NUM_POW_INT[int_width].to_string(),
+                    args,
+                    arg_layouts,
+                    ret_layout,
+                )
+            }
+            LowLevel::NumPow => {
+                let intrinsic = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::NUM_POW[float_width]
+                    }
+                    LayoutRepr::DEC => todo!("exponentiation for decimals"),
+                    _ => unreachable!("invalid layout for NumPow"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumFloor => {
+                let repr = self.interner().get_repr(*ret_layout);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid return layout for NumFloor")
+                };
+
+                match arg_layouts[0] {
+                    Layout::F32 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_FLOOR_F32[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::F64 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_FLOOR_F64[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::DEC => todo!("NumFloor for decimals"),
+                    _ => unreachable!("invalid layout for NumFloor"),
+                }
+            }
+
+            LowLevel::NumCeiling => {
+                let repr = self.interner().get_repr(*ret_layout);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid return layout for NumCeiling")
+                };
+
+                match arg_layouts[0] {
+                    Layout::F32 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_CEILING_F32[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::F64 => self.build_fn_call(
+                        sym,
+                        bitcode::NUM_CEILING_F64[int_width].to_string(),
+                        args,
+                        arg_layouts,
+                        ret_layout,
+                    ),
+                    Layout::DEC => todo!("NumCeiling for decimals"),
+                    _ => unreachable!("invalid layout for NumCeiling"),
+                }
+            }
+
             LowLevel::NumSub => {
                 debug_assert_eq!(
                     2,
@@ -1385,6 +1464,36 @@ trait Backend<'a> {
 
                 self.build_num_sqrt(*sym, args[0], float_width);
             }
+            LowLevel::NumSin => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_SIN[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_SIN[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_SIN,
+                    _ => unreachable!("invalid layout for sin"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::NumCos => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_COS[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_COS[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_COS,
+                    _ => unreachable!("invalid layout for cos"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+            LowLevel::NumTan => {
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F64 => &bitcode::NUM_TAN[FloatWidth::F64],
+                    Layout::F32 => &bitcode::NUM_TAN[FloatWidth::F32],
+                    Layout::DEC => bitcode::DEC_TAN,
+                    _ => unreachable!("invalid layout for tan"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
             LowLevel::NumRound => self.build_fn_call(
                 sym,
                 bitcode::NUM_ROUND_F64[IntWidth::I64].to_string(),
@@ -1408,6 +1517,15 @@ trait Backend<'a> {
                 );
                 let elem_layout = list_element_layout!(self.interner(), *ret_layout);
                 self.build_list_with_capacity(sym, args[0], arg_layouts[0], elem_layout, ret_layout)
+            }
+            LowLevel::ListClone => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListClone: expected to have exactly one argument"
+                );
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_clone(*sym, args[0], elem_layout, *ret_layout)
             }
             LowLevel::ListReserve => {
                 debug_assert_eq!(
@@ -1486,30 +1604,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrStartsWithScalar => self.build_fn_call(
-                sym,
-                bitcode::STR_STARTS_WITH_SCALAR.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrAppendScalar => self.build_fn_call(
-                sym,
-                bitcode::STR_APPEND_SCALAR.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::StrEndsWith => self.build_fn_call(
                 sym,
                 bitcode::STR_ENDS_WITH.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrCountGraphemes => self.build_fn_call(
-                sym,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -1589,23 +1686,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrToScalars => self.build_fn_call(
-                sym,
-                bitcode::STR_TO_SCALARS.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::StrGetUnsafe => self.build_fn_call(
                 sym,
                 bitcode::STR_GET_UNSAFE.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrGetScalarUnsafe => self.build_fn_call(
-                sym,
-                bitcode::STR_GET_SCALAR_UNSAFE.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -1763,6 +1846,21 @@ trait Backend<'a> {
             LowLevel::NumIsMultipleOf => {
                 let int_width = arg_layouts[0].try_int_width().unwrap();
                 let intrinsic = bitcode::NUM_IS_MULTIPLE_OF[int_width].to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+            LowLevel::NumCountLeadingZeroBits => {
+                let int_width = arg_layouts[0].try_int_width().unwrap();
+                let intrinsic = bitcode::NUM_COUNT_LEADING_ZERO_BITS[int_width].to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+            LowLevel::NumCountTrailingZeroBits => {
+                let int_width = arg_layouts[0].try_int_width().unwrap();
+                let intrinsic = bitcode::NUM_COUNT_TRAILING_ZERO_BITS[int_width].to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
+            }
+            LowLevel::NumCountOneBits => {
+                let int_width = arg_layouts[0].try_int_width().unwrap();
+                let intrinsic = bitcode::NUM_COUNT_ONE_BITS[int_width].to_string();
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout);
             }
             LowLevel::ListSublist => {
@@ -1947,12 +2045,15 @@ trait Backend<'a> {
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
+                let literal = match self.interner().get_repr(arg_layouts[0]) {
+                    LayoutRepr::Builtin(Builtin::Int(_)) => Literal::Int(0i128.to_ne_bytes()),
+                    LayoutRepr::Builtin(Builtin::Float(_)) => Literal::Float(0.0),
+                    LayoutRepr::DEC => Literal::Decimal([0; 16]),
+                    _ => unreachable!("invalid layout for sin"),
+                };
+
                 self.load_literal_symbols(args);
-                self.load_literal(
-                    &Symbol::DEV_TMP,
-                    &arg_layouts[0],
-                    &Literal::Int(0i128.to_ne_bytes()),
-                );
+                self.load_literal(&Symbol::DEV_TMP, &arg_layouts[0], &literal);
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
@@ -1992,18 +2093,6 @@ trait Backend<'a> {
                 } else {
                     self.load_literal(sym, BOOL_LAYOUT, LITERAL);
                 }
-            }
-            Symbol::STR_IS_VALID_SCALAR => {
-                // just call the function
-                let fn_name = self.lambda_name_to_string(
-                    func_name,
-                    arg_layouts.iter().copied(),
-                    None,
-                    *ret_layout,
-                );
-                // Now that the arguments are needed, load them if they are literals.
-                self.load_literal_symbols(args);
-                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             _other => {
                 // just call the function
@@ -2069,6 +2158,14 @@ trait Backend<'a> {
         src2: &Symbol,
         num_layout: &InLayout<'a>,
         return_layout: &InLayout<'a>,
+    );
+
+    fn build_num_add_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
     );
 
     /// build_num_sub_checked stores the sum of src1 and src2 into dst.
@@ -2280,6 +2377,14 @@ trait Backend<'a> {
 
     fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+
+    fn build_list_clone(
+        &mut self,
+        dst: Symbol,
+        input_list: Symbol,
+        elem_layout: InLayout<'a>,
+        ret_layout: InLayout<'a>,
+    );
 
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(

@@ -269,6 +269,8 @@ pub enum Expr {
     },
 
     Dbg {
+        source_location: Box<str>,
+        source: Box<str>,
         loc_message: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
         variable: Variable,
@@ -1249,7 +1251,7 @@ pub fn canonicalize_expr<'a>(
         ast::Expr::Dbg(_, _) => {
             internal_error!("Dbg should have been desugared by now")
         }
-        ast::Expr::LowLevelDbg(message, continuation) => {
+        ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
             let mut output = Output::default();
 
             let (loc_message, output1) =
@@ -1276,6 +1278,8 @@ pub fn canonicalize_expr<'a>(
 
             (
                 Dbg {
+                    source_location: (*source_location).into(),
+                    source: (*source).into(),
                     loc_message: Box::new(loc_message),
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
@@ -2097,6 +2101,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         }
 
         Dbg {
+            source_location,
+            source,
             loc_message,
             loc_continuation,
             variable,
@@ -2113,6 +2119,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             };
 
             Dbg {
+                source_location,
+                source,
                 loc_message: Box::new(loc_message),
                 loc_continuation: Box::new(loc_continuation),
                 variable,
@@ -2398,7 +2406,7 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::MalformedClosure => true,
         // Newlines are disallowed inside interpolation, and these all require newlines
         ast::Expr::Dbg(_, _)
-        | ast::Expr::LowLevelDbg(_, _)
+        | ast::Expr::LowLevelDbg(_, _, _)
         | ast::Expr::Defs(_, _)
         | ast::Expr::Expect(_, _)
         | ast::Expr::When(_, _)
@@ -2415,7 +2423,9 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                 | ast::StrSegment::Plaintext(_) => true,
                 // Disallow nested interpolation. Alternatively, we could allow it but require
                 // a comment above it apologizing to the next person who has to read the code.
-                ast::StrSegment::Interpolated(_) => false,
+                ast::StrSegment::Interpolated(_) | ast::StrSegment::DeprecatedInterpolated(_) => {
+                    false
+                }
             })
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
@@ -2542,7 +2552,7 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 },
-                Interpolated(loc_expr) => {
+                Interpolated(loc_expr) | DeprecatedInterpolated(loc_expr) => {
                     if is_valid_interpolation(loc_expr.value) {
                         // Interpolations desugar to Str.concat calls
                         output.references.insert_call(Symbol::STR_CONCAT);

@@ -442,7 +442,7 @@ pub trait LayoutInterner<'a>: Sized {
 pub struct InLayout<'a>(usize, std::marker::PhantomData<&'a ()>);
 impl<'a> Clone for InLayout<'a> {
     fn clone(&self) -> Self {
-        Self(self.0, Default::default())
+        *self
     }
 }
 

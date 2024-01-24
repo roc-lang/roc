@@ -34,8 +34,8 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len, list_map,
-        list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
+        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len,
+        list_map, list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
         list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
         list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
@@ -153,18 +153,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
         }
-        StrToScalars => {
-            // Str.toScalars : Str -> List U32
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_TO_SCALARS,
-            )
-        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             arguments!(string, prefix);
@@ -175,18 +163,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[],
                 BitcodeReturns::Basic,
                 bitcode::STR_STARTS_WITH,
-            )
-        }
-        StrStartsWithScalar => {
-            // Str.startsWithScalar : Str, U32 -> Bool
-            arguments!(string, prefix);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[prefix],
-                BitcodeReturns::Basic,
-                bitcode::STR_STARTS_WITH_SCALAR,
             )
         }
         StrEndsWith => {
@@ -545,102 +521,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             );
             BasicValueEnum::IntValue(is_zero)
         }
-        StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Nat
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::Basic,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
-            )
-        }
-        StrGetScalarUnsafe => {
-            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
-            arguments!(string, index);
-
-            let roc_return_type =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-
-            use roc_target::Architecture::*;
-            use roc_target::OperatingSystem::*;
-            match env.target_info {
-                TargetInfo {
-                    operating_system: Windows,
-                    ..
-                } => {
-                    let result = env.builder.new_build_alloca(roc_return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[result.into(), string, index],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let cast_result = env.builder.new_build_pointer_cast(
-                        result,
-                        roc_return_type.ptr_type(AddressSpace::default()),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(roc_return_type, cast_result, "load_result")
-                }
-                TargetInfo {
-                    architecture: Wasm32,
-                    ..
-                } => {
-                    let result = env.builder.new_build_alloca(roc_return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[
-                            result.into(),
-                            pass_string_to_zig_wasm(env, string).into(),
-                            index,
-                        ],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let cast_result = env.builder.new_build_pointer_cast(
-                        result,
-                        roc_return_type.ptr_type(AddressSpace::default()),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(roc_return_type, cast_result, "load_result")
-                }
-                TargetInfo {
-                    operating_system: Unix,
-                    ..
-                } => {
-                    let result = call_str_bitcode_fn(
-                        env,
-                        &[string],
-                        &[index],
-                        BitcodeReturns::Basic,
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    // zig will pad the struct to the alignment boundary, or bitpack it on 32-bit
-                    // targets. So we have to cast it to the format that the roc code expects
-                    let alloca = env
-                        .builder
-                        .new_build_alloca(result.get_type(), "to_roc_record");
-                    env.builder.new_build_store(alloca, result);
-
-                    env.builder
-                        .new_build_load(roc_return_type, alloca, "to_roc_record")
-                }
-                TargetInfo {
-                    operating_system: Wasi,
-                    ..
-                } => unimplemented!(),
-            }
-        }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
             arguments!(string);
@@ -695,18 +575,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_RELEASE_EXCESS_CAPACITY,
             )
         }
-        StrAppendScalar => {
-            // Str.appendScalar : Str, U32 -> Str
-            arguments!(string, capacity);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[capacity],
-                BitcodeReturns::Str,
-                bitcode::STR_APPEND_SCALAR,
-            )
-        }
         StrTrim => {
             // Str.trim : Str -> Str
             arguments!(string);
@@ -747,18 +615,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[str_len],
                 BitcodeReturns::Str,
                 bitcode::STR_WITH_CAPACITY,
-            )
-        }
-        StrGraphemes => {
-            // Str.graphemes : Str -> List Str
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_GRAPHEMES,
             )
         }
         ListLen => {
@@ -962,6 +818,31 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::LIST_IS_UNIQUE,
             )
         }
+        ListClone => {
+            // List.clone : List a -> List a
+            arguments_with_layouts!((list, list_layout));
+            let element_layout = list_element_layout!(layout_interner, list_layout);
+
+            match update_mode {
+                UpdateMode::Immutable => {
+                    //
+                    call_list_bitcode_fn(
+                        env,
+                        &[list.into_struct_value()],
+                        &[
+                            env.alignment_intvalue(layout_interner, element_layout),
+                            layout_width(env, layout_interner, element_layout),
+                        ],
+                        BitcodeReturns::List,
+                        bitcode::LIST_CLONE,
+                    )
+                }
+                UpdateMode::InPlace => {
+                    // we statically know the list is unique
+                    list
+                }
+            }
+        }
         NumToStr => {
             // Num.toStr : Num a -> Str
             arguments_with_layouts!((num, num_layout));
@@ -1100,13 +981,22 @@ pub(crate) fn run_low_level<'a, 'ctx>(
         NumBytesToU128 => {
             arguments!(list, position);
 
-            call_list_bitcode_fn(
+            let ret = call_list_bitcode_fn(
                 env,
                 &[list.into_struct_value()],
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U128,
-            )
+            );
+
+            if env.target_info.operating_system == roc_target::OperatingSystem::Windows {
+                // On windows the return type is not a i128, likely due to alignment
+                env.builder
+                    .build_bitcast(ret, env.context.i128_type(), "empty_string")
+                    .unwrap()
+            } else {
+                ret
+            }
         }
         NumCompare => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
@@ -1535,7 +1425,7 @@ fn build_int_binop<'ctx>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer addition overflowed!")
+            throw_on_overflow(env, parent, result, "Integer addition overflowed!")
         }
         NumAddWrap => bd.new_build_int_add(lhs, rhs, "add_int_wrap").into(),
         NumAddChecked => {
@@ -1566,7 +1456,7 @@ fn build_int_binop<'ctx>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer subtraction overflowed!")
+            throw_on_overflow(env, parent, result, "Integer subtraction overflowed!")
         }
         NumSubWrap => bd.new_build_int_sub(lhs, rhs, "sub_int").into(),
         NumSubChecked => {
@@ -1597,7 +1487,7 @@ fn build_int_binop<'ctx>(
                 )
                 .into_struct_value();
 
-            throw_on_overflow(env, parent, result, "integer multiplication overflowed!")
+            throw_on_overflow(env, parent, result, "Integer multiplication overflowed!")
         }
         NumMulWrap => bd.new_build_int_mul(lhs, rhs, "mul_int").into(),
         NumMulSaturated => call_bitcode_fn(
@@ -1844,6 +1734,11 @@ fn build_float_binop<'ctx>(
 
     let bd = env.builder;
 
+    let float_type = match float_width {
+        FloatWidth::F32 => env.context.f32_type(),
+        FloatWidth::F64 => env.context.f64_type(),
+    };
+
     match op {
         NumAdd => bd.new_build_float_add(lhs, rhs, "add_float").into(),
         NumAddChecked => {
@@ -1856,10 +1751,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1885,10 +1778,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -1915,10 +1806,8 @@ fn build_float_binop<'ctx>(
                     .into_int_value();
             let is_infinite = bd.new_build_not(is_finite, "negate");
 
-            let struct_type = context.struct_type(
-                &[context.f64_type().into(), context.bool_type().into()],
-                false,
-            );
+            let struct_type =
+                context.struct_type(&[float_type.into(), context.bool_type().into()], false);
 
             let struct_value = {
                 let v1 = struct_type.const_zero();
@@ -2350,7 +2239,7 @@ fn build_dec_binop<'a, 'ctx>(
             bitcode::DEC_ADD_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal addition overflowed",
+            "Decimal addition overflowed",
         ),
         NumSub => build_dec_binop_throw_on_overflow(
             env,
@@ -2358,7 +2247,7 @@ fn build_dec_binop<'a, 'ctx>(
             bitcode::DEC_SUB_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal subtraction overflowed",
+            "Decimal subtraction overflowed",
         ),
         NumMul => build_dec_binop_throw_on_overflow(
             env,
@@ -2366,7 +2255,7 @@ fn build_dec_binop<'a, 'ctx>(
             bitcode::DEC_MUL_WITH_OVERFLOW,
             lhs,
             rhs,
-            "decimal multiplication overflowed",
+            "Decimal multiplication overflowed",
         ),
         NumDivFrac => dec_binop_with_unchecked(env, bitcode::DEC_DIV, lhs, rhs),
 
@@ -2596,7 +2485,16 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                         }
                     }
                     PtrWidth::Bytes8 => {
-                        if target_int_width.stack_size() as usize > env.target_info.ptr_size() {
+                        let return_by_pointer = {
+                            if env.target_info.operating_system
+                                == roc_target::OperatingSystem::Windows
+                            {
+                                target_int_width.stack_size() as usize >= env.target_info.ptr_size()
+                            } else {
+                                target_int_width.stack_size() as usize > env.target_info.ptr_size()
+                            }
+                        };
+                        if return_by_pointer {
                             let bitcode_return_type =
                                 zig_to_int_checked_result_type(env, target_int_width.type_name());
 
@@ -2659,7 +2557,7 @@ fn int_neg_raise_on_overflow<'ctx>(
     throw_internal_exception(
         env,
         parent,
-        "integer negation overflowed because its argument is the minimum value",
+        "Integer negation overflowed because its argument is the minimum value",
     );
 
     builder.position_at_end(else_block);
@@ -2690,7 +2588,7 @@ fn int_abs_raise_on_overflow<'ctx>(
     throw_internal_exception(
         env,
         parent,
-        "integer absolute overflowed because its argument is the minimum value",
+        "Integer absolute overflowed because its argument is the minimum value",
     );
 
     builder.position_at_end(else_block);

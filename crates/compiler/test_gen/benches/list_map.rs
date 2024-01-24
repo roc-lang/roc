@@ -57,7 +57,7 @@ fn roc_function<'a, 'b>(
     let config = helpers::llvm::HelperConfig {
         mode: LlvmBackendMode::GenTest,
         ignore_problems: false,
-        add_debug_info: true,
+        emit_debug_info: true,
         opt_level: OptLevel::Optimize,
     };
 
