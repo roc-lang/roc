@@ -48,6 +48,7 @@ interface Num
         isLte,
         isGt,
         isGte,
+        isApproxEq,
         sin,
         cos,
         tan,
@@ -660,6 +661,22 @@ isLte : Num a, Num a -> Bool
 ## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
+
+## Returns `Bool.true` if the first number and second number are within a specific threshold
+##
+## A specific relative and absolute tolerance can be provided to change the threshold
+##
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
+## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
+isApproxEq : Frac a, Frac a, { rtol ? Frac a, atol ? Frac a } -> Bool
+isApproxEq = \value, refValue, { rtol ? 0.00001, atol ? 0.00000001 } -> value
+    <= refValue
+    && value
+    >= refValue
+    || Num.absDiff value refValue
+    <= atol
+    + rtol
+    * Num.abs refValue
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
