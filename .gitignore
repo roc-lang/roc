@@ -117,3 +117,14 @@ crates/glue/tests/fixtures/*/build.rs
 crates/glue/tests/fixtures/*/host.c
 crates/glue/tests/fixtures/*/src/main.rs
 crates/glue/tests/fixtures/*/test_glue/
+
+# examples
+examples/cli/countdown
+examples/cli/echo
+examples/cli/effects
+examples/cli/form
+examples/cli/tui
+examples/cli/http-get
+examples/cli/file
+examples/cli/env
+examples/cli/ingested-file
