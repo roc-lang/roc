@@ -1,9 +1,9 @@
 app "env"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
     imports [pf.Stdout, pf.Stderr, pf.Env, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Task {} []
+main : Task {} I32
 main =
     task =
         Env.decode "EDITOR"

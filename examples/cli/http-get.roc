@@ -1,24 +1,27 @@
 app "http-get"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
     imports [pf.Http, pf.Task.{ Task }, pf.Stdin, pf.Stdout]
     provides [main] to pf
 
-main : Task {} []
+main : Task {} I32
 main =
-    _ <- Task.await (Stdout.line "Please enter a URL to fetch")
+    _ <- Stdout.line "Please enter a URL to fetch" |> Task.await
 
-    url <- Task.await Stdin.line
+    urlInput <- Stdin.line |> Task.await
 
-    request = {
-        method: Get,
-        headers: [],
-        url,
-        body: Http.emptyBody,
-        timeout: NoTimeout,
-    }
+    when urlInput is
+        End -> Task.ok {}
+        Input url ->
+            request = {
+                method: Get,
+                headers: [],
+                url,
+                body: Http.emptyBody,
+                timeout: NoTimeout,
+            }
 
-    output <- Http.send request
-        |> Task.onFail (\err -> err |> Http.errorToString |> Task.succeed)
-        |> Task.await
+            output <- Http.send request
+                |> Task.onErr \err -> Task.ok (Http.errorToString err)
+                |> Task.await
 
-    Stdout.line output
+            Stdout.line output

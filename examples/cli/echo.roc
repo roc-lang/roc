@@ -1,17 +1,21 @@
 app "echo"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Task {} []
+main : Task {} I32
 main =
-    _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
+    _ <- Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂" |> Task.await
+
     Task.loop {} \_ -> Task.map tick Step
 
-tick : Task.Task {} []
+tick : Task.Task {} I32
 tick =
-    shout <- Task.await Stdin.line
-    Stdout.line (echo shout)
+    shout <- Stdin.line |> Task.await
+
+    when shout is
+        End -> Task.ok {}
+        Input shoutStr -> Stdout.line (echo shoutStr)
 
 echo : Str -> Str
 echo = \shout ->

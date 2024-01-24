@@ -5,6 +5,6 @@ effects
 form
 tui
 http-get
-file-io
+file
 env
 out.txt

@@ -1,18 +1,28 @@
 app "countdown"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br" }
-    imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop, succeed }]
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+    imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }]
     provides [main] to pf
 
+main : Task {} I32
 main =
-    _ <- await (Stdout.line "\nLet's count down from 10 together - all you have to do is press <ENTER>.")
-    _ <- await Stdin.line
-    loop 10 tick
+    _ <- Stdout.line "\nLet's count down from 10 together - all you have to do is press <ENTER>." |> Task.await
+    _ <- Stdin.line |> Task.await
 
+    Task.loop 10 tick
+
+tick : I64 -> Task [Done {}, Step I64] *
 tick = \n ->
     if n == 0 then
-        _ <- await (Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂")
-        succeed (Done {})
+        _ <- Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂" |> Task.await
+
+        Task.ok (Done {})
     else
-        _ <- await (n |> Num.toStr |> \s -> "\(s)..." |> Stdout.line)
-        _ <- await Stdin.line
-        succeed (Step (n - 1))
+        _ <-
+            Num.toStr n
+            |> \s -> "\(s)..."
+            |> Stdout.line
+            |> Task.await
+
+        _ <- Stdin.line |> Task.await
+
+        Task.ok (Step (n - 1))

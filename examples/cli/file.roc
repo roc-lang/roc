@@ -1,7 +1,6 @@
 app "file-io"
-    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
     imports [
-        pf.Process,
         pf.Stdout,
         pf.Stderr,
         pf.Task.{ Task },
@@ -12,7 +11,7 @@ app "file-io"
     ]
     provides [main] to pf
 
-main : Task {} []
+main : Task {} I32
 main =
     path = Path.fromStr "out.txt"
     task =
@@ -31,7 +30,9 @@ main =
 
     Task.attempt task \result ->
         when result is
-            Ok {} -> Stdout.line "Successfully wrote a string to out.txt"
+            Ok {} ->
+                Stdout.line "Successfully wrote a string to out.txt"
+
             Err err ->
                 msg =
                     when err is
@@ -41,5 +42,5 @@ main =
                         FileReadErr _ _ -> "Error reading file"
                         _ -> "Uh oh, there was an error!"
 
-                {} <- Stderr.line msg |> Task.await
-                Process.exit 1
+                Stderr.line msg
+
