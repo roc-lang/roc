@@ -86,6 +86,7 @@ pub struct CodeGenOptions {
     pub opt_level: OptLevel,
     pub emit_debug_info: bool,
     pub emit_llvm_ir: bool,
+    pub fuzz: bool,
 }
 
 type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
@@ -103,6 +104,7 @@ pub fn gen_from_mono_module<'a>(
     let path = roc_file_path;
     let debug = code_gen_options.emit_debug_info;
     let emit_llvm_ir = code_gen_options.emit_llvm_ir;
+    let fuzz = code_gen_options.fuzz;
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
@@ -131,6 +133,7 @@ pub fn gen_from_mono_module<'a>(
             backend_mode,
             debug,
             emit_llvm_ir,
+            fuzz,
         ),
     }
 }
@@ -148,6 +151,7 @@ fn gen_from_mono_module_llvm<'a>(
     backend_mode: LlvmBackendMode,
     emit_debug_info: bool,
     emit_llvm_ir: bool,
+    fuzz: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -284,7 +288,8 @@ fn gen_from_mono_module_llvm<'a>(
 
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    let memory_buffer = if cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok() {
+    let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
+    let memory_buffer = if fuzz || gen_sanitizers {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.into_path();
 
@@ -301,33 +306,27 @@ fn gen_from_mono_module_llvm<'a>(
         let mut passes = vec![];
         let mut extra_args = vec![];
         let mut unrecognized = vec![];
-        for sanitizer in std::env::var("ROC_SANITIZERS")
-            .unwrap()
-            .split(',')
-            .map(|x| x.trim())
-        {
-            match sanitizer {
-                "address" => passes.push("asan-module"),
-                "memory" => passes.push("msan-module"),
-                "thread" => passes.push("tsan-module"),
-                "cargo-fuzz" => {
-                    passes.push("sancov-module");
-                    extra_args.extend_from_slice(&[
-                        "-sanitizer-coverage-level=3",
-                        "-sanitizer-coverage-prune-blocks=0",
-                        "-sanitizer-coverage-inline-8bit-counters",
-                        "-sanitizer-coverage-pc-table",
-                    ]);
+        if fuzz {
+            passes.push("sancov-module");
+            extra_args.extend_from_slice(&[
+                "-sanitizer-coverage-level=4",
+                "-sanitizer-coverage-inline-8bit-counters",
+                "-sanitizer-coverage-pc-table",
+                "-sanitizer-coverage-trace-compares",
+            ]);
+        }
+        if gen_sanitizers {
+            for sanitizer in std::env::var("ROC_SANITIZERS")
+                .unwrap()
+                .split(',')
+                .map(|x| x.trim())
+            {
+                match sanitizer {
+                    "address" => passes.push("asan-module"),
+                    "memory" => passes.push("msan-module"),
+                    "thread" => passes.push("tsan-module"),
+                    x => unrecognized.push(x.to_owned()),
                 }
-                "afl.rs" => {
-                    passes.push("sancov-module");
-                    extra_args.extend_from_slice(&[
-                        "-sanitizer-coverage-level=3",
-                        "-sanitizer-coverage-prune-blocks=0",
-                        "-sanitizer-coverage-trace-pc-guard",
-                    ]);
-                }
-                x => unrecognized.push(x.to_owned()),
             }
         }
         if !unrecognized.is_empty() {
@@ -1291,6 +1290,7 @@ pub fn build_str_test<'a>(
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
         emit_llvm_ir: false,
+        fuzz: false,
     };
 
     let emit_timings = false;

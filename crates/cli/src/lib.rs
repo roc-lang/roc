@@ -68,6 +68,7 @@ pub const FLAG_STDIN: &str = "stdin";
 pub const FLAG_STDOUT: &str = "stdout";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const FLAG_OUTPUT: &str = "output";
+pub const FLAG_FUZZ: &str = "fuzz";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
@@ -139,6 +140,12 @@ pub fn build_app() -> Command {
         .value_parser(value_parser!(u32))
         .required(false);
 
+    let flag_fuzz = Arg::new(FLAG_FUZZ)
+        .long(FLAG_FUZZ)
+        .help("Instrument the roc binary for fuzzing with roc-fuzz")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
     let roc_file_to_run = Arg::new(ROC_FILE)
         .help("The .roc file of an app to run")
         .value_parser(value_parser!(PathBuf))
@@ -175,6 +182,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(flag_wasm_stack_size_kb)
             .arg(
                 Arg::new(FLAG_TARGET)
@@ -225,6 +233,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -248,6 +257,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
         )
@@ -262,6 +272,7 @@ pub fn build_app() -> Command {
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
             .arg(flag_prebuilt.clone())
+            .arg(flag_fuzz.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone().last(true))
         )
@@ -393,6 +404,7 @@ pub fn build_app() -> Command {
         .arg(flag_time)
         .arg(flag_linker)
         .arg(flag_prebuilt)
+        .arg(flag_fuzz)
         .arg(roc_file_to_run)
         .arg(args_for_app.trailing_var_arg(true))
 }
@@ -748,6 +760,11 @@ pub fn build(
             (cross_compile && !targeting_wasm)
     };
 
+    let fuzz = matches.get_flag(FLAG_FUZZ);
+    if fuzz && !matches!(code_gen_backend, CodeGenBackend::Llvm(_)) {
+        user_error!("Cannot instrument binary for fuzzing while using a dev backend.");
+    }
+
     let wasm_dev_stack_bytes: Option<u32> = matches
         .try_get_one::<u32>(FLAG_WASM_STACK_SIZE_KB)
         .ok()
@@ -764,6 +781,7 @@ pub fn build(
         opt_level,
         emit_debug_info,
         emit_llvm_ir,
+        fuzz,
     };
 
     let load_config = standard_load_config(&triple, build_ordering, threading);
