@@ -266,7 +266,7 @@ pub fn build_app() -> Command {
             .arg(args_for_app.clone().last(true))
         )
         .subcommand(Command::new(CMD_FORMAT)
-            .about("Format a .roc file using standard Roc formatting")
+            .about("Format a .roc file or the .roc files contained in a directory using standard\nRoc formatting")
             .arg(
                 Arg::new(DIRECTORY_OR_FILES)
                     .index(1)
@@ -294,6 +294,7 @@ pub fn build_app() -> Command {
                     .action(ArgAction::SetTrue)
                     .required(false),
             )
+            .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are formatted.")
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
