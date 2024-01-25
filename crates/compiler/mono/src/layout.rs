@@ -1817,7 +1817,6 @@ impl<'a> LambdaSet<'a> {
         args: VariableSubsSlice,
         closure_var: Variable,
         ret_var: Variable,
-        target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
         let mut env = Env::from_components(cache, subs, arena);
         Self::from_var(&mut env, args, closure_var, ret_var).value()

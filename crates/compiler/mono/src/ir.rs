@@ -6845,7 +6845,6 @@ fn register_capturing_closure<'a>(
                         args,
                         closure_var,
                         ret,
-                        env.target_info,
                     )
                 };
 
