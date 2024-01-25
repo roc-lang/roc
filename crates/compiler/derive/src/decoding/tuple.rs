@@ -639,8 +639,8 @@ fn step_elem(
             WhenBranch {
                 patterns: vec![WhenBranchPattern {
                     pattern: Loc::at_zero(Pattern::IntLiteral(
-                        Variable::NAT,
-                        Variable::NATURAL,
+                        Variable::U64,
+                        Variable::UNSIGNED64,
                         index.to_string().into_boxed_str(),
                         IntValue::I128((index as i128).to_ne_bytes()),
                         IntBound::Exact(IntLitWidth::U64),
@@ -676,12 +676,12 @@ fn step_elem(
 
     // when index is
     let body = Expr::When {
-        loc_cond: Box::new(Loc::at_zero(Expr::Var(index_arg_symbol, Variable::NAT))),
-        cond_var: Variable::NAT,
+        loc_cond: Box::new(Loc::at_zero(Expr::Var(index_arg_symbol, Variable::U64))),
+        cond_var: Variable::U64,
         expr_var: keep_or_skip_var,
         region: Region::zero(),
         branches,
-        branches_cond_var: Variable::NAT,
+        branches_cond_var: Variable::U64,
         exhaustive: ExhaustiveMark::known_exhaustive(),
     };
 
@@ -699,7 +699,7 @@ fn step_elem(
     };
 
     {
-        let args_slice = SubsSlice::insert_into_subs(env.subs, [state_record_var, Variable::NAT]);
+        let args_slice = SubsSlice::insert_into_subs(env.subs, [state_record_var, Variable::U64]);
 
         env.subs.set_content(
             function_type,
@@ -721,7 +721,7 @@ fn step_elem(
                 Loc::at_zero(Pattern::Identifier(state_arg_symbol)),
             ),
             (
-                Variable::NAT,
+                Variable::U64,
                 AnnotatedMark::known_exhaustive(),
                 Loc::at_zero(Pattern::Identifier(index_arg_symbol)),
             ),
