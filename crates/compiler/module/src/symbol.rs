@@ -1299,10 +1299,10 @@ define_builtins! {
         17 STR_TRIM: "trim"
         18 STR_TRIM_START: "trimStart"
         19 STR_TRIM_END: "trimEnd"
-        20 STR_TO_DEC: "toDec"
+        20 STR_WITH_CAPACITY: "withCapacity"
         21 STR_TO_F64: "toF64"
         22 STR_TO_F32: "toF32"
-
+        23 STR_TO_DEC: "toDec"
         24 STR_TO_U128: "toU128"
         25 STR_TO_I128: "toI128"
         26 STR_TO_U64: "toU64"
@@ -1327,8 +1327,7 @@ define_builtins! {
         45 STR_REPLACE_EACH: "replaceEach"
         46 STR_REPLACE_FIRST: "replaceFirst"
         47 STR_REPLACE_LAST: "replaceLast"
-        48 STR_WITH_CAPACITY: "withCapacity"
-        49 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        48 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
