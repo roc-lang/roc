@@ -385,12 +385,8 @@ fn from_can_pattern_help<'a>(
             use roc_exhaustive::Union;
 
             let res_variant = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 crate::layout::union_sorted_tags(&mut layout_env, *whole_var).map_err(Into::into)
             };
 
@@ -880,12 +876,8 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_elems = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 crate::layout::sort_tuple_elems(&mut layout_env, *whole_var)
                     .map_err(RuntimeError::from)?
             };
@@ -936,12 +928,8 @@ fn from_can_pattern_help<'a>(
         } => {
             // sorted fields based on the type
             let sorted_fields = {
-                let mut layout_env = layout::Env::from_components(
-                    layout_cache,
-                    env.subs,
-                    env.arena,
-                    env.target_info,
-                );
+                let mut layout_env =
+                    layout::Env::from_components(layout_cache, env.subs, env.arena);
                 crate::layout::sort_record_fields(&mut layout_env, *whole_var)
                     .map_err(RuntimeError::from)?
             };

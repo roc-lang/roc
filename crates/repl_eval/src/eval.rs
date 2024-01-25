@@ -99,12 +99,8 @@ fn get_newtype_tag_and_var(
     tags: UnionTags,
 ) -> Option<(TagName, Variable)> {
     let union_variant = {
-        let mut layout_env = roc_mono::layout::Env::from_components(
-            &mut env.layout_cache,
-            env.subs,
-            env.arena,
-            env.target_info,
-        );
+        let mut layout_env =
+            roc_mono::layout::Env::from_components(&mut env.layout_cache, env.subs, env.arena);
         roc_mono::layout::union_sorted_tags(&mut layout_env, var).unwrap()
     };
 
@@ -253,12 +249,8 @@ fn get_tags_vars_and_variant<'a>(
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
     let union_variant = {
-        let mut layout_env = layout::Env::from_components(
-            &mut env.layout_cache,
-            env.subs,
-            env.arena,
-            env.target_info,
-        );
+        let mut layout_env =
+            layout::Env::from_components(&mut env.layout_cache, env.subs, env.arena);
         union_sorted_tags_pub(&mut layout_env, tags_vec, opt_rec_var)
     };
 
@@ -1415,7 +1407,6 @@ fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<
                             &mut env.layout_cache,
                             env.subs,
                             env.arena,
-                            env.target_info,
                         );
                         union_sorted_tags_pub(&mut layout_env, tags_vec, None)
                     };
@@ -1446,7 +1437,6 @@ fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<
                             &mut env.layout_cache,
                             env.subs,
                             env.arena,
-                            env.target_info,
                         );
                         union_sorted_tags_pub(&mut layout_env, tags_vec, None)
                     };

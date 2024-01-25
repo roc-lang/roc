@@ -160,7 +160,6 @@ impl<'a> LayoutCache<'a> {
             arena,
             subs,
             seen: Vec::new_in(arena),
-            target_info: self.target_info,
             cache: self,
         };
 
@@ -186,7 +185,6 @@ impl<'a> LayoutCache<'a> {
             arena,
             subs,
             seen: Vec::new_in(arena),
-            target_info: self.target_info,
             cache: self,
         };
 
@@ -1821,7 +1819,7 @@ impl<'a> LambdaSet<'a> {
         ret_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        let mut env = Env::from_components(cache, subs, arena, target_info);
+        let mut env = Env::from_components(cache, subs, arena);
         Self::from_var(&mut env, args, closure_var, ret_var).value()
     }
 
@@ -2229,7 +2227,6 @@ macro_rules! list_element_layout {
 }
 
 pub struct Env<'a, 'b> {
-    target_info: TargetInfo,
     pub(crate) arena: &'a Bump,
     seen: Vec<'a, Variable>,
     pub(crate) subs: &'b Subs,
@@ -2241,14 +2238,12 @@ impl<'a, 'b> Env<'a, 'b> {
         cache: &'b mut LayoutCache<'a>,
         subs: &'b Subs,
         arena: &'a Bump,
-        target_info: TargetInfo,
     ) -> Self {
         Self {
             cache,
             subs,
             seen: Vec::new_in(arena),
             arena,
-            target_info,
         }
     }
 
@@ -2518,7 +2513,7 @@ impl<'a> Layout<'a> {
                 }
             }
 
-            RangedNumber(range) => Self::layout_from_ranged_number(env, range),
+            RangedNumber(range) => Self::layout_from_ranged_number(range),
 
             Error => cacheable(Err(LayoutProblem::Erroneous)),
         }
@@ -2539,18 +2534,12 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn layout_from_ranged_number(
-        env: &mut Env<'a, '_>,
-        range: NumericRange,
-    ) -> Cacheable<LayoutResult<'a>> {
+    fn layout_from_ranged_number(range: NumericRange) -> Cacheable<LayoutResult<'a>> {
         // We don't pass the range down because `RangedNumber`s are somewhat rare, they only
         // appear due to number literals, so no need to increase parameter list sizes.
         let num_layout = range.default_compilation_width();
 
-        cacheable(Ok(Layout::int_literal_width_to_int(
-            num_layout,
-            env.target_info,
-        )))
+        cacheable(Ok(Layout::int_literal_width_to_int(num_layout)))
     }
 
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
@@ -3028,10 +3017,7 @@ impl<'a> Layout<'a> {
         Layout::DEC
     }
 
-    pub fn int_literal_width_to_int(
-        width: roc_types::num::IntLitWidth,
-        target_info: TargetInfo,
-    ) -> InLayout<'a> {
+    pub fn int_literal_width_to_int(width: roc_types::num::IntLitWidth) -> InLayout<'a> {
         use roc_types::num::IntLitWidth::*;
         match width {
             U8 => Layout::U8,
@@ -3229,7 +3215,6 @@ fn layout_from_flat_type<'a>(
 
     let arena = env.arena;
     let subs = env.subs;
-    let target_info = env.target_info;
 
     match flat_type {
         Apply(symbol, args) => {
@@ -3237,11 +3222,6 @@ fn layout_from_flat_type<'a>(
 
             match symbol {
                 // Ints
-                Symbol::NUM_NAT => {
-                    debug_assert_eq!(args.len(), 0);
-                    cacheable(Ok(Layout::usize(env.target_info)))
-                }
-
                 Symbol::NUM_I128 => {
                     debug_assert_eq!(args.len(), 0);
                     cacheable(Ok(Layout::I128))
@@ -3305,7 +3285,7 @@ fn layout_from_flat_type<'a>(
                     let var = args[0];
                     let content = subs.get_content_without_compacting(var);
 
-                    layout_from_num_content(content, target_info)
+                    layout_from_num_content(content)
                 }
 
                 Symbol::STR_STR => cacheable(Ok(Layout::STR)),
@@ -4539,10 +4519,7 @@ pub fn ext_var_is_empty_tag_union(_: &Subs, _: TagExt) -> bool {
     unreachable!();
 }
 
-fn layout_from_num_content<'a>(
-    content: &Content,
-    target_info: TargetInfo,
-) -> Cacheable<LayoutResult<'a>> {
+fn layout_from_num_content<'a>(content: &Content) -> Cacheable<LayoutResult<'a>> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
@@ -4558,8 +4535,6 @@ fn layout_from_num_content<'a>(
         FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
         Structure(Apply(symbol, args)) => match *symbol {
             // Ints
-            Symbol::NUM_NAT => Ok(Layout::usize(target_info)),
-
             Symbol::NUM_INTEGER => Ok(Layout::I64),
             Symbol::NUM_I128 => Ok(Layout::I128),
             Symbol::NUM_I64 => Ok(Layout::I64),
