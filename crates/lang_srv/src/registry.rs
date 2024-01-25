@@ -41,11 +41,7 @@ pub(crate) struct Registry {
 
 impl Registry {
     pub async fn get_latest_version(&self, url: &Url) -> Option<i32> {
-        self.documents
-            .lock()
-            .await
-            .get(url)
-            .map(|x| x.info.version)
+        self.documents.lock().await.get(url).map(|x| x.info.version)
     }
 
     fn update_document(
@@ -54,8 +50,9 @@ impl Registry {
         updating_url: &Url,
     ) {
         if &document.doc_info.url == updating_url {
-            if let Some(a) = documents
-                .get_mut(updating_url) { a.latest_document.set(document.clone()).unwrap() }
+            if let Some(a) = documents.get_mut(updating_url) {
+                a.latest_document.set(document.clone()).unwrap()
+            }
         }
 
         let url = document.url().clone();
@@ -146,9 +143,8 @@ impl Registry {
     }
 
     pub async fn diagnostics(&self, url: &Url) -> Vec<Diagnostic> {
-        let Some( document) = self.latest_document_by_url(url).await else {
+        let Some(document) = self.latest_document_by_url(url).await else {
             return vec![];
-
         };
         document.diagnostics()
     }

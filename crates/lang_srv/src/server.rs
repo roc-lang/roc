@@ -118,9 +118,7 @@ impl RocServerState {
         &self.registry
     }
 
-    async fn close(&self, _fi: Url) {
-        
-    }
+    async fn close(&self, _fi: Url) {}
 
     pub async fn change(
         &self,
@@ -312,7 +310,7 @@ impl LanguageServer for RocServer {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
         trace!("got completion request");
-        
+
         panic_wrapper_async(|| async {
             self.state
                 .registry
@@ -348,14 +346,11 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Once},
-    };
+    use std::sync::Once;
 
-    use indoc::indoc;
     use expect_test::expect;
+    use indoc::indoc;
     use log::info;
-    
 
     use super::*;
 
