@@ -142,7 +142,7 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
 
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">\(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">\(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>!"</span></samp></pre>
 
 This is syntax sugar for calling `Str.concat` several times, like so:
 
@@ -152,7 +152,7 @@ Str.concat greeting (Str.concat " there, " (Str.concat audience "!"))
 
 You can put entire single-line expressions inside the parentheses in string interpolation. For example:
 
-<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">\(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">$(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
 
 By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
 
@@ -194,7 +194,7 @@ iguanas = 2
 total = Num.toStr (birds + iguanas)
 
 main =
-    Stdout.line "There are \(total) animals."
+    Stdout.line "There are $(total) animals."
 ```
 
 Now run `roc dev` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
@@ -211,7 +211,7 @@ A definition names an expression.
 - The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
 - The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
 
-Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are \(total) animals."` refers to `total`.
+Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line "There are $(total) animals."` refers to `total`.
 
 You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
@@ -234,7 +234,7 @@ iguanas = 2
 total = addAndStringify birds iguanas
 
 main =
-    Stdout.line "There are \(total) animals."
+    Stdout.line "There are $(total) animals."
 
 addAndStringify = \num1, num2 ->
     Num.toStr (num1 + num2)
@@ -849,7 +849,7 @@ Here's how calling `List.get` can look in practice:
 
 ```roc
 when List.get ["a", "b", "c"] index is
-    Ok str -> "I got this string: \(str)"
+    Ok str -> "I got this string: $(str)"
     Err OutOfBounds -> "That index was out of bounds, sorry!"
 ```
 
@@ -980,7 +980,7 @@ Sometimes you may want to document the type of a definition. For example, you mi
 ```roc
 # Takes a firstName string and a lastName string, and returns a string
 fullName = \firstName, lastName ->
-    "\(firstName) \(lastName)"
+    "$(firstName) $(lastName)"
 ```
 
 Comments can be valuable documentation, but they can also get out of date and become misleading. If someone changes this function and forgets to update the comment, it will no longer be accurate.
@@ -992,7 +992,7 @@ Here's another way to document this function's type, which doesn't have that pro
 ```roc
 fullName : Str, Str -> Str
 fullName = \firstName, lastName ->
-    "\(firstName) \(lastName)"
+    "$(firstName) $(lastName)"
 ```
 
 The `fullName :` line is a _type annotation_. It's a strictly optional piece of metadata we can add above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for accuracy. If the annotation ever doesn't fit with the implementation, we'll get a compile-time error.
@@ -1333,9 +1333,9 @@ pluralize = \singular, plural, count ->
     countStr = Num.toStr count
 
     if count == 1 then
-        "\(countStr) \(singular)"
+        "$(countStr) $(singular)"
     else
-        "\(countStr) \(plural)"
+        "$(countStr) $(plural)"
 
 expect pluralize "cactus" "cacti" 1 == "1 cactus"
 
@@ -1362,11 +1362,11 @@ pluralize = \singular, plural, count ->
     countStr = Num.toStr count
 
     if count == 1 then
-        "\(countStr) \(singular)"
+        "$(countStr) $(singular)"
     else
         expect count > 0
 
-        "\(countStr) \(plural)"
+        "$(countStr) $(plural)"
 ```
 
 This `expect` will fail if you call `pluralize` passing a count of 0.
@@ -1563,7 +1563,7 @@ app "cli-tutorial"
 
 main =
     Task.await Stdin.line \input ->
-        Stdout.line "Your input was: \(Inspect.toStr input)"
+        Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value. It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but in a real program we'd run a `when` on `input` and do something different depending on whether we got an `End` or `Input` tag.
@@ -1584,7 +1584,7 @@ The second argument to `Task.await` is a "callback function" which runs after th
 
 ```roc
 \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 Notice that, just like before, we're still building `main` from a single `Task`. This is how we'll always do it! We'll keep building up bigger and bigger `Task`s out of smaller tasks, and then setting `main` to be that one big `Task`.
@@ -1595,7 +1595,7 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 main =
     Task.await (Stdout.line "Type something press Enter:") \_ ->
         Task.await Stdin.line \input ->
-            Stdout.line "Your input was: \(Inspect.toStr input)"
+            Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 This works, but we can make it a little nicer to read. Let's change it to the following:
@@ -1609,7 +1609,7 @@ app "cli-tutorial"
 main =
     await (Stdout.line "Type something press Enter:") \_ ->
         await Stdin.line \input ->
-            Stdout.line "Your input was: \(Inspect.toStr input)"
+            Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 Here we've changed how we're importing the `Task` module. Before it was `pf.Task` and now it's `pf.Task.{ await }`. The difference is that we're importing `await` in an _unqualified_ way, meaning that whenever we write `await` in this module, it will refer to `Task.await`. Now we no longer need to write `Task.` every time we want to use `await`.
@@ -1623,7 +1623,7 @@ main =
     _ <- await (Stdout.line "Type something press Enter:")
     input <- await Stdin.line
 
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 ## [Backpassing](#backpassing) {#backpassing}
@@ -1635,14 +1635,14 @@ Here, we're using backpassing to define two anonymous functions. Here's one of t
 ```roc
 input <-
 
-Stdout.line "Your input was: \(Inspect.toStr input)"
+Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 It may not look like it, but this code is defining an anonymous function! You might remember it as the anonymous function we previously defined like this:
 
 ```roc
 \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 These two anonymous functions are the same, just defined using different syntax.
@@ -1655,7 +1655,7 @@ Here's the original:
 
 ```roc
 await Stdin.line \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 And here's the equivalent expression with backpassing syntax:
@@ -1663,7 +1663,7 @@ And here's the equivalent expression with backpassing syntax:
 ```roc
 input <- await Stdin.line
 
-Stdout.line "Your input was: \(Inspect.toStr input)"
+Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 Here's the other function we're defining with backpassing:
@@ -1672,7 +1672,7 @@ Here's the other function we're defining with backpassing:
 _ <-
 input <- await Stdin.line
 
-Stdout.line "Your input was: \(Inspect.toStr input)"
+Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 We could also have written that function this way if we preferred:
@@ -1681,7 +1681,7 @@ We could also have written that function this way if we preferred:
 _ <-
 
 await Stdin.line \input ->
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 This is using a mix of a backpassing function `_ <-` and a normal function `\input ->`, which is totally allowed! Since backpassing is nothing more than syntax sugar for defining a function and passing back as an argument to another function, there's no reason we can't mix and match if we like.
@@ -1693,7 +1693,7 @@ main =
     _ <- await (Stdout.line "Type something press Enter:")
     input <- await Stdin.line
 
-    Stdout.line "Your input was: \(Inspect.toStr input)"
+    Stdout.line "Your input was: $(Inspect.toStr input)"
 ```
 
 This way, it reads like a series of instructions:
@@ -1728,7 +1728,7 @@ Let's say I write a function which takes a record with a `firstName` and `lastNa
 
 ```roc
 fullName = \user ->
-    "\(user.firstName) \(user.lastName)"
+    "$(user.firstName) $(user.lastName)"
 ```
 
 I can pass this function a record that has more fields than just `firstName` and `lastName`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
@@ -1747,14 +1747,14 @@ If we add a type annotation to this `fullName` function, we can choose to have i
 # Closed record
 fullName : { firstName : Str, lastName : Str } -> Str
 fullName = \user ->
-    "\(user.firstName) \(user.lastName)"
+    "$(user.firstName) $(user.lastName)"
 ```
 
 ```roc
 # Open record (because of the `*`)
 fullName : { firstName : Str, lastName : Str }* -> Str
 fullName = \user ->
-    "\(user.firstName) \(user.lastName)"
+    "$(user.firstName) $(user.lastName)"
 ```
 
 The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
@@ -1770,7 +1770,7 @@ The type variable can also be a named type variable, like so:
 ```roc
 addHttps : { url : Str }a -> { url : Str }a
 addHttps = \record ->
-    { record & url: "https://\(record.url)" }
+    { record & url: "https://$(record.url)" }
 ```
 
 This function uses _constrained records_ in its type. The annotation is saying:
