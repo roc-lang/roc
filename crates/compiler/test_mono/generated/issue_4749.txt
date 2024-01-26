@@ -178,72 +178,67 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
     in
     jump List.636 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
-procedure Num.133 (#Attr.2):
-    let Num.336 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.336;
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.260 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.260;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.300 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.300;
-
-procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.309 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.309;
+    let Num.269 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.269;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.312 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.312;
+    let Num.272 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.272;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.334 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.334;
+    let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.294;
 
 procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.318 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
-    ret Num.318;
+    let Num.278 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
+    ret Num.278;
 
 procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.324 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
-    ret Num.324;
+    let Num.284 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.335 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.335;
+    let Num.295 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.295;
 
 procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.297 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
-    ret Num.297;
+    let Num.257 : U8 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.257;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.298 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.298;
+    let Num.258 : U8 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.258;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.331 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.331;
+    let Num.291 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Str.43 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.259 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.259;
+    let Str.258 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.258;
 
-procedure Str.9 (Str.68):
-    let Str.257 : U64 = 0i64;
-    let Str.260 : U64 = CallByName List.6 Str.68;
-    let Str.258 : U64 = CallByName Num.133 Str.260;
-    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.257 Str.258;
-    let Str.254 : Int1 = StructAtIndex 2 Str.69;
-    if Str.254 then
-        let Str.256 : Str = StructAtIndex 1 Str.69;
-        let Str.255 : [C {U64, U8}, C Str] = TagId(1) Str.256;
-        ret Str.255;
+procedure Str.9 (Str.67):
+    let Str.256 : U64 = 0i64;
+    let Str.257 : U64 = CallByName List.6 Str.67;
+    let Str.68 : {U64, Str, Int1, U8} = CallByName Str.43 Str.67 Str.256 Str.257;
+    let Str.253 : Int1 = StructAtIndex 2 Str.68;
+    if Str.253 then
+        let Str.255 : Str = StructAtIndex 1 Str.68;
+        let Str.254 : [C {U64, U8}, C Str] = TagId(1) Str.255;
+        ret Str.254;
     else
-        let Str.252 : U8 = StructAtIndex 3 Str.69;
-        let Str.253 : U64 = StructAtIndex 0 Str.69;
-        let #Derived_gen.6 : Str = StructAtIndex 1 Str.69;
+        let Str.251 : U8 = StructAtIndex 3 Str.68;
+        let Str.252 : U64 = StructAtIndex 0 Str.68;
+        let #Derived_gen.6 : Str = StructAtIndex 1 Str.68;
         dec #Derived_gen.6;
-        let Str.251 : {U64, U8} = Struct {Str.253, Str.252};
-        let Str.250 : [C {U64, U8}, C Str] = TagId(0) Str.251;
-        ret Str.250;
+        let Str.250 : {U64, U8} = Struct {Str.252, Str.251};
+        let Str.249 : [C {U64, U8}, C Str] = TagId(0) Str.250;
+        ret Str.249;
 
 procedure Test.3 ():
     let Test.0 : List U8 = Array [82i64, 111i64, 99i64];

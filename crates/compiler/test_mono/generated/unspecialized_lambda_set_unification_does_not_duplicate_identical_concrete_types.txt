@@ -184,44 +184,44 @@ procedure List.90 (#Derived_gen.19, #Derived_gen.20, #Derived_gen.21, #Derived_g
     jump List.612 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21 #Derived_gen.22 #Derived_gen.23;
 
 procedure Num.127 (#Attr.2):
-    let Num.304 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.304;
+    let Num.264 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.264;
+
+procedure Num.137 (#Attr.2, #Attr.3):
+    let Num.269 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
+    ret Num.269;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.308 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.308;
+    let Num.268 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.268;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.305 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.305;
+    let Num.265 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.265;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.310 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.310;
+    let Num.270 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.270;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.316 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.316;
+    let Num.276 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.276;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.318 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.318;
+    let Num.278 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.278;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.313 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.313;
+    let Num.273 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.273;
 
 procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.317 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.317;
-
-procedure Num.94 (#Attr.2, #Attr.3):
-    let Num.309 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
-    ret Num.309;
+    let Num.277 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.277;
 
 procedure Str.12 (#Attr.2):
-    let Str.251 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.251;
+    let Str.250 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.250;
 
 procedure Test.2 (Test.10):
     let Test.15 : {Str, Str} = CallByName Encode.23 Test.10;
@@ -421,7 +421,7 @@ procedure TotallyNotJson.26 (TotallyNotJson.152):
         let TotallyNotJson.1062 : U64 = 120i64;
         let TotallyNotJson.1059 : U64 = CallByName Num.21 TotallyNotJson.1061 TotallyNotJson.1062;
         let TotallyNotJson.1060 : U64 = 100i64;
-        let TotallyNotJson.1058 : U64 = CallByName Num.94 TotallyNotJson.1059 TotallyNotJson.1060;
+        let TotallyNotJson.1058 : U64 = CallByName Num.137 TotallyNotJson.1059 TotallyNotJson.1060;
         let TotallyNotJson.1055 : List U8 = CallByName List.68 TotallyNotJson.1058;
         let TotallyNotJson.1057 : U8 = 34i64;
         let TotallyNotJson.1056 : List U8 = Array [TotallyNotJson.1057];

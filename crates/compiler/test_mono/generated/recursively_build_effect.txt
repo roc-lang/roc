@@ -1,10 +1,10 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.297 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.297;
+    let Num.257 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.257;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.252 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.252;
+    let Str.251 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.251;
 
 procedure Test.11 (Test.29, #Attr.12):
     let Test.32 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;

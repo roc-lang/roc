@@ -158,28 +158,28 @@ procedure List.90 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_g
     jump List.600 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
 
 procedure Num.127 (#Attr.2):
-    let Num.316 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.316;
+    let Num.276 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.276;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.317 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.317;
+    let Num.277 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.277;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.320 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.320;
+    let Num.280 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.280;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.318 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.318;
+    let Num.278 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.278;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.319 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.319;
+    let Num.279 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.279;
 
 procedure Str.12 (#Attr.2):
-    let Str.251 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.251;
+    let Str.250 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.250;
 
 procedure Test.2 (Test.11):
     let Test.18 : {{}, {}} = CallByName Encode.23 Test.11;
