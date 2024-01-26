@@ -152,6 +152,10 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
     in
     jump List.632 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
+procedure Num.133 (#Attr.2):
+    let Num.336 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.336;
+
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.300 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.300;
@@ -193,53 +197,54 @@ procedure Num.77 (#Attr.2, #Attr.3):
     ret Num.331;
 
 procedure Str.12 (#Attr.2):
-    let Str.260 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.260;
-
-procedure Str.27 (Str.88):
-    let Str.251 : [C {}, C I64] = CallByName Str.61 Str.88;
-    ret Str.251;
-
-procedure Str.42 (#Attr.2):
-    let Str.259 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    let Str.259 : List U8 = lowlevel StrToUtf8 #Attr.2;
     ret Str.259;
 
-procedure Str.43 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.270 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.270;
+procedure Str.27 (Str.87):
+    let Str.250 : [C {}, C I64] = CallByName Str.61 Str.87;
+    ret Str.250;
 
-procedure Str.61 (Str.195):
-    let Str.196 : {I64, U8} = CallByName Str.42 Str.195;
-    dec Str.195;
-    let Str.257 : U8 = StructAtIndex 1 Str.196;
-    let Str.258 : U8 = 0i64;
-    let Str.254 : Int1 = CallByName Bool.11 Str.257 Str.258;
-    if Str.254 then
-        let Str.256 : I64 = StructAtIndex 0 Str.196;
-        let Str.255 : [C {}, C I64] = TagId(1) Str.256;
-        ret Str.255;
+procedure Str.42 (#Attr.2):
+    let Str.258 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    ret Str.258;
+
+procedure Str.43 (#Attr.2, #Attr.3, #Attr.4):
+    let Str.269 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.269;
+
+procedure Str.61 (Str.194):
+    let Str.195 : {I64, U8} = CallByName Str.42 Str.194;
+    dec Str.194;
+    let Str.256 : U8 = StructAtIndex 1 Str.195;
+    let Str.257 : U8 = 0i64;
+    let Str.253 : Int1 = CallByName Bool.11 Str.256 Str.257;
+    if Str.253 then
+        let Str.255 : I64 = StructAtIndex 0 Str.195;
+        let Str.254 : [C {}, C I64] = TagId(1) Str.255;
+        ret Str.254;
     else
-        let Str.253 : {} = Struct {};
-        let Str.252 : [C {}, C I64] = TagId(0) Str.253;
-        ret Str.252;
+        let Str.252 : {} = Struct {};
+        let Str.251 : [C {}, C I64] = TagId(0) Str.252;
+        ret Str.251;
 
 procedure Str.9 (Str.68):
-    let Str.268 : U64 = 0i64;
-    let Str.269 : U64 = CallByName List.6 Str.68;
-    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.268 Str.269;
-    let Str.265 : Int1 = StructAtIndex 2 Str.69;
-    if Str.265 then
-        let Str.267 : Str = StructAtIndex 1 Str.69;
-        let Str.266 : [C {U64, U8}, C Str] = TagId(1) Str.267;
-        ret Str.266;
+    let Str.267 : U64 = 0i64;
+    let Str.270 : U64 = CallByName List.6 Str.68;
+    let Str.268 : U64 = CallByName Num.133 Str.270;
+    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.267 Str.268;
+    let Str.264 : Int1 = StructAtIndex 2 Str.69;
+    if Str.264 then
+        let Str.266 : Str = StructAtIndex 1 Str.69;
+        let Str.265 : [C {U64, U8}, C Str] = TagId(1) Str.266;
+        ret Str.265;
     else
-        let Str.263 : U8 = StructAtIndex 3 Str.69;
-        let Str.264 : U64 = StructAtIndex 0 Str.69;
+        let Str.262 : U8 = StructAtIndex 3 Str.69;
+        let Str.263 : U64 = StructAtIndex 0 Str.69;
         let #Derived_gen.7 : Str = StructAtIndex 1 Str.69;
         dec #Derived_gen.7;
-        let Str.262 : {U64, U8} = Struct {Str.264, Str.263};
-        let Str.261 : [C {U64, U8}, C Str] = TagId(0) Str.262;
-        ret Str.261;
+        let Str.261 : {U64, U8} = Struct {Str.263, Str.262};
+        let Str.260 : [C {U64, U8}, C Str] = TagId(0) Str.261;
+        ret Str.260;
 
 procedure Test.0 ():
     let Test.37 : Str = "-1234";

@@ -178,6 +178,10 @@ procedure List.80 (#Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.
     in
     jump List.636 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5;
 
+procedure Num.133 (#Attr.2):
+    let Num.336 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.336;
+
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.300 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
     ret Num.300;
@@ -219,26 +223,27 @@ procedure Num.77 (#Attr.2, #Attr.3):
     ret Num.331;
 
 procedure Str.43 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.260 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.260;
+    let Str.259 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
+    ret Str.259;
 
 procedure Str.9 (Str.68):
-    let Str.258 : U64 = 0i64;
-    let Str.259 : U64 = CallByName List.6 Str.68;
-    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.258 Str.259;
-    let Str.255 : Int1 = StructAtIndex 2 Str.69;
-    if Str.255 then
-        let Str.257 : Str = StructAtIndex 1 Str.69;
-        let Str.256 : [C {U64, U8}, C Str] = TagId(1) Str.257;
-        ret Str.256;
+    let Str.257 : U64 = 0i64;
+    let Str.260 : U64 = CallByName List.6 Str.68;
+    let Str.258 : U64 = CallByName Num.133 Str.260;
+    let Str.69 : {U64, Str, Int1, U8} = CallByName Str.43 Str.68 Str.257 Str.258;
+    let Str.254 : Int1 = StructAtIndex 2 Str.69;
+    if Str.254 then
+        let Str.256 : Str = StructAtIndex 1 Str.69;
+        let Str.255 : [C {U64, U8}, C Str] = TagId(1) Str.256;
+        ret Str.255;
     else
-        let Str.253 : U8 = StructAtIndex 3 Str.69;
-        let Str.254 : U64 = StructAtIndex 0 Str.69;
+        let Str.252 : U8 = StructAtIndex 3 Str.69;
+        let Str.253 : U64 = StructAtIndex 0 Str.69;
         let #Derived_gen.6 : Str = StructAtIndex 1 Str.69;
         dec #Derived_gen.6;
-        let Str.252 : {U64, U8} = Struct {Str.254, Str.253};
-        let Str.251 : [C {U64, U8}, C Str] = TagId(0) Str.252;
-        ret Str.251;
+        let Str.251 : {U64, U8} = Struct {Str.253, Str.252};
+        let Str.250 : [C {U64, U8}, C Str] = TagId(0) Str.251;
+        ret Str.250;
 
 procedure Test.3 ():
     let Test.0 : List U8 = Array [82i64, 111i64, 99i64];
