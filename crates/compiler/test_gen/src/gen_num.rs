@@ -531,11 +531,18 @@ fn f64_abs() {
     assert_evals_to!("Num.abs -4.7f64", 4.7, f64);
     assert_evals_to!("Num.abs 5.8f64", 5.8, f64);
 
-    #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-    {
-        assert_evals_to!("Num.abs Num.maxF64", f64::MAX, f64);
-        assert_evals_to!("Num.abs Num.minF64", f64::MAX, f64);
-    }
+    assert_evals_to!("Num.abs Num.maxF64", f64::MAX, f64);
+    assert_evals_to!("Num.abs Num.minF64", f64::MAX, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_abs() {
+    assert_evals_to!("Num.abs -4.7f32", 4.7, f32);
+    assert_evals_to!("Num.abs 5.8f32", 5.8, f32);
+
+    assert_evals_to!("Num.abs Num.maxF32", f32::MAX, f32);
+    assert_evals_to!("Num.abs Num.minF32", f32::MAX, f32);
 }
 
 #[test]
@@ -1482,6 +1489,29 @@ fn gte_f64() {
     assert_evals_to!("1.1f64 >= 1.2", false, bool);
     assert_evals_to!("1.2f64 >= 1.1", true, bool);
     assert_evals_to!("0.0f64 >= 0.0", true, bool);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_is_approx_eq() {
+    assert_evals_to!("Num.isApproxEq 1e10f64 1.00001e10f64 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq 1e-7f64 1e-8f64 {}", false, bool);
+    assert_evals_to!("Num.isApproxEq 1e-8f32 1e-9f32 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq 1e10f64 1.0001e10f64 {}", false, bool);
+    assert_evals_to!("Num.isApproxEq 1.0f32 1.0 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq (1f64 / 0.0) (1f64 / 0.0) {}", true, bool);
+    assert_evals_to!("Num.isApproxEq (0f64 / 0.0) (0f64 / 0.0) {}", false, bool);
+    assert_evals_to!("Num.isApproxEq 1e-8f64 0f64 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq 1e-7f64 0f64 {}", false, bool);
+    assert_evals_to!("Num.isApproxEq 1e-100f64 0f64 { atol: 0f64 }", false, bool);
+    assert_evals_to!("Num.isApproxEq 1e-7f64 0f64 { atol: 0f64 }", false, bool);
+    assert_evals_to!("Num.isApproxEq 1e-10f64 1e-20f64 {}", true, bool);
+    assert_evals_to!("Num.isApproxEq 1e-10f64 0f64 {}", true, bool);
+    assert_evals_to!(
+        "Num.isApproxEq 1e-10f64 0.999999e-10f64 { atol: 0f64 }",
+        true,
+        bool
+    );
 }
 
 #[test]

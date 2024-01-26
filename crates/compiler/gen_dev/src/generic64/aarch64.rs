@@ -1246,6 +1246,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn abs_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
+    ) {
+        fabs_freg_freg(buf, FloatWidth::F32, dst, src);
+    }
+
+    #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,

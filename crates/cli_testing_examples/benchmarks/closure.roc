@@ -15,7 +15,7 @@ closure1 = \_ ->
     Task.succeed (foo toUnitBorrowed "a long string such that it's malloced")
     |> Task.map \_ -> {}
 
-toUnitBorrowed = \x -> Str.countGraphemes x
+toUnitBorrowed = \x -> Str.countUtf8Bytes x
 
 foo = \f, x -> f x
 

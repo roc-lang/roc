@@ -1173,6 +1173,16 @@ fn lowlevel_spec<'a>(
                 _ => unreachable!(),
             }
         }
+        ListClone => {
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            with_new_heap_cell(builder, block, bag)
+        }
         ListSwap => {
             let list = env.symbols[&arguments[0]];
 

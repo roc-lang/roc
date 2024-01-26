@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(not(windows))]
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
@@ -47,18 +46,10 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     output_path.extend([filename]);
     output_path.set_extension("dat");
 
-    #[cfg(not(windows))]
     if SKIP_SUBS_CACHE {
         write_types_for_module_dummy(&output_path)
     } else {
         write_types_for_module_real(module_id, filename, &output_path)
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = SKIP_SUBS_CACHE;
-        let _ = module_id;
-        write_types_for_module_dummy(&output_path)
     }
 }
 
@@ -67,7 +58,6 @@ fn write_types_for_module_dummy(output_path: &Path) {
     std::fs::write(output_path, []).unwrap();
 }
 
-#[cfg(not(windows))]
 fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path: &Path) {
     use roc_can::module::TypeState;
     use roc_load_internal::file::{LoadingProblem, Threading};

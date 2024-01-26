@@ -323,11 +323,12 @@ mod cli_run {
     }
 
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
-    fn test_roc_expect(dir_name: &str, roc_filename: &str) {
-        let path = file_path_from_root(dir_name, roc_filename);
-        let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
-        assert!(out.status.success());
-    }
+    // not currently used
+    // fn test_roc_expect(dir_name: &str, roc_filename: &str) {
+    //     let path = file_path_from_root(dir_name, roc_filename);
+    //     let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
+    //     assert!(out.status.success());
+    // }
 
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
@@ -912,9 +913,9 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser/examples",
+            "examples/parser",
             "parse-movies-csv.roc",
-            "Parse success!\n",
+            "2 movies were found:\n\nThe movie 'Airplane!' was released in 1980 and stars Robert Hays and Julie Hagerty\nThe movie 'Caddyshack' was released in 1980 and stars Chevy Chase, Rodney Dangerfield, Ted Knight, Michael O'Keefe and Bill Murray\n\nParse success!\n\n",
             UseValgrind::No,
         )
     }
@@ -924,17 +925,11 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
-            "examples/parser/examples",
+            "examples/parser",
             "letter-counts.roc",
             "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn parse_http() {
-        test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
     #[test]
@@ -1333,7 +1328,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
+                ── TYPE MISMATCH in tests/known_bad/TypeError.roc ──────────────────────────────
 
                 Something is off with the body of the main definition:
 
@@ -1363,13 +1358,36 @@ mod cli_run {
     }
 
     #[test]
+    fn known_type_error_with_long_path() {
+        check_compile_error(
+            &known_bad_file("UnusedImportButWithALongFileNameForTesting.roc"),
+            &[],
+            indoc!(
+                r#"
+                ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
+
+                Nothing from Symbol is used in this module.
+
+                3│      imports [Symbol.{ Ident }]
+                                 ^^^^^^^^^^^^^^^^
+
+                Since Symbol isn't used, you don't need to import it.
+
+                ────────────────────────────────────────────────────────────────────────────────
+
+                0 errors and 1 warning found in <ignored for test> ms."#
+            ),
+        );
+    }
+
+    #[test]
     fn exposed_not_defined() {
         check_compile_error(
             &known_bad_file("ExposedNotDefined.roc"),
             &[],
             indoc!(
                 r#"
-                ── MISSING DEFINITION ────────────────── tests/known_bad/ExposedNotDefined.roc ─
+                ── MISSING DEFINITION in tests/known_bad/ExposedNotDefined.roc ─────────────────
 
                 bar is listed as exposed, but it isn't defined in this module.
 
@@ -1390,7 +1408,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNUSED IMPORT ──────────────────────────── tests/known_bad/UnusedImport.roc ─
+                ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
                 Nothing from Symbol is used in this module.
 
@@ -1413,7 +1431,7 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── UNKNOWN GENERATES FUNCTION ─────── tests/known_bad/UnknownGeneratesWith.roc ─
+                ── UNKNOWN GENERATES FUNCTION in tests/known_bad/UnknownGeneratesWith.roc ──────
 
                 I don't know how to generate the foobar function.
 

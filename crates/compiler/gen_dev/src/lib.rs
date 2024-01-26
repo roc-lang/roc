@@ -1518,6 +1518,15 @@ trait Backend<'a> {
                 let elem_layout = list_element_layout!(self.interner(), *ret_layout);
                 self.build_list_with_capacity(sym, args[0], arg_layouts[0], elem_layout, ret_layout)
             }
+            LowLevel::ListClone => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListClone: expected to have exactly one argument"
+                );
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_clone(*sym, args[0], elem_layout, *ret_layout)
+            }
             LowLevel::ListReserve => {
                 debug_assert_eq!(
                     2,
@@ -1595,30 +1604,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrStartsWithScalar => self.build_fn_call(
-                sym,
-                bitcode::STR_STARTS_WITH_SCALAR.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrAppendScalar => self.build_fn_call(
-                sym,
-                bitcode::STR_APPEND_SCALAR.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::StrEndsWith => self.build_fn_call(
                 sym,
                 bitcode::STR_ENDS_WITH.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrCountGraphemes => self.build_fn_call(
-                sym,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -1698,23 +1686,9 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            LowLevel::StrToScalars => self.build_fn_call(
-                sym,
-                bitcode::STR_TO_SCALARS.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::StrGetUnsafe => self.build_fn_call(
                 sym,
                 bitcode::STR_GET_UNSAFE.to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
-            LowLevel::StrGetScalarUnsafe => self.build_fn_call(
-                sym,
-                bitcode::STR_GET_SCALAR_UNSAFE.to_string(),
                 args,
                 arg_layouts,
                 ret_layout,
@@ -2120,18 +2094,6 @@ trait Backend<'a> {
                     self.load_literal(sym, BOOL_LAYOUT, LITERAL);
                 }
             }
-            Symbol::STR_IS_VALID_SCALAR => {
-                // just call the function
-                let fn_name = self.lambda_name_to_string(
-                    func_name,
-                    arg_layouts.iter().copied(),
-                    None,
-                    *ret_layout,
-                );
-                // Now that the arguments are needed, load them if they are literals.
-                self.load_literal_symbols(args);
-                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
-            }
             _other => {
                 // just call the function
                 let fn_name = self.lambda_name_to_string(
@@ -2415,6 +2377,14 @@ trait Backend<'a> {
 
     fn build_indirect_inc(&mut self, layout: InLayout<'a>) -> Symbol;
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol;
+
+    fn build_list_clone(
+        &mut self,
+        dst: Symbol,
+        input_list: Symbol,
+        elem_layout: InLayout<'a>,
+        ret_layout: InLayout<'a>,
+    );
 
     /// build_list_with_capacity creates and returns a list with the given capacity.
     fn build_list_with_capacity(
