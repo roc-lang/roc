@@ -53,10 +53,6 @@ jobs:
           latestTag=$(git describe --tags $(git rev-list --tags --max-count=1))
           git checkout $latestTag
 
-      # temp issue with new string interpolation syntax
-      # TODO undo when 0.7.2 or 0.8.0 is released
-      - run: sed -i 's/\$//g' basic-cli/examples/tcp-client.roc
-
       - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
           sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
