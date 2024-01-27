@@ -6,7 +6,7 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-  
+
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
@@ -16,7 +16,7 @@ jobs:
   fetch-releases:
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
@@ -32,7 +32,7 @@ jobs:
     runs-on: [ubuntu-20.04]
     needs: [fetch-releases]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -42,7 +42,7 @@ jobs:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
         run: ./ci/build_basic_webserver.sh linux_x86_64 "--linker legacy"
 
-      - name: Save .rh, .rm and .o file 
+      - name: Save .rh, .rm and .o file
         uses: actions/upload-artifact@v3
         with:
           name: linux-x86_64-files
@@ -56,7 +56,7 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64]
     needs: [fetch-releases]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -69,7 +69,7 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
         run: ./ci/build_basic_webserver.sh linux_arm64
 
-      - name: Save .o file 
+      - name: Save .o file
         uses: actions/upload-artifact@v3
         with:
           name: linux-arm64-files
@@ -80,7 +80,7 @@ jobs:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12 and 13
     needs: [fetch-releases]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -99,7 +99,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [fetch-releases]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -118,7 +118,7 @@ jobs:
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: remove all folders except the ci folder
         run: ls | grep -v  ci | xargs rm -rf
@@ -145,7 +145,7 @@ jobs:
           cd ..
 
       - run: cp macos-apple-silicon-files/* ./basic-webserver/platform
-      
+
       - run: cp linux-x86_64-files/* ./basic-webserver/platform
 
       - run: cp linux-arm64-files/* ./basic-webserver/platform

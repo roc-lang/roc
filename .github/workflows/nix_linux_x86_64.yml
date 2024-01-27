@@ -12,10 +12,10 @@ jobs:
     runs-on: [self-hosted, i5-4690K]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
-          
+      - uses: actions/checkout@v4
+
       - name: test building default.nix
-        run: nix-build 
+        run: nix-build
 
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
