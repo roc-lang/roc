@@ -2949,7 +2949,11 @@ impl<
         self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
-        self.load_layout_stack_size(*ret_layout, Symbol::DEV_TMP2);
+        let element_layout = match self.interner().get_repr(*ret_layout) {
+            LayoutRepr::Builtin(Builtin::List(e)) => e,
+            _ => unreachable!(),
+        };
+        self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
