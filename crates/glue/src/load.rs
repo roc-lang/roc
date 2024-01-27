@@ -220,7 +220,7 @@ fn call_roc_make_glue(
     backend: CodeGenBackend,
     roc_types: roc_std::RocList<roc_type::Types>,
 ) -> roc_std::RocList<roc_type::File> {
-    match backend {
+    let roc_call_result = match backend {
         CodeGenBackend::Assembly(_) => {
             type MakeGlueReturnType = RocCallResult<
                 roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
@@ -235,24 +235,7 @@ fn call_roc_make_glue(
                     .unwrap_or_else(|_| panic!("Unable to load glue function"))
             };
 
-            let files = unsafe { make_glue(roc_types) };
-
-            // Roc will free data passed into it. So forget that data.
-            // std::mem::forget(roc_types);
-
-            match Result::from(files) {
-                Err((msg, tag)) => match tag {
-                    CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
-                    CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
-                },
-                Ok(files_or_error) => match Result::from(files_or_error) {
-                    Err(err) => {
-                        eprintln!("Glue generation failed: {err}");
-                        process::exit(1);
-                    }
-                    Ok(files) => files,
-                },
-            }
+            unsafe { make_glue(roc_types) }
         }
         CodeGenBackend::Llvm(_) => {
             type MakeGlueReturnType =
@@ -274,22 +257,24 @@ fn call_roc_make_glue(
             // Roc will free data passed into it. So forget that data.
             std::mem::forget(roc_types);
 
-            match Result::from(files) {
-                Err((msg, tag)) => match tag {
-                    CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
-                    CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
-                },
-                Ok(files_or_error) => match Result::from(files_or_error) {
-                    Err(err) => {
-                        eprintln!("Glue generation failed: {err}");
-                        process::exit(1);
-                    }
-                    Ok(files) => files,
-                },
-            }
+            files
         }
 
         CodeGenBackend::Wasm => todo!(),
+    };
+
+    match Result::from(roc_call_result) {
+        Err((msg, tag)) => match tag {
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+            CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+        },
+        Ok(files_or_error) => match Result::from(files_or_error) {
+            Err(err) => {
+                eprintln!("Glue generation failed: {err}");
+                process::exit(1);
+            }
+            Ok(files) => files,
+        },
     }
 }
 
