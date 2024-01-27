@@ -24,6 +24,7 @@ pub mod operator;
 pub mod pattern;
 pub mod procedure;
 pub mod scope;
+pub mod scopes;
 pub mod string;
 pub mod traverse;
 
