@@ -33,7 +33,7 @@ fn multi_branch_capturing() {
             f = \t, s ->
               if t
               then \{} -> 15nat
-              else \{} -> Str.countGraphemes s
+              else \{} -> Str.countUtf8Bytes s
 
             main = ((f Bool.true "abc") {}, (f Bool.false "abc") {})
             "#

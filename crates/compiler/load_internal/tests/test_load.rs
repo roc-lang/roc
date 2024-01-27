@@ -1222,7 +1222,6 @@ fn module_cyclic_import_itself() {
         err
     );
 }
-
 #[test]
 fn module_cyclic_import_transitive() {
     let modules = vec![

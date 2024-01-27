@@ -435,13 +435,17 @@ repeatHelp = \value, count, accum ->
 ## ```
 reverse : List a -> List a
 reverse = \list ->
-    reverseHelp list 0 (Num.subSaturated (List.len list) 1)
+    end = List.len list |> Num.subSaturated 1
+    reverseHelp (List.clone list) 0 end
 
 reverseHelp = \list, left, right ->
     if left < right then
         reverseHelp (List.swap list left right) (Num.addWrap left 1) (Num.subWrap right 1)
     else
         list
+
+# Ensures that the list in unique (will re-use if already unique)
+clone : List a -> List a
 
 ## Join the given lists together into one list.
 ## ```

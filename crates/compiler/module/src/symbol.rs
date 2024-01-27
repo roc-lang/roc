@@ -1274,6 +1274,7 @@ define_builtins! {
         162 NUM_PI: "pi"
         163 NUM_TAU: "tau"
         164 NUM_BITWISE_NOT: "bitwiseNot"
+        165 NUM_IS_APPROX_EQ: "isApproxEq"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
@@ -1297,14 +1298,14 @@ define_builtins! {
         3 STR_CONCAT: "concat"
         4 STR_JOIN_WITH: "joinWith"
         5 STR_SPLIT: "split"
-        6 STR_COUNT_GRAPHEMES: "countGraphemes"
+        6 STR_WITH_PREFIX: "withPrefix"
         7 STR_STARTS_WITH: "startsWith"
         8 STR_ENDS_WITH: "endsWith"
         9 STR_FROM_UTF8: "fromUtf8"
         10 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
         11 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
         12 STR_TO_UTF8: "toUtf8"
-        13 STR_STARTS_WITH_SCALAR: "startsWithScalar"
+        13 STR_WALK_UTF8: "walkUtf8"
         14 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
         15 STR_FROM_UTF8_RANGE: "fromUtf8Range"
         16 STR_REPEAT: "repeat"
@@ -1325,7 +1326,7 @@ define_builtins! {
         31 STR_TO_I16: "toI16"
         32 STR_TO_U8: "toU8"
         33 STR_TO_I8: "toI8"
-        34 STR_TO_SCALARS: "toScalars"
+        34 STR_CONTAINS: "contains"
         35 STR_GET_UNSAFE: "getUnsafe"
         36 STR_COUNT_UTF8_BYTES: "countUtf8Bytes"
         37 STR_SUBSTRING_UNSAFE: "substringUnsafe"
@@ -1333,24 +1334,14 @@ define_builtins! {
         39 STR_SPLIT_LAST: "splitLast"
         40 STR_WALK_UTF8_WITH_INDEX: "walkUtf8WithIndex"
         41 STR_RESERVE: "reserve"
-        42 STR_APPEND_SCALAR_UNSAFE: "appendScalarUnsafe"
-        43 STR_APPEND_SCALAR: "appendScalar"
-        44 STR_GET_SCALAR_UNSAFE: "getScalarUnsafe"
-        45 STR_WALK_SCALARS: "walkScalars"
-        46 STR_WALK_SCALARS_UNTIL: "walkScalarsUntil"
-        47 STR_TO_NUM: "strToNum"
-        48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
-        49 STR_CAPACITY: "capacity"
-        50 STR_REPLACE_EACH: "replaceEach"
-        51 STR_REPLACE_FIRST: "replaceFirst"
-        52 STR_REPLACE_LAST: "replaceLast"
-        53 STR_WITH_CAPACITY: "withCapacity"
-        54 STR_WITH_PREFIX: "withPrefix"
-        55 STR_GRAPHEMES: "graphemes"
-        56 STR_IS_VALID_SCALAR: "isValidScalar"
-        57 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
-        58 STR_WALK_UTF8: "walkUtf8"
-        59 STR_CONTAINS: "contains"
+        42 STR_TO_NUM: "strToNum"
+        43 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
+        44 STR_CAPACITY: "capacity"
+        45 STR_REPLACE_EACH: "replaceEach"
+        46 STR_REPLACE_FIRST: "replaceFirst"
+        47 STR_REPLACE_LAST: "replaceLast"
+        48 STR_WITH_CAPACITY: "withCapacity"
+        49 STR_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
@@ -1440,6 +1431,7 @@ define_builtins! {
         84 LIST_APPEND_IF_OK: "appendIfOk"
         85 LIST_PREPEND_IF_OK: "prependIfOk"
         86 LIST_WALK_WITH_INDEX_UNTIL: "walkWithIndexUntil"
+        87 LIST_CLONE: "clone"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

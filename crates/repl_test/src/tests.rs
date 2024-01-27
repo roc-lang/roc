@@ -269,11 +269,6 @@ fn str_concat() {
 }
 
 #[test]
-fn str_count_graphemes() {
-    expect_success("Str.countGraphemes \"å🤔\"", "2 : Nat");
-}
-
-#[test]
 fn literal_empty_list() {
     expect_success("[]", "[] : List *");
 }

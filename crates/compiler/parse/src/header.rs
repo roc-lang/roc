@@ -23,6 +23,16 @@ impl<'a> HeaderType<'a> {
             HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
         }
     }
+    pub fn to_string(&'a self) -> &str {
+        match self {
+            HeaderType::App { .. } => "app",
+            HeaderType::Hosted { .. } => "hosted",
+            HeaderType::Builtin { .. } => "builtin",
+            HeaderType::Package { .. } => "package",
+            HeaderType::Platform { .. } => "platform",
+            HeaderType::Interface { .. } => "interface",
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -57,6 +57,7 @@ pub fn generate(
                 opt_level: OptLevel::Development,
                 emit_debug_info: false,
                 emit_llvm_ir: false,
+                fuzz: false,
             };
 
             let load_config = standard_load_config(

@@ -2224,7 +2224,9 @@ fn update<'a>(
 
                         #[cfg(target_family = "wasm")]
                         {
-                            panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                            panic!(
+                                "Specifying packages via URLs is currently unsupported in wasm."
+                            );
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
@@ -4079,7 +4081,7 @@ fn load_packages<'a>(
 
             #[cfg(target_family = "wasm")]
             {
-                panic!("Specifying packages via URLs is curently unsupported in wasm.");
+                panic!("Specifying packages via URLs is currently unsupported in wasm.");
             }
         } else {
             cwd.join(src)
