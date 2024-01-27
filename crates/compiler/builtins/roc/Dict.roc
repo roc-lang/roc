@@ -729,7 +729,7 @@ incrementDist = \distAndFingerprint ->
     distAndFingerprint + distInc
 
 incrementDistN = \distAndFingerprint, n ->
-    distAndFingerprint + (n * distInc)
+    distAndFingerprint + (Num.mulWrap n distInc)
 
 decrementDist = \distAndFingerprint ->
     distAndFingerprint - distInc
@@ -837,7 +837,7 @@ removeBucketHelper = \buckets, bucketIndex ->
     nextIndex = nextBucketIndex bucketIndex (List.len buckets)
     nextBucket = listGetUnsafe buckets nextIndex
     # shift down until either empty or an element with correct spot is found
-    if nextBucket.distAndFingerprint >= distInc * 2 then
+    if nextBucket.distAndFingerprint >= Num.mulWrap distInc 2 then
         List.set buckets bucketIndex { nextBucket & distAndFingerprint: decrementDist nextBucket.distAndFingerprint }
         |> removeBucketHelper nextIndex
     else
@@ -1417,7 +1417,7 @@ wymix = \a, b ->
 
 wymum : U64, U64 -> { lower : U64, upper : U64 }
 wymum = \a, b ->
-    r = Num.toU128 a * Num.toU128 b
+    r = Num.mulWrap (Num.toU128 a) (Num.toU128 b)
     lower = Num.toU64 r
     upper = Num.shiftRightZfBy r 64 |> Num.toU64
 
