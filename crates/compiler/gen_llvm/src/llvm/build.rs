@@ -4903,10 +4903,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                             Attribute::get_named_enum_kind_id("byval"),
                             c_abi_type.as_any_type_enum(),
                         );
-                        let nonnull = context.create_type_attribute(
-                            Attribute::get_named_enum_kind_id("nonnull"),
-                            c_abi_type.as_any_type_enum(),
-                        );
+                        let nonnull = context
+                            .create_enum_attribute(Attribute::get_named_enum_kind_id("nonnull"), 0);
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
                         let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
                         let param_index = i as u32 + returns_pointer as u32;
