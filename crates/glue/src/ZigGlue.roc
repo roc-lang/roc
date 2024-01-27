@@ -21,7 +21,7 @@ staticFiles : List File
 staticFiles = [
     { name: "list.zig", content: rocStdList },
     { name: "str.zig", content: rocStdStr },
-    { name: "utls.zig", content: rocStdUtils },
+    { name: "utils.zig", content: rocStdUtils },
 ]
 
 convertTypesToFile : Types -> File
