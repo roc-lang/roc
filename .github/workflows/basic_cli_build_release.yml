@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: build basic-cli
         env:
@@ -99,7 +99,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
@@ -118,7 +118,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - run: ./ci/build_basic_cli.sh macos_apple_silicon
 
@@ -140,7 +140,7 @@ jobs:
         run: ls | grep -v  ci | xargs rm -rf
 
       - name: Download the previously uploaded files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: mv roc nightly and simplify name
         run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
@@ -196,7 +196,7 @@ jobs:
     steps:
 
       - name: Download the previously uploaded files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: mv roc nightly and simplify name
         run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
