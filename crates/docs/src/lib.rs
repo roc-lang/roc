@@ -392,22 +392,31 @@ fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -
         let entries = {
             let mut entries_buf = String::new();
 
-            for entry in &module.entries {
-                if let DocEntry::DocDef(doc_def) = entry {
-                    if module.exposed_symbols.contains(&doc_def.symbol) {
-                        let mut entry_href = String::new();
+            let mut module_definitions = module
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    DocEntry::DocDef(doc_def) => Some(doc_def),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
 
-                        entry_href.push_str(href);
-                        entry_href.push('#');
-                        entry_href.push_str(doc_def.name.as_str());
+            module_definitions.sort_by_key(|doc_def| doc_def.name.as_str());
 
-                        push_html(
-                            &mut entries_buf,
-                            "a",
-                            vec![("href", entry_href.as_str())],
-                            doc_def.name.as_str(),
-                        );
-                    }
+            for doc_def in module_definitions.into_iter() {
+                if module.exposed_symbols.contains(&doc_def.symbol) {
+                    let mut entry_href = String::new();
+
+                    entry_href.push_str(href);
+                    entry_href.push('#');
+                    entry_href.push_str(doc_def.name.as_str());
+
+                    push_html(
+                        &mut entries_buf,
+                        "a",
+                        vec![("href", entry_href.as_str())],
+                        doc_def.name.as_str(),
+                    );
                 }
             }
 
