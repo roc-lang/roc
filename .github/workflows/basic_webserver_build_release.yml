@@ -24,7 +24,7 @@ jobs:
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
 
       - name: Save roc_nightly archives
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path:  roc_nightly-*
 
@@ -43,7 +43,7 @@ jobs:
         run: ./ci/build_basic_webserver.sh linux_x86_64 "--linker legacy"
 
       - name: Save .rh, .rm and .o file
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64-files
           path: |
@@ -70,7 +70,7 @@ jobs:
         run: ./ci/build_basic_webserver.sh linux_arm64
 
       - name: Save .o file
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-files
           path: |
@@ -88,7 +88,7 @@ jobs:
       - run: ./ci/build_basic_webserver.sh macos_x86_64
 
       - name: Save .o files
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64-files
           path: |
@@ -107,7 +107,7 @@ jobs:
       - run: ./ci/build_basic_webserver.sh macos_apple_silicon
 
       - name: Save macos-arm64.o file
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-apple-silicon-files
           path: |
@@ -157,7 +157,7 @@ jobs:
       - run: echo "TAR_FILENAME=$(ls -d basic-webserver/platform/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: basic-webserver-platform
           path: |

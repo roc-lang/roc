@@ -6,7 +6,7 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-  
+
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
@@ -17,7 +17,7 @@ jobs:
   prepare:
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           repository: roc-lang/basic-cli
 
@@ -40,7 +40,7 @@ jobs:
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
 
       - name: Save roc_nightly archives
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path:  roc_nightly-*
 
@@ -48,7 +48,7 @@ jobs:
     runs-on: [ubuntu-20.04]
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -58,8 +58,8 @@ jobs:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
         run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
-      - name: Save .rh, .rm and .o file 
-        uses: actions/upload-artifact@v3
+      - name: Save .rh, .rm and .o file
+        uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64-files
           path: |
@@ -72,7 +72,7 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64]
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -85,8 +85,8 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
         run: ./ci/build_basic_cli.sh linux_arm64
 
-      - name: Save .o file 
-        uses: actions/upload-artifact@v3
+      - name: Save .o file
+        uses: actions/upload-artifact@v4
         with:
           name: linux-arm64-files
           path: |
@@ -96,7 +96,7 @@ jobs:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12 and up
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -104,7 +104,7 @@ jobs:
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
       - name: Save .o files
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64-files
           path: |
@@ -115,7 +115,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
@@ -123,7 +123,7 @@ jobs:
       - run: ./ci/build_basic_cli.sh macos_apple_silicon
 
       - name: Save macos-arm64.o file
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: macos-apple-silicon-files
           path: |
@@ -134,7 +134,7 @@ jobs:
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: remove all folders except the ci folder
         run: ls | grep -v  ci | xargs rm -rf
@@ -157,7 +157,7 @@ jobs:
       - run: git clone https://github.com/roc-lang/basic-cli.git
 
       - run: cp macos-apple-silicon-files/* ./basic-cli/platform
-      
+
       - run: cp linux-x86_64-files/* ./basic-cli/platform
 
       - run: cp linux-arm64-files/* ./basic-cli/platform
@@ -177,14 +177,14 @@ jobs:
       - run: echo "TAR_FILENAME=$(ls -d basic-cli/platform/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: basic-cli-platform
           path: |
             ${{ env.TAR_FILENAME }}
 
       - name: Upload docs archive
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: release-assets-docs
           path: |
@@ -232,7 +232,7 @@ jobs:
           mkdir platform
           # move all files to platform dir
           find . -maxdepth 1 -type f -exec mv {} platform/ \;
-          
+
           mkdir temp-basic-cli
           cd temp-basic-cli
           git clone https://github.com/roc-lang/basic-cli.git
@@ -242,9 +242,8 @@ jobs:
           cp -r ci ../..
           cp -r LICENSE ../..
           # LICENSE is necessary for command test
-          
+
       - name: run tests
         run: |
           cd basic-cli-platform
           ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ROC_BUILD_FLAGS=--prebuilt-platform ./ci/all_tests.sh
-

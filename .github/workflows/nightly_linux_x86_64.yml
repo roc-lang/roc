@@ -38,7 +38,7 @@ jobs:
         run: ./ci/www-repl.sh
 
       - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
            name: roc_repl_wasm.tar.gz
            path: roc_repl_wasm.tar.gz
@@ -58,7 +58,7 @@ jobs:
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
            name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz

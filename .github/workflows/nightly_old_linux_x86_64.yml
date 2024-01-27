@@ -35,7 +35,7 @@ jobs:
         run: earthly +build-nightly-release  --RELEASE_FOLDER_NAME=${{ env.RELEASE_FOLDER_NAME }} --RUSTFLAGS="-C target-cpu=x86-64"
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
            name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
