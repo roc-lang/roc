@@ -2031,8 +2031,7 @@ trait Backend<'a> {
                         self.build_int_to_float_cast(sym, &args[0], int_width, float_width);
                     }
                     None => {
-                        //
-                        todo!("other NumToFloatCast cases");
+                        self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout);
                     }
                 }
             }
