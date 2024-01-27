@@ -3910,6 +3910,28 @@ fn to_packages_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+        EPackages::ListEnd(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a header packages list, but I got stuck here:",
+                ),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
+                alloc
+                    .parser_suggestion("packages { package_name: \"url-or-path\", }")
+                    .indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD PACKAGES LIST".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
 
         EPackages::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
