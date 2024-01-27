@@ -122,6 +122,9 @@ comptime {
         num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
         num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
 
+        num.exportNumToFloatCast(T, f32, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f32.");
+        num.exportNumToFloatCast(T, f64, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f64.");
+
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");
         num.exportAddSaturatedInt(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_saturated.");

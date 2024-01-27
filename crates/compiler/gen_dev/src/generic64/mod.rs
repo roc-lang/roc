@@ -358,6 +358,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
+    fn mov_freg32_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
     fn mov_reg_base32(
         buf: &mut Vec<'_, u8>,
@@ -2150,6 +2151,30 @@ impl<
                     }
                     _ => unreachable!(),
                 }
+            },
+        );
+    }
+
+    fn build_int_to_float_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        int_width: IntWidth,
+        float_width: FloatWidth,
+    ) {
+        use roc_builtins::bitcode::{INT_TO_FLOAT_CAST_F32, INT_TO_FLOAT_CAST_F64};
+
+        self.build_fn_call(
+            dst,
+            match float_width {
+                FloatWidth::F32 => INT_TO_FLOAT_CAST_F32[int_width].to_string(),
+                FloatWidth::F64 => INT_TO_FLOAT_CAST_F64[int_width].to_string(),
+            },
+            &[*src],
+            &[Layout::from_int_width(int_width)],
+            match float_width {
+                FloatWidth::F32 => &Layout::F32,
+                FloatWidth::F64 => &Layout::F64,
             },
         );
     }

@@ -292,6 +292,10 @@ pub const NUM_FLOOR_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_
 pub const NUM_FLOOR_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_f64");
 pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
 pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
+pub const INT_TO_FLOAT_CAST_F32: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.num_to_float_cast_f32");
+pub const INT_TO_FLOAT_CAST_F64: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.num_to_float_cast_f64");
 
 pub const NUM_ADD_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_or_panic");
 pub const NUM_ADD_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_saturated");
