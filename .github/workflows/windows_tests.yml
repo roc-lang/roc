@@ -56,7 +56,7 @@ jobs:
         run: cargo test-gen-dev --locked --release nat_alias && cargo test-gen-dev --locked --release a_crash
 
       - name: Run gen tests
-        run: cargo test-gen-llvm --locked --release gen_str 
+        run: cargo test-gen-llvm --locked --release 
         
       - name: Actually run the tests.
         run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli
