@@ -5640,7 +5640,7 @@ All branches in an `if` must have the same type!
             Num.if
             "
         ),
-        @r"
+        @r###"
     ── NOT EXPOSED in /code/proj/Main.roc ──────────────────────────────────────────
 
     The Num module does not expose `if`:
@@ -5652,9 +5652,9 @@ All branches in an `if` must have the same type!
 
         Num.sin
         Num.div
-        Num.min
         Num.e
-    "
+        Num.pi
+    "###
     );
 
     test_report!(
@@ -5790,7 +5790,7 @@ All branches in an `if` must have the same type!
             ["foo", bar("")]
             "#
         ),
-        @r#"
+        @r###"
     ── UNRECOGNIZED NAME in /code/proj/Main.roc ────────────────────────────────────
 
     Nothing is named `bar` in this scope.
@@ -5800,11 +5800,11 @@ All branches in an `if` must have the same type!
 
     Did you mean one of these?
 
-        Nat
         Str
         Err
         U8
-    "#
+        F64
+    "###
     );
 
     test_report!(
@@ -6822,7 +6822,7 @@ In roc, functions are always written as a lambda, like{}
             C a b : a -> D a b
             D a b : { a, b }
 
-            f : C a Num.Nat -> D a Num.Nat
+            f : C a U64 -> D a U64
             f = \c -> c 6
             f
             "
@@ -7572,7 +7572,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7598,7 +7598,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -7625,7 +7625,7 @@ In roc, functions are always written as a lambda, like{}
 
     But `get` needs its 2nd argument to be:
 
-        Nat
+        U64
     "
     );
 
@@ -8215,7 +8215,7 @@ In roc, functions are always written as a lambda, like{}
         invalid_record_extension_type,
         indoc!(
             r"
-            f : { x : Num.Nat }[]
+            f : { x : U64 }[]
             f
             "
         ),
@@ -8224,8 +8224,8 @@ In roc, functions are always written as a lambda, like{}
 
     This record extension type is invalid:
 
-    4│      f : { x : Num.Nat }[]
-                               ^^
+    4│      f : { x : U64 }[]
+                           ^^
 
     Note: A record extension variable can only contain a type variable or
     another record.
@@ -11751,7 +11751,7 @@ In roc, functions are always written as a lambda, like{}
 
     The argument is a Unicode scalar value of type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     But `contains` needs its 2nd argument to be:
 
@@ -11808,7 +11808,7 @@ In roc, functions are always written as a lambda, like{}
 
     But the branch patterns have type:
 
-        U16, I32, U32, I64, Nat, U64, I128, or U128
+        U16, I32, U32, I64, U64, I128, or U128
 
     The branches must be cases of the `when` condition's type!
     "#
