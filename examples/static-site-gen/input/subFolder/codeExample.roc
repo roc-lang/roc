@@ -29,7 +29,6 @@ transformFileContent = \currentUrl, htmlContent ->
     |> Result.map Html.render
     |> Result.withDefault ""
 
-
 ### start snippet view
 view : NavLink, Str -> Html.Node
 view = \currentNavLink, htmlContent ->
