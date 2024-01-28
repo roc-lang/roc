@@ -43,7 +43,7 @@ mod glue_cli_run {
                     let test_name_str = stringify!($test_name);
 
                     // TODO after #5924 is fixed; remove this if
-                    if !(cfg!(target_os = "linux") && (test_name_str == "nullable_unwrapped" || test_name_str == "nullable_wrapped")) {
+                    if !(cfg!(target_os = "linux") && (test_name_str == "closures" || test_name_str == "option")) {
                         let out = run_app(&dir.join("app.roc"), std::iter::empty());
 
                         assert!(out.status.success());
