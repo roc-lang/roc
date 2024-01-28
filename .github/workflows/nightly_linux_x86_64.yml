@@ -5,20 +5,20 @@ on:
     - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
-    
+
 jobs:
   build:
     name: build and package nightly release
     runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
-    
+
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Update PATH to use zig 11
         run: |
           echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
-      
+
       - run: zig version
 
       - name: create version.txt
@@ -30,7 +30,7 @@ jobs:
 
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
-        
+
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
 
@@ -38,12 +38,12 @@ jobs:
         run: ./ci/www-repl.sh
 
       - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
            name: roc_repl_wasm.tar.gz
            path: roc_repl_wasm.tar.gz
            retention-days: 4
-        
+
       - name: build file name
         env:
             DATE: ${{ env.DATE }}
@@ -53,12 +53,12 @@ jobs:
       # this makes the roc binary a lot smaller
       - name: strip debug info
         run: strip ./target/release-with-lto/roc
-       
+
       - name: Make nightly release tar archive
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
            name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
