@@ -1423,16 +1423,8 @@ These modules are not ordinary `.roc` files that live on your filesystem. Rather
 
 Besides being built into the compiler, the builtin modules are different from other modules in that:
 
-<<<<<<< HEAD
-
 -   They are always imported. You never need to add them to `imports`.
--   All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module).
-    ||||||| parent of cda0cfb47 (Remove Nat from documentation)
--   They are always imported. You never need to add them to `imports`.
--   # All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module.
--   They are always imported. You never need to add them to `imports`.
--   All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.
-    > > > > > > > cda0cfb47 (Remove Nat from documentation)
+-   All their types are imported unqualified automatically. So you never need to write `Num.Dec`, because it's as if the `Num` module was imported using `imports [Num.{ Dec }]` (the same is true for all the other types in the `Num` module.)
 
 ### [App Module Header](#app-module-header) {#app-module-header}
 
