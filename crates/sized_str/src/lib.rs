@@ -5,7 +5,7 @@ use std::num::{NonZeroU32, NonZeroU8};
 /// Internally, this is represented as a NonZeroU32, which means
 /// if you wrap one of these in an Option, Option::None will be 0.
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub struct NonEmptyStr4(NonZeroU32);
+pub struct Str4(NonZeroU32);
 
 #[repr(align(16))]
 pub struct Str4Chunk([NonZeroU32; Str4Chunks::NUM_LANES]);
@@ -14,12 +14,12 @@ pub struct Str4Chunks<'a>(&'a [Str4Chunk]);
 
 impl<'a> Str4Chunks<'a> {
     const NUM_LANES: usize = 4;
-    const ALIGN: usize = Self::NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
+    const ALIGN: usize = Self::NUM_LANES * std::mem::align_of::<Str4>();
 
     /// Safety: The given slice must:
     /// - have a nonzero length that's a multiple of 4
     /// - point to a memory address that's disible by 16
-    pub unsafe fn new_unchecked(slice: &'a [NonEmptyStr4]) -> Self {
+    pub unsafe fn new_unchecked(slice: &'a [Str4]) -> Self {
         debug_assert!(!slice.is_empty());
         debug_assert_eq!(slice.len() % Self::NUM_LANES, 0);
         debug_assert_eq!(
@@ -30,7 +30,7 @@ impl<'a> Str4Chunks<'a> {
         std::mem::transmute(slice)
     }
 
-    pub fn as_slice(&self) -> &[NonEmptyStr4] {
+    pub fn as_slice(&self) -> &[Str4] {
         // Internally, we have chunks of 4; adjust the returned slice's length accordingly.
         unsafe {
             std::slice::from_raw_parts(self.0.as_ptr().cast(), self.0.len() * Self::NUM_LANES)
@@ -38,7 +38,7 @@ impl<'a> Str4Chunks<'a> {
     }
 }
 
-impl NonEmptyStr4 {
+impl Str4 {
     const CAPACITY: usize = 4;
 
     /// This is only needed in aarch64; in x64, we call _mm_set_epi32 directly
@@ -71,7 +71,7 @@ impl NonEmptyStr4 {
     pub fn first_index_in(&self, slice: Str4Chunks<'_>) -> Option<usize> {
         // Each SIMD register holds 4 u32s
         const NUM_LANES: usize = 4;
-        const ALIGN: usize = NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
+        const ALIGN: usize = NUM_LANES * std::mem::align_of::<Str4>();
 
         #[cfg(target_arch = "aarch64")]
         use std::arch::aarch64::*;
@@ -201,7 +201,7 @@ fn from_bytes<const CAPACITY: usize>(input: &[NonZeroU8]) -> [u8; CAPACITY] {
 
 #[cfg(test)]
 mod str4_from_str {
-    use crate::NonEmptyStr4;
+    use crate::Str4;
 
     #[test]
     fn multiple_chars() {
@@ -214,8 +214,7 @@ mod str4_from_str {
                 buf.push(ch);
             }
 
-            let input =
-                unsafe { NonEmptyStr4::from_nonempty_bytes(std::mem::transmute(buf.as_str())) };
+            let input = unsafe { Str4::from_nonempty_bytes(std::mem::transmute(buf.as_str())) };
 
             assert_eq!(input.len(), buf.len().min(4));
 
