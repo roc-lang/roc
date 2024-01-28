@@ -1185,7 +1185,6 @@ expect
     |> len
     |> Bool.isEq 0
 
-
 # All BadKey's hash to the same location.
 # This is needed to test some robinhood logic.
 BadKey := U64 implements [
