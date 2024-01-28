@@ -18,7 +18,8 @@ macro_rules! make_str_n {
             const NUM_LANES: usize = $num_lanes;
             const ALIGN: usize = Self::NUM_LANES * std::mem::align_of::<$name>();
 
-            /// Safety: The given slice must:
+            /// # Safety
+            /// The given slice must:
             /// - have a nonzero length that's a multiple of 4
             /// - point to a memory address that's disible by 16
             pub unsafe fn new_unchecked(slice: &'a [$name]) -> Self {
@@ -44,6 +45,7 @@ macro_rules! make_str_n {
         }
 
         impl $name {
+            #[allow(clippy::len_without_is_empty)]
             #[cfg(target_endian = "little")] // This implementation relies on little-endian byte ordering for the int
             pub fn len(&self) -> usize {
                 // NonZeroU__::trailing_zeros compiles to a single instruction on x64, whereas
@@ -187,7 +189,8 @@ impl Str4 {
     /// (Other bytes past the first 4 are ignored.)
     /// If there are fewer than 4 input bytes, pads the end with zeros internally.
     ///
-    /// Safety: There must be at least 8 bytes of safely accessible memory starting from the pointer.
+    /// # Safety
+    /// There must be at least 8 bytes of safely accessible memory starting from the pointer.
     ///
     /// Note: These unusual API requirements are for performance; they avoid a memcpy call and branching!
     pub unsafe fn from_raw_parts(input: *const NonZeroU8, len: NonZeroUsize) -> Self {
@@ -329,7 +332,8 @@ impl Str8 {
     /// (Other bytes past the first 8 are ignored.)
     /// If there are fewer than 8 input bytes, pads the end with zeros internally.
     ///
-    /// Safety: There must be at least 8 bytes of safely accessible memory starting from the pointer.
+    /// # Safety
+    /// There must be at least 8 bytes of safely accessible memory starting from the pointer.
     ///
     /// Note: These unusual API requirements are for performance; they avoid a memcpy call and branching!
     pub unsafe fn from_raw_parts(input: *const NonZeroU8, len: NonZeroUsize) -> Self {
