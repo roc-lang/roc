@@ -32,7 +32,7 @@ fn multi_branch_capturing() {
 
             f = \t, s ->
               if t
-              then \{} -> 15nat
+              then \{} -> 15u64
               else \{} -> Str.countUtf8Bytes s
 
             main = ((f Bool.true "abc") {}, (f Bool.false "abc") {})
