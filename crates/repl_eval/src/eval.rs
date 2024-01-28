@@ -265,8 +265,6 @@ fn get_tags_vars_and_variant<'a>(
     (vars_of_tag, union_variant)
 }
 
-const FAKE_EXPR: &Loc<Expr> = &Loc::at_zero(Expr::Crash);
-
 fn expr_of_tag<'a, M: ReplAppMemory>(
     env: &mut Env<'a, '_>,
     mem: &'a M,
@@ -296,6 +294,7 @@ fn expr_of_tag<'a, M: ReplAppMemory>(
         cmp_fields(&env.layout_cache.interner, i1, *lay1, i2, *lay2)
     });
 
+    const FAKE_EXPR: &Loc<Expr> = &Loc::at_zero(Expr::Crash);
     let mut output: Vec<&Loc<Expr>> =
         Vec::from_iter_in(std::iter::repeat(FAKE_EXPR).take(layouts.len()), env.arena);
     let mut field_addr = data_addr;
@@ -358,11 +357,6 @@ fn tag_id_from_recursive_ptr<'a, M: ReplAppMemory>(
         (tag_id, addr_with_id)
     }
 }
-
-const OPAQUE_FUNCTION: Expr = Expr::Var {
-    module_name: "",
-    ident: "<function>",
-};
 
 fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     env: &mut Env<'a, '_>,
@@ -430,7 +424,10 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 Expr::Str(StrLiteral::PlainLine(arena_str))
             };
 
-            app.call_function_returns_roc_str(env.target_info, main_fn_name, body)
+            match app.call_function_returns_roc_str(env.target_info, main_fn_name, body) {
+                Some(string) => string,
+                None => Expr::REPL_RUNTIME_CRASH,
+            }
         }
         LayoutRepr::Builtin(Builtin::List(elem_layout)) => app.call_function_returns_roc_list(
             main_fn_name,
@@ -476,7 +473,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
-                    OPAQUE_FUNCTION
+                    Expr::REPL_OPAQUE_FUNCTION
                 }
                 other => {
                     unreachable!(
@@ -486,16 +483,21 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
             };
 
-            app.call_function_dynamic_size(
+            let opt_struct = app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
                 struct_addr_to_ast,
-            )
+            );
+
+            match opt_struct {
+                Some(struct_) => struct_,
+                None => Expr::REPL_RUNTIME_CRASH,
+            }
         }
         LayoutRepr::Union(UnionLayout::NonRecursive(_)) => {
             let size = env.layout_cache.interner.stack_size(layout);
 
-            app.call_function_dynamic_size(
+            let opt_union = app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
@@ -508,7 +510,12 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         env.subs.get_root_key_without_compacting(raw_var),
                     )
                 },
-            )
+            );
+
+            match opt_union {
+                Some(union_) => union_,
+                None => Expr::REPL_RUNTIME_CRASH,
+            }
         }
         LayoutRepr::Union(UnionLayout::Recursive(_))
         | LayoutRepr::Union(UnionLayout::NonNullableUnwrapped(_))
@@ -516,7 +523,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         | LayoutRepr::Union(UnionLayout::NullableWrapped { .. }) => {
             let size = env.layout_cache.interner.stack_size(layout);
 
-            app.call_function_dynamic_size(
+            let opt_union = app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
@@ -529,7 +536,12 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         env.subs.get_root_key_without_compacting(raw_var),
                     )
                 },
-            )
+            );
+
+            match opt_union {
+                Some(union_) => union_,
+                None => Expr::REPL_RUNTIME_CRASH,
+            }
         }
         LayoutRepr::RecursivePointer(_) => {
             unreachable!("RecursivePointers can only be inside structures")
@@ -538,7 +550,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             unreachable!("Ptr will never be visible to users")
         }
         LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_) => {
-            OPAQUE_FUNCTION
+            Expr::REPL_OPAQUE_FUNCTION
         }
     };
 
@@ -578,7 +590,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
     let expr = match (raw_content, layout) {
         (Content::Structure(FlatType::Func(_, _, _)), _) | (_, LayoutRepr::LambdaSet(_) | LayoutRepr::FunctionPointer(_) | LayoutRepr::Erased(_)) => {
-            OPAQUE_FUNCTION
+            Expr::REPL_OPAQUE_FUNCTION
         }
         (_, LayoutRepr::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.

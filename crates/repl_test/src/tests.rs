@@ -755,6 +755,58 @@ fn type_problem_string_interpolation() {
     );
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn list_drop_at_negative_index() {
+    expect_failure(
+        "List.dropAt [1, 2, 3] -1",
+        indoc!(
+            r#"
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+            This 2nd argument to dropAt has an unexpected type:
+
+            4│      List.dropAt [1, 2, 3] -1
+                                          ^^
+
+            The argument is a number of type:
+
+                I8, I16, F32, I32, F64, I64, I128, or Dec
+
+            But dropAt needs its 2nd argument to be:
+
+                Nat
+            "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn list_get_negative_index() {
+    expect_failure(
+        "List.get [1, 2, 3] -1",
+        indoc!(
+            r#"
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+            This 2nd argument to get has an unexpected type:
+
+            4│      List.get [1, 2, 3] -1
+                                       ^^
+
+            The argument is a number of type:
+
+                I8, I16, F32, I32, F64, I64, I128, or Dec
+
+            But get needs its 2nd argument to be:
+
+                Nat
+            "#
+        ),
+    );
+}
+
 #[test]
 fn issue_2149_i8_ok() {
     expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
