@@ -155,7 +155,7 @@ fn fmt_comment(buf: &mut Buf, comment: &str) {
 
     buf.push('#');
     // Add a space between the starting `#` and the rest of the comment,
-    // unless there already is one or the comment is of the form `#### something`.
+    // unless there already is a space or the comment is of the form `#### something`.
     if !comment.starts_with(' ') && !comment.starts_with('#') {
         buf.spaces(1);
     }
