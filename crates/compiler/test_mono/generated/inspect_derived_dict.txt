@@ -1054,143 +1054,143 @@ procedure List.91 (#Derived_gen.57, #Derived_gen.58, #Derived_gen.59, #Derived_g
     jump List.613 #Derived_gen.57 #Derived_gen.58 #Derived_gen.59 #Derived_gen.60 #Derived_gen.61;
 
 procedure Num.131 (#Attr.2):
-    let Num.316 : U32 = lowlevel NumIntCast #Attr.2;
-    ret Num.316;
+    let Num.319 : U32 = lowlevel NumIntCast #Attr.2;
+    ret Num.319;
 
 procedure Num.133 (#Attr.2):
-    let Num.371 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.371;
+    let Num.374 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.374;
 
 procedure Num.133 (#Attr.2):
-    let Num.372 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.372;
+    let Num.375 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.375;
 
 procedure Num.133 (#Attr.2):
-    let Num.387 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.387;
+    let Num.390 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.390;
 
 procedure Num.135 (#Attr.2):
-    let Num.393 : U128 = lowlevel NumIntCast #Attr.2;
-    ret Num.393;
+    let Num.396 : U128 = lowlevel NumIntCast #Attr.2;
+    ret Num.396;
 
 procedure Num.137 (#Attr.2):
-    let Num.307 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.307;
+    let Num.310 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.310;
 
 procedure Num.137 (#Attr.2):
-    let Num.313 : U64 = lowlevel NumIntCast #Attr.2;
-    ret Num.313;
+    let Num.316 : U64 = lowlevel NumIntCast #Attr.2;
+    ret Num.316;
 
 procedure Num.139 (#Attr.2):
-    let Num.340 : Float32 = lowlevel NumToFloatCast #Attr.2;
-    ret Num.340;
+    let Num.343 : Float32 = lowlevel NumToFloatCast #Attr.2;
+    ret Num.343;
 
-procedure Num.159 (Num.245, Num.246):
-    let Num.342 : Int1 = CallByName Num.22 Num.245 Num.246;
-    if Num.342 then
-        ret Num.245;
-    else
+procedure Num.159 (Num.246, Num.247):
+    let Num.345 : Int1 = CallByName Num.22 Num.246 Num.247;
+    if Num.345 then
         ret Num.246;
+    else
+        ret Num.247;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.297 : U32 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.297;
+    let Num.300 : U32 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.300;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.317 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.317;
-
-procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.320 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    let Num.320 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
     ret Num.320;
 
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.323 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.323;
+
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.339 : Float32 = lowlevel NumMul #Attr.2 #Attr.3;
+    let Num.342 : Float32 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.342;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.339 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
     ret Num.339;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.336 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.336;
-
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.466 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.466;
+    let Num.469 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.469;
 
 procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.459 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
-    ret Num.459;
-
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.321 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.321;
-
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.462 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    let Num.462 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
     ret Num.462;
 
-procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.463 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
-    ret Num.463;
-
-procedure Num.50 (#Attr.2):
-    let Num.338 : U64 = lowlevel NumFloor #Attr.2;
-    ret Num.338;
-
-procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.465 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.465;
-
-procedure Num.69 (#Attr.2, #Attr.3):
-    let Num.325 : U32 = lowlevel NumBitwiseAnd #Attr.2 #Attr.3;
-    ret Num.325;
-
-procedure Num.70 (#Attr.2, #Attr.3):
-    let Num.369 : U64 = lowlevel NumBitwiseXor #Attr.2 #Attr.3;
-    ret Num.369;
-
-procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.324 : U32 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Num.324 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
     ret Num.324;
 
+procedure Num.24 (#Attr.2, #Attr.3):
+    let Num.465 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.465;
+
+procedure Num.25 (#Attr.2, #Attr.3):
+    let Num.466 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.466;
+
+procedure Num.50 (#Attr.2):
+    let Num.341 : U64 = lowlevel NumFloor #Attr.2;
+    ret Num.341;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.468 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.468;
+
+procedure Num.69 (#Attr.2, #Attr.3):
+    let Num.328 : U32 = lowlevel NumBitwiseAnd #Attr.2 #Attr.3;
+    ret Num.328;
+
+procedure Num.70 (#Attr.2, #Attr.3):
+    let Num.372 : U64 = lowlevel NumBitwiseXor #Attr.2 #Attr.3;
+    ret Num.372;
+
 procedure Num.71 (#Attr.2, #Attr.3):
-    let Num.407 : U64 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
-    ret Num.407;
+    let Num.327 : U32 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.327;
+
+procedure Num.71 (#Attr.2, #Attr.3):
+    let Num.410 : U64 = lowlevel NumBitwiseOr #Attr.2 #Attr.3;
+    ret Num.410;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.298 : U32 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.298;
+    let Num.301 : U32 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.301;
 
 procedure Num.72 (#Attr.2, #Attr.3):
-    let Num.422 : U64 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
-    ret Num.422;
+    let Num.425 : U64 = lowlevel NumShiftLeftBy #Attr.2 #Attr.3;
+    ret Num.425;
 
 procedure Num.74 (#Attr.2, #Attr.3):
-    let Num.388 : U128 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
-    ret Num.388;
-
-procedure Num.74 (#Attr.2, #Attr.3):
-    let Num.390 : U64 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
-    ret Num.390;
-
-procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.326 : U32 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.326;
-
-procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.456 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.456;
-
-procedure Num.78 (#Attr.2, #Attr.3):
-    let Num.391 : U128 = lowlevel NumMulWrap #Attr.2 #Attr.3;
+    let Num.391 : U128 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
     ret Num.391;
 
-procedure Num.96 (#Attr.2):
-    let Num.335 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.335;
+procedure Num.74 (#Attr.2, #Attr.3):
+    let Num.393 : U64 = lowlevel NumShiftRightZfBy #Attr.2 #Attr.3;
+    ret Num.393;
+
+procedure Num.75 (#Attr.2, #Attr.3):
+    let Num.329 : U32 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.329;
+
+procedure Num.75 (#Attr.2, #Attr.3):
+    let Num.459 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
+    ret Num.459;
+
+procedure Num.78 (#Attr.2, #Attr.3):
+    let Num.394 : U128 = lowlevel NumMulWrap #Attr.2 #Attr.3;
+    ret Num.394;
 
 procedure Num.96 (#Attr.2):
-    let Num.464 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.464;
+    let Num.338 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.338;
+
+procedure Num.96 (#Attr.2):
+    let Num.467 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.467;
 
 procedure Str.12 (#Attr.2):
     let Str.253 : List U8 = lowlevel StrToUtf8 #Attr.2;
