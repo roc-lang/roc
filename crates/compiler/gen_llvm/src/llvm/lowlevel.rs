@@ -153,18 +153,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 }
             }
         }
-        StrToScalars => {
-            // Str.toScalars : Str -> List U32
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_TO_SCALARS,
-            )
-        }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
             arguments!(string, prefix);
@@ -175,18 +163,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[],
                 BitcodeReturns::Basic,
                 bitcode::STR_STARTS_WITH,
-            )
-        }
-        StrStartsWithScalar => {
-            // Str.startsWithScalar : Str, U32 -> Bool
-            arguments!(string, prefix);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[prefix],
-                BitcodeReturns::Basic,
-                bitcode::STR_STARTS_WITH_SCALAR,
             )
         }
         StrEndsWith => {
@@ -545,102 +521,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             );
             BasicValueEnum::IntValue(is_zero)
         }
-        StrCountGraphemes => {
-            // Str.countGraphemes : Str -> Nat
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::Basic,
-                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS,
-            )
-        }
-        StrGetScalarUnsafe => {
-            // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
-            arguments!(string, index);
-
-            let roc_return_type =
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
-
-            use roc_target::Architecture::*;
-            use roc_target::OperatingSystem::*;
-            match env.target_info {
-                TargetInfo {
-                    operating_system: Windows,
-                    ..
-                } => {
-                    let result = env.builder.new_build_alloca(roc_return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[result.into(), string, index],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let cast_result = env.builder.new_build_pointer_cast(
-                        result,
-                        roc_return_type.ptr_type(AddressSpace::default()),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(roc_return_type, cast_result, "load_result")
-                }
-                TargetInfo {
-                    architecture: Wasm32,
-                    ..
-                } => {
-                    let result = env.builder.new_build_alloca(roc_return_type, "result");
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[
-                            result.into(),
-                            pass_string_to_zig_wasm(env, string).into(),
-                            index,
-                        ],
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    let cast_result = env.builder.new_build_pointer_cast(
-                        result,
-                        roc_return_type.ptr_type(AddressSpace::default()),
-                        "cast",
-                    );
-
-                    env.builder
-                        .new_build_load(roc_return_type, cast_result, "load_result")
-                }
-                TargetInfo {
-                    operating_system: Unix,
-                    ..
-                } => {
-                    let result = call_str_bitcode_fn(
-                        env,
-                        &[string],
-                        &[index],
-                        BitcodeReturns::Basic,
-                        bitcode::STR_GET_SCALAR_UNSAFE,
-                    );
-
-                    // zig will pad the struct to the alignment boundary, or bitpack it on 32-bit
-                    // targets. So we have to cast it to the format that the roc code expects
-                    let alloca = env
-                        .builder
-                        .new_build_alloca(result.get_type(), "to_roc_record");
-                    env.builder.new_build_store(alloca, result);
-
-                    env.builder
-                        .new_build_load(roc_return_type, alloca, "to_roc_record")
-                }
-                TargetInfo {
-                    operating_system: Wasi,
-                    ..
-                } => unimplemented!(),
-            }
-        }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
             arguments!(string);
@@ -695,18 +575,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_RELEASE_EXCESS_CAPACITY,
             )
         }
-        StrAppendScalar => {
-            // Str.appendScalar : Str, U32 -> Str
-            arguments!(string, capacity);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[capacity],
-                BitcodeReturns::Str,
-                bitcode::STR_APPEND_SCALAR,
-            )
-        }
         StrTrim => {
             // Str.trim : Str -> Str
             arguments!(string);
@@ -747,18 +615,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[str_len],
                 BitcodeReturns::Str,
                 bitcode::STR_WITH_CAPACITY,
-            )
-        }
-        StrGraphemes => {
-            // Str.graphemes : Str -> List Str
-            arguments!(string);
-
-            call_str_bitcode_fn(
-                env,
-                &[string],
-                &[],
-                BitcodeReturns::List,
-                bitcode::STR_GRAPHEMES,
             )
         }
         ListLen => {

@@ -15,7 +15,7 @@ jobs:
 
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
@@ -45,21 +45,18 @@ jobs:
           curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v16.0.6/LLVM-16.0.6-win64.7z
           7z x LLVM-16.0.6-win64.7z -oC:\LLVM-16.0.6-win64
 
-      - name: Build tests --release without running. 
+      - name: Build tests --release without running.
         run: cargo test --locked --release --no-run
 
       # Why are these tests not build with previous command? => fingerprint error. Use `CARGO_LOG=cargo::core::compiler::fingerprint=info` to investigate
-      - name: Build specific tests without running. 
-        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli -p test_gen 
+      - name: Build specific tests without running.
+        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli -p test_gen
 
       - name: Test setjmp/longjmp logic
         run: cargo test-gen-dev --locked --release nat_alias && cargo test-gen-dev --locked --release a_crash
 
       - name: Run gen tests
-        run: cargo test-gen-llvm --locked --release gen_str 
-        
+        run: cargo test-gen-llvm --locked --release gen_str
+
       - name: Actually run the tests.
         run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli
-
-      
-

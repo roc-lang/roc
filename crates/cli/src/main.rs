@@ -287,6 +287,7 @@ fn main() -> io::Result<()> {
                             values.push(os_string.to_owned());
                         }
                     }
+                    None if from_stdin || to_stdout => {}
                     None => {
                         let mut os_string_values: Vec<OsString> = Vec::new();
 
