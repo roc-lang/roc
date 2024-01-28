@@ -6,6 +6,27 @@ use std::num::{NonZeroU32, NonZeroU8};
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct NonEmptyStr4(NonZeroU32);
 
+#[repr(align(16))]
+pub struct Str4Chunk([NonZeroU32; 4]);
+
+pub struct Str4Chunks<'a>(&'a [Str4Chunk]);
+
+impl<'a> Str4Chunks<'a> {
+    /// Safety: The given slice must:
+    /// - have a nonzero length that's a multiple of 4
+    /// - point to a memory address that's disible by 16
+    pub unsafe fn new_unchecked(slice: &'a [NonEmptyStr4]) -> Self {
+        const NUM_LANES: usize = 4;
+        const ALIGN: usize = NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
+
+        debug_assert!(!slice.is_empty());
+        debug_assert_eq!(slice.len() % NUM_LANES, 0);
+        debug_assert_eq!(0, ((slice as *const _) as *const u32) as usize % ALIGN);
+
+        std::mem::transmute(slice)
+    }
+}
+
 impl NonEmptyStr4 {
     const CAPACITY: usize = 4;
 
@@ -27,90 +48,32 @@ impl NonEmptyStr4 {
     ///
     /// Safety: The input slice must not be empty.
     pub unsafe fn from_nonempty_bytes(input: &[NonZeroU8]) -> Self {
-        debug_assert_ne!(input.len(), 0);
+        debug_assert!(!input.is_empty());
 
-        let self_u32 = u32::from_be_bytes(from_bytes::<{ Self::CAPACITY }>(input));
+        let u32_input = u32::from_be_bytes(from_bytes(input));
 
         // Safety: as noted in this function's safety section, this slice must not be empty
-        Self(unsafe { NonZeroU32::new_unchecked(self_u32) })
+        Self(unsafe { NonZeroU32::new_unchecked(u32_input) })
     }
 
     /// Returns Some(first index where self occurs in the given slice) or else None if it wasn't found.
-    pub fn first_index_in<'a>(&self, slice: &'a [Self]) -> Option<usize> {
-        if slice.is_empty() {
-            return None;
-        }
-
+    pub fn first_index_in(&self, slice: Str4Chunks<'_>) -> Option<usize> {
         // Each SIMD register holds 4 u32s
         const NUM_LANES: usize = 4;
         const ALIGN: usize = NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
 
+        #[cfg(target_arch = "aarch64")]
+        use std::arch::aarch64::*;
+
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::*;
+
+        #[cfg(target_arch = "wasm32")]
+        use std::arch::wasm32::*;
+
         unsafe {
-            #[cfg(target_arch = "aarch64")]
-            use std::arch::aarch64::*;
-
-            #[cfg(target_arch = "x86_64")]
-            use std::arch::x86_64::*;
-
-            #[cfg(target_arch = "wasm32")]
-            use std::arch::wasm32::*;
-
-            let mut current_elem: *const u32 = slice.as_ptr().cast(); // Start at the beginning of the slice
-            let slice_end: *const u32 = current_elem.add(slice.len()); // Pointer to right after slice's last elem
-
-            // The beginning of the slice may not have the necessary alignment to be loaded directly into a
-            // SIMD register. Also, the slice may be shorter than the number of lanes in the SIMD register.
-            //
-            // To ensure safety, the first time we load a SIMD register with strings, we zero-pad both sides;
-            // the start is zero-padded as necessary to ensure alignment, and the end is zeros by default.
-            let mut current_chunk = {
-                let slice_ptr = slice.as_ptr();
-                let zeros_needed = (slice_ptr as usize) % ALIGN;
-                let elems_to_copy = NUM_LANES - zeros_needed;
-                let zero: u32 = 0;
-
-                macro_rules! copy_lane {
-                    ($index:expr) => {
-                        *{
-                            if elems_to_copy > $index && slice.len() > $index {
-                                slice_ptr.add($index).cast()
-                            } else {
-                                &zero
-                            }
-                        }
-                    };
-                }
-
-                // This wrapper type ensures the alignment we need.
-                let array = U32x4([copy_lane!(0), copy_lane!(1), copy_lane!(2), copy_lane!(3)]);
-
-                // We already processed these elems, so advance past them.
-                current_elem = current_elem.add(elems_to_copy);
-
-                // After advancing current_elem, it should now have the correct alignment.
-                debug_assert_eq!(current_elem as usize % ALIGN, 0);
-
-                let array_ptr = array.0.as_ptr();
-
-                // The array should have the correct alignment for us to use vld1q_u32 on it.
-                debug_assert_eq!(array_ptr as usize % ALIGN, 0);
-
-                #[cfg(target_arch = "aarch64")]
-                {
-                    vld1q_u32(array_ptr.cast())
-                }
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    _mm_loadu_si128(array_ptr.cast())
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    v128_load(current_elem.cast())
-                }
-            };
-
+            let mut current_elem: *const u32 = slice.0.as_ptr().cast(); // Start at the beginning of the slice
+            let slice_end: *const u32 = current_elem.add(slice.0.len()); // Pointer to right after slice's last elem
             let answer_mask;
             let needle;
 
@@ -130,7 +93,30 @@ impl NonEmptyStr4 {
                 Some(slice_end as usize - current_elem as usize + lane_index)
             };
 
-            loop {
+            while current_elem < slice_end {
+                let current_chunk;
+
+                // Advance to the next chunk
+                current_elem = current_elem.add(NUM_LANES);
+
+                // current_elem should always have the correct alignment
+                debug_assert_eq!(current_elem as usize % ALIGN, 0);
+
+                #[cfg(target_arch = "aarch64")]
+                {
+                    current_chunk = vld1q_u32(current_elem);
+                }
+
+                #[cfg(target_arch = "x86_64")]
+                {
+                    current_chunk = _mm_loadu_si128(current_elem.cast());
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    current_chunk = v128_load(current_elem.cast());
+                }
+
                 #[cfg(target_arch = "aarch64")]
                 {
                     // Compare each lane of the chunk to the needle for equality.
@@ -180,38 +166,12 @@ impl NonEmptyStr4 {
                         return success(current_elem, lane_index);
                     }
                 }
-
-                // Advance to the next chunk
-                current_elem = current_elem.add(NUM_LANES);
-
-                if current_elem >= slice_end {
-                    return None;
-                }
-
-                // current_elem should always have the correct alignment
-                debug_assert_eq!(current_elem as usize % ALIGN, 0);
-
-                #[cfg(target_arch = "aarch64")]
-                {
-                    current_chunk = vld1q_u32(current_elem);
-                }
-
-                #[cfg(target_arch = "x86_64")]
-                {
-                    current_chunk = _mm_loadu_si128(current_elem.cast());
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    current_chunk = v128_load(current_elem.cast());
-                }
             }
         }
+
+        None
     }
 }
-
-#[repr(align(16))]
-struct U32x4([u32; 4]);
 
 /// Returns the first CAPACITY bytes of the input string.
 /// (Other bytes past the first CAPACITY are ignored.)
@@ -233,18 +193,10 @@ mod str4_from_str {
     use crate::NonEmptyStr4;
 
     #[test]
-    fn one_char() {
-        let input_str = "z";
-        let input = unsafe { NonEmptyStr4::from_nonempty_bytes(std::mem::transmute(input_str)) };
-
-        assert_eq!(input.len(), input_str.len());
-    }
-
-    #[test]
-    fn multiple_char() {
+    fn multiple_chars() {
         let mut buf = String::with_capacity(10);
 
-        for len in 1..buf.capacity() {
+        for len in 4..buf.capacity() {
             for ch_code in 0..len {
                 let ch = char::from_u32(ch_code as u32 + 97).unwrap();
 
