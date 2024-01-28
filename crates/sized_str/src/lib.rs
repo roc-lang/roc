@@ -1,4 +1,4 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroU8};
+use std::num::{NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
 
 macro_rules! make_str_n {
     ($num_lanes:expr, $name:ident, $chunk_name:ident, $chunks_name:ident, $int:ty, $nonzero_int:ty) => {
@@ -50,20 +50,6 @@ macro_rules! make_str_n {
                 // u__::trailing_zeros compiles to a conditional branch. This is becuase apparently some
                 // CPUs do different things when asked to count leading or trailing zeros of the number 0.
                 std::mem::size_of::<Self>() - (self.0.trailing_zeros() as usize / 8)
-            }
-
-            /// Returns the first 4 bytes of the input as a Str4.
-            /// (Other bytes past the first 4 are ignored.)
-            /// If there are fewer than 4 input bytes, pads the end with zeros internally.
-            ///
-            /// Safety: The input slice must not be empty.
-            pub unsafe fn from_nonempty_bytes(input: &[NonZeroU8]) -> Self {
-                debug_assert!(!input.is_empty());
-
-                let int_input = <$int>::from_be_bytes(from_bytes(input));
-
-                // Safety: as noted in this function's safety section, this slice must not be empty
-                Self(unsafe { <$nonzero_int>::new_unchecked(int_input) })
             }
         }
     };
@@ -165,7 +151,7 @@ impl Str4 {
 
                     // Check if the mask was nonzero by converting to NonZeroU32,
                     // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
-                    if let Some(mask) = NonZeroU32::new(mask) {
+                    if let Some(mask) = NonZeroU32::new(mask as u32) {
                         #[cfg(target_endian = "little")]
                         let lane_index = mask.trailing_zeros() as usize;
 
@@ -184,7 +170,7 @@ impl Str4 {
 
                     // Check if the mask was nonzero by converting to NonZeroU64,
                     // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
-                    if let Some(mask) = NonZeroU32::new(mask) {
+                    if let Some(mask) = NonZeroU32::new(mask as u32) {
                         #[cfg(target_endian = "little")]
                         let lane_index = mask.trailing_zeros() as usize;
 
@@ -196,21 +182,21 @@ impl Str4 {
 
         None
     }
-}
 
-/// Returns the first CAPACITY bytes of the input string.
-/// (Other bytes past the first CAPACITY are ignored.)
-/// If there are fewer than CAPACITY input bytes, pads the end with zeroes.
-fn from_bytes<const CAPACITY: usize>(input: &[NonZeroU8]) -> [u8; CAPACITY] {
-    let mut answer = [0u8; CAPACITY];
-    let copy_len = input.len().min(CAPACITY);
+    /// Returns the first 4 bytes of the input slice as a Str4.
+    /// (Other bytes past the first 4 are ignored.)
+    /// If there are fewer than 4 input bytes, pads the end with zeros internally.
+    ///
+    /// Safety: There must be at least 8 bytes of safely accessible memory starting from the pointer.
+    ///
+    /// Note: These unusual API requirements are for performance; they avoid a memcpy call and branching!
+    pub unsafe fn from_raw_parts(input: *const NonZeroU8, len: NonZeroUsize) -> Self {
+        let int = u32::from_be_bytes(*input.cast());
+        let zeros_needed = 4usize.saturating_sub(len.into());
 
-    // Safety: it's always safe to transmute NonZeroU8 to u8
-    let u8_input: &[u8] = unsafe { std::mem::transmute(input) };
-
-    answer[..copy_len].copy_from_slice(&u8_input[..copy_len]);
-
-    answer
+        // Safety: as noted in this function's safety section, this slice must not be empty
+        Self(NonZeroU32::new_unchecked(int >> zeros_needed))
+    }
 }
 
 make_str_n!(2, Str8, Str8Chunk, Str8Chunks, u64, NonZeroU64);
@@ -246,8 +232,8 @@ impl Str8 {
 
             #[cfg(target_arch = "x86_64")]
             {
-                answer_mask = _mm_set_epi64(1, 0);
-                needle = _mm_set1_epi64(*(self as *const Self).cast());
+                answer_mask = _mm_set_epi64x(1, 0);
+                needle = _mm_set1_epi64x(*(self as *const Self).cast());
             }
 
             let success = |current_elem, lane_index| {
@@ -307,7 +293,7 @@ impl Str8 {
 
                     // Check if the mask was nonzero by converting to NonZeroU64,
                     // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
-                    if let Some(mask) = NonZeroU32::new(mask) {
+                    if let Some(mask) = NonZeroU32::new(mask as u32) {
                         #[cfg(target_endian = "little")]
                         let lane_index = mask.trailing_zeros() as usize;
 
@@ -338,6 +324,20 @@ impl Str8 {
 
         None
     }
+
+    /// Returns the first 8 bytes of the input slice as a Str8.
+    /// (Other bytes past the first 8 are ignored.)
+    /// If there are fewer than 8 input bytes, pads the end with zeros internally.
+    ///
+    /// Safety: There must be at least 8 bytes of safely accessible memory starting from the pointer.
+    ///
+    /// Note: These unusual API requirements are for performance; they avoid a memcpy call and branching!
+    pub unsafe fn from_raw_parts(input: *const NonZeroU8, len: NonZeroUsize) -> Self {
+        let int = u64::from_be_bytes(*input.cast());
+        let zeros_needed = 8usize.saturating_sub(len.into());
+
+        Self(NonZeroU64::new_unchecked(int >> zeros_needed))
+    }
 }
 
 #[cfg(test)]
@@ -357,7 +357,8 @@ mod str4_from_str {
                 buf.push(ch);
             }
 
-            let input = unsafe { Str4::from_nonempty_bytes(std::mem::transmute(buf.as_str())) };
+            let input =
+                unsafe { Str4::from_raw_parts(buf.as_ptr().cast(), buf.len().try_into().unwrap()) };
 
             assert_eq!(input.len(), buf.len().min(SIZE));
 
@@ -383,7 +384,8 @@ mod str8_from_str {
                 buf.push(ch);
             }
 
-            let input = unsafe { Str8::from_nonempty_bytes(std::mem::transmute(buf.as_str())) };
+            let input =
+                unsafe { Str8::from_raw_parts(buf.as_ptr().cast(), buf.len().try_into().unwrap()) };
 
             assert_eq!(input.len(), buf.len().min(SIZE));
 
