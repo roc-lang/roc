@@ -7,23 +7,33 @@ use std::num::{NonZeroU32, NonZeroU8};
 pub struct NonEmptyStr4(NonZeroU32);
 
 #[repr(align(16))]
-pub struct Str4Chunk([NonZeroU32; 4]);
+pub struct Str4Chunk([NonZeroU32; Str4Chunks::NUM_LANES]);
 
 pub struct Str4Chunks<'a>(&'a [Str4Chunk]);
 
 impl<'a> Str4Chunks<'a> {
+    const NUM_LANES: usize = 4;
+    const ALIGN: usize = Self::NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
+
     /// Safety: The given slice must:
     /// - have a nonzero length that's a multiple of 4
     /// - point to a memory address that's disible by 16
     pub unsafe fn new_unchecked(slice: &'a [NonEmptyStr4]) -> Self {
-        const NUM_LANES: usize = 4;
-        const ALIGN: usize = NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
-
         debug_assert!(!slice.is_empty());
-        debug_assert_eq!(slice.len() % NUM_LANES, 0);
-        debug_assert_eq!(0, ((slice as *const _) as *const u32) as usize % ALIGN);
+        debug_assert_eq!(slice.len() % Self::NUM_LANES, 0);
+        debug_assert_eq!(
+            0,
+            ((slice as *const _) as *const u32) as usize % Self::ALIGN
+        );
 
         std::mem::transmute(slice)
+    }
+
+    pub fn as_slice(&self) -> &[NonEmptyStr4] {
+        // Internally, we have chunks of 4; adjust the returned slice's length accordingly.
+        unsafe {
+            std::slice::from_raw_parts(self.0.as_ptr().cast(), self.0.len() * Self::NUM_LANES)
+        }
     }
 }
 
