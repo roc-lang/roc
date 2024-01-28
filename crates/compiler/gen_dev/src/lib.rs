@@ -2019,6 +2019,23 @@ trait Backend<'a> {
                 self.build_num_cmp(sym, &args[0], &args[1], &arg_layouts[0]);
             }
 
+            LowLevel::NumToFloatCast => {
+                let float_width = match *ret_layout {
+                    Layout::F64 => FloatWidth::F64,
+                    Layout::F32 => FloatWidth::F32,
+                    _ => unreachable!("invalid return layout for NumToFloatCast"),
+                };
+
+                match arg_layouts[0].try_to_int_width() {
+                    Some(int_width) => {
+                        self.build_int_to_float_cast(sym, &args[0], int_width, float_width);
+                    }
+                    None => {
+                        self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout);
+                    }
+                }
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }
@@ -2133,6 +2150,14 @@ trait Backend<'a> {
         src: &Symbol,
         source: IntWidth,
         target: IntWidth,
+    );
+
+    fn build_int_to_float_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        int_width: IntWidth,
+        float_width: FloatWidth,
     );
 
     /// build_num_abs stores the absolute value of src into dst.
