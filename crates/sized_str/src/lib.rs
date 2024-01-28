@@ -1,32 +1,38 @@
-struct Str8;
-struct Str16;
+use std::num::{NonZeroU32, NonZeroU8};
 
+/// A string of length 1 to 4 bytes.
+///
+/// Internally, this is represented
 #[derive(Copy, Clone, PartialEq, Eq)]
-#[repr(align(4))]
-pub struct Str4([u8; Str4::CAPACITY]);
+pub struct NonEmptyStr4(NonZeroU32);
 
-impl Str4 {
-    pub const EMPTY: Self = Self([0; Self::CAPACITY]);
-
+impl NonEmptyStr4 {
     const CAPACITY: usize = 4;
 
     /// This is only needed in aarch64; in x64, we call _mm_set_epi32 directly
     #[cfg(target_arch = "aarch64")]
     const ANSWER_MASK: [u32; Self::CAPACITY] = [0, 1, 2, 3];
 
+    #[cfg(target_endian = "little")] // This implementation relies on little-endian byte ordering for u32
     pub fn len(&self) -> usize {
-        Self::CAPACITY - self.0.trailing_zeros()
+        // NonZeroU32::trailing_zeros compiles to a single instruction on x64, whereas
+        // u32::trailing_zeros compiles to a conditional branch. This is becuase apparently some
+        // CPUs do different things when asked to count leading or trailing zeros of the number 0.
+        Self::CAPACITY - (self.0.trailing_zeros() as usize / 8)
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns the first 4 bytes of the input string as a Str4.
+    /// Returns the first 4 bytes of the input as a Str4.
     /// (Other bytes past the first 4 are ignored.)
-    /// If there are fewer than 4 input bytes, pads the end with zeroes.
-    pub fn from_str(input: &str) -> Self {
-        Self(from_str::<{ Self::CAPACITY }>(input))
+    /// If there are fewer than 4 input bytes, pads the end with zeros internally.
+    ///
+    /// Safety: The input slice must not be empty.
+    pub unsafe fn from_nonempty_bytes(input: &[NonZeroU8]) -> Self {
+        debug_assert_ne!(input.len(), 0);
+
+        let self_u32 = u32::from_be_bytes(from_bytes::<{ Self::CAPACITY }>(input));
+
+        // Safety: as noted in this function's safety section, this slice must not be empty
+        Self(unsafe { NonZeroU32::new_unchecked(self_u32) })
     }
 
     /// Returns Some(first index where self occurs in the given slice) or else None if it wasn't found.
@@ -37,7 +43,7 @@ impl Str4 {
 
         // Each SIMD register holds 4 u32s
         const NUM_LANES: usize = 4;
-        const ALIGN: usize = NUM_LANES * std::mem::align_of::<Str4>();
+        const ALIGN: usize = NUM_LANES * std::mem::align_of::<NonEmptyStr4>();
 
         unsafe {
             #[cfg(target_arch = "aarch64")]
@@ -58,13 +64,25 @@ impl Str4 {
             // To ensure safety, the first time we load a SIMD register with strings, we zero-pad both sides;
             // the start is zero-padded as necessary to ensure alignment, and the end is zeros by default.
             let mut current_chunk = {
-                let zeros_needed = (slice.as_ptr() as usize) % ALIGN;
+                let slice_ptr = slice.as_ptr();
+                let zeros_needed = (slice_ptr as usize) % ALIGN;
                 let elems_to_copy = NUM_LANES - zeros_needed;
+                let zero: u32 = 0;
+
+                macro_rules! copy_lane {
+                    ($index:expr) => {
+                        *{
+                            if elems_to_copy > $index && slice.len() > $index {
+                                slice_ptr.add($index).cast()
+                            } else {
+                                &zero
+                            }
+                        }
+                    };
+                }
 
                 // This wrapper type ensures the alignment we need.
-                let mut array = Str4x4([Self::EMPTY; NUM_LANES]);
-
-                array.0[elems_to_copy..].copy_from_slice(&slice[..zeros_needed]);
+                let array = U32x4([copy_lane!(0), copy_lane!(1), copy_lane!(2), copy_lane!(3)]);
 
                 // We already processed these elems, so advance past them.
                 current_elem = current_elem.add(elems_to_copy);
@@ -193,33 +211,52 @@ impl Str4 {
 }
 
 #[repr(align(16))]
-struct Str4x4([Str4; 4]);
-
-impl From<[u8; Str4::CAPACITY]> for Str4 {
-    fn from(value: [u8; Str4::CAPACITY]) -> Self {
-        Self(value)
-    }
-}
-
-impl From<Str4> for [u8; Str4::CAPACITY] {
-    fn from(value: Str4) -> Self {
-        value.0
-    }
-}
+struct U32x4([u32; 4]);
 
 /// Returns the first CAPACITY bytes of the input string.
 /// (Other bytes past the first CAPACITY are ignored.)
 /// If there are fewer than CAPACITY input bytes, pads the end with zeroes.
-fn from_str<const CAPACITY: usize>(input: &str) -> [u8; CAPACITY] {
+fn from_bytes<const CAPACITY: usize>(input: &[NonZeroU8]) -> [u8; CAPACITY] {
     let mut answer = [0u8; CAPACITY];
     let copy_len = input.len().min(CAPACITY);
-    let input_bytes = &input.as_bytes()[..copy_len];
 
-    // The input string should have no bytes that are 0.
-    // (Or at least none of the bytes we're using from it should be 0.)
-    debug_assert_eq!(input_bytes.iter().filter(|b| b == 0).count(), 0);
+    // Safety: it's always safe to transmute NonZeroU8 to u8
+    let u8_input: &[u8] = unsafe { std::mem::transmute(input) };
 
-    answer[..copy_len].copy_from_slice(input_bytes);
+    answer[..copy_len].copy_from_slice(&u8_input[..copy_len]);
 
     answer
+}
+
+#[cfg(test)]
+mod str4_from_str {
+    use crate::NonEmptyStr4;
+
+    #[test]
+    fn one_char() {
+        let input_str = "z";
+        let input = unsafe { NonEmptyStr4::from_nonempty_bytes(std::mem::transmute(input_str)) };
+
+        assert_eq!(input.len(), input_str.len());
+    }
+
+    #[test]
+    fn multiple_char() {
+        let mut buf = String::with_capacity(10);
+
+        for len in 1..buf.capacity() {
+            for ch_code in 0..len {
+                let ch = char::from_u32(ch_code as u32 + 97).unwrap();
+
+                buf.push(ch);
+            }
+
+            let input =
+                unsafe { NonEmptyStr4::from_nonempty_bytes(std::mem::transmute(buf.as_str())) };
+
+            assert_eq!(input.len(), buf.len().min(4));
+
+            buf.clear();
+        }
+    }
 }
