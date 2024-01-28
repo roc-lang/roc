@@ -2,7 +2,8 @@ use std::num::{NonZeroU32, NonZeroU8};
 
 /// A string of length 1 to 4 bytes.
 ///
-/// Internally, this is represented
+/// Internally, this is represented as a NonZeroU32, which means
+/// if you wrap one of these in an Option, Option::None will be 0.
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub struct NonEmptyStr4(NonZeroU32);
 
