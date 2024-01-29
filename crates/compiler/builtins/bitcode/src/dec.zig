@@ -340,6 +340,17 @@ pub const RocDec = extern struct {
         }
     }
 
+    fn trunc(self: RocDec) RocDec {
+        return RocDec.sub(self, self.fract());
+    }
+
+    fn fract(self: RocDec) RocDec {
+        const sign = std.math.sign(self.num);
+        const digits = @mod(sign * self.num, RocDec.one_point_zero.num);
+
+        return RocDec{ .num = sign * digits };
+    }
+
     pub fn mul(self: RocDec, other: RocDec) RocDec {
         const answer = RocDec.mulWithOverflow(self, other);
 
@@ -1193,6 +1204,90 @@ test "div: 500 / 1000" {
 
 test "log: 1" {
     try expectEqual(RocDec.fromU64(0), RocDec.log(RocDec.fromU64(1)));
+}
+
+test "fract: 0" {
+    var roc_str = RocStr.init("0", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.fract());
+}
+
+test "fract: 1" {
+    var roc_str = RocStr.init("1", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.fract());
+}
+
+test "fract: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
+}
+
+test "fract: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -450000000000000000 }, dec.fract());
+}
+
+test "fract: .45" {
+    var roc_str = RocStr.init(".45", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 450000000000000000 }, dec.fract());
+}
+
+test "fract: -0.00045" {
+    const dec: RocDec = .{ .num = -450000000000000 };
+    const res = dec.fract();
+
+    try expectEqual(dec.num, res.num);
+}
+
+test "trunc: 0" {
+    var roc_str = RocStr.init("0", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.trunc());
+}
+
+test "trunc: 1" {
+    var roc_str = RocStr.init("1", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec.one_point_zero, dec.trunc());
+}
+
+test "trunc: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.trunc());
+}
+
+test "trunc: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.trunc());
+}
+
+test "trunc: .45" {
+    var roc_str = RocStr.init(".45", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 0 }, dec.trunc());
+}
+
+test "trunc: -0.00045" {
+    const dec: RocDec = .{ .num = -450000000000000 };
+    const res = dec.trunc();
+
+    try expectEqual(RocDec{ .num = 0 }, res);
 }
 
 // exports
