@@ -121,7 +121,7 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         _target_info: TargetInfo,
         main_fn_name: &str,
         transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
@@ -138,11 +138,11 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         _main_fn_name: &str,
         _ret_bytes: usize,
         mut transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        transform(self.memory, self.offset)
+        Some(transform(self.memory, self.offset))
     }
 }
