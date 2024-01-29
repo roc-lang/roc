@@ -408,6 +408,7 @@ pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_in
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
 pub const DEC_LOG: &str = "roc_builtins.dec.log";
+pub const DEC_POW: &str = "roc_builtins.dec.pow";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";

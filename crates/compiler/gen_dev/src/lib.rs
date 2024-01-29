@@ -1099,7 +1099,7 @@ trait Backend<'a> {
                     LayoutRepr::Builtin(Builtin::Float(float_width)) => {
                         &bitcode::NUM_POW[float_width]
                     }
-                    LayoutRepr::DEC => todo!("exponentiation for decimals"),
+                    LayoutRepr::DEC => bitcode::DEC_POW,
                     _ => unreachable!("invalid layout for NumPow"),
                 };
 
