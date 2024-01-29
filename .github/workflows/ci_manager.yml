@@ -15,7 +15,7 @@ jobs:
             run_tests: ${{ steps.filecheck.outputs.run_tests }}
         steps:
             - name: Checkout
-              uses: actions/checkout@v3
+              uses: actions/checkout@v4
 
             - name: Check if only css, html or md files changed
               id: filecheck
@@ -112,7 +112,3 @@ jobs:
             fi
 
         - run: echo "Workflow succeeded :)"
-
-
-
-

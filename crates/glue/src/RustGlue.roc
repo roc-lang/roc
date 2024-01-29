@@ -1611,7 +1611,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         }
     |> \{ b, args, fields, fieldTypes, fieldAccesses } ->
         argsStr = Str.joinWith args ", "
-        fieldsStr = Str.joinWith fields "\n\(indent)\(indent)\(indent)"
+        fieldsStr = Str.joinWith fields ",\n\(indent)\(indent)\(indent)"
 
         {
             b: Str.concat

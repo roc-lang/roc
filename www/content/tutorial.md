@@ -1221,23 +1221,7 @@ Here are the different fixed-size integer types that Roc supports:
 | `-9_223_372_036_854_775_808` <br> `9_223_372_036_854_775_807`                                                     | `I64`  |
 | `0` <br> _(over 18 quintillion)_`18_446_744_073_709_551_615`                                                      | `U64`  |
 | `-170_141_183_460_469_231_731_687_303_715_884_105_728` <br> `170_141_183_460_469_231_731_687_303_715_884_105_727` | `I128` |
-
-<<<<<<< HEAD
-| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` |
-
-Roc also has one variable-size integer type: `Nat` (short for "natural number"). The size of `Nat` is equal to the size of a memory address, which varies by system. For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`. When compiling for a 32-bit system, it works the same way as `U32`. Most popular computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly, `Nat` will work like a `U32` in that program.
-
-A common use for `Nat` is to store the length of a collection like a `List`; there's a function `List.len : List * -> Nat` which returns the length of the given list. 64-bit systems can represent longer lists in memory than 32-bit systems can, which is why the length of a list is represented as a `Nat`.
-||||||| parent of cda0cfb47 (Remove Nat from documentation)
-| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` |
-
-Roc also has one variable-size integer type: `Nat` (short for "natural number"). The size of `Nat` is equal to the size of a memory address, which varies by system. For example, when compiling for a 64-bit system, `Nat` works the same way as `U64`. When compiling for a 32-bit system, it works the same way as `U32`. Most popular computing devices today are 64-bit, so `Nat` is usually the same as `U64`, but Web Assembly is typically 32-bit - so when running a Roc program built for Web Assembly, `Nat` will work like a `U32` in that program.
-
-# A common use for `Nat` is to store the length of a collection like a `List`; there's a function `List.len : List * -> Nat` which returns the length of the given list. 64-bit systems can represent longer lists in memory than 32-bit systems can, which is why the length of a list is represented as a `Nat`.
-
-| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455` | `U128` |
-
-> > > > > > > cda0cfb47 (Remove Nat from documentation)
+| `0` <br> _(over 340 undecillion)_`340_282_366_920_938_463_463_374_607_431_768_211_455`                            | `U128` |
 
 If any operation would result in an integer that is either too big or too small to fit in that range (e.g. calling `Int.maxI32 + 1`, which adds 1 to the highest possible 32-bit integer), then the operation will [overflow](https://en.wikipedia.org/wiki/Integer_overflow). When an overflow occurs, the program will crash.
 

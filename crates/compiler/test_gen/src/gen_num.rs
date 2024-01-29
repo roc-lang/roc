@@ -15,7 +15,7 @@ use roc_std::{RocDec, RocOrder, RocResult};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
-fn nat_alias() {
+fn u64_alias() {
     assert_evals_to!(
         indoc!(
             r"
@@ -2313,7 +2313,7 @@ num_conversion_tests! {
         to_i64_truncate_wraps, "10_000_000_000_000_000_000i128", -8446744073709551616
     )
     "Num.toI128", i128, (
-        to_i128_same_width, "15u128", 15
+        to_i128_same_width, "15u128", 15, ["gen-dev"]
         to_i128_extend, "15i8", 15
     )
     "Num.toU8", u8, (
@@ -2340,36 +2340,37 @@ num_conversion_tests! {
         to_u64_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
     )
     "Num.toU128", u128, (
-        to_u128_same_width, "15i128", 15
+        to_u128_same_width, "15i128", 15, ["gen-dev"]
         to_u128_extend, "15i8", 15
+        to_u128_big, "11562537357600483583u64", 11562537357600483583, ["gen-dev"]
     )
     "Num.toF32", f32, (
-        to_f32_from_i8, "15i8", 15.0
-        to_f32_from_i16, "15i16", 15.0
-        to_f32_from_i32, "15i32", 15.0
-        to_f32_from_i64, "15i64", 15.0
-        to_f32_from_i128, "15i128", 15.0
-        to_f32_from_u8, "15u8", 15.0
-        to_f32_from_u16, "15u16", 15.0
-        to_f32_from_u32, "15u32", 15.0
-        to_f32_from_u64, "15u64", 15.0
-        to_f32_from_u128, "15u128", 15.0
-        to_f32_from_f32, "1.5f32", 1.5
-        to_f32_from_f64, "1.5f64", 1.5
+        to_f32_from_i8, "15i8", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_i16, "15i16", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_i32, "15i32", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_i64, "15i64", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_i128, "15i128", 15.0, ["gen-dev"]
+        to_f32_from_u8, "15u8", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_u16, "15u16", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_u32, "15u32", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_u64, "15u64", 15.0, ["gen-wasm", "gen-dev"]
+        to_f32_from_u128, "15u128", 15.0, ["gen-dev"]
+        to_f32_from_f32, "1.5f32", 1.5, ["gen-wasm", "gen-dev"]
+        to_f32_from_f64, "1.5f64", 1.5, ["gen-wasm", "gen-dev"]
     )
     "Num.toF64", f64, (
-        to_f64_from_i8, "15i8", 15.0
-        to_f64_from_i16, "15i16", 15.0
-        to_f64_from_i32, "15i32", 15.0
-        to_f64_from_i64, "15i64", 15.0
-        to_f64_from_i128, "15i128", 15.0
-        to_f64_from_u8, "15u8", 15.0
-        to_f64_from_u16, "15u16", 15.0
-        to_f64_from_u32, "15u32", 15.0
-        to_f64_from_u64, "15u64", 15.0
-        to_f64_from_u128, "15u128", 15.0
-        to_f64_from_f32, "1.5f32", 1.5
-        to_f64_from_f64, "1.5f64", 1.5
+        to_f64_from_i8, "15i8", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_i16, "15i16", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_i32, "15i32", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_i64, "15i64", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_i128, "15i128", 15.0, ["gen-dev"]
+        to_f64_from_u8, "15u8", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_u16, "15u16", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_u32, "15u32", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_u64, "15u64", 15.0, ["gen-wasm", "gen-dev"]
+        to_f64_from_u128, "15u128", 15.0, ["gen-dev"]
+        to_f64_from_f32, "1.5f32", 1.5, ["gen-dev"]
+        to_f64_from_f64, "1.5f64", 1.5, ["gen-wasm", "gen-dev"]
     )
 }
 
@@ -3103,7 +3104,7 @@ fn monomorphized_ints_aliased() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn to_float_f32() {
     assert_evals_to!(
         indoc!(
@@ -3122,7 +3123,7 @@ fn to_float_f32() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn to_float_f64() {
     assert_evals_to!(
         indoc!(
