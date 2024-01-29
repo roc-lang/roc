@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/sized_str",
+  "crates/arena_cache",
   "crates/compiler/*",
   "crates/vendor/*",
   "crates/glue",

@@ -1,0 +1,16 @@
+[package]
+name = "cache"
+description = "An arena allocator that can be cached to/from disk."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = ["io"]
+io = []
+
+[dependencies]
+
+[dev-dependencies]
