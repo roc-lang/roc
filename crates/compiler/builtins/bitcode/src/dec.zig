@@ -24,6 +24,9 @@ pub const RocDec = extern struct {
     pub const one_point_zero_i128: i128 = math.pow(i128, 10, RocDec.decimal_places);
     pub const one_point_zero: RocDec = .{ .num = one_point_zero_i128 };
 
+    pub const two_point_zero: RocDec = RocDec.add(RocDec.one_point_zero, RocDec.one_point_zero);
+    pub const zero_point_five: RocDec = RocDec.div(RocDec.one_point_zero, RocDec.two_point_zero);
+
     pub fn fromU64(num: u64) RocDec {
         return .{ .num = num * one_point_zero_i128 };
     }
@@ -349,6 +352,43 @@ pub const RocDec = extern struct {
         const digits = @mod(sign * self.num, RocDec.one_point_zero.num);
 
         return RocDec{ .num = sign * digits };
+    }
+
+    // Returns the nearest integer to self. If a value is half-way between two integers, round away from 0.0.
+    fn round(arg1: RocDec) RocDec {
+        // this rounds towards zero
+        const tmp = arg1.trunc();
+
+        const sign = std.math.sign(arg1.num);
+        const abs_fract = sign * arg1.fract().num;
+
+        if (abs_fract >= RocDec.zero_point_five.num) {
+            return RocDec.add(tmp, RocDec{ .num = sign * RocDec.one_point_zero.num });
+        } else {
+            return tmp;
+        }
+    }
+
+    // Returns the largest integer less than or equal to itself
+    fn floor(arg1: RocDec) RocDec {
+        const tmp = arg1.trunc();
+
+        if (arg1.num < 0 and arg1.fract().num != 0) {
+            return RocDec.sub(tmp, RocDec.one_point_zero);
+        } else {
+            return tmp;
+        }
+    }
+
+    // Returns the smallest integer greater than or equal to itself
+    fn ceiling(arg1: RocDec) RocDec {
+        const tmp = arg1.trunc();
+
+        if (arg1.num > 0 and arg1.fract().num != 0) {
+            return RocDec.add(tmp, RocDec.one_point_zero);
+        } else {
+            return tmp;
+        }
     }
 
     pub fn mul(self: RocDec, other: RocDec) RocDec {
@@ -1290,6 +1330,34 @@ test "trunc: -0.00045" {
     try expectEqual(RocDec{ .num = 0 }, res);
 }
 
+test "round: 123.45" {
+    var roc_str = RocStr.init("123.45", 6);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = 123000000000000000000 }, dec.round());
+}
+
+test "round: -123.45" {
+    var roc_str = RocStr.init("-123.45", 7);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -123000000000000000000 }, dec.round());
+}
+
+test "round: 0.5" {
+    var roc_str = RocStr.init("0.5", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec.one_point_zero, dec.round());
+}
+
+test "round: -0.5" {
+    var roc_str = RocStr.init("-0.5", 4);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec{ .num = -1000000000000000000 }, dec.round());
+}
+
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
@@ -1436,4 +1504,31 @@ pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
 
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
+}
+
+pub fn exportRound(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: RocDec) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.round().num, RocDec.one_point_zero_i128)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: RocDec) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.floor().num, RocDec.one_point_zero_i128)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
+pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(input: RocDec) callconv(.C) T {
+            return @as(T, @intCast(@divFloor(input.ceiling().num, RocDec.one_point_zero_i128)));
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }

@@ -1106,30 +1106,36 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
 
+            LowLevel::NumRound => {
+                let repr = self.interner().get_repr(*ret_layout);
+                let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
+                    unreachable!("invalid return layout for NumRound")
+                };
+
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F32 => &bitcode::NUM_ROUND_F32[int_width],
+                    Layout::F64 => &bitcode::NUM_ROUND_F64[int_width],
+                    Layout::DEC => &bitcode::DEC_ROUND[int_width],
+                    _ => unreachable!("invalid layout for NumRound"),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
+
             LowLevel::NumFloor => {
                 let repr = self.interner().get_repr(*ret_layout);
                 let LayoutRepr::Builtin(Builtin::Int(int_width)) = repr else {
                     unreachable!("invalid return layout for NumFloor")
                 };
 
-                match arg_layouts[0] {
-                    Layout::F32 => self.build_fn_call(
-                        sym,
-                        bitcode::NUM_FLOOR_F32[int_width].to_string(),
-                        args,
-                        arg_layouts,
-                        ret_layout,
-                    ),
-                    Layout::F64 => self.build_fn_call(
-                        sym,
-                        bitcode::NUM_FLOOR_F64[int_width].to_string(),
-                        args,
-                        arg_layouts,
-                        ret_layout,
-                    ),
-                    Layout::DEC => todo!("NumFloor for decimals"),
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F32 => &bitcode::NUM_FLOOR_F32[int_width],
+                    Layout::F64 => &bitcode::NUM_FLOOR_F64[int_width],
+                    Layout::DEC => &bitcode::DEC_FLOOR[int_width],
                     _ => unreachable!("invalid layout for NumFloor"),
-                }
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
 
             LowLevel::NumCeiling => {
@@ -1138,24 +1144,14 @@ trait Backend<'a> {
                     unreachable!("invalid return layout for NumCeiling")
                 };
 
-                match arg_layouts[0] {
-                    Layout::F32 => self.build_fn_call(
-                        sym,
-                        bitcode::NUM_CEILING_F32[int_width].to_string(),
-                        args,
-                        arg_layouts,
-                        ret_layout,
-                    ),
-                    Layout::F64 => self.build_fn_call(
-                        sym,
-                        bitcode::NUM_CEILING_F64[int_width].to_string(),
-                        args,
-                        arg_layouts,
-                        ret_layout,
-                    ),
-                    Layout::DEC => todo!("NumCeiling for decimals"),
+                let intrinsic = match arg_layouts[0] {
+                    Layout::F32 => &bitcode::NUM_CEILING_F32[int_width],
+                    Layout::F64 => &bitcode::NUM_CEILING_F64[int_width],
+                    Layout::DEC => &bitcode::DEC_CEILING[int_width],
                     _ => unreachable!("invalid layout for NumCeiling"),
-                }
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
 
             LowLevel::NumSub => {
@@ -1494,13 +1490,6 @@ trait Backend<'a> {
 
                 self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
             }
-            LowLevel::NumRound => self.build_fn_call(
-                sym,
-                bitcode::NUM_ROUND_F64[IntWidth::I64].to_string(),
-                args,
-                arg_layouts,
-                ret_layout,
-            ),
             LowLevel::ListLen => {
                 debug_assert_eq!(
                     1,
