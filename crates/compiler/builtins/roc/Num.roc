@@ -1002,13 +1002,21 @@ divCeilChecked = \a, b ->
 ## Num.divTrunc 8 -3
 ## ```
 divTrunc : Int a, Int a -> Int a
+divTrunc = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.divTruncUnchecked a b
 
 divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divTruncChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.divTrunc a b)
+        Ok (Num.divTruncUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+divTruncUnchecked : Int a, Int a -> Int a
 
 ## Obtains the remainder (truncating modulo) from the division of two integers.
 ##

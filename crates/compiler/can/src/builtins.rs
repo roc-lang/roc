@@ -173,7 +173,7 @@ map_symbol_to_lowlevel_and_arity! {
     NumLte; NUM_LTE; 2,
     NumCompare; NUM_COMPARE; 2,
     NumDivFrac; NUM_DIV_FRAC; 2,
-    NumDivTruncUnchecked; NUM_DIV_TRUNC; 2,
+    NumDivTruncUnchecked; NUM_DIV_TRUNC_UNCHECKED; 2,
     NumDivCeilUnchecked; NUM_DIV_CEIL; 2,
     NumRemUnchecked; NUM_REM; 2,
     NumIsMultipleOf; NUM_IS_MULTIPLE_OF; 2,

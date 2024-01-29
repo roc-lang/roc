@@ -1275,6 +1275,7 @@ define_builtins! {
         163 NUM_TAU: "tau"
         164 NUM_BITWISE_NOT: "bitwiseNot"
         165 NUM_IS_APPROX_EQ: "isApproxEq"
+        166 NUM_DIV_TRUNC_UNCHECKED: "divTruncUnchecked" // traps on division by zero
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

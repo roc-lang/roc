@@ -101,6 +101,12 @@ fn num_ceil_checked_division_success() {
 }
 
 #[test]
+fn float_division_by_zero() {
+    expect_success("1f64 / 0", "∞ : F64");
+    expect_success("-1f64 / 0", "-∞ : F64");
+}
+
+#[test]
 fn bool_in_record() {
     expect_success("{ x: 1 == 1 }", "{ x: Bool.true } : { x : Bool }");
     expect_success(
