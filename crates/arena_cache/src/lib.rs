@@ -3,4 +3,5 @@
 // but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(feature = "io", debug_assertions, test)), no_std)]
 
+mod alloc;
 pub mod arena;
