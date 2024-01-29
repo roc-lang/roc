@@ -31,7 +31,7 @@ You can track progress in [this PR](https://github.com/roc-lang/roc/pull/5923).
 ### Platform Author Specific Breaking Changes
 
 All of the following changes only affect platform authors.
-They will not be noticable from the Roc user perspective.
+They will not be noticeable from the Roc user perspective.
 
 #### Glue
 
@@ -46,15 +46,15 @@ For example, [Stdout.line](https://github.com/roc-lang/basic-cli/blob/e022fba2b0
 Roc directly calling these functions synchronously greatly limits the possibilities of how a platform can implement the effect.
 With the effect interpreter model, on each effect, roc will return a tag union to the platform
 That tag union will contain all of the function arguments along with a continuation closure.
-The platform can execute the affect however it likes (including running it asynchronously).
-After the effect completes the platform simply has to call the continuation closure with the result.
+The platform can execute the effect however it likes (including running it asynchronously).
+After the effect completes the platform simply has to call the continuation closure with the results.
 
 In terms of actual implementation, this is quite similar to an async state machine in other languages like Rust.
 
 #### Platform Side Explicit Allocators
 
 Related to the effect interpreter changes, for memory allocation functions (plus a few others), currently roc always directly calls `roc_alloc/roc_etc`.
-This makes it hard to implement more interesting allocation strategies (like arena alloation).
+This makes it hard to implement more interesting allocation strategies (like arena allocation).
 With this change, all calls to Roc will require the platform to pass in a Allocator struct.
 Roc will directly use that struct to call each of the allocation related functions.
 This struct will also hold a few other functions like `roc_dbg` and `roc_panic`.
