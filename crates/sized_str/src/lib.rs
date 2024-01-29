@@ -1,4 +1,8 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
+use core::mem::size_of;
+use core::num::{NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
+
+#[repr(align(16))]
+struct AlignedU128(u128);
 
 macro_rules! make_str_n {
     ($num_lanes:expr, $name:ident, $chunk_name:ident, $chunks_name:ident, $int:ty, $nonzero_int:ty) => {
@@ -65,10 +69,23 @@ impl Str4 {
     const ANSWER_MASK: [u32; 4] = [0, 1, 2, 3];
 
     /// Returns Some(first index where self occurs in the given slice) or else None if it wasn't found.
-    pub fn first_index_in(&self, slice: Str4Chunks<'_>) -> Option<usize> {
+    ///
+    /// # Safety
+    /// The slice's pointer must point to at least 16B of accessible memory, even if its length means
+    /// we'll never need to look that far. The reason for this is that we start by dereferencing the
+    /// slice's pointer into a 16B structure, and then discarding any memory garbage we find.
+    /// So there must be 16B there that we can safely dereference, even if it contains garbage!
+    pub unsafe fn first_index_in(&self, slice: &[Str4]) -> Option<usize> {
+        let ptr = slice.as_ptr();
+        let len = slice.len();
+        let end_ptr: *const u32 = ptr.add(len).cast(); // Pointer to right after the last elem
+
         // Each SIMD register holds 4 u32s
         const NUM_LANES: usize = 4;
         const ALIGN: usize = NUM_LANES * std::mem::align_of::<Str4>();
+
+        let mut current_chunk;
+        let mut current_elem: *const u32;
 
         #[cfg(target_arch = "aarch64")]
         use std::arch::aarch64::*;
@@ -79,110 +96,148 @@ impl Str4 {
         #[cfg(target_arch = "wasm32")]
         use std::arch::wasm32::*;
 
-        unsafe {
-            let mut current_elem: *const u32 = slice.0.as_ptr().cast(); // Start at the beginning of the slice
-            let slice_end: *const u32 = current_elem.add(slice.0.len()); // Pointer to right after slice's last elem
-            let answer_mask;
-            let needle;
+        // Special-case the first chunk, which may not be 16B-aligned.
+        // (Subsequent chunks will definitely be 16B-aligned.)
+        {
+            // We need to shift in this many zeros to discard any memory garbage.
+            let zeros_needed = size_of::<u128>().saturating_sub(len * size_of::<Str4>());
 
+            // First, load a u128 with the given bytes. Wrap in a struct to ensure 16B alignment.
+            // (This pointer dereference is why the pointer must point to at least 16B of accessible memory.
+            // Even if we may end up discarding a lot of these bytes, this is the fastest way to load them!)
+            let int = AlignedU128(u128::from_be_bytes(*ptr.cast()) >> zeros_needed);
+
+            // Get a pointer to these 128 bits, then load it into a 128-bit SIMD register.
+            {
+                let src_ptr = (&int as *const AlignedU128).cast();
+
+                // src_ptr should always have the correct alignment
+                debug_assert_eq!(src_ptr as usize % ALIGN, 0);
+
+                #[cfg(target_arch = "aarch64")]
+                {
+                    current_chunk = vld1q_u32(src_ptr);
+                }
+
+                #[cfg(target_arch = "x86_64")]
+                {
+                    current_chunk = _mm_loadu_si128(src_ptr);
+                }
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    current_chunk = v128_load(src_ptr);
+                }
+            }
+
+            // Advance to the next 16B boundary so we can use SIMD on each chunk from here on.
+            let needed_for_alignment = (ALIGN - (ptr as usize % ALIGN)) % ALIGN;
+
+            current_elem = (ptr as *const u8).add(needed_for_alignment).cast();
+        }
+
+        // Initialize the answer mask and the needle we're searching for.
+        let answer_mask;
+        let needle;
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            answer_mask = vld1q_u32(Self::ANSWER_MASK.as_ptr()); // Load ANSWER_MASK into a SIMD register for later
+            needle = vdupq_n_u32(*(self as *const Self).cast()); // Load self into each lane of a SIMD register
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        {
+            answer_mask = _mm_set_epi32(3, 2, 1, 0);
+            needle = _mm_set1_epi32(*(self as *const Self).cast());
+        }
+
+        let success =
+            |current_elem, lane_index| Some(end_ptr as usize - current_elem as usize + lane_index);
+
+        loop {
             #[cfg(target_arch = "aarch64")]
             {
-                answer_mask = vld1q_u32(Self::ANSWER_MASK.as_ptr()); // Load ANSWER_MASK into a SIMD register for later
-                needle = vdupq_n_u32(*(self as *const Self).cast()); // Load self into each lane of a SIMD register
+                // Compare each lane of the chunk to the needle for equality.
+                let equality_reg = vceqq_u32(current_chunk, needle);
+
+                // If lane-wise equality returned any nonzero values, we found a match.
+                if vmaxvq_u32(equality_reg) != 0 {
+                    // Do a bitwise AND with answer_mask, whose lanes are initialized to [0, 1, 2, 3]
+                    // and then get the scalar min of that, which will tell us the first lane's index
+                    // where we found an occurrence of the needle. (If multiple lanes matched, min will
+                    // give us the first one that matched, which is what we want given find's semantics.)
+                    let lane_index = vminvq_u32(vandq_u32(equality_reg, answer_mask)) as usize;
+
+                    return success(current_elem, lane_index);
+                }
             }
 
             #[cfg(target_arch = "x86_64")]
             {
-                answer_mask = _mm_set_epi32(3, 2, 1, 0);
-                needle = _mm_set1_epi32(*(self as *const Self).cast());
+                // Compare each lane of the chunk to the needle for equality.
+                let equality_reg = _mm_cmpeq_epi32(current_chunk, needle);
+
+                // Get a mask of the most significant bit of each element in the equality comparison,
+                // and store it in the 4 least significant bits of the return value. (All other bits are 0.)
+                let mask = _mm_movemask_ps(_mm_castsi128_ps(equality_reg));
+
+                // Check if the mask was nonzero by converting to NonZeroU32,
+                // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
+                if let Some(mask) = NonZeroU32::new(mask as u32) {
+                    #[cfg(target_endian = "little")]
+                    let lane_index = mask.trailing_zeros() as usize;
+
+                    return success(current_elem, lane_index);
+                }
             }
 
-            let success = |current_elem, lane_index| {
-                Some(slice_end as usize - current_elem as usize + lane_index)
-            };
+            #[cfg(target_arch = "wasm32")]
+            {
+                // Compare each lane of the chunk to the needle for equality.
+                let equality_reg = i32x4_eq(current_chunk, needle);
 
-            while current_elem < slice_end {
-                let current_chunk;
+                // Get a mask of the most significant bit of each element in the equality comparison,
+                // and store it in the 4 least significant bits of the return value. (All other bits are 0.)
+                let mask = i32x4_bitmask(equality_reg);
 
-                // Advance to the next chunk
-                current_elem = current_elem.add(NUM_LANES);
+                // Check if the mask was nonzero by converting to NonZeroU64,
+                // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
+                if let Some(mask) = NonZeroU32::new(mask as u32) {
+                    #[cfg(target_endian = "little")]
+                    let lane_index = mask.trailing_zeros() as usize;
 
-                // current_elem should always have the correct alignment
-                debug_assert_eq!(current_elem as usize % ALIGN, 0);
-
-                #[cfg(target_arch = "aarch64")]
-                {
-                    current_chunk = vld1q_u32(current_elem);
+                    return success(current_elem, lane_index);
                 }
+            }
 
-                #[cfg(target_arch = "x86_64")]
-                {
-                    current_chunk = _mm_loadu_si128(current_elem.cast());
-                }
+            // Advance to the next chunk
+            current_elem = current_elem.add(NUM_LANES);
 
-                #[cfg(target_arch = "wasm32")]
-                {
-                    current_chunk = v128_load(current_elem.cast());
-                }
+            // current_elem should always have the correct alignment
+            debug_assert_eq!(current_elem as usize % ALIGN, 0);
 
-                #[cfg(target_arch = "aarch64")]
-                {
-                    // Compare each lane of the chunk to the needle for equality.
-                    let equality_reg = vceqq_u32(current_chunk, needle);
+            if current_elem >= end_ptr {
+                return None;
+            }
 
-                    // If lane-wise equality returned any nonzero values, we found a match.
-                    if vmaxvq_u32(equality_reg) != 0 {
-                        // Do a bitwise AND with answer_mask, whose lanes are initialized to [0, 1, 2, 3]
-                        // and then get the scalar min of that, which will tell us the first lane's index
-                        // where we found an occurrence of the needle. (If multiple lanes matched, min will
-                        // give us the first one that matched, which is what we want given find's semantics.)
-                        let lane_index = vminvq_u32(vandq_u32(equality_reg, answer_mask)) as usize;
+            // Load the next chunk for when the loop continues.
 
-                        return success(current_elem, lane_index);
-                    }
-                }
+            #[cfg(target_arch = "aarch64")]
+            {
+                current_chunk = vld1q_u32(current_elem);
+            }
 
-                #[cfg(target_arch = "x86_64")]
-                {
-                    // Compare each lane of the chunk to the needle for equality.
-                    let equality_reg = _mm_cmpeq_epi32(current_chunk, needle);
+            #[cfg(target_arch = "x86_64")]
+            {
+                current_chunk = _mm_loadu_si128(current_elem.cast());
+            }
 
-                    // Get a mask of the most significant bit of each element in the equality comparison,
-                    // and store it in the 4 least significant bits of the return value. (All other bits are 0.)
-                    let mask = _mm_movemask_ps(_mm_castsi128_ps(equality_reg));
-
-                    // Check if the mask was nonzero by converting to NonZeroU32,
-                    // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
-                    if let Some(mask) = NonZeroU32::new(mask as u32) {
-                        #[cfg(target_endian = "little")]
-                        let lane_index = mask.trailing_zeros() as usize;
-
-                        return success(current_elem, lane_index);
-                    }
-                }
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    // Compare each lane of the chunk to the needle for equality.
-                    let equality_reg = i32x4_eq(current_chunk, needle);
-
-                    // Get a mask of the most significant bit of each element in the equality comparison,
-                    // and store it in the 4 least significant bits of the return value. (All other bits are 0.)
-                    let mask = i32x4_bitmask(equality_reg);
-
-                    // Check if the mask was nonzero by converting to NonZeroU64,
-                    // because NonZeroU32 has a more efficient trailing_zeros() than u32 does.
-                    if let Some(mask) = NonZeroU32::new(mask as u32) {
-                        #[cfg(target_endian = "little")]
-                        let lane_index = mask.trailing_zeros() as usize;
-
-                        return success(current_elem, lane_index);
-                    }
-                }
+            #[cfg(target_arch = "wasm32")]
+            {
+                current_chunk = v128_load(current_elem.cast());
             }
         }
-
-        None
     }
 
     /// Returns the first 4 bytes of the input slice as a Str4.
@@ -347,11 +402,12 @@ impl Str8 {
 #[cfg(test)]
 mod str4_from_str {
     use crate::Str4;
+    use core::mem::size_of;
 
-    const SIZE: usize = 4;
+    const SIZE: usize = size_of::<Str4>();
 
     #[test]
-    fn multiple_chars() {
+    fn len() {
         let mut buf = String::with_capacity(10);
 
         for len in SIZE..buf.capacity() {
@@ -369,13 +425,42 @@ mod str4_from_str {
             buf.clear();
         }
     }
+
+    #[test]
+    fn first_index_in() {
+        let mut buf = String::with_capacity(10);
+        let mut src = Vec::with_capacity(20);
+        let mut last_input = None;
+
+        for len in SIZE..buf.capacity() {
+            for ch_code in 0..len {
+                let ch = char::from_u32(ch_code as u32 + 97).unwrap();
+
+                buf.push(ch);
+            }
+
+            let input =
+                unsafe { Str4::from_raw_parts(buf.as_ptr().cast(), buf.len().try_into().unwrap()) };
+
+            assert_eq!(input.len(), buf.len().min(SIZE));
+
+            src.push(input);
+
+            buf.clear();
+
+            last_input = Some(input);
+        }
+
+        assert_eq!(Some(8), unsafe { last_input.unwrap().first_index_in(&src) });
+    }
 }
 
 #[cfg(test)]
 mod str8_from_str {
     use crate::Str8;
+    use core::mem::size_of;
 
-    const SIZE: usize = 8;
+    const SIZE: usize = size_of::<Str8>();
 
     #[test]
     fn multiple_chars() {
