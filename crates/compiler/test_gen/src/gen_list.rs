@@ -912,6 +912,25 @@ fn list_prepend_big_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_prepend_record() {
+    assert_evals_to!(
+        indoc!(
+            r"
+            payment1 : { amount: Dec, date: [RD I32] }
+            payment1 = { amount: 1dec, date: (RD 1000) }
+            payment2 : { amount: Dec, date: [RD I32] }
+            payment2 = { amount: 2dec, date: (RD 1001) }
+
+            List.prepend [payment2] payment1
+            "
+        ),
+        RocList::from_slice(&[(RocDec::from(1), 1000i32), (RocDec::from(2), 1001i32),]),
+        RocList<(RocDec, i32)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_walk_backwards_empty_all_inline() {
     assert_evals_to!(
         indoc!(
