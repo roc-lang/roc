@@ -823,6 +823,30 @@ fn list_append_longer_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_append_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            [
+                { name: "foo", content: "cfoo" },
+                { name: "bar", content: "cbar" },
+                { name: "baz", content: "cbaz" },
+            ]
+            |> List.append { name: "spam", content: "cspam" }
+            "#
+        ),
+        RocList::from_slice(&[
+            (RocStr::from("cfoo"), RocStr::from("foo"),),
+            (RocStr::from("cbar"), RocStr::from("bar"),),
+            (RocStr::from("cbaz"), RocStr::from("baz"),),
+            (RocStr::from("cspam"), RocStr::from("spam"),),
+        ]),
+        RocList<(RocStr, RocStr)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend() {
     assert_evals_to!("List.prepend [] 1", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!(

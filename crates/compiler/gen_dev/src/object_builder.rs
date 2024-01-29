@@ -30,6 +30,28 @@ pub fn build_module<'a, 'r>(
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
+    let module_object = build_module_help(env, interns, layout_interner, target, procedures);
+
+    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
+        let module_out = module_object
+            .write()
+            .expect("failed to build output object");
+
+        let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
+        std::fs::write(&file_path, module_out).expect("failed to write object to file");
+    }
+
+    module_object
+}
+
+fn build_module_help<'a, 'r>(
+    env: &'r Env<'a>,
+    interns: &'r mut Interns,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    target: &Triple,
+    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
+) -> Object<'a> {
     match target {
         Triple {
             architecture: TargetArch::X86_64,

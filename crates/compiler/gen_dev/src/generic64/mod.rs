@@ -2949,7 +2949,11 @@ impl<
         self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
-        self.load_layout_stack_size(*ret_layout, Symbol::DEV_TMP2);
+        let element_layout = match self.interner().get_repr(*ret_layout) {
+            LayoutRepr::Builtin(Builtin::List(e)) => e,
+            _ => unreachable!(),
+        };
+        self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
@@ -4871,11 +4875,25 @@ impl<
 
                 // move a zero into the lower 8 bytes
                 ASM::mov_reg64_imm64(buf, tmp_reg, 0x0);
-                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
 
-                ASM::mov_base32_reg64(buf, base_offset + 8, src_reg);
+                ASM::mov_base32_reg64(buf, base_offset, src_reg);
 
                 self.free_symbol(&tmp);
+
+                return;
+            }
+            (U128, I128) | (I128, U128) => {
+                let to_offset = self.storage_manager.claim_stack_area_layout(
+                    self.layout_interner,
+                    *dst,
+                    Layout::from_int_width(target),
+                );
+
+                let (from_offset, size) = self.storage_manager.stack_offset_and_size(src);
+
+                self.storage_manager
+                    .copy_to_stack_offset(buf, size, from_offset, to_offset);
 
                 return;
             }

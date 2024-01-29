@@ -2320,7 +2320,7 @@ num_conversion_tests! {
         to_i64_truncate_wraps, "10_000_000_000_000_000_000i128", -8446744073709551616
     )
     "Num.toI128", i128, (
-        to_i128_same_width, "15u128", 15
+        to_i128_same_width, "15u128", 15, ["gen-dev"]
         to_i128_extend, "15i8", 15
     )
     "Num.toU8", u8, (
@@ -2347,8 +2347,9 @@ num_conversion_tests! {
         to_u64_truncate_wraps, "10_000_000_000_000_000_000_000i128", 1864712049423024128
     )
     "Num.toU128", u128, (
-        to_u128_same_width, "15i128", 15
+        to_u128_same_width, "15i128", 15, ["gen-dev"]
         to_u128_extend, "15i8", 15
+        to_u128_big, "11562537357600483583u64", 11562537357600483583, ["gen-dev"]
     )
     "Num.toNat", usize, (
         to_nat_same_width, "15i64", 15, ["gen-wasm", "gen-dev"]
