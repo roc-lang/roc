@@ -9,7 +9,7 @@ use crate::{
     def::{Annotation, Def},
     expr::{
         self, AnnotatedMark, ClosureData, Declarations, Expr, Field, OpaqueWrapFunctionData,
-        StructAccessorData,
+        Recursive, StructAccessorData,
     },
     pattern::{DestructType, Pattern, RecordDestruct, TupleDestruct},
 };
@@ -31,6 +31,7 @@ pub enum DeclarationInfo<'a> {
         expr_var: Variable,
         pattern: Pattern,
         function: &'a Loc<expr::FunctionDef>,
+        recursive: Recursive,
     },
     Destructure {
         loc_pattern: &'a Loc<Pattern>,
@@ -75,11 +76,11 @@ impl<'a> DeclarationInfo<'a> {
 }
 
 pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
-    use crate::expr::DeclarationTag::*;
+    use crate::expr::DeclarationTag as t;
 
     for (index, tag) in decls.declarations.iter().enumerate() {
         let info = match tag {
-            Value => {
+            t::Value => {
                 let loc_expr = &decls.expressions[index];
 
                 let loc_symbol = decls.symbols[index];
@@ -101,14 +102,14 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     annotation: decls.annotations[index].as_ref(),
                 }
             }
-            Expectation | ExpectationFx => {
+            t::Expectation | t::ExpectationFx => {
                 let loc_condition = &decls.expressions[index];
 
                 DeclarationInfo::Expectation { loc_condition }
             }
-            Function(function_index)
-            | Recursive(function_index)
-            | TailRecursive(function_index) => {
+            t::Function(function_index)
+            | t::Recursive(function_index)
+            | t::TailRecursive(function_index) => {
                 let loc_body = &decls.expressions[index];
 
                 let loc_symbol = decls.symbols[index];
@@ -123,6 +124,11 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                 };
 
                 let function_def = &decls.function_bodies[function_index.index()];
+                let recursive = match tag {
+                    t::TailRecursive(_) => Recursive::TailRecursive,
+                    t::Recursive(_) => Recursive::Recursive,
+                    _ => Recursive::NotRecursive,
+                };
 
                 DeclarationInfo::Function {
                     loc_symbol,
@@ -130,9 +136,10 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     expr_var,
                     pattern,
                     function: function_def,
+                    recursive,
                 }
             }
-            Destructure(destructure_index) => {
+            t::Destructure(destructure_index) => {
                 let destructure = &decls.destructs[destructure_index.index()];
                 let loc_pattern = &destructure.loc_pattern;
 
@@ -154,7 +161,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
                     annotation: decls.annotations[index].as_ref(),
                 }
             }
-            MutualRecursion { .. } => {
+            t::MutualRecursion { .. } => {
                 // The actual declarations involved in the mutual recursion will come next.
                 continue;
             }
@@ -191,6 +198,7 @@ pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
             expr_var,
             pattern,
             function,
+            ..
         } => {
             visitor.visit_pattern(&pattern, loc_symbol.region, Some(expr_var));
 
@@ -662,6 +670,7 @@ impl Visitor for TypeAtVisitor {
 struct TypeAtPositionVisitor {
     position: Position,
     region_typ: Option<(Region, Variable)>,
+    fun_type: Option<Recursive>,
 }
 
 impl Visitor for TypeAtPositionVisitor {
@@ -669,11 +678,42 @@ impl Visitor for TypeAtPositionVisitor {
         region.contains_pos(self.position)
     }
 
+    fn visit_def(&mut self, def: &Def) {
+        if self.should_visit(def.region()) {
+            //if we are trying to get the type of the pattern we can tell them it is recursive
+            if self.should_visit(def.loc_pattern.region) {
+                match def.loc_expr.value {
+                    Expr::Closure(ClosureData { recursive, .. }) => {
+                        self.fun_type = Some(recursive.clone())
+                    }
+                    _ => self.fun_type = None,
+                }
+            }
+            walk_def(self, def);
+        }
+    }
     fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
         if region.contains_pos(self.position) {
+            //reset the decl type because we didn't end on a declaration
+            match expr {
+                // Expr::Call(_, _, _) => todo!(),
+                Expr::Closure(ClosureData { recursive, .. }) => self.fun_type = Some(*recursive),
+                _ => self.fun_type = None,
+                // _ => (),
+            }
             self.region_typ = Some((region, var));
 
             walk_expr(self, expr, var);
+        }
+    }
+    fn visit_decl(&mut self, decl: DeclarationInfo<'_>) {
+        if self.should_visit(decl.region()) {
+            //set the recursive status of the function if needed
+            match &decl {
+                DeclarationInfo::Function { recursive, .. } => self.fun_type = Some(*recursive),
+                _ => self.fun_type = None,
+            }
+            walk_decl(self, decl)
         }
     }
 
@@ -724,9 +764,24 @@ pub fn find_closest_type_at(
     let mut visitor = TypeAtPositionVisitor {
         position,
         region_typ: None,
+        fun_type: None,
     };
     visitor.visit_decls(decls);
     visitor.region_typ
+}
+/// Given an ability Foo implements foo : ..., returns (T, foo1) if the symbol at the given region is a
+/// Like [find_type_at], but descends into the narrowest node containing [position].
+pub fn find_hover_at(
+    position: Position,
+    decls: &Declarations,
+) -> (Option<(Region, Variable)>, Option<Recursive>) {
+    let mut visitor = TypeAtPositionVisitor {
+        position,
+        region_typ: None,
+        fun_type: None,
+    };
+    visitor.visit_decls(decls);
+    (visitor.region_typ, visitor.fun_type)
 }
 
 /// Given an ability Foo has foo : ..., returns (T, foo1) if the symbol at the given region is a

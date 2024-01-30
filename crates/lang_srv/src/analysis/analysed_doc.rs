@@ -172,16 +172,29 @@ impl AnalyzedDocument {
             ..
         } = self.module()?;
 
-        let (region, var) = roc_can::traverse::find_closest_type_at(pos, declarations)?;
+        let (var_info, recusive) = roc_can::traverse::find_hover_at(pos, declarations);
+        //Make a string that denotes if a function is recursive or not
+        let recursive_string = recusive.map(|rec| MarkedString::String(format!("{:?}", rec)));
+
+        let (region, var) = var_info?;
+
         let type_str = format_var_type(var, &mut subs.clone(), module_id, interns);
 
         let range = region.to_range(self.line_info());
 
         Some(Hover {
-            contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                language: "roc".to_string(),
-                value: type_str,
-            })),
+            contents: HoverContents::Array(
+                vec![
+                    Some(MarkedString::LanguageString(LanguageString {
+                        language: "roc".to_string(),
+                        value: type_str,
+                    })),
+                    recursive_string,
+                ]
+                .into_iter()
+                .filter_map(|x| x)
+                .collect::<Vec<_>>(),
+            ),
             range: Some(range),
         })
     }
