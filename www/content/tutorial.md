@@ -499,7 +499,6 @@ This means you can choose to omit the `title`, `description`, or both fields, wh
 This is also the type that would have been inferred for `table` if no annotation
 had been written. Roc's compiler can tell from the destructuring syntax
 `title ? ""` that `title` is an optional field, and that it has the type `Str`.
-These default values can reference other expressions in the record destructure; if you wanted, you could write `{ height, width, title ? "", description ? Str.concat "A table called " title }`.
 
 Destructuring is the only way to implement a record with optional fields. For example, if you write the expression `config.title` and `title` is an
 optional field, you'll get a compile error.
