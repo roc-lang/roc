@@ -1031,13 +1031,21 @@ divTruncUnchecked : Int a, Int a -> Int a
 ## Num.rem -8 -3
 ## ```
 rem : Int a, Int a -> Int a
+rem = \a, b ->
+    if Num.isZero b then
+        crash "Integer division by 0!"
+    else
+        Num.remUnchecked a b
 
 remChecked : Int a, Int a -> Result (Int a) [DivByZero]
 remChecked = \a, b ->
     if Num.isZero b then
         Err DivByZero
     else
-        Ok (Num.rem a b)
+        Ok (Num.remUnchecked a b)
+
+## traps (hardware fault) when given zero as the second argument.
+remUnchecked : Int a, Int a -> Int a
 
 isMultipleOf : Int a, Int a -> Bool
 

@@ -1189,17 +1189,28 @@ fn gen_rem_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = r#"User crash with message: "Integer division by 0!"#)]
+fn gen_rem_div_by_zero_i64() {
+    assert_evals_to!("Num.rem 42 0", 100, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_rem_checked_i64() {
+    assert_evals_to!(
+        "Num.remChecked 42 40",
+        RocResult::ok(2),
+        RocResult<i64, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
-        indoc!(
-            r"
-            when Num.remChecked 8 0 is
-                Err DivByZero -> 4
-                Ok _ -> -23
-            "
-        ),
-        4,
-        i64
+        "Num.remChecked 8 0",
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
