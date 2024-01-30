@@ -31,7 +31,7 @@ You can track progress in [this PR](https://github.com/roc-lang/roc/pull/5923).
 ### Platform Author Specific Breaking Changes
 
 All of the following changes only affect platform authors.
-They will not be noticeable from the Roc user perspective.
+They will not be noticeable from the Roc application developer perspective.
 
 #### Glue
 
