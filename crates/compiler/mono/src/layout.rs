@@ -4840,6 +4840,6 @@ mod test {
     #[test]
     fn align_u128_in_tag_union() {
         let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
-        assert_eq!(interner.alignment_bytes(Layout::U128), 16);
+        assert_eq!(interner.alignment_bytes(Layout::U128), 8);
     }
 }

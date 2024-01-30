@@ -267,8 +267,7 @@ impl<T, E> Drop for RocResult<T, E> {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
-#[repr(C, align(16))]
-pub struct RocDec([u8; 16]);
+pub struct RocDec(i128);
 
 impl Debug for RocDec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -280,8 +279,8 @@ impl Debug for RocDec {
 }
 
 impl RocDec {
-    pub const MIN: Self = Self(i128::MIN.to_ne_bytes());
-    pub const MAX: Self = Self(i128::MAX.to_ne_bytes());
+    pub const MIN: Self = Self(i128::MIN);
+    pub const MAX: Self = Self(i128::MAX);
 
     const DECIMAL_PLACES: usize = 18;
     const ONE_POINT_ZERO: i128 = 10i128.pow(Self::DECIMAL_PLACES as u32);
@@ -289,7 +288,7 @@ impl RocDec {
     const MAX_STR_LENGTH: usize = Self::MAX_DIGITS + 2; // + 2 here to account for the sign & decimal dot
 
     pub fn new(num: i128) -> Self {
-        Self(num.to_ne_bytes())
+        Self(num)
     }
 
     pub fn as_bits(&self) -> (i64, u64) {
@@ -373,7 +372,7 @@ impl RocDec {
         }
 
         match hi.checked_mul(Self::ONE_POINT_ZERO) {
-            Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
+            Some(hi) => hi.checked_add(lo).map(|num| Self(num)),
             None => None,
         }
     }
@@ -385,15 +384,15 @@ impl RocDec {
     /// This is private because RocDec being an i128 is an implementation detail
     #[inline(always)]
     fn as_i128(&self) -> i128 {
-        i128::from_ne_bytes(self.0)
+        self.0
     }
 
     pub fn from_ne_bytes(bytes: [u8; 16]) -> Self {
-        Self(bytes)
+        Self(i128::from_ne_bytes(bytes))
     }
 
     pub fn to_ne_bytes(&self) -> [u8; 16] {
-        self.0
+        self.0.to_ne_bytes()
     }
 
     fn to_str_helper(self, string: &mut ArrayString<{ Self::MAX_STR_LENGTH }>) -> &str {

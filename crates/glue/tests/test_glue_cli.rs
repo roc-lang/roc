@@ -79,7 +79,7 @@ mod glue_cli_run {
     }
 
     fixtures! {
-        basic_record:"basic-record" => "Record was: MyRcd { b: 42, a: 1995 }\n",
+        basic_record:"basic-record" => "Record was: MyRcd { a: 1995, b: 42 }\n",
         nested_record:"nested-record" => "Record was: Outer { y: \"foo\", z: [1, 2], x: Inner { b: 24.0, a: 5 } }\n",
         enumeration:"enumeration" => "tag_union was: MyEnum::Foo, Bar is: MyEnum::Bar, Baz is: MyEnum::Baz\n",
         single_tag_union:"single-tag-union" => indoc!(r#"

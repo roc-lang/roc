@@ -1779,9 +1779,10 @@ fn alignment_i128() {
                 x
                 #"
         ),
+        // This note will matter again when LLVM actually aligns u128 to 16 bytes.
         // NOTE: roc_std::U128 is always aligned to 16, unlike rust's u128
-        ((U128::from(42), true), 1),
-        ((U128, bool), u8)
+        ((42u128, true), 1),
+        ((u128, bool), u8)
     );
 }
 

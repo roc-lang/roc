@@ -130,10 +130,12 @@ impl IntWidth {
                 // according to https://reviews.llvm.org/D28990#655487
                 //
                 // however, rust does not always think that this is true
+                // This matches what is currently reported by rust and zig.
+                // When finally updates the alignment, this will likely change.
                 match target_info.architecture {
-                    Architecture::X86_64 => 16,
-                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
-                    Architecture::X86_32 => 8,
+                    Architecture::Aarch64 => 16,
+                    Architecture::X86_64 | Architecture::Aarch32 | Architecture::Wasm32 => 8,
+                    Architecture::X86_32 => 4,
                 }
             }
         }
