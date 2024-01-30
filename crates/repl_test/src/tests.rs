@@ -813,6 +813,32 @@ fn list_get_negative_index() {
     );
 }
 
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn invalid_string_interpolation() {
+    expect_failure(
+        "\"$(123)\"",
+        indoc!(
+            r#"
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+            This argument to this string interpolation has an unexpected type:
+
+            4│      "$(123)"
+                       ^^^
+
+            The argument is a number of type:
+
+                Num *
+
+            But this string interpolation needs its argument to be:
+
+                Str
+            "#
+        ),
+    );
+}
+
 #[test]
 fn issue_2149_i8_ok() {
     expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
