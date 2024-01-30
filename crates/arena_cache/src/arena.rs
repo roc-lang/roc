@@ -20,8 +20,8 @@ use core::{
     ptr::{self, NonNull},
 };
 
-#[cfg(all(feature = "io", not(target_arch = "wasm32")))]
-use std::{fs::File, io};
+#[cfg(not(wasm32))]
+use fs::{self, File};
 
 #[derive(Debug)]
 pub struct Arena<'a> {
@@ -295,7 +295,7 @@ impl<'a> Drop for Arena<'a> {
                     capacity = chunk.capacity();
 
                     // Continue on to the previous chunk once this is done.
-                    chunk_ptr = chunk.prev;
+                    chunk_ptr = chunk.prev();
                 }
 
                 // If capacity was 0, we never allocated anything (meaning we got this memory
