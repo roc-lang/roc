@@ -15,7 +15,7 @@ use indoc::indoc;
 
 use roc_mono::layout::{LayoutRepr, STLayoutInterner};
 #[cfg(test)]
-use roc_std::{RocList, RocStr, U128};
+use roc_std::{RocList, RocStr};
 
 #[test]
 fn width_and_alignment_u8_u8() {

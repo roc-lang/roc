@@ -372,7 +372,7 @@ impl RocDec {
         }
 
         match hi.checked_mul(Self::ONE_POINT_ZERO) {
-            Some(hi) => hi.checked_add(lo).map(|num| Self(num)),
+            Some(hi) => hi.checked_add(lo).map(Self),
             None => None,
         }
     }
