@@ -69,6 +69,9 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (*mut u8, usize) {
         if answer == MAP_FAILED {
             let todo = todo!("Handle mapping failed");
         } else {
+            // We should never return a size smaller than what was requested!
+            debug_assert!(size >= layout.size());
+
             (answer as *mut u8, size)
         }
     }
@@ -112,6 +115,9 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (*mut u8, usize) {
                 todo!("Handle allocation failed. Use GetLastError to find out what happened.");
         }
 
+        // We should never return a size smaller than what was requested!
+        debug_assert!(size >= layout.size());
+
         (ptr as *mut u8, size)
     }
 
@@ -129,6 +135,9 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (*mut u8, usize) {
         if ptr.is_null() {
             let todo = todo!("Handle allocation error");
         }
+
+        // We should never return a size smaller than what was requested!
+        debug_assert!(size >= layout.size());
 
         (ptr, size)
     }

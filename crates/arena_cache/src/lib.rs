@@ -5,3 +5,4 @@
 
 mod alloc;
 pub mod arena;
+mod chunk;
