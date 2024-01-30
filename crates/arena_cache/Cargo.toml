@@ -8,7 +8,7 @@ license.workspace = true
 version.workspace = true
 
 [target.'cfg(not(wasm32))'.dependencies.fs]
-path = "./fs"
+path = "../fs"
 
 # We use wee_alloc for wasm "virtual" allocations, since wasm doesn't have
 # a built-in mmap or VirtualAlloc equivalent. This adds about 800B to the binary.

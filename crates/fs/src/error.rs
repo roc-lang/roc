@@ -1,3 +1,74 @@
+#[cfg(unix)]
+pub struct IoError(i32);
+
+#[cfg(windows)]
+pub struct IoError(u32);
+
+#[cfg(unix)]
+impl IoError {
+    pub fn write(&self, buf: &mut [u8]) -> Result<(), IoError> {
+        extern "C" {
+            // https://linux.die.net/man/3/strerror_r
+            fn strerror_r(errnum: i32, buf: *mut u8, buf_len: usize) -> i32;
+        }
+
+        let error = unsafe { strerror_r(self.0, buf.as_mut_ptr(), buf.len()) };
+
+        if error == 0 {
+            Ok(())
+        } else {
+            Err(Self::most_recent())
+        }
+    }
+
+    pub fn most_recent() -> Self {
+        Self(unsafe { *errno_location() })
+    }
+}
+
+#[cfg(windows)]
+impl IoError {
+    pub fn write(&self, buf: &mut [u16]) -> usize {
+        // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-formatmessagew
+        extern "system" {
+            fn FormatMessageW(
+                dwFlags: u32,
+                lpSource: *const c_void,
+                dwMessageId: u32,
+                dwLanguageId: u32,
+                lpBuffer: *mut u16,
+                nSize: u32,
+                Arguments: *mut c_void,
+            ) -> u32;
+        }
+
+        const FORMAT_MESSAGE_FROM_SYSTEM: u32 = 0x00001000;
+        const FORMAT_MESSAGE_IGNORE_INSERTS: u32 = 0x00000200;
+
+        let chars_written = unsafe {
+            FormatMessageW(
+                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                core::ptr::null(),
+                error_code,
+                0, // Use default language
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                core::ptr::null_mut(),
+            )
+        };
+
+        if chars_written > 0 {
+            Ok(chars_written as usize)
+        } else {
+            Err(IoError(error::last_error()))
+        }
+    }
+
+    pub fn most_recent() -> Self {
+        Self(unsafe { GetLastError() })
+    }
+}
+
 // Adapted from https://github.com/rust-lang/rust copyright (C) Rust contributors
 // Dual-licensed under MIT and Apache licenses.
 // Thank you, Rust contributors.
@@ -43,19 +114,7 @@ extern "C" {
     fn errno_location() -> *mut i32;
 }
 
-#[inline(always)]
-#[cfg(unix)]
-pub fn last_error() -> i32 {
-    unsafe { *errno_location() }
-}
-
 #[cfg(windows)]
 extern "system" {
     fn GetLastError() -> u32;
-}
-
-#[cfg(windows)]
-#[inline(always)]
-pub fn last_error() -> u32 {
-    GetLastError()
 }

@@ -4,86 +4,131 @@
 
 mod error;
 
+pub use error::IoError;
+
 #[cfg(unix)]
+use core::ffi::CStr;
+
+#[cfg(windows)]
+use widestring::ucstr::U16CStr;
+
+#[cfg(unix)]
+#[derive(Debug)]
 pub struct File {
     fd: i32,
 }
 
+#[cfg(unix)]
+impl Drop for File {
+    fn drop(&mut self) {
+        extern "C" {
+            // https://www.man7.org/linux/man-pages/man2/close.2.html
+            fn close(fd: i32) -> i32;
+        }
+
+        unsafe {
+            close(self.fd);
+        }
+    }
+}
+
 #[cfg(windows)]
+#[derive(Debug)]
 pub struct File {
     handle: *mut u8,
 }
 
-#[cfg(unix)]
-pub struct OsError(i32);
-
 #[cfg(windows)]
-pub struct OsError(u32);
-
-#[cfg(any(unix, windows))]
-pub struct ReadError {
-    pub error: OsError,
-}
-
-#[cfg(any(unix, windows))]
-impl OsError {
-    #[cfg(unix)]
-    pub fn write(&self, buf: &mut [u8]) -> Result<(), OsError> {
-        extern "C" {
-            // https://pubs.opengroup.org/onlinepubs/009695399/functions/strerror.html
-            fn strerror_r(errnum: i32, buf: *mut u8, buf_len: usize) -> i32;
+impl Drop for File {
+    #[cfg(windows)]
+    fn drop(&mut self) {
+        extern "system" {
+            // https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle
+            fn CloseHandle(handle: *mut u8) -> i32;
         }
 
-        let error = unsafe { strerror_r(self.0, buf.as_mut_ptr(), buf.len()) };
-
-        if error == 0 {
-            Ok(())
-        } else {
-            Err(OsError(error))
+        unsafe {
+            CloseHandle(self.handle);
         }
     }
+}
 
-    #[cfg(windows)]
-    pub fn write(&self, buf: &mut [u16]) -> usize {
-        // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-formatmessagew
-        extern "system" {
-            fn FormatMessageW(
-                dwFlags: u32,
-                lpSource: *const c_void,
-                dwMessageId: u32,
-                dwLanguageId: u32,
-                lpBuffer: *mut u16,
-                nSize: u32,
-                Arguments: *mut c_void,
-            ) -> u32;
+#[cfg(unix)]
+impl File {
+    // https://docs.rs/libc/latest/libc/constant.O_RDONLY.html
+    const O_RDONLY: i32 = 0;
+    const O_WRONLY: i32 = 1;
+
+    pub fn open_read(path: &CStr) -> Result<Self, IoError> {
+        Self::open(path, Self::O_RDONLY)
+    }
+
+    pub fn open_write(path: &CStr) -> Result<Self, IoError> {
+        Self::open(path, Self::O_WRONLY)
+    }
+
+    fn open(path: &CStr, oflag: i32) -> Result<Self, IoError> {
+        extern "C" {
+            // https://www.man7.org/linux/man-pages/man2/open.2.html
+            fn open(path: *const i8, oflag: i32, ...) -> i32;
         }
 
-        const FORMAT_MESSAGE_FROM_SYSTEM: u32 = 0x00001000;
-        const FORMAT_MESSAGE_IGNORE_INSERTS: u32 = 0x00000200;
+        let fd = unsafe { open(path.as_ptr(), oflag) };
 
-        let chars_written = unsafe {
-            FormatMessageW(
-                FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                core::ptr::null(),
-                error_code,
-                0, // Use default language
-                buf.as_mut_ptr(),
-                buf.len() as u32,
-                core::ptr::null_mut(),
+        if fd >= 0 {
+            Ok(Self { fd })
+        } else {
+            Err(IoError::most_recent())
+        }
+    }
+}
+
+#[cfg(windows)]
+impl File {
+    // https://docs.rs/winapi/latest/winapi/um/handleapi/constant.INVALID_HANDLE_VALUE.html
+    const INVALID_HANDLE_VALUE: *mut u8 = -1isize as _;
+
+    fn open(
+        path: &U16CStr,
+        dwDesiredAccess: u32,
+        dwCreationDisposition: u32,
+        dwFlagsAndAttributes: u32,
+    ) -> Result<Self, IoError> {
+        extern "C" {
+            fn CreateFileW(
+                lpFileName: *const u16,
+                dwDesiredAccess: u32,
+                dwShareMode: u32,
+                lpSecurityAttributes: *mut u8,
+                dwCreationDisposition: u32,
+                dwFlagsAndAttributes: u32,
+                hTemplateFile: *mut u8,
+            ) -> *mut u8;
+        }
+
+        let handle = unsafe {
+            CreateFileW(
+                file_path.as_ptr(),
+                dwDesiredAccess,
+                0, // Share mode: prevent other processes from accessing the file
+                core::ptr::null_mut(), // Security attributes: none
+                dwCreationDisposition,
+                dwFlagsAndAttributes,
+                core::ptr::null_mut(), // Template file: none
             )
         };
 
-        if chars_written > 0 {
-            Ok(chars_written as usize)
+        if handle != INVALID_HANDLE_VALUE {
+            Ok(Self { handle })
         } else {
-            Err(OsError(error::last_error()))
+            Err(IoError(error::last_error()))
         }
     }
 }
 
 #[cfg(any(unix, windows))]
 impl File {
-    pub fn read_from_file(file: &mut File, buf: &mut [u8]) -> Result<usize, ReadError> {
+    pub fn read_from_file(file: &mut File, buf: &mut [u8]) -> Result<usize, IoError> {
         #[cfg(unix)]
         {
             extern "C" {
@@ -95,9 +140,7 @@ impl File {
             if bytes_read >= 0 {
                 Ok(bytes_read as usize)
             } else {
-                Err(ReadError {
-                    error: OsError(error::last_error()),
-                })
+                Err(IoError::most_recent())
             }
         }
 
@@ -127,9 +170,7 @@ impl File {
                 {
                     Ok(bytes_read.assume_init() as usize)
                 } else {
-                    Err(ReadError {
-                        error: OsError(error::last_error()),
-                    })
+                    Err(IoError::most_recent())
                 }
             }
         }
