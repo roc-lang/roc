@@ -959,6 +959,62 @@ mod test_can {
         assert_eq!(p_detected, Recursive::TailRecursive);
     }
 
+    #[test]
+    fn recognize_tail_calls_if_else() {
+        let src = indoc!(
+            r"
+                g = \x ->
+                    if x == 0 then
+                        0
+                    else
+                        g (x - 1)
+
+                # use parens to force the ordering!
+                (
+                    h = \x ->
+                        if x == 0 then
+                            0
+                        else
+                            g (x - 1)
+
+                    (
+                        p = \x ->
+                            if x == 0 then
+                                0
+                            else if x == 1 then
+                                g (x - 1)
+                            else
+                                p (x - 1)
+
+
+                        # variables must be (indirectly) referenced in the body for analysis to work
+                        { x: p, y: h }
+                    )
+                )
+
+            "
+        );
+        let arena = Bump::new();
+        let CanExprOut {
+            loc_expr, problems, ..
+        } = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(problems, Vec::new());
+        assert!(problems
+            .iter()
+            .all(|problem| matches!(problem, Problem::UnusedDef(_, _))));
+
+        let actual = loc_expr.value;
+
+        let g_detected = get_closure(&actual, 0);
+        let h_detected = get_closure(&actual, 1);
+        let p_detected = get_closure(&actual, 2);
+
+        assert_eq!(g_detected, Recursive::TailRecursive);
+        assert_eq!(h_detected, Recursive::NotRecursive);
+        assert_eq!(p_detected, Recursive::TailRecursive);
+    }
+
     // TODO restore this test! It should report two unused defs (h and p), but only reports 1.
     // #[test]
     // fn reproduce_incorrect_unused_defs() {

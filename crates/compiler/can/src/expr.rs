@@ -1308,6 +1308,7 @@ pub fn canonicalize_expr<'a>(
 
                 output.references.union_mut(&cond_output.references);
                 output.references.union_mut(&then_output.references);
+                output.union(then_output);
             }
 
             let (loc_else, else_output) = canonicalize_expr(
@@ -1319,6 +1320,7 @@ pub fn canonicalize_expr<'a>(
             );
 
             output.references.union_mut(&else_output.references);
+            output.union(else_output);
 
             (
                 If {
@@ -3077,14 +3079,14 @@ pub enum DeclarationTag {
 
 impl DeclarationTag {
     fn len(self) -> usize {
-        use DeclarationTag::*;
+        use DeclarationTag as dt;
 
         match self {
-            Function(_) | Recursive(_) | TailRecursive(_) => 1,
-            Value => 1,
-            Expectation | ExpectationFx => 1,
-            Destructure(_) => 1,
-            MutualRecursion { length, .. } => length as usize + 1,
+            dt::Function(_) | dt::Recursive(_) | dt::TailRecursive(_) => 1,
+            dt::Value => 1,
+            dt::Expectation | dt::ExpectationFx => 1,
+            dt::Destructure(_) => 1,
+            dt::MutualRecursion { length, .. } => length as usize + 1,
         }
     }
 }

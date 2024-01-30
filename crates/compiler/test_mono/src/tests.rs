@@ -1620,6 +1620,20 @@ fn tail_call_elimination() {
 }
 
 #[mono_test]
+fn tail_call_elimination_if_else() {
+    indoc!(
+        r"
+        sum = \n, accum ->
+            if n==0 then
+                accum
+            else sum (n - 1) (n + accum)
+
+        sum 1_000_000 0
+        "
+    )
+}
+
+#[mono_test]
 fn tail_call_with_same_layout_different_lambda_sets() {
     indoc!(
         r#"

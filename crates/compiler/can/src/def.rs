@@ -2369,7 +2369,7 @@ fn canonicalize_pending_body<'a>(
                 // reset the tailcallable_symbol
                 env.tailcallable_symbol = outer_tailcallable;
 
-                // The closure is self tail recursive iff it tail calls itself (by defined name).
+                // The closure is self tail recursive if it tail calls itself (by defined name).
                 let is_recursive = match can_output.tail_call {
                     Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
                     _ => Recursive::NotRecursive,
