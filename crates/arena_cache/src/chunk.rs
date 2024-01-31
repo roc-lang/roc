@@ -4,11 +4,8 @@ use core::{
     ptr::{self, NonNull},
 };
 
-#[cfg(all(feature = "io", not(target_arch = "wasm32")))]
-use std::{fs::File, io};
-
-#[cfg(all(unix, feature = "io"))]
-use std::os::unix::io::RawFd;
+#[cfg(not(target_arch = "wasm32"))]
+use fs::{File, IoError};
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ChunkHeader {
@@ -29,12 +26,12 @@ impl ChunkHeader {
 
     pub unsafe fn from_raw_parts(
         prev: *mut ChunkHeader,
-        capacity: usize,
+        content_capacity: usize,
         content_len: usize,
     ) -> Self {
         Self {
             prev,
-            capacity,
+            capacity: content_capacity,
             content_len,
         }
     }
@@ -85,10 +82,9 @@ impl ChunkHeader {
     /// Write this chunk and (recursively) all of its previous chunks to disk, using a single writev sycall.
     ///
     /// https://linux.die.net/man/2/writev
-    #[cfg(all(unix, feature = "io"))]
-    pub(crate) fn write_recursive(&self, file: &mut File) -> io::Result<usize> {
+    #[cfg(unix)]
+    pub(crate) fn write_recursive(&self, file: &mut File) -> Result<usize, IoError> {
         use core::mem::{align_of, MaybeUninit};
-        use std::os::fd::AsRawFd;
 
         const MAX_ON_STACK: usize = 8;
 
@@ -142,22 +138,15 @@ impl ChunkHeader {
 
                     heap_allocated_bytes = Some(total_bytes_allocated);
 
-                    match NonNull::new(ptr) {
-                        Some(non_null) => {
-                            // Switch from the stack-allocated array to the new allocation.
-                            iov_storage = non_null.cast();
+                    // Switch from the stack-allocated array to the new allocation.
+                    iov_storage = ptr.cast();
 
-                            // Copy all the existing entries into the new allocation.
-                            core::ptr::copy_nonoverlapping(
-                                &iov_array as *const MaybeUninit<IoVec> as _,
-                                iov_storage.as_mut(),
-                                MAX_ON_STACK,
-                            );
-                        }
-                        None => {
-                            let todo = todo!("handle allocation failure");
-                        }
-                    }
+                    // Copy all the existing entries into the new allocation.
+                    core::ptr::copy_nonoverlapping(
+                        &iov_array as *const MaybeUninit<IoVec> as _,
+                        iov_storage.as_mut(),
+                        MAX_ON_STACK,
+                    );
                 }
 
                 // Add the new entry.
@@ -188,7 +177,7 @@ impl ChunkHeader {
             // giving them to writev. Otherwise writev will write them backwards!
             reverse_in_place(iov_storage.as_ptr(), num_iovecs);
 
-            let bytes_written = writev(file.as_raw_fd(), iov_storage.as_ptr(), num_iovecs as i32);
+            let bytes_written = writev(file.fd(), iov_storage.as_ptr(), num_iovecs as i32);
 
             // If we had to resort to an OS allocation to store all the iovecs, free it.
             // We no longer need the allocation now that writev has been called, and this
@@ -206,16 +195,16 @@ impl ChunkHeader {
                 alloc::dealloc_virtual(iov_storage.as_ptr().cast(), layout);
             }
 
-            if bytes_written < 0 {
-                Err(io::Error::last_os_error())
-            } else {
+            if bytes_written >= 0 {
                 Ok(bytes_written as usize)
+            } else {
+                Err(IoError::most_recent())
             }
         }
     }
 }
 
-#[cfg(all(unix, feature = "io"))]
+#[cfg(unix)]
 // https://www.man7.org/linux/man-pages/man3/iovec.3type.html
 #[repr(C)]
 struct IoVec {
@@ -223,10 +212,10 @@ struct IoVec {
     len: usize,
 }
 
-#[cfg(all(unix, feature = "io"))]
+#[cfg(unix)]
 extern "C" {
     // https://linux.die.net/man/2/writev
-    fn writev(fd: RawFd, iov: *const IoVec, iovcnt: i32) -> isize;
+    fn writev(fd: i32, iov: *const IoVec, iovcnt: i32) -> isize;
 }
 
 fn reverse_in_place<T>(array: *mut T, len: usize) {

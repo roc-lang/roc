@@ -16,12 +16,11 @@ use core::{
     alloc::Layout,
     marker::PhantomData,
     mem::{align_of, size_of},
-    num::NonZeroUsize,
     ptr::{self, NonNull},
 };
 
 #[cfg(not(wasm32))]
-use fs::{self, File};
+use fs::{self, File, IoError};
 
 #[derive(Debug)]
 pub struct Arena<'a> {
@@ -46,30 +45,21 @@ impl<'a> Arena<'a> {
 
         // Get the actual capacity back (alloc may have given us more than we asked for,
         // after rounding up for page alignment etc.)
-        let (ptr, allocated_bytes) = alloc_virtual(layout);
+        let (non_null, allocated_bytes) = alloc_virtual(layout);
 
-        match NonNull::new(ptr) {
-            Some(non_null) => {
-                // The allocated bytes include the header, so subtract that back out.
-                // In the extremely unlikely event that we end up with zero somehow,
-                // this will just mean we always reallocate whenever doing a new allocation.
-                let capacity_bytes =
-                    NonZeroUsize::new(allocated_bytes.saturating_sub(size_of::<ChunkHeader>()));
-                let header = non_null.cast();
+        // The allocated bytes include the header, so subtract that back out.
+        // In the extremely unlikely event that we end up with zero somehow,
+        // this will just mean we always reallocate whenever doing a new allocation.
+        let content_capacity = allocated_bytes.saturating_sub(size_of::<ChunkHeader>());
+        let chunk = non_null.as_ptr().cast();
 
-                unsafe {
-                    *(header.as_ptr()) = ChunkHeader { len: 0 };
-                }
+        unsafe {
+            *chunk = ChunkHeader::from_raw_parts(ptr::null_mut(), content_capacity, 0);
+        }
 
-                Self {
-                    header,
-                    capacity: capacity_bytes,
-                    _phantom: PhantomData::default(),
-                }
-            }
-            None => {
-                let todo = todo!("Handle allocation failure.");
-            }
+        Self {
+            chunk,
+            _phantom: PhantomData::default(),
         }
     }
 
@@ -78,11 +68,50 @@ impl<'a> Arena<'a> {
     /// new location (unlike, say, a Vec would when it resizes); instead, it will create new OS
     /// allocations as needed. When the arena gets dropped, all of those allocations will be
     /// returned to the OS (or marked as free in the wasm allocator).
-    pub fn alloc(&mut self, layout: Layout) -> Option<NonNull<u8>> {
+    ///
+    /// This is based on bumpalo's `alloc_with` - see bumpalo's docs on why the Fn can improve perf:
+    /// https://docs.rs/bumpalo/latest/bumpalo/struct.Bump.html#method.alloc_with
+    pub fn alloc<T>(&mut self, make: impl FnOnce() -> T) -> &mut T {
+        // This implementation is adapted from Bumpalo copyright (c) Nick Fitzgerald,
+        // licensed under the Apache License, Version 2.0
+        #[inline(always)]
+        unsafe fn inner_writer<T, F>(ptr: *mut T, f: F)
+        where
+            F: FnOnce() -> T,
+        {
+            // This function is translated as:
+            // - allocate space for a T on the stack
+            // - call f() with the return value being put onto this stack space
+            // - memcpy from the stack to the heap
+            //
+            // Ideally we want LLVM to always realize that doing a stack
+            // allocation is unnecessary and optimize the code so it writes
+            // directly into the heap instead. It seems we get it to realize
+            // this most consistently if we put this critical line into it's
+            // own function instead of inlining it into the surrounding code.
+            ptr::write(ptr, f())
+        }
+
+        let layout = Layout::new::<T>();
+
+        unsafe {
+            let p = self.alloc_layout(layout);
+            let p = p.as_ptr() as *mut T;
+            inner_writer(p, make);
+            &mut *p
+        }
+    }
+
+    /// If there is not enough space in the current allocation, goes back to the OS to do a virtual
+    /// allocation (or growing the heap on WASM). This will never copy existing allocations into a
+    /// new location (unlike, say, a Vec would when it resizes); instead, it will create new OS
+    /// allocations as needed. When the arena gets dropped, all of those allocations will be
+    /// returned to the OS (or marked as free in the wasm allocator).
+    pub fn alloc_layout(&mut self, layout: Layout) -> NonNull<u8> {
         // Happy path: we have a chunk and it has room to allocate.
         if let Some(mut chunk) = NonNull::new(self.chunk) {
             if let Some(non_null) = unsafe { chunk.as_mut().alloc(layout) } {
-                return Some(non_null);
+                return non_null;
             }
         }
 
@@ -92,14 +121,15 @@ impl<'a> Arena<'a> {
             // original layout.
             let layout = Layout::from_size_align_unchecked(
                 // Allocate enough space for both the header and the actual capacity
-                size_of::<ChunkHeader>()
-                    .saturating_add(ChunkHeader::DEFAULT_CAPACITY.max((layout.size() * 3) / 2)),
+                size_of::<ChunkHeader>().saturating_add(
+                    ChunkHeader::DEFAULT_CAPACITY.max((layout.size().saturating_mul(3)) / 2),
+                ),
                 // Make sure the alignment works with both the requested alignment
                 // as well as the chunk header.
                 layout.align().max(align_of::<ChunkHeader>()),
             );
             let (ptr, actual_bytes) = alloc_virtual(layout);
-            let ptr = ptr as *mut ChunkHeader;
+            let ptr = ptr.as_ptr().cast();
 
             // Write the header into the beginning of the new allocation.
             *ptr = ChunkHeader::from_raw_parts(
@@ -116,7 +146,7 @@ impl<'a> Arena<'a> {
             self.chunk = ptr;
 
             // Advance past the header when returning the allocated content.
-            NonNull::new(ptr.add(1).cast())
+            NonNull::new_unchecked(ptr.add(1).cast())
         }
     }
 
@@ -156,8 +186,8 @@ impl<'a> Arena<'a> {
     }
 
     /// Write the arena's complete contents to a file. This should only take one syscall.
-    #[cfg(all(feature = "io", not(target_arch = "wasm32")))]
-    pub fn write_to_file(&self, file: &mut File) -> io::Result<usize> {
+    #[cfg(not(wasm32))]
+    pub fn write_to_file(&self, file: &mut File) -> Result<usize, IoError> {
         match NonNull::new(self.chunk) {
             Some(non_null) => unsafe { non_null.as_ref().write_recursive(file) },
             None => {
@@ -185,7 +215,7 @@ impl<'a> Arena<'a> {
     /// after the cache gets invalidated.
     ///
     /// Safety: It must be safe to write `bytes_available` bytes to the given pointer.
-    #[cfg(all(feature = "io", not(target_arch = "wasm32")))]
+    #[cfg(not(wasm32))]
     pub unsafe fn read_from_file(
         file: &mut File,
         // We verify that align_of::<ChunkHeader>() == align_of::<usize>(),
@@ -193,9 +223,8 @@ impl<'a> Arena<'a> {
         // This way, we don't have to expose ChunkHeader outside this crate.
         dest: NonNull<usize>,
         bytes_available: usize,
-    ) -> io::Result<Self> {
+    ) -> Result<Self, IoError> {
         use core::slice;
-        use std::io::Read;
 
         // Safety: This file requires being given a pointer to at least size_of::<Header> bytes.
         if let Some(after_header) = bytes_available.checked_sub(size_of::<ChunkHeader>()) {
@@ -238,59 +267,68 @@ impl<'a> Arena<'a> {
         // 1. Ask the OS for the exact size of the file (we don't do this by default, to avoid a syscall)
         // 2. Create a chunk using with_capacity
         // 3. Read into that arena.
-        let file_size = file.metadata()?.len();
+        let mut file_size = file.size_on_disk()?;
 
-        if file_size > isize::MAX as u64 {
-            let todo = todo!("file is too big to read! Return some sort of error.");
+        loop {
+            // Safety: we know ChunkHeader has a valid alignment.
+            let layout = Layout::from_size_align_unchecked(
+                // Allocate 1 extra capacity byte so we can tell if we potentially had a partial read.
+                // (This can theoretically happen if somehow the file grew between when we read its
+                // size and when we're reading its contents.)
+                size_of::<ChunkHeader>()
+                    .saturating_add(file_size as usize)
+                    .saturating_add(1),
+                align_of::<ChunkHeader>(),
+            );
+
+            // Note that if the file_size is greater than isize::MAX, the alloc_virtual call will fail.
+            // This seems very unlikely to ever come up, so it seems fine to let the allocation failure
+            // happen rather than adding a conditional here and returning ERANGE explicitly.
+
+            let (chunk_ptr, capacity) = alloc_virtual(layout);
+            let chunk_ptr = chunk_ptr.as_ptr();
+            let capacity = capacity.saturating_sub(size_of::<ChunkHeader>());
+            let bytes_read = {
+                let slice: &mut [u8] = slice::from_raw_parts_mut(chunk_ptr.add(1).cast(), capacity);
+
+                file.read(slice)?
+            };
+
+            if bytes_read < capacity {
+                *(chunk_ptr.cast()) =
+                    ChunkHeader::from_raw_parts(ptr::null_mut(), capacity, bytes_read);
+
+                return Ok(Self {
+                    chunk: chunk_ptr.cast(),
+                    _phantom: PhantomData::default(),
+                });
+            }
+
+            // It's possible (but very unlikely) that the file grew between when we read its size
+            // and when we read its contents. If that happens, this check will fail and we'll continue
+            // in the loop (trying again with double the previous size). Eventually either the read will
+            // succeed or else alloc_virtual will fail because we're trying to allocate too many bytes.
+            file_size = file_size.saturating_mul(2);
         }
-
-        // Safety: we know ChunkHeader has a valid alignment.
-        let layout = Layout::from_size_align_unchecked(
-            // Allocate 1 extra capacity byte so we can tell if we potentially had a partial read.
-            // (This can theoretically happen if somehow the file grew between when we read its
-            // size and when we're reading its contents.)
-            size_of::<ChunkHeader>()
-                .saturating_add(file_size as usize)
-                .saturating_add(1),
-            align_of::<ChunkHeader>(),
-        );
-        let (chunk_ptr, capacity) = alloc_virtual(layout);
-        let capacity = capacity.saturating_sub(size_of::<ChunkHeader>());
-        let bytes_read = {
-            let slice: &mut [u8] = slice::from_raw_parts_mut(chunk_ptr.add(1).cast(), capacity);
-
-            file.read(slice)?
-        };
-
-        if bytes_read >= capacity {
-            let todo = todo!("Somehow the file grew between when we read its size and read its contents. Error out!");
-        }
-
-        *(chunk_ptr.cast()) = ChunkHeader::from_raw_parts(prev, capacity, bytes_read);
-
-        Ok(Self {
-            chunk: chunk_ptr.cast(),
-            _phantom: PhantomData::default(),
-        })
     }
 }
 
 impl<'a> Drop for Arena<'a> {
     fn drop(&mut self) {
         // Recursively deallocate each of the chunks.
-        let mut chunk_ptr = self.chunk;
+        let mut chunk_ptr = NonNull::new(self.chunk);
 
         // Note: the original chunk pointer might be null if the arena never allocated anything.
-        while !chunk_ptr.is_null() {
+        while let Some(non_null) = chunk_ptr {
             unsafe {
-                let ptr_to_deallocate = chunk_ptr.cast();
+                let ptr_to_deallocate = non_null.as_ptr().cast();
                 let capacity;
 
                 // We only dereference chunk_ptr in here. Afterwards, we should be totally done
                 // with the chunk, and should no longer need any reference to it because we're
                 // going to deallocate it!
                 {
-                    let chunk = *chunk_ptr;
+                    let chunk = non_null.as_ref();
 
                     capacity = chunk.capacity();
 
@@ -301,16 +339,14 @@ impl<'a> Drop for Arena<'a> {
                 // If capacity was 0, we never allocated anything (meaning we got this memory
                 // from somoene else), so there's nothing to release!
                 if capacity > 0 {
-                    unsafe {
-                        // Safety: we know ChunkHeader has a valid alignment.
-                        let layout = Layout::from_size_align_unchecked(
-                            // Allocate enough space for both the header and the actual capacity
-                            size_of::<ChunkHeader>().saturating_add(capacity),
-                            align_of::<ChunkHeader>(),
-                        );
+                    // Safety: we know ChunkHeader has a valid alignment.
+                    let layout = Layout::from_size_align_unchecked(
+                        // Allocate enough space for both the header and the actual capacity
+                        size_of::<ChunkHeader>().saturating_add(capacity),
+                        align_of::<ChunkHeader>(),
+                    );
 
-                        dealloc_virtual(ptr_to_deallocate, layout);
-                    }
+                    dealloc_virtual(ptr_to_deallocate, layout);
                 }
             }
         }

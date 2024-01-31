@@ -1,6 +1,4 @@
-use core::alloc::Layout;
-
-/// OS-level virtual memory allocation and deallocation functions, for use in the `arena`` module.
+/// OS-level virtual memory allocation and deallocation functions, for use in the `arena` module.
 /// The goal here is to avoid managing free lists and instead to directly ask the OS for memory.
 /// In long-running compiler processes (e.g. watch mode, editor integrations, repl), this can
 /// prevent memory usage from slowly growing over time because we're actually goving memory
@@ -13,18 +11,28 @@ use core::alloc::Layout;
 /// list behind the scenes, since wasm only supports growing the heap and that's it. Although
 /// wasm doesn't have a watch mode, it does have long-running processes in the form of the repl
 /// and also potentially in the future a playground.
+use core::{alloc::Layout, ptr::NonNull};
 
+////////////////
+// ALLOCATION //
+////////////////
+
+/// We use wee_alloc for allocations on wasm because wasm natively supports only growing the heap,
+/// not releasing anything. Releasing has to be built in userspace, which wee_alloc provides.
 #[cfg(wasm32)]
 static WEE_ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
-#[cfg(wasm32)]
-const WEE_ALLOC_ALIGN: usize = 0x10000; // wasm memory pages are 64KiB
+/// We'll exit after printing this message to stderr if allocation fails
+const ALLOC_FAILED_MESSAGE: &str =
+    "The Roc compiler had to exit unexpectedly because a virtual memory allocation operation failed.\n\nThis normally should never happen, but one way it could happen is if the compiler is running in an unusually memory-constrained environment, such as a virtualized operating system.\n\nIf you are seeing this message repeatedly, you might want to try contacting other Roc community members via <https://roc-lang.org/community> to see if they can help.";
+
+/// We'll exit with this code if allocation fails
+const ALLOC_FAILED_EXIT_CODE: u8 = 90;
 
 /// Returns the pointer and also how many bytes were actually allocated,
 /// since it will round up to the nearest page size depending on target OS.
-pub(crate) fn alloc_virtual(layout: Layout) -> (*mut u8, usize) {
+pub(crate) fn alloc_virtual(layout: Layout) -> (NonNull<u8>, usize) {
     let size = layout.size();
-    let align = layout.align();
 
     #[cfg(unix)]
     {
@@ -65,14 +73,30 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (*mut u8, usize) {
                 0,
             )
         };
+        // We should never return a size smaller than what was requested!
+        debug_assert!(size >= layout.size());
 
-        if answer == MAP_FAILED {
-            let todo = todo!("Handle mapping failed");
-        } else {
-            // We should never return a size smaller than what was requested!
-            debug_assert!(size >= layout.size());
+        match NonNull::new(answer) {
+            Some(non_null) if answer != MAP_FAILED => (non_null.cast(), size),
+            _ => {
+                extern "C" {
+                    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+                    fn exit(status: i32) -> !;
+                }
 
-            (answer as *mut u8, size)
+                const FD_STDERR: i32 = 2;
+
+                // Allocation failed. We realistically can't recover from this, so print OOM and exit.
+                unsafe {
+                    // Write OOM_MESSAGE to stderr and exit
+                    write(
+                        FD_STDERR,
+                        ALLOC_FAILED_MESSAGE.as_ptr(),
+                        ALLOC_FAILED_MESSAGE.len(),
+                    );
+                    exit(ALLOC_FAILED_EXIT_CODE as i32);
+                }
+            }
         }
     }
 
@@ -110,42 +134,88 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (*mut u8, usize) {
             )
         };
 
-        if ptr == ptr::null_mut::<c_void>() {
-            let todo =
-                todo!("Handle allocation failed. Use GetLastError to find out what happened.");
-        }
-
         // We should never return a size smaller than what was requested!
         debug_assert!(size >= layout.size());
 
-        (ptr as *mut u8, size)
+        match NonNull::new(ptr) {
+            Some(non_null) => (non_null.cast(), size),
+            None => {
+                // Allocation failed. We realistically can't recover from this, so print OOM and exit.
+                extern "system" {
+                    fn GetStdHandle(nStdHandle: i32) -> *mut u8;
+                    fn WriteFile(
+                        hFile: *mut u8,
+                        lpBuffer: *const u8,
+                        nNumberOfBytesToWrite: u32,
+                        lpNumberOfBytesWritten: *mut u32,
+                        lpOverlapped: *mut u8,
+                    ) -> i32;
+                    fn ExitProcess(uExitCode: u32) -> !;
+                }
+
+                const STD_ERROR_HANDLE: i32 = -12;
+
+                unsafe {
+                    use core::mem::MaybeUninit;
+
+                    // Write OOM_MESSAGE to stderr and exit
+                    let mut bytes_written = MaybeUninit::uninit();
+
+                    WriteFile(
+                        GetStdHandle(STD_ERROR_HANDLE),
+                        ALLOC_FAILED_MESSAGE.as_ptr(),
+                        ALLOC_FAILED_MESSAGE.len() as u32,
+                        bytes_written.as_mut_ptr(),
+                        core::ptr::null_mut(),
+                    );
+
+                    ExitProcess(ALLOC_FAILED_EXIT_CODE as u32);
+                }
+            }
+        }
     }
 
     #[cfg(wasm32)]
     {
-        use core::ptr;
-
-        // Round up to nearest page
-        let size = (size + (WEE_ALLOC_ALIGN - 1)) & !(WEE_ALLOC_ALIGN - 1);
-
-        // Safety: We rounded up `size` to the correct multiple already.
-        let ptr =
-            unsafe { WEE_ALLOC.alloc(Layout::from_size_align_unchecked(size, WEE_ALLOC_ALIGN)) };
-
-        if ptr.is_null() {
-            let todo = todo!("Handle allocation error");
-        }
+        let ptr = unsafe { WEE_ALLOC.alloc(layout) };
 
         // We should never return a size smaller than what was requested!
         debug_assert!(size >= layout.size());
 
-        (ptr, size)
+        match NonNull::new(ptr) {
+            Some(non_null) => (non_null.cast(), size),
+            None => {
+                extern "C" {
+                    fn alloc_failed(ptr: *const u8, len: usize) -> !;
+                }
+
+                alloc_failed(ALLOC_FAILED_MESSAGE.as_ptr(), ALLOC_FAILED_MESSAGE.len());
+            }
+        }
     }
+}
+
+//////////////////
+// DEALLOCATION //
+//////////////////
+
+#[cfg(debug_assertions)]
+macro_rules! dealloc_failed {
+    ($ptr:expr) => {
+        let mut buf = [0; 256];
+
+        let _ = fs::IoError::most_recent().write(&mut buf);
+
+        panic!(
+            "Tried to deallocate address {:?} but it failed with error: {:?}",
+            $ptr,
+            core::ffi::CStr::from_bytes_until_nul(&buf)
+        );
+    };
 }
 
 pub(crate) unsafe fn dealloc_virtual(ptr: *mut u8, layout: Layout) {
     let size = layout.size();
-    let align = layout.align();
 
     #[cfg(unix)]
     {
@@ -155,8 +225,16 @@ pub(crate) unsafe fn dealloc_virtual(ptr: *mut u8, layout: Layout) {
             fn munmap(addr: *mut c_void, length: usize) -> i32;
         }
 
-        if munmap(ptr as *mut c_void, size) < 0 {
-            let todo = todo!("Check errno to see what the error was.");
+        // If deallocation fails, panic in debug builds so we can try to diagnose it
+        // (and so that it will fail tests), but silently continue in release builds
+        // because a memory leak is generally a better user experience than a crash.
+        let _answer = munmap(ptr as *mut c_void, size);
+
+        #[cfg(debug_assertions)]
+        {
+            if _answer < 0 {
+                dealloc_failed!(ptr);
+            }
         }
     }
 
@@ -172,25 +250,31 @@ pub(crate) unsafe fn dealloc_virtual(ptr: *mut u8, layout: Layout) {
 
         // When calling VirtualAlloc with MEM_RELEASE, the second argument must be 0.
         // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualfree#parameters
-        if VirtualFree(ptr as *mut c_void, 0, MEM_RELEASE) == 0 {
-            let todo = todo!(
-                "Handle error using GetLastError and incorporate size somehow to avoid unused warning: {}",
-                size
-            );
+        let _answer = VirtualFree(ptr as *mut c_void, 0, MEM_RELEASE);
+
+        #[cfg(debug_assertions)]
+        {
+            if _answer == 0 {
+                dealloc_failed!(ptr);
+            }
         }
     }
 
     #[cfg(wasm32)]
     {
-        use core::{alloc::Layout, ptr};
+        let _ptr = unsafe { WEE_ALLOC.dealloc(layout) };
 
-        let ptr =
-            unsafe { WEE_ALLOC.dealloc(Layout::from_size_align_unchecked(size, WEE_ALLOC_ALIGN)) };
-
-        if ptr.is_null() {
-            let todo = todo!("Handle deallocation error");
+        // If deallocation fails, panic in debug builds so we can try to diagnose it
+        // (and so that it will fail tests), but silently continue in release builds
+        // because a memory leak is generally a better user experience than a crash.
+        #[cfg(debug_assertions)]
+        {
+            if _ptr.is_null() {
+                panic!(
+                    "Tried to deallocate address {:?} but it failed.",
+                    $ptr,
+                );
+            }
         }
-
-        (ptr, size)
     }
 }
