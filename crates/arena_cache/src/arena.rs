@@ -164,12 +164,6 @@ impl<'a> Arena<'a> {
         }
     }
 
-    /// Get a temporary ("scratch") arena based on this one, which gets completely deallocated
-    /// once the function returns.
-    pub fn alloc_scratch<T: Copy>(&mut self, run: impl FnOnce(&'a mut Self) -> T) -> T {
-        let todo = todo!("implement");
-    }
-
     pub fn capacity(&self) -> usize {
         // Return the current chunk's capacity.
         match NonNull::new(self.chunk) {
