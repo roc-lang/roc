@@ -2,12 +2,8 @@
 // Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
-use core::mem::size_of;
 use core::num::{NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize};
 use core::{fmt, slice};
-
-#[repr(align(16))]
-struct AlignedU128(u128);
 
 macro_rules! make_str_n {
     ($num_lanes:expr, $name:ident, $chunk_name:ident, $chunks_name:ident, $int:ty, $nonzero_int:ty) => {
@@ -92,7 +88,7 @@ impl Str4 {
     /// Returns Some(first index where self occurs in the given slice) or else None if it wasn't found.
     ///
     /// # Safety
-    /// The slice's pointer must point to at least 16B of accessible memory, even if its length means
+    /// There must bet at least least 16B of accessible memory after the end of the slice.
     /// we'll never need to look that far. The reason for this is that we start by dereferencing the
     /// slice's pointer into a 16B structure, and then discarding any memory garbage we find.
     /// So there must be 16B there that we can safely dereference, even if it contains garbage!
@@ -137,26 +133,36 @@ impl Str4 {
             needle = wasm32::i32x4_splat(*(self as *const Self).cast());
         }
 
-        let success = |elem_ptr, offset| {
-            Some(len - (dbg!(slice_end.offset_from(elem_ptr)) + dbg!(offset)) as usize)
+        let success = |ptr: *const Str4, offset| {
+            let index = dbg!(ptr.offset_from(first_elem) + dbg!(offset)) as usize;
+
+            // It's possible that we got a false positive because we encountered memory garbage
+            // after the last element, and it happened to be a match. If that's the case, it must
+            // mean we examined all the elements and didn't find a match, so return None.
+            if index < len {
+                Some(index)
+            } else {
+                None
+            }
         };
 
         macro_rules! check_equality {
-            ($ptr:expr, $elem_ptr:expr) => {{
+            ($ptr:expr, $elem_ptr:expr, $apply_mask:expr) => {{
                 // This pointer should have the correct alignment for a 16B-aligned SIMD register
                 debug_assert_eq!(($ptr as *const core::ffi::c_void).align_offset(ALIGN), 0);
 
                 #[cfg(target_arch = "aarch64")]
                 {
                     // Compare each lane of the chunk to the needle for equality.
-                    let equality_reg = aarch64::vceqq_u32(aarch64::vld1q_u32($ptr), needle);
+                    // Apply a mask afterwards so we can discard lanes that contained garbage memory.
+                    let equality_reg = $apply_mask(aarch64::vceqq_u32(aarch64::vld1q_u32($ptr), needle));
 
                     // If lane-wise equality returned any nonzero values, we found a match.
                     if aarch64::vmaxvq_u32(equality_reg) != 0 {
                         // Do a bitwise AND with answer_mask, whose lanes are initialized to [0, 1, 2, 3]
                         // and then get the scalar min of that, which will tell us the first lane's index
                         // where we found an occurrence of the needle. (If multiple lanes matched, min will
-                        // give us the first one that matched, which is what we want given find's semantics.)
+                        // give us the first one that matched, which is what we want this function to do.)
                         let lane_index =
                             aarch64::vminvq_u32(aarch64::vandq_u32(equality_reg, answer_mask)) as isize;
 
@@ -207,35 +213,37 @@ impl Str4 {
         // Special-case the first chunk, which may not be 16B-aligned.
         // (Subsequent chunks will definitely be 16B-aligned.)
         {
-            // We need to shift in this many zeros to discard any memory garbage.
-            let empty_lanes = dbg!(NUM_LANES.saturating_sub(len));
+            // We need to mask out this many lanes to discard memory garbage.
+            let garbage_lanes = dbg!(NUM_LANES.saturating_sub(dbg!(len)));
 
-            todo!("what needs to happen here is:// see comment");
-            // Currently we're loading an i128 and bit shifting it. I don't think this is actually what we want to do.
-            // I think the problem we're seeing is that the bit shifting is running afoul of endianness, so
-            // we don't want to get u128 involved at all. Instead what we want to do is to pass in a mask
-            // (only on this first equality check, so maybe a Fn instead) which is all 1s for the first N lanes
-            // which are valid, and 0s for the others. Then we put that mask into a register and do a bitwise &
-            // with the equality register, such that all the lanes that we loaded with garbage data will be
-            // considered unequal no matter what. So to do that we just have to figure out how to construct
-            // the mask efficiently!
-            let lane_mask = AlignedU128(!0 << (empty_lanes * size_of::<Str4>())); // not sure if this is it...
+            dbg!(*first_elem);
 
-            // First, load a u128 with the given bytes. Wrap in a struct to ensure 16B alignment.
-            // (This pointer dereference is why the pointer must point to at least 16B of accessible memory.
-            // Even if we may end up discarding a lot of these bytes, this is the fastest way to load them!)
-            let int = AlignedU128(
-                u128::from_be_bytes(*first_elem.cast()) >> (empty_lanes * size_of::<Str4>()),
+            // Give an offset that subtracts the zero padding, so the answer index is
+            // relative to the start of the slice rather than incorrectly offset by the zeros.
+            check_equality!(
+                first_elem.cast(),
+                first_elem.add(garbage_lanes).cast(),
+                // Do a bitwise AND on each lane, to remove the garbage memory.
+                // (This will happen after the equality chek, so all the garbage
+                // lanes will be reported as not equal.)
+                |reg| {
+                    #[repr(align(16))]
+                    struct AlignedU32x4([u32; 4]);
+
+                    // Mask 0 is all 1s, so it has no effect. The others mask out 1 more lane than the previous one.
+                    const MASKS: [AlignedU32x4; 4] = [
+                        AlignedU32x4([!0, !0, !0, !0]),
+                        AlignedU32x4([!0, !0, !0, 0]),
+                        AlignedU32x4([!0, !0, 0, 0]),
+                        AlignedU32x4([!0, 0, 0, 0]),
+                    ];
+
+                    aarch64::vandq_u32(
+                        reg,
+                        aarch64::vld1q_u32(dbg!(MASKS[garbage_lanes].0).as_ptr()),
+                    )
+                }
             );
-
-            // Get a pointer to these 128 bits, then load it into a 128-bit SIMD register.
-            {
-                let src_ptr = (&int as *const AlignedU128).cast();
-
-                // Give an offset that subtracts the zero padding, so the answer index is
-                // relative to the start of the slice rather than incorrectly offset by the zeros.
-                check_equality!(src_ptr, first_elem.add(empty_lanes).cast());
-            }
 
             // Advance to the next 16B boundary so we can do SIMD loads on each subsequent chunk.
             // If we were already on a 16B boundary, then branchlessly advance by NUM_LANES - otherwise
@@ -247,21 +255,32 @@ impl Str4 {
                 align_offset
             };
 
+            dbg!(&amount_to_advance);
+
             current_elem = first_elem.add(amount_to_advance).cast();
         }
 
-        while (current_elem as usize + size_of::<AlignedU128>()) < slice_end as usize {
-            check_equality!(current_elem.cast(), current_elem.cast());
+        while (dbg!(slice_end.offset_from(current_elem)) >= NUM_LANES as isize) {
+            dbg!(*(current_elem as *const Str4));
+
+            check_equality!(current_elem.cast(), current_elem.cast(), |a| a);
 
             // Advance to the next chunk
             current_elem = current_elem.add(NUM_LANES);
         }
 
-        // There may have been leftovers
-        let last_chunk = slice_end.offset(-(NUM_LANES as isize));
-        let last_chunk = last_chunk.add(last_chunk.align_offset(ALIGN));
+        // There may have been leftovers. If so, check for them by looking at the very last chunk.
+        // (We only want to do this if there were actually possibly leftovers; otherwise, we may read
+        // garbage memory. We don't want to have to mask that out in the common case where len >= NUM_LANES!)
+        if len > NUM_LANES {
+            dbg!("CHECKING FOR LEFTOVERS");
+            let last_chunk =
+                slice_end.offset(slice_end.align_offset(ALIGN) as isize - (NUM_LANES as isize));
+            debug_assert_eq!(last_chunk.align_offset(ALIGN), 0);
+            dbg!(*(last_chunk as *const Str4), last_chunk, slice_end);
 
-        check_equality!(last_chunk.cast(), last_chunk.cast());
+            check_equality!(last_chunk.cast(), last_chunk.cast(), |a| a);
+        }
 
         None
     }
@@ -480,7 +499,7 @@ mod str4_from_str {
         assert_ne!(src.len(), 0);
 
         for index in 0..src.len() {
-            let expected = Some(src.len() - index);
+            let expected = Some(src.len() - index - 1);
             let actual = unsafe { dbg!(last_input.unwrap()).first_index_in(dbg!(&src[index..])) };
 
             assert_eq!(
