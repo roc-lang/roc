@@ -10,7 +10,7 @@ On MacOS and Linux, we highly recommend Using [nix](https://nixos.org/download.h
 
 ### On Linux x86_64 or MacOS aarch64/arm64/x86_64
 
-#### Install
+#### Installing Nix
 
 If you are running ArchLinux or a derivative like Manjaro, you'll need to run `sudo sysctl -w kernel.unprivileged_userns_clone=1` before installing nix.
 
