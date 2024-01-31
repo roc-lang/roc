@@ -132,6 +132,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena"
+version = "0.0.1"
+dependencies = [
+ "crash",
+ "fs",
+ "wee_alloc",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -354,14 +363,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
-name = "cache"
-version = "0.0.1"
-dependencies = [
- "fs",
- "wee_alloc",
-]
-
-[[package]]
 name = "capstone"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -573,6 +574,10 @@ name = "core-foundation-sys"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e496a50fda8aacccc86d7529e2c1e0892dbd0f898a6b5645b5561b89c3210efa"
+
+[[package]]
+name = "crash"
+version = "0.0.1"
 
 [[package]]
 name = "crc32fast"

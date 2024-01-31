@@ -150,20 +150,6 @@ impl<'a> Arena<'a> {
         }
     }
 
-    /// If the given pointer (and corresponding layout) happens to be the most recently allocated
-    /// thing, then reset the bump pointer back to reclaim that memory. Returns whether any memory
-    /// was successfully reclaimed.
-    ///
-    /// # Safety
-    /// If this returns `true`, then the memory backing the given slice has been reclaimed,
-    /// and referencing the slice ever again would be undefined behavior.
-    pub unsafe fn try_dealloc(&'a mut self, slice: &'a mut [u8]) -> bool {
-        match NonNull::new(self.chunk) {
-            Some(mut chunk) => chunk.as_mut().try_dealloc(slice.as_mut_ptr(), slice.len()),
-            None => false,
-        }
-    }
-
     pub fn capacity(&self) -> usize {
         // Return the current chunk's capacity.
         match NonNull::new(self.chunk) {

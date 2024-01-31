@@ -78,25 +78,7 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (NonNull<u8>, usize) {
 
         match NonNull::new(answer) {
             Some(non_null) if answer != MAP_FAILED => (non_null.cast(), size),
-            _ => {
-                extern "C" {
-                    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
-                    fn exit(status: i32) -> !;
-                }
-
-                const FD_STDERR: i32 = 2;
-
-                // Allocation failed. We realistically can't recover from this, so print OOM and exit.
-                unsafe {
-                    // Write OOM_MESSAGE to stderr and exit
-                    write(
-                        FD_STDERR,
-                        ALLOC_FAILED_MESSAGE.as_ptr(),
-                        ALLOC_FAILED_MESSAGE.len(),
-                    );
-                    exit(ALLOC_FAILED_EXIT_CODE as i32);
-                }
-            }
+            _ => crash::unrecoverable!(ALLOC_FAILED_MESSAGE, ALLOC_FAILED_EXIT_CODE),
         }
     }
 
@@ -139,39 +121,7 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (NonNull<u8>, usize) {
 
         match NonNull::new(ptr) {
             Some(non_null) => (non_null.cast(), size),
-            None => {
-                // Allocation failed. We realistically can't recover from this, so print OOM and exit.
-                extern "system" {
-                    fn GetStdHandle(nStdHandle: i32) -> *mut u8;
-                    fn WriteFile(
-                        hFile: *mut u8,
-                        lpBuffer: *const u8,
-                        nNumberOfBytesToWrite: u32,
-                        lpNumberOfBytesWritten: *mut u32,
-                        lpOverlapped: *mut u8,
-                    ) -> i32;
-                    fn ExitProcess(uExitCode: u32) -> !;
-                }
-
-                const STD_ERROR_HANDLE: i32 = -12;
-
-                unsafe {
-                    use core::mem::MaybeUninit;
-
-                    // Write OOM_MESSAGE to stderr and exit
-                    let mut bytes_written = MaybeUninit::uninit();
-
-                    WriteFile(
-                        GetStdHandle(STD_ERROR_HANDLE),
-                        ALLOC_FAILED_MESSAGE.as_ptr(),
-                        ALLOC_FAILED_MESSAGE.len() as u32,
-                        bytes_written.as_mut_ptr(),
-                        core::ptr::null_mut(),
-                    );
-
-                    ExitProcess(ALLOC_FAILED_EXIT_CODE as u32);
-                }
-            }
+            None => crash::unrecoverable!(ALLOC_FAILED_MESSAGE, ALLOC_FAILED_EXIT_CODE),
         }
     }
 

@@ -59,26 +59,6 @@ impl ChunkHeader {
         let todo = todo!("allocate");
     }
 
-    pub(crate) unsafe fn try_dealloc(&mut self, ptr: *mut u8, size: usize) -> bool {
-        let todo = todo!("Look at the pointer and layout; if it's the most recent thing we allocated, bump back over it.");
-    }
-
-    pub(crate) fn contents(&self) -> &[u8] {
-        unsafe {
-            let after_header = (self as *const Self).add(1);
-
-            core::slice::from_raw_parts(after_header.cast(), self.capacity)
-        }
-    }
-
-    pub(crate) fn contents_mut(&mut self) -> &mut [u8] {
-        unsafe {
-            let after_header = (self as *mut Self).add(1);
-
-            core::slice::from_raw_parts_mut(after_header.cast(), self.capacity)
-        }
-    }
-
     /// Write this chunk and (recursively) all of its previous chunks to disk, using a single writev sycall.
     ///
     /// https://linux.die.net/man/2/writev
@@ -124,8 +104,19 @@ impl ChunkHeader {
                         prev_chunk = NonNull::new(ptr.as_ref().prev);
                     }
 
+                    // If this ever happens, something was probably miscalibrated.
+                    // Panic in dev builds so we hear about it, but gracefully error
+                    // out in release builds.
                     if iovecs_needed > i32::MAX as usize {
-                        let todo = todo!("handle too many iovecs needed");
+                        #[cfg(debug_assertions)]
+                        {
+                            panic!("The number of iovecs needed was {:?}, but the max that writev accepts is {:?}. Something probably went wrong for there to be so many chunks in this arena!", iovecs_needed, i32::MAX);
+                        }
+
+                        #[cfg(not(debug_assertions))]
+                        {
+                            return Err(IoError::NOT_ENOUGH_MEMORY);
+                        }
                     }
 
                     // Now that we know how many iovecs we need, allocate enough space for them.

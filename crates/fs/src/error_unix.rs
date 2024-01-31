@@ -1,6 +1,10 @@
+#[derive(Debug, Clone, Copy)]
 pub struct IoError(i32);
 
 impl IoError {
+    /// ENOMEM is 12 in errno.h https://en.wikipedia.org/wiki/Errno.h
+    pub const NOT_ENOUGH_MEMORY: Self = Self(12);
+
     pub fn write(&self, buf: &mut [u8]) -> Result<(), IoError> {
         extern "C" {
             // https://linux.die.net/man/3/strerror_r
