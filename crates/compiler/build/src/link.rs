@@ -613,7 +613,8 @@ pub fn rebuild_host(
 
             // Clean up c_host.o
             if c_host_dest.exists() {
-                std::fs::remove_file(c_host_dest).unwrap();
+                // there can be a race condition on this file cleanup
+                let _ = std::fs::remove_file(c_host_dest);
             }
         }
     } else if rust_host_src.exists() {
