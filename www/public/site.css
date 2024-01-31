@@ -50,10 +50,8 @@ html {
 
 html,
 body {
-    margin: 0;
+    margin: 0 30px;
     padding: 0;
-    width: 100%;
-    height: 100%;
     box-sizing: border-box;
     overflow-x: hidden; /* This shouldn't be necessary, but without it mobile has a right gutter. */
 }
