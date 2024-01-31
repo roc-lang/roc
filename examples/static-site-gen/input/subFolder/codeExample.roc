@@ -38,6 +38,7 @@ view = \currentNavLink, htmlContent ->
             Html.title [] [text currentNavLink.title],
             link [rel "stylesheet", href "style.css"] [],
         ],
+        ### start snippet body
         body [] [
             div [class "main"] [
                 div [class "navbar"] [
@@ -50,8 +51,9 @@ view = \currentNavLink, htmlContent ->
                 ],
             ],
         ],
+        ### end snippet body
     ]
-### end snippet
+### end snippet view
 
 viewNavbar : NavLink -> Html.Node
 viewNavbar = \currentNavLink ->

@@ -3,13 +3,11 @@ use libc;
 use pulldown_cmark::{html, Options, Parser};
 use roc_std::{RocBox, RocStr};
 use std::env;
-use std::ffi::CStr;
 use std::fs;
-use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Style, ThemeSet};
+use syntect::highlighting::{ThemeSet};
 use syntect::html::{ClassStyle, ClassedHTMLGenerator};
 use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
@@ -357,13 +355,7 @@ pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
 fn is_roc_code_block(cbk: &pulldown_cmark::CodeBlockKind) -> bool {
     match cbk {
         pulldown_cmark::CodeBlockKind::Indented => false,
-        pulldown_cmark::CodeBlockKind::Fenced(cow_str) => {
-            if cow_str.contains("roc") {
-                true
-            } else {
-                false
-            }
-        }
+        pulldown_cmark::CodeBlockKind::Fenced(cow_str) => cow_str.contains("roc")
     }
 }
 
@@ -382,12 +374,24 @@ fn read_replacement_file(replacement_file_name: &str, input_file: &Path) -> Stri
         Ok(content) => String::from_utf8(content).unwrap(),
         Err(err) => {
             panic!(
-                "ERROR File \"{}\" is unreadable ({}). ",
+                "ERROR File \"{}\" is unreadable:\n\t{}",
                 replacement_file_path.to_str().unwrap(),
                 err
             );
         }
     }
+}
+
+fn remove_snippet_comments(input: &str) -> String {
+    let line_ending = if input.contains("\r\n") { "\r\n" } else { "\n" };
+
+    input
+        .lines()
+        .filter(|line| {
+            !line.contains("### start snippet") && !line.contains("### end snippet")
+        })
+        .collect::<Vec<&str>>()
+        .join(line_ending)
 }
 
 fn read_replacement_snippet(
@@ -396,21 +400,29 @@ fn read_replacement_snippet(
     input_file: &Path,
 ) -> String {
     let start_marker = format!("### start snippet {}", snippet_name);
-    let end_marker = "### end snippet";
+    let end_marker = format!("### end snippet {}", snippet_name);
 
     let replacement_file_content = read_replacement_file(replacement_file_name.trim(), input_file);
 
     let start_position = replacement_file_content
         .find(&start_marker)
-        .expect(format!("ERROR Cannot find start marker \"{}\". ", &start_marker).as_str());
+        .expect(format!("ERROR Failed to find snippet start \"{}\". ", &start_marker).as_str());
 
     let end_position = replacement_file_content
         .find(&end_marker)
-        .expect(format!("ERROR Cannot find end marker \"{}\". ", &end_marker).as_str());
+        .expect(format!("ERROR Failed to find snippet end \"{}\". ", &end_marker).as_str());
 
-    if start_position > end_position {
-        "".to_string()
+    if start_position >= end_position {
+        let start_position_str = start_position.to_string();
+        let end_position_str = end_position.to_string();
+
+        panic!(
+            "ERROR Detected start position ({start_position_str}) of snippet \"{snippet_name}\" was greater than or equal to detected end position ({end_position_str})." 
+        );
     } else {
-        replacement_file_content[start_position + start_marker.len()..end_position].to_string()
+        // We want to remove other snippet comments inside this one if they exist.
+        remove_snippet_comments(
+            &replacement_file_content[start_position + start_marker.len()..end_position]
+        )
     }
 }
