@@ -32,7 +32,7 @@ install-zig-llvm:
     RUN apt -y install libpolly-16-dev # required by llvm-sys crate
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     RUN apt -y install libssl-dev
-    RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
+    RUN wget https://rustwasm.github.io/wasm-pack/installer/init.sh -O init.sh && sh init.sh
     # sccache
     RUN cargo install sccache --locked
     RUN sccache -V
