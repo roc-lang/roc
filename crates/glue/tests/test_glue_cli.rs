@@ -43,7 +43,7 @@ mod glue_cli_run {
                     let test_name_str = stringify!($test_name);
 
                     // TODO after #5924 is fixed; remove this
-                    let skip_on_linux = ["closures", "option", "nullable_wrapped"];
+                    let skip_on_linux = ["closures", "option", "nullable_wrapped", "enumeration", "nested_record"];
 
                     if !(cfg!(target_os = "linux") && (skip_on_linux.contains(&test_name_str))) {
                         let out = run_app(&dir.join("app.roc"), std::iter::empty());
