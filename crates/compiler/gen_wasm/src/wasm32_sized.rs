@@ -75,19 +75,36 @@ impl Wasm32Sized for isize {
     const ALIGN_OF_WASM: usize = 4;
 }
 
+const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
+    if lhs == 0 {
+        return lhs;
+    }
+
+    match lhs % rhs {
+        0 => lhs,
+        r => lhs + (rhs - r),
+    }
+}
+
 impl<T: Wasm32Sized, U: Wasm32Sized> Wasm32Sized for (T, U) {
-    const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM;
+    const SIZE_OF_WASM: usize =
+        next_multiple_of(T::SIZE_OF_WASM + U::SIZE_OF_WASM, Self::ALIGN_OF_WASM);
     const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM]);
 }
 
 impl<T: Wasm32Sized, U: Wasm32Sized, V: Wasm32Sized> Wasm32Sized for (T, U, V) {
-    const SIZE_OF_WASM: usize = T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM;
+    const SIZE_OF_WASM: usize = next_multiple_of(
+        T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM,
+        Self::ALIGN_OF_WASM,
+    );
     const ALIGN_OF_WASM: usize = max(&[T::ALIGN_OF_WASM, U::ALIGN_OF_WASM, V::ALIGN_OF_WASM]);
 }
 
 impl<T: Wasm32Sized, U: Wasm32Sized, V: Wasm32Sized, W: Wasm32Sized> Wasm32Sized for (T, U, V, W) {
-    const SIZE_OF_WASM: usize =
-        T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM + W::SIZE_OF_WASM;
+    const SIZE_OF_WASM: usize = next_multiple_of(
+        T::SIZE_OF_WASM + U::SIZE_OF_WASM + V::SIZE_OF_WASM + W::SIZE_OF_WASM,
+        Self::ALIGN_OF_WASM,
+    );
     const ALIGN_OF_WASM: usize = max(&[
         T::ALIGN_OF_WASM,
         U::ALIGN_OF_WASM,
