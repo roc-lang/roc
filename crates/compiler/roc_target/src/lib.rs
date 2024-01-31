@@ -77,11 +77,12 @@ impl TargetInfo {
     }
 
     pub const fn max_by_value_size(&self) -> usize {
-        // Pass values larger than 4 machine words by reference.
+        // From testing with List/Str (3 machine words) plus looking at other language defaults:
+        // Pass values larger than 2 machine words by reference.
         // This is a reasonable default for most architectures. We want to pass large values by
         // reference because it's more efficient than copying them around on the stack, and puts
         // less pressure on CPU registers.
-        self.ptr_size() * 4
+        self.ptr_size() * 2
     }
 
     pub const fn ptr_alignment_bytes(&self) -> usize {
