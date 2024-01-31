@@ -1486,5 +1486,12 @@ fn number_literal_to_ast<T: std::fmt::Display>(arena: &Bump, num: T) -> Expr<'_>
 
     let mut string = bumpalo::collections::String::with_capacity_in(64, arena);
     write!(string, "{num}").unwrap();
-    Expr::Num(string.into_bump_str())
+
+    if string == "inf" {
+        Expr::Num("∞")
+    } else if string == "-inf" {
+        Expr::Num("-∞")
+    } else {
+        Expr::Num(string.into_bump_str())
+    }
 }

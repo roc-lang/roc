@@ -101,6 +101,12 @@ fn num_ceil_checked_division_success() {
 }
 
 #[test]
+fn float_division_by_zero() {
+    expect_success("1f64 / 0", "∞ : F64");
+    expect_success("-1f64 / 0", "-∞ : F64");
+}
+
+#[test]
 fn bool_in_record() {
     expect_success("{ x: 1 == 1 }", "{ x: Bool.true } : { x : Bool }");
     expect_success(
@@ -802,6 +808,32 @@ fn list_get_negative_index() {
             But get needs its 2nd argument to be:
 
                 U64
+            "#
+        ),
+    );
+}
+
+#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
+#[test]
+fn invalid_string_interpolation() {
+    expect_failure(
+        "\"$(123)\"",
+        indoc!(
+            r#"
+            ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
+
+            This argument to this string interpolation has an unexpected type:
+
+            4│      "$(123)"
+                       ^^^
+
+            The argument is a number of type:
+
+                Num *
+
+            But this string interpolation needs its argument to be:
+
+                Str
             "#
         ),
     );

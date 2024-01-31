@@ -1262,6 +1262,12 @@ define_builtins! {
         150 NUM_BITWISE_NOT: "bitwiseNot"
         151 NUM_INT_CAST: "intCast"
         152 NUM_IS_APPROX_EQ: "isApproxEq"
+        153 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        154 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        155 NUM_BYTES_TO_U64_LOWLEVEL: "bytesToU64Lowlevel"
+        156 NUM_BYTES_TO_U128_LOWLEVEL: "bytesToU128Lowlevel"
+        157 NUM_DIV_TRUNC_UNCHECKED: "divTruncUnchecked" // traps on division by zero
+        158 NUM_REM_UNCHECKED: "remUnchecked" // traps on division by zero
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

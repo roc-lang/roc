@@ -163,12 +163,12 @@ procedure List.90 (#Derived_gen.17, #Derived_gen.18, #Derived_gen.19, #Derived_g
     jump List.574 #Derived_gen.17 #Derived_gen.18 #Derived_gen.19 #Derived_gen.20 #Derived_gen.21;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.258 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.258;
+    let Num.268 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.268;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.257 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.257;
+    let Num.267 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.267;
 
 procedure Str.3 (#Attr.2, #Attr.3):
     let Str.249 : Str = lowlevel StrConcat #Attr.2 #Attr.3;

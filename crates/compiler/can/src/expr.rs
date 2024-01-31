@@ -2600,10 +2600,38 @@ fn flatten_str_lines<'a>(
 fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;
 
+    let n = segments.len();
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
         Some(Plaintext(string)) => Loc::at(Region::zero(), Expr::Str(string)),
-        Some(Interpolation(loc_expr)) => loc_expr,
+        Some(Interpolation(loc_expr)) => {
+            if n == 1 {
+                // We concat with the empty string to ensure a type error when loc_expr is not a string
+                let empty_string = Loc::at(Region::zero(), Expr::Str("".into()));
+
+                let fn_expr = Loc::at(
+                    Region::zero(),
+                    Expr::Var(Symbol::STR_CONCAT, var_store.fresh()),
+                );
+                let expr = Expr::Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    vec![
+                        (var_store.fresh(), empty_string),
+                        (var_store.fresh(), loc_expr),
+                    ],
+                    CalledVia::StringInterpolation,
+                );
+
+                Loc::at(Region::zero(), expr)
+            } else {
+                loc_expr
+            }
+        }
         None => {
             // No segments? Empty string!
 

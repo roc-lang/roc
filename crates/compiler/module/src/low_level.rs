@@ -304,8 +304,8 @@ map_symbol_to_lowlevel! {
     NumCompare <= NUM_COMPARE;
     NumDivFrac <= NUM_DIV_FRAC;
     NumDivCeilUnchecked <= NUM_DIV_CEIL;
-    NumDivTruncUnchecked <= NUM_DIV_TRUNC;
-    NumRemUnchecked <= NUM_REM;
+    NumDivTruncUnchecked <= NUM_DIV_TRUNC_UNCHECKED;
+    NumRemUnchecked <= NUM_REM_UNCHECKED;
     NumIsMultipleOf <= NUM_IS_MULTIPLE_OF;
     NumAbs <= NUM_ABS;
     NumNeg <= NUM_NEG;

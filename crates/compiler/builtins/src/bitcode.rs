@@ -415,6 +415,9 @@ pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
+pub const DEC_ROUND: IntrinsicName = int_intrinsic!("roc_builtins.dec.round");
+pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
+pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
 pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";

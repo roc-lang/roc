@@ -52,6 +52,10 @@ comptime {
 
     inline for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
+
+        dec.exportRound(T, ROC_BUILTINS ++ ".dec.round.");
+        dec.exportFloor(T, ROC_BUILTINS ++ ".dec.floor.");
+        dec.exportCeiling(T, ROC_BUILTINS ++ ".dec.ceiling.");
     }
 }
 

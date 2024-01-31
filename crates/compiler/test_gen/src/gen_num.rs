@@ -1156,17 +1156,18 @@ fn gen_div_u64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = r#"User crash with message: "Integer division by 0!"#)]
+fn gen_div_by_zero_i64() {
+    assert_evals_to!("1i64 // 0", 100, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_div_checked_i64() {
     assert_evals_to!(
-        indoc!(
-            r"
-                    when Num.divTruncChecked 1000 10 is
-                        Ok val -> val
-                        Err _ -> -1
-                "
-        ),
-        100,
-        i64
+        "Num.divTruncChecked 1000 10",
+        RocResult::ok(100),
+        RocResult<i64, ()>
     );
 }
 
@@ -1174,15 +1175,9 @@ fn gen_div_checked_i64() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_div_checked_by_zero_i64() {
     assert_evals_to!(
-        indoc!(
-            r"
-                    when Num.divTruncChecked 1000 0 is
-                        Err DivByZero -> 99
-                        _ -> -24
-                "
-        ),
-        99,
-        i64
+        "Num.divTruncChecked 1000 0",
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
@@ -1194,17 +1189,28 @@ fn gen_rem_i64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[should_panic(expected = r#"User crash with message: "Integer division by 0!"#)]
+fn gen_rem_div_by_zero_i64() {
+    assert_evals_to!("Num.rem 42 0", 100, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn gen_rem_checked_i64() {
+    assert_evals_to!(
+        "Num.remChecked 42 40",
+        RocResult::ok(2),
+        RocResult<i64, ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_rem_checked_div_by_zero_i64() {
     assert_evals_to!(
-        indoc!(
-            r"
-            when Num.remChecked 8 0 is
-                Err DivByZero -> 4
-                Ok _ -> -23
-            "
-        ),
-        4,
-        i64
+        "Num.remChecked 8 0",
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
@@ -1825,15 +1831,56 @@ fn pow() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn ceiling() {
-    assert_evals_to!("Num.ceiling 1.1f64", 2, i64);
+fn round_f64() {
+    assert_evals_to!("Num.round 1.9f64", 2, i64);
+    assert_evals_to!("Num.round -1.9f64", -2, i64);
+    assert_evals_to!("Num.round 0.5f64", 1, i64);
+    assert_evals_to!("Num.round -0.5f64", -1, i64);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn floor() {
+fn round_dec() {
+    assert_evals_to!("Num.round 1.9dec", 2, i64);
+    assert_evals_to!("Num.round -1.9dec", -2, i64);
+    assert_evals_to!("Num.round 0.5dec", 1, i64);
+    assert_evals_to!("Num.round -0.5dec", -1, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn ceiling_f64() {
+    assert_evals_to!("Num.ceiling 1.9f64", 2, i64);
+    assert_evals_to!("Num.ceiling -1.9f64", -1, i64);
+    assert_evals_to!("Num.ceiling 0.5f64", 1, i64);
+    assert_evals_to!("Num.ceiling -0.5f64", 0, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn ceiling_dec() {
+    assert_evals_to!("Num.ceiling 1.9dec", 2, i64);
+    assert_evals_to!("Num.ceiling -1.9dec", -1, i64);
+    assert_evals_to!("Num.ceiling 0.5dec", 1, i64);
+    assert_evals_to!("Num.ceiling -0.5dec", 0, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn floor_f64() {
     assert_evals_to!("Num.floor 1.9f64", 1, i64);
     assert_evals_to!("Num.floor -1.9f64", -2, i64);
+    assert_evals_to!("Num.floor 0.5f64", 0, i64);
+    assert_evals_to!("Num.floor -0.5f64", -1, i64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn floor_dec() {
+    assert_evals_to!("Num.floor 1.9dec", 1, i64);
+    assert_evals_to!("Num.floor -1.9dec", -2, i64);
+    assert_evals_to!("Num.floor 0.5dec", 0, i64);
+    assert_evals_to!("Num.floor -0.5dec", -1, i64);
 }
 
 #[test]

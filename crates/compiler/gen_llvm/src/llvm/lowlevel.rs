@@ -2141,10 +2141,12 @@ fn build_dec_unary_op<'a, 'ctx>(
     _layout_interner: &STLayoutInterner<'a>,
     _parent: FunctionValue<'ctx>,
     arg: BasicValueEnum<'ctx>,
-    _return_layout: InLayout<'a>,
+    return_layout: InLayout<'a>,
     op: LowLevel,
 ) -> BasicValueEnum<'ctx> {
     use roc_module::low_level::LowLevel::*;
+
+    let int_width = || return_layout.to_int_width();
 
     match op {
         NumAbs => dec_unary_op(env, bitcode::DEC_ABS, arg),
@@ -2154,6 +2156,10 @@ fn build_dec_unary_op<'a, 'ctx>(
         NumCos => dec_unary_op(env, bitcode::DEC_COS, arg),
         NumSin => dec_unary_op(env, bitcode::DEC_SIN, arg),
         NumTan => dec_unary_op(env, bitcode::DEC_TAN, arg),
+
+        NumRound => dec_unary_op(env, &bitcode::DEC_ROUND[int_width()], arg),
+        NumFloor => dec_unary_op(env, &bitcode::DEC_FLOOR[int_width()], arg),
+        NumCeiling => dec_unary_op(env, &bitcode::DEC_CEILING[int_width()], arg),
 
         _ => {
             unreachable!("Unrecognized dec unary operation: {:?}", op);
@@ -2636,42 +2642,39 @@ fn build_float_unary_op<'a, 'ctx>(
                 LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Ceiling return layout is not int: {:?}", layout),
             };
-            match float_width {
-                FloatWidth::F32 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F32[int_width])
-                }
-                FloatWidth::F64 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_CEILING_F64[int_width])
-                }
-            }
+
+            let intrinsic = match float_width {
+                FloatWidth::F32 => &bitcode::NUM_CEILING_F32[int_width],
+                FloatWidth::F64 => &bitcode::NUM_CEILING_F64[int_width],
+            };
+
+            call_bitcode_fn(env, &[arg.into()], intrinsic)
         }
         NumFloor => {
             let int_width = match layout_interner.get_repr(layout) {
                 LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Floor return layout is not int: {:?}", layout),
             };
-            match float_width {
-                FloatWidth::F32 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F32[int_width])
-                }
-                FloatWidth::F64 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_FLOOR_F64[int_width])
-                }
-            }
+
+            let intrinsic = match float_width {
+                FloatWidth::F32 => &bitcode::NUM_FLOOR_F32[int_width],
+                FloatWidth::F64 => &bitcode::NUM_FLOOR_F64[int_width],
+            };
+
+            call_bitcode_fn(env, &[arg.into()], intrinsic)
         }
         NumRound => {
             let int_width = match layout_interner.get_repr(layout) {
                 LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
                 _ => internal_error!("Round return layout is not int: {:?}", layout),
             };
-            match float_width {
-                FloatWidth::F32 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F32[int_width])
-                }
-                FloatWidth::F64 => {
-                    call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_ROUND_F64[int_width])
-                }
-            }
+
+            let intrinsic = match float_width {
+                FloatWidth::F32 => &bitcode::NUM_ROUND_F32[int_width],
+                FloatWidth::F64 => &bitcode::NUM_ROUND_F64[int_width],
+            };
+
+            call_bitcode_fn(env, &[arg.into()], intrinsic)
         }
         NumIsNan => call_bitcode_fn(env, &[arg.into()], &bitcode::NUM_IS_NAN[float_width]),
         NumIsInfinite => {

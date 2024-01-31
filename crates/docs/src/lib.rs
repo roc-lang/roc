@@ -1015,7 +1015,8 @@ fn markdown_to_html(
         }
     };
 
-    let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
+    let markdown_options =
+        pulldown_cmark::Options::ENABLE_TABLES | pulldown_cmark::Options::ENABLE_HEADING_ATTRIBUTES;
 
     let mut in_code_block: Option<CowStr> = None;
     let mut to_highlight = String::new();

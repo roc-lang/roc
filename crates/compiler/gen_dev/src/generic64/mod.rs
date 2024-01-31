@@ -3299,7 +3299,7 @@ impl<
         let elem_layout = arg_layouts[1];
 
         // List alignment argument (u32).
-        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
+        self.load_layout_alignment(elem_layout, Symbol::DEV_TMP);
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
