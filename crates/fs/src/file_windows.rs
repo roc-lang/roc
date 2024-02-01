@@ -1,13 +1,19 @@
-use widestring::ucstr::U16CStr;
-
 use crate::error_windows::IoError;
+use crate::file::File;
 
 #[derive(Debug)]
-pub struct File {
+#[repr(transparent)]
+pub struct NeverClosedFile {
     handle: *mut c_void,
 }
 
-impl Drop for File {
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct SelfClosingFile {
+    file: NeverClosedFile,
+}
+
+impl Drop for SelfClosingFile {
     fn drop(&mut self) {
         extern "system" {
             // https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle
@@ -20,7 +26,13 @@ impl Drop for File {
     }
 }
 
-impl File {
+impl SelfClosingFile {
+    pub fn handle(&mut self) -> *mut c_void {
+        self.file.fd()
+    }
+}
+
+impl NeverClosedFile {
     // https://docs.rs/winapi/latest/winapi/um/handleapi/constant.INVALID_HANDLE_VALUE.html
     const INVALID_HANDLE_VALUE: *mut u8 = -1isize as _;
 
@@ -64,10 +76,31 @@ impl File {
             Err(IoError(error_unix::last_error()))
         }
     }
+
+    fn metadata(&mut self) -> Result<FileInfo, IoError> {
+        extern "system" {
+            // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle
+            fn GetFileInformationByHandle(handle: *mut u8, buf: *mut FileInfo) -> i32;
+        }
+
+        let mut buf = MaybeUninit::uninit();
+
+        unsafe {
+            if GetFileInformationByHandle(self.handle, buf.as_mut_ptr) != 0 {
+                Ok(buf.assume_init())
+            } else {
+                Err(IoError::most_recent())
+            }
+        }
+    }
 }
 
-impl File {
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+impl File for NeverClosedFile {
+    fn open_read(path: &CStr) -> Result<Self, IoError> {
+        Self::open(path, Self::O_RDONLY)
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         extern "C" {
             // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
             fn ReadFile(
@@ -97,28 +130,28 @@ impl File {
         }
     }
 
-    pub fn size_on_disk(&mut self) -> Result<u64, IoError> {
+    fn size_on_disk(&mut self) -> Result<u64, IoError> {
         let info = self.metadata()?;
         let size: u64 = ((info.nFileSizeHigh as u64) << 8) | info.nFileIndexLow as u64;
 
         Ok(size as u64)
     }
+}
 
-    pub fn metadata(&mut self) -> Result<FileInfo, IoError> {
-        extern "system" {
-            // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfileinformationbyhandle
-            fn GetFileInformationByHandle(handle: *mut u8, buf: *mut FileInfo) -> i32;
+impl File for SelfClosingFile {
+    fn open_read(path: &CStr) -> Result<Self, IoError> {
+        match NeverClosedFile::open_read(path) {
+            Ok(file) => Ok(Self { file }),
+            Err(err) => Err(err),
         }
+    }
 
-        let mut buf = MaybeUninit::uninit();
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+        self.file.read(buf)
+    }
 
-        unsafe {
-            if GetFileInformationByHandle(self.handle, buf.as_mut_ptr) != 0 {
-                Ok(buf.assume_init())
-            } else {
-                Err(IoError::most_recent())
-            }
-        }
+    fn size_on_disk(&mut self) -> Result<u64, IoError> {
+        self.file.size_on_disk()
     }
 }
 

@@ -4,6 +4,9 @@
 
 mod alloc;
 mod arena;
-mod chunk;
+mod arena_ref;
+mod vec;
 
 pub use arena::*;
+pub use arena_ref::*;
+pub use vec::*;
