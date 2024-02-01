@@ -21,15 +21,14 @@ pub struct Ast<'a> {
 impl<'a> Ast<'a> {
     pub fn parse(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
         use roc_parse::{
-            module::{module_defs, parse_header},
-            parser::Parser,
+            module::{parse_header, parse_module_defs},
             state::State,
         };
 
         let (module, state) = parse_header(arena, State::new(src.as_bytes()))
             .map_err(|e| SyntaxError::Header(e.problem))?;
 
-        let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
+        let defs = parse_module_defs(arena, state, Defs::default())?;
 
         Ok(Ast {
             module,

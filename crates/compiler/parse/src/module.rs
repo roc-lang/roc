@@ -28,12 +28,19 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     }
 }
 
-#[inline(always)]
-pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
-    skip_second!(
-        specialize(SyntaxError::Expr, crate::expr::toplevel_defs(),),
-        end_of_file()
-    )
+pub fn parse_module_defs<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    defs: Defs<'a>,
+) -> Result<Defs<'a>, SyntaxError<'a>> {
+    let min_indent = 0;
+    match crate::expr::parse_top_level_defs(arena, state.clone(), defs) {
+        Ok((_, defs, state)) => match end_of_file().parse(arena, state, min_indent) {
+            Ok(_) => Ok(defs),
+            Err((_, fail)) => Err(fail),
+        },
+        Err((_, fail)) => Err(SyntaxError::Expr(fail, state.pos())),
+    }
 }
 
 pub fn parse_header<'a>(
@@ -184,7 +191,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
             string_literal::parse_str_literal()
         )),
         packages: optional(specialize(EHeader::Packages, packages())),
-        imports: optional(specialize(EHeader::Imports, imports())),
+        imports: specialize(EHeader::Imports, imports()),
         provides: specialize(EHeader::Provides, provides_to()),
     })
     .trace("app_header")
@@ -530,25 +537,27 @@ fn generates_with<'a>() -> impl Parser<
 #[inline(always)]
 fn imports<'a>() -> impl Parser<
     'a,
-    KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    Option<Loc<KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>>>,
     EImports,
 > {
-    record!(KeywordItem {
-        keyword: spaces_around_keyword(
-            ImportsKeyword,
-            EImports::Imports,
-            EImports::IndentImports,
-            EImports::IndentListStart
-        ),
-        item: collection_trailing_sep_e!(
-            word1(b'[', EImports::ListStart),
-            loc!(imports_entry()),
-            word1(b',', EImports::ListEnd),
-            word1(b']', EImports::ListEnd),
-            Spaced::SpaceBefore
-        )
-    })
-    .trace("imports")
+    optional(
+        loc!(record!(KeywordItem {
+            keyword: spaces_around_keyword(
+                ImportsKeyword,
+                EImports::Imports,
+                EImports::IndentImports,
+                EImports::IndentListStart
+            ),
+            item: collection_trailing_sep_e!(
+                word1(b'[', EImports::ListStart),
+                loc!(imports_entry()),
+                word1(b',', EImports::ListEnd),
+                word1(b']', EImports::ListEnd),
+                Spaced::SpaceBefore
+            )
+        }))
+        .trace("imports"),
+    )
 }
 
 #[inline(always)]

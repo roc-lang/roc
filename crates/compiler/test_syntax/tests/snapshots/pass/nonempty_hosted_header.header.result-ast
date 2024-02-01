@@ -48,53 +48,7 @@ Module {
                     ],
                 },
             },
-            imports: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ImportsKeyword,
-                    after: [
-                        Newline,
-                    ],
-                },
-                item: Collection {
-                    items: [
-                        @143-147 SpaceBefore(
-                            Module(
-                                ModuleName(
-                                    "Blah",
-                                ),
-                                [],
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @161-182 SpaceBefore(
-                            Module(
-                                ModuleName(
-                                    "Baz",
-                                ),
-                                [
-                                    @167-172 ExposedName(
-                                        "stuff",
-                                    ),
-                                    @174-180 ExposedName(
-                                        "things",
-                                    ),
-                                ],
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    final_comments: [
-                        Newline,
-                    ],
-                },
-            },
+            imports: None,
             generates: KeywordItem {
                 keyword: Spaces {
                     before: [
@@ -117,7 +71,7 @@ Module {
                 },
                 item: Collection {
                     items: [
-                        @239-242 SpaceBefore(
+                        @154-157 SpaceBefore(
                             ExposedName(
                                 "map",
                             ),
@@ -125,7 +79,7 @@ Module {
                                 Newline,
                             ],
                         ),
-                        @256-261 SpaceBefore(
+                        @171-176 SpaceBefore(
                             ExposedName(
                                 "after",
                             ),
@@ -133,7 +87,7 @@ Module {
                                 Newline,
                             ],
                         ),
-                        @275-279 SpaceBefore(
+                        @190-194 SpaceBefore(
                             ExposedName(
                                 "loop",
                             ),

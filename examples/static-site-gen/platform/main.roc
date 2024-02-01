@@ -2,7 +2,6 @@ platform "static-site-gen"
     requires {} { transformFileContent : Str, Str -> Str }
     exposes []
     packages {}
-    imports []
     provides [transformFileContentForHost]
 
 transformFileContentForHost : Box Str, Box Str -> Str

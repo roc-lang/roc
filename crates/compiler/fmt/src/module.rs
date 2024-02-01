@@ -183,8 +183,6 @@ pub fn fmt_interface_header<'a>(buf: &mut Buf, header: &'a InterfaceHeader<'a>) 
 
     header.exposes.keyword.format(buf, indent);
     fmt_exposes(buf, header.exposes.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
 }
 
 pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
@@ -197,8 +195,7 @@ pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
 
     header.exposes.keyword.format(buf, indent);
     fmt_exposes(buf, header.exposes.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
+
     header.generates.format(buf, indent);
     header.generates_with.keyword.format(buf, indent);
     fmt_exposes(buf, header.generates_with.item, indent);
@@ -216,10 +213,7 @@ pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {
         packages.keyword.format(buf, indent);
         fmt_packages(buf, packages.item, indent);
     }
-    if let Some(imports) = &header.imports {
-        imports.keyword.format(buf, indent);
-        fmt_imports(buf, imports.item, indent);
-    }
+
     header.provides.format(buf, indent);
 }
 
@@ -250,8 +244,6 @@ pub fn fmt_platform_header<'a>(buf: &mut Buf, header: &'a PlatformHeader<'a>) {
     fmt_exposes(buf, header.exposes.item, indent);
     header.packages.keyword.format(buf, indent);
     fmt_packages(buf, header.packages.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
     header.provides.keyword.format(buf, indent);
     fmt_provides(buf, header.provides.item, None, indent);
 }
@@ -327,14 +319,6 @@ impl<'a, T: Formattable> Formattable for Spaced<'a, T> {
             }
         }
     }
-}
-
-fn fmt_imports<'a>(
-    buf: &mut Buf,
-    loc_entries: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
-    indent: u16,
-) {
-    fmt_collection(buf, indent, Braces::Square, loc_entries, Newlines::No)
 }
 
 fn fmt_provides<'a>(

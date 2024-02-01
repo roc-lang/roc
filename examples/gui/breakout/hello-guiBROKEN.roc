@@ -1,7 +1,8 @@
 app "hello-gui"
     packages { pf: "platform/main.roc" }
-    imports [pf.Game.{ Bounds, Elem, Event }]
     provides [program] { Model } to pf
+
+import pf.Game exposing [Bounds, Elem, Event]
 
 Model : { text : Str }
 

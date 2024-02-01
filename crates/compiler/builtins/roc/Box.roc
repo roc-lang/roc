@@ -4,7 +4,6 @@
 ##
 interface Box
     exposes [box, unbox]
-    imports []
 
 ## Allocates a value on the heap. Boxing is an expensive process as it copies
 ## the value from the stack to the heap. This may provide a performance

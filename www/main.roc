@@ -2,7 +2,7 @@ app "roc-website"
     packages { pf: "../examples/static-site-gen/platform/main.roc" }
     imports [
         pf.Html.{ Node, html, head, body, header, footer, div, span, main, text, nav, a, link, meta, script, br },
-        pf.Html.Attributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type },
+        pf.HtmlAttributes.{ attribute, content, name, id, href, rel, lang, class, title, charset, color, ariaLabel, ariaHidden, type },
         InteractiveExample,
     ]
     provides [transformFileContent] to pf

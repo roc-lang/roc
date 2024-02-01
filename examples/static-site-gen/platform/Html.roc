@@ -122,7 +122,8 @@ interface Html
         slot,
         template,
     ]
-    imports [Html.Attributes]
+
+import HtmlAttributes
 
 Node : [
     Text Str,
@@ -130,10 +131,10 @@ Node : [
     UnclosedElem Str Nat (List Attribute),
 ]
 
-Attribute : Html.Attributes.Attribute
+Attribute : HtmlAttributes.Attribute
 
 attribute : Str -> (Str -> Attribute)
-attribute = Html.Attributes.attribute
+attribute = HtmlAttributes.attribute
 
 text : Str -> Node
 text = Text

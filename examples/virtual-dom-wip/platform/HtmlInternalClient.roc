@@ -1,30 +1,29 @@
-interface Html.Internal.Client
+interface HtmlInternalClient
     exposes [
         PlatformState,
         initClientApp,
         dispatchEvent,
     ]
-    imports [
-        Effect.{
-            Effect,
-            NodeId,
-            HandlerId,
-            TagName,
-            AttrType,
-            EventType,
-        },
-        Html.Internal.Shared.{
-            App,
-            Html,
-            Attribute,
-            CyclicStructureAccessor,
-            Handler,
-            Size,
-            translateStatic,
-        },
-        TotallyNotJson,
-        Action,
-    ]
+
+import Effect exposing [
+    Effect,
+    NodeId,
+    HandlerId,
+    TagName,
+    AttrType,
+    EventType,
+]
+import HtmlInternalShared exposing [
+    App,
+    Html,
+    Attribute,
+    CyclicStructureAccessor,
+    Handler,
+    Size,
+    translateStatic,
+]
+import TotallyNotJson
+import Action
 
 PlatformState state initData : {
     app : App state initData,

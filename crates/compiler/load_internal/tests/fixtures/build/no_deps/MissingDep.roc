@@ -1,6 +1,5 @@
 interface MissingDep
     exposes [unit]
-    imports []
 
 import ThisFileIsMissing
 

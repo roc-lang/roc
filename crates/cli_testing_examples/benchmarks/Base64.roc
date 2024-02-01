@@ -1,9 +1,11 @@
-interface Base64 exposes [fromBytes, fromStr, toBytes, toStr] imports [Base64.Decode, Base64.Encode]
+interface Base64 exposes [fromBytes, fromStr, toBytes, toStr]
+
+import Base64Decode
 
 # base 64 encoding from a sequence of bytes
 fromBytes : List U8 -> Result Str [InvalidInput]
 fromBytes = \bytes ->
-    when Base64.Decode.fromBytes bytes is
+    when Base64Decode.fromBytes bytes is
         Ok v ->
             Ok v
 
@@ -18,7 +20,7 @@ fromStr = \str ->
 # base64-encode bytes to the original
 toBytes : Str -> Result (List U8) [InvalidInput]
 toBytes = \str ->
-    Ok (Base64.Encode.toBytes str)
+    Ok (Base64Decode.toBytes str)
 
 toStr : Str -> Result Str [InvalidInput]
 toStr = \str ->

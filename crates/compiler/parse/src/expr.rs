@@ -2140,40 +2140,41 @@ fn assigned_expr_field_to_pattern_help<'a>(
     })
 }
 
-pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| {
-        let (_, initial_space, state) =
-            space0_e(EExpr::IndentEnd).parse(arena, state, min_indent)?;
+pub fn parse_top_level_defs<'a>(
+    arena: &'a bumpalo::Bump,
+    state: State<'a>,
+    mut output: Defs<'a>,
+) -> ParseResult<'a, Defs<'a>, EExpr<'a>> {
+    let (_, initial_space, state) = space0_e(EExpr::IndentEnd).parse(arena, state, 0)?;
 
-        let start_column = state.column();
+    let start_column = state.column();
 
-        let options = ExprParseOptions {
-            accept_multi_backpassing: true,
-            check_for_arrow: true,
-        };
+    let options = ExprParseOptions {
+        accept_multi_backpassing: true,
+        check_for_arrow: true,
+    };
 
-        let mut output = Defs::default();
-        let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
+    let existing_len = output.tags.len();
 
-        let (_, mut output, state) = parse_defs_end(options, start_column, output, arena, state)?;
+    let before = Slice::extend_new(&mut output.spaces, initial_space.iter().copied());
 
-        let (_, final_space, state) =
-            space0_e(EExpr::IndentEnd).parse(arena, state, start_column)?;
+    let (_, mut output, state) = parse_defs_end(options, start_column, output, arena, state)?;
 
-        if !output.tags.is_empty() {
-            // add surrounding whitespace
-            let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
+    let (_, final_space, state) = space0_e(EExpr::IndentEnd).parse(arena, state, start_column)?;
 
-            debug_assert!(output.space_before[0].is_empty());
-            output.space_before[0] = before;
+    if output.tags.len() > existing_len {
+        // add surrounding whitespace
+        let after = Slice::extend_new(&mut output.spaces, final_space.iter().copied());
 
-            let last = output.tags.len() - 1;
-            debug_assert!(output.space_after[last].is_empty() || after.is_empty());
-            output.space_after[last] = after;
-        }
+        debug_assert!(output.space_before[existing_len].is_empty());
+        output.space_before[existing_len] = before;
 
-        Ok((MadeProgress, output, state))
+        let last = output.tags.len() - 1;
+        debug_assert!(output.space_after[last].is_empty() || after.is_empty());
+        output.space_after[last] = after;
     }
+
+    Ok((MadeProgress, output, state))
 }
 
 // PARSER HELPERS

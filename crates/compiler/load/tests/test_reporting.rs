@@ -4915,7 +4915,9 @@ mod test_reporting {
         dict_type_formatting,
         indoc!(
             r#"
-            app "dict" imports [ Dict ] provides [main] to "./platform"
+            app "dict" provides [main] to "./platform"
+
+            import Dict
 
             myDict : Dict.Dict Num.I64 Str
             myDict = Dict.insert (Dict.empty {}) "foo" 42
@@ -4928,8 +4930,8 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    3│  myDict : Dict.Dict Num.I64 Str
-    4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
+    5│  myDict : Dict.Dict Num.I64 Str
+    6│  myDict = Dict.insert (Dict.empty {}) "foo" 42
                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
@@ -4946,9 +4948,11 @@ mod test_reporting {
         alias_type_diff,
         indoc!(
             r#"
-            app "test" imports [Set.{ Set }] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-            HSet a : Set a
+            import Set
+
+            HSet a : Set.Set a
 
             foo : Str -> HSet {}
 
@@ -4963,9 +4967,9 @@ mod test_reporting {
 
     Something is off with the body of the `myDict` definition:
 
-    7│  myDict : HSet Str
-    8│  myDict = foo "bar"
-                 ^^^^^^^^^
+     9│  myDict : HSet Str
+    10│  myDict = foo "bar"
+                  ^^^^^^^^^
 
     This `foo` call produces:
 
@@ -6070,32 +6074,6 @@ In roc, functions are always written as a lambda, like{}
 
                     requires { Model, Msg } {main : Effect {}}
             "#
-            ),
-        )
-    }
-
-    #[test]
-    fn missing_imports() {
-        report_header_problem_as(
-            indoc!(
-                r"
-                interface Foobar
-                    exposes [main, Foo]
-                "
-            ),
-            indoc!(
-                r"
-                ── WEIRD IMPORTS in /code/proj/Main.roc ────────────────────────────────────────
-
-                I am partway through parsing a header, but I got stuck here:
-
-                2│      exposes [main, Foo]
-                                           ^
-
-                I am expecting the `imports` keyword next, like
-
-                    imports [Animal, default, tame]
-                "
             ),
         )
     }
@@ -9179,30 +9157,6 @@ In roc, functions are always written as a lambda, like{}
     );
 
     test_report!(
-        imports_missing_comma,
-        indoc!(
-            r#"
-            app "test-missing-comma"
-                packages { pf: "platform/main.roc" }
-                imports [pf.Task Base64]
-                provides [main, @Foo] to pf
-            "#
-        ),
-        @r#"
-        ── WEIRD IMPORTS in tmp/imports_missing_comma/Test.roc ─────────────────────────
-
-        I am partway through parsing a imports list, but I got stuck here:
-
-        2│      packages { pf: "platform/main.roc" }
-        3│      imports [pf.Task Base64]
-                                 ^
-
-        I am expecting a comma or end of list, like
-
-            imports [Shape, Vector]"#
-    );
-
-    test_report!(
         not_enough_cases_for_open_union,
         indoc!(
             r#"
@@ -9308,7 +9262,9 @@ In roc, functions are always written as a lambda, like{}
         type_error_in_apply_is_circular,
         indoc!(
             r#"
-            app "test" imports [Set] provides [go] to "./platform"
+            app "test" provides [go] to "./platform"
+
+            import Set
 
             S a : { set : Set.Set a }
 
@@ -9408,7 +9364,7 @@ In roc, functions are always written as a lambda, like{}
         function_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" imports [] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main = Encode.toEncoder \x -> x
             "#
@@ -9433,7 +9389,7 @@ In roc, functions are always written as a lambda, like{}
         nested_opaque_does_not_implement_encoding,
         indoc!(
             r#"
-            app "test" imports [] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
             A := {}
             main = Encode.toEncoder { x: @A {} }
@@ -9617,7 +9573,6 @@ In roc, functions are always written as a lambda, like{}
         indoc!(
             r#"
             app "test"
-                imports []
                 provides [A, myEncoder] to "./platform"
 
             A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
@@ -9630,7 +9585,7 @@ In roc, functions are always written as a lambda, like{}
 
     Ability implementations cannot be optional:
 
-    5│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
+    4│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
                                        ^^^^^^^^^^^^^^^^^^^^^
 
     Custom implementations must be supplied fully.
@@ -9643,7 +9598,7 @@ In roc, functions are always written as a lambda, like{}
 
     This type does not fully implement the `Encoding` ability:
 
-    5│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
+    4│  A := U8 implements [ Encoding {toEncoder ? myEncoder} ]
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     The following necessary members are missing implementations:
@@ -9806,7 +9761,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_function,
         indoc!(
             r#"
-            app "test" imports [] provides [A] to "./platform"
+            app "test" provides [A] to "./platform"
 
             A a := a -> a implements [Encode.Encoding]
             "#
@@ -9829,7 +9784,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_non_encoding_alias,
         indoc!(
             r#"
-            app "test" imports [] provides [A] to "./platform"
+            app "test" provides [A] to "./platform"
 
             A := B implements [Encode.Encoding]
 
@@ -9855,7 +9810,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_other_has_encoding,
         indoc!(
             r#"
-            app "test" imports [] provides [A] to "./platform"
+            app "test" provides [A] to "./platform"
 
             A := B implements [Encode.Encoding]
 
@@ -9869,7 +9824,7 @@ In roc, functions are always written as a lambda, like{}
         has_encoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" imports [] provides [MyNat] to "./platform"
+            app "test" provides [MyNat] to "./platform"
 
             MyNat := [S MyNat, Z] implements [Encode.Encoding]
             "#
@@ -10798,7 +10753,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_function,
         indoc!(
             r#"
-            app "test" imports [] provides [A] to "./platform"
+            app "test" provides [A] to "./platform"
 
             A a := a -> a implements [Decode.Decoding]
             "#
@@ -10821,7 +10776,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_non_decoding_opaque,
         indoc!(
             r#"
-            app "test" imports [] provides [A] to "./platform"
+            app "test" provides [A] to "./platform"
 
             A := B implements [Decode.Decoding]
 
@@ -10848,7 +10803,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_other_has_decoding,
         indoc!(
             r#"
-            app "test" imports [] provides [A] to "./platform"
+            app "test" provides [A] to "./platform"
 
             A := B implements [Decode.Decoding]
 
@@ -10862,7 +10817,7 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_recursive_deriving,
         indoc!(
             r#"
-            app "test" imports [] provides [MyNat] to "./platform"
+            app "test" provides [MyNat] to "./platform"
 
             MyNat := [S MyNat, Z] implements [Decode.Decoding]
             "#
@@ -10874,7 +10829,9 @@ In roc, functions are always written as a lambda, like{}
         function_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
@@ -10888,7 +10845,7 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -10903,7 +10860,9 @@ In roc, functions are always written as a lambda, like{}
         nested_opaque_cannot_derive_encoding,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             A := {}
 
@@ -10919,7 +10878,7 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      myDecoder = decoder
+    9│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11095,7 +11054,9 @@ In roc, functions are always written as a lambda, like{}
         infer_decoded_record_error_with_function_field,
         indoc!(
             r#"
-            app "test" imports [TotallyNotJson] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import TotallyNotJson
 
             main =
                 decoded = Str.toUtf8 "{\"first\":\"ab\",\"second\":\"cd\"}" |> Decode.fromBytes TotallyNotJson.json
@@ -11109,7 +11070,7 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    6│          Ok rcd -> rcd.first rcd.second
+    8│          Ok rcd -> rcd.first rcd.second
                           ^^^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11124,7 +11085,9 @@ In roc, functions are always written as a lambda, like{}
         record_with_optional_field_types_cannot_derive_decoding,
         indoc!(
             r#"
-             app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+             app "test" provides [main] to "./platform"
+
+             import Decode exposing [decoder]
 
              main =
                  myDecoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
@@ -11138,7 +11101,7 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -11335,7 +11298,9 @@ In roc, functions are always written as a lambda, like{}
         unused_value_import,
         indoc!(
             r#"
-            app "test" imports [List.{ concat }] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import List exposing [concat]
 
             main = ""
             "#
@@ -11343,12 +11308,12 @@ In roc, functions are always written as a lambda, like{}
     @r#"
     ── UNUSED IMPORT in /code/proj/Main.roc ────────────────────────────────────────
 
-    `List.concat` is not used in this module.
+    List is imported but not used.
 
-    1│  app "test" imports [List.{ concat }] provides [main] to "./platform"
-                                   ^^^^^^
+    3│  import List exposing [concat]
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-    Since `List.concat` isn't used, you don't need to import it.
+    Since List isn't used, you don't need to import it.
     "#
     );
 
@@ -11357,7 +11322,9 @@ In roc, functions are always written as a lambda, like{}
         unnecessary_builtin_module_import,
         indoc!(
             r#"
-            app "test" imports [Str] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import Str
 
             main = Str.concat "" ""
             "#
@@ -11371,7 +11338,9 @@ In roc, functions are always written as a lambda, like{}
         unnecessary_builtin_type_import,
         indoc!(
             r#"
-            app "test" imports [Decode.{ DecodeError }] provides [main, E] to "./platform"
+            app "test" provides [main, E] to "./platform"
+
+            import Decode exposing [DecodeError]
 
             E : DecodeError
 
@@ -11386,7 +11355,7 @@ In roc, functions are always written as a lambda, like{}
         invalid_toplevel_cycle,
         indoc!(
             r#"
-            app "test" imports [] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
             main =
                 if Bool.true then {} else main
@@ -12678,14 +12647,14 @@ In roc, functions are always written as a lambda, like{}
         ),
     @r#"
     ── REDUNDANT PATTERN in /code/proj/Main.roc ────────────────────────────────────
-    
+
     The 2nd pattern is redundant:
-    
+
     6│       when l is
     7│           [A, ..] -> ""
     8│>          [.., A] -> ""
     9│           [..] -> ""
-    
+
     Any value of this shape will be handled by a previous pattern, so this
     one should be removed.
     "#
@@ -13640,7 +13609,9 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_nat,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder Nat fmt where fmt implements DecoderFormatting
@@ -13654,7 +13625,7 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -13671,7 +13642,7 @@ In roc, functions are always written as a lambda, like{}
         derive_encoding_for_nat,
         indoc!(
             r#"
-            app "test" imports [] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
             x : Nat
 
@@ -13704,7 +13675,9 @@ In roc, functions are always written as a lambda, like{}
         derive_decoding_for_tuple,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
@@ -13719,7 +13692,9 @@ In roc, functions are always written as a lambda, like{}
         cannot_decode_tuple_with_non_decode_element,
         indoc!(
             r#"
-            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
+
+            import Decode exposing [decoder]
 
             main =
                 myDecoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
@@ -13733,7 +13708,7 @@ In roc, functions are always written as a lambda, like{}
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│      myDecoder = decoder
+    7│      myDecoder = decoder
                         ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
@@ -13748,7 +13723,7 @@ In roc, functions are always written as a lambda, like{}
         derive_encoding_for_tuple,
         indoc!(
             r#"
-            app "test" imports [] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
             x : (U32, Str)
 
@@ -13761,7 +13736,7 @@ In roc, functions are always written as a lambda, like{}
         cannot_encode_tuple_with_non_encode_element,
         indoc!(
             r#"
-            app "test" imports [] provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
             x : (U32, {} -> {})
 

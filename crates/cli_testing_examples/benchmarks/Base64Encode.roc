@@ -1,6 +1,7 @@
-interface Base64.Encode
+interface Base64Encode
     exposes [toBytes]
-    imports [Bytes.Encode.{ ByteEncoder }]
+
+import BytesEncode exposing [ByteEncoder]
 
 InvalidChar : U8
 
@@ -10,8 +11,8 @@ toBytes = \str ->
     str
     |> Str.toUtf8
     |> encodeChunks
-    |> Bytes.Encode.sequence
-    |> Bytes.Encode.encode
+    |> BytesEncode.sequence
+    |> BytesEncode.encode
 
 encodeChunks : List U8 -> List ByteEncoder
 encodeChunks = \bytes ->
@@ -86,7 +87,7 @@ encodeCharacters = \a, b, c, d ->
                 b1 : U8
                 b1 = Num.intCast (Num.shiftRightBy n 16)
 
-                Ok (Bytes.Encode.u8 b1)
+                Ok (BytesEncode.u8 b1)
             else if !(isValidChar c) then
                 Err c
             else
@@ -100,7 +101,7 @@ encodeCharacters = \a, b, c, d ->
                 combined : U16
                 combined = Num.intCast (Num.shiftRightBy n 8)
 
-                Ok (Bytes.Encode.u16 BE combined)
+                Ok (BytesEncode.u16 BE combined)
         else if !(isValidChar d) then
             Err d
         else
@@ -124,7 +125,7 @@ encodeCharacters = \a, b, c, d ->
             combined : U16
             combined = Num.intCast (Num.shiftRightBy n 8)
 
-            Ok (Bytes.Encode.sequence [Bytes.Encode.u16 BE combined, Bytes.Encode.u8 b3])
+            Ok (BytesEncode.sequence [BytesEncode.u16 BE combined, BytesEncode.u8 b3])
 
 # is the character a base64 digit?
 # The base16 digits are: A-Z, a-z, 0-1, '+' and '/'

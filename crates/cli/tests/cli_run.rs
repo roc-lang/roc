@@ -1332,9 +1332,9 @@ mod cli_run {
 
                 Something is off with the body of the main definition:
 
-                6│  main : Str -> Task {} []
-                7│  main = /_ ->
-                8│      "this is a string, not a Task {} [] function like the platform expects."
+                7│  main : Str -> Task {} []
+                8│  main = /_ ->
+                9│      "this is a string, not a Task {} [] function like the platform expects."
                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 The body is a string of type:
@@ -1366,10 +1366,10 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in ...nown_bad/UnusedImportButWithALongFileNameForTesting.roc ─
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
-                3│      imports [Symbol.{ Ident }]
-                                 ^^^^^^^^^^^^^^^^
+                4│  import Symbol exposing [Ident]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
 
@@ -1410,10 +1410,10 @@ mod cli_run {
                 r#"
                 ── UNUSED IMPORT in tests/known_bad/UnusedImport.roc ───────────────────────────
 
-                Nothing from Symbol is used in this module.
+                Symbol is imported but not used.
 
-                3│      imports [Symbol.{ Ident }]
-                                 ^^^^^^^^^^^^^^^^
+                4│  import Symbol exposing [Ident]
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 Since Symbol isn't used, you don't need to import it.
 
@@ -1435,7 +1435,7 @@ mod cli_run {
 
                 I don't know how to generate the foobar function.
 
-                4│      generates Effect with [after, map, always, foobar]
+                3│      generates Effect with [after, map, always, foobar]
                                                                    ^^^^^^
 
                 Only specific functions like `after` and `map` can be generated.Learn

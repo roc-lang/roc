@@ -7,9 +7,8 @@ mod test_fmt {
     use roc_fmt::def::fmt_defs;
     use roc_fmt::module::fmt_module;
     use roc_fmt::Buf;
-    use roc_parse::ast::Module;
-    use roc_parse::module::{self, module_defs};
-    use roc_parse::parser::Parser;
+    use roc_parse::ast::{Defs, Module};
+    use roc_parse::module::{self, parse_module_defs};
     use roc_parse::state::State;
     use roc_test_utils::{assert_multiline_str_eq, workspace_root};
     use test_syntax::test_helpers::Input;
@@ -38,8 +37,8 @@ mod test_fmt {
     ) {
         fmt_module(buf, module);
 
-        match module_defs().parse(arena, state, 0) {
-            Ok((_, loc_defs, _)) => {
+        match parse_module_defs(arena, state, Defs::default()) {
+            Ok(loc_defs) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
             Err(error) => panic!(
@@ -4771,7 +4770,7 @@ mod test_fmt {
     fn single_line_interface() {
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []"
+                interface Foo exposes []"
         ));
     }
 
@@ -4781,12 +4780,12 @@ mod test_fmt {
         module_formats_to(
             indoc!(
                 r"
-            interface Foo exposes [] imports []
+            interface Foo exposes []
             a = 42 # Yay greetings"
             ),
             indoc!(
                 r"
-            interface Foo exposes [] imports []
+            interface Foo exposes []
             a = 42 # Yay greetings
             "
             ),
@@ -4798,8 +4797,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r"
                 interface Foo
-                    exposes []
-                    imports []"
+                    exposes []"
         ));
     }
 
@@ -4808,8 +4806,7 @@ mod test_fmt {
         module_formats_same(indoc!(
             r"
                 interface Foo
-                    exposes [Bar, Baz, a, b]
-                    imports []"
+                    exposes [Bar, Baz, a, b]"
         ));
     }
 
@@ -4819,7 +4816,10 @@ mod test_fmt {
             r"
                 interface Foo
                     exposes [Bar, Baz, a, b]
-                    imports [Blah, Thing.{ foo, bar }, Stuff]"
+
+                import Blah
+                import Thing exposing [foo, bar]
+                import Stuff"
         ));
     }
 
@@ -4833,10 +4833,9 @@ mod test_fmt {
                         Things,
                         somethingElse,
                     ]
-                    imports [
-                        Blah,
-                        Baz.{ stuff, things },
-                    ]"
+
+                import Blah
+                import Baz exposing [stuff, things]"
         ));
     }
 
@@ -4844,7 +4843,7 @@ mod test_fmt {
     fn single_line_app() {
         module_formats_same(indoc!(
             r#"
-                app "Foo" packages { pf: "platform/main.roc" } imports [] provides [main] to pf"#
+                app "Foo" packages { pf: "platform/main.roc" } provides [main] to pf"#
         ));
     }
 
@@ -4855,7 +4854,6 @@ mod test_fmt {
             requires { Model, Msg } { main : Effect {} } \
             exposes [] \
             packages {} \
-            imports [Task.{ Task }] \
             provides [mainForHost]",
         );
     }
@@ -4868,7 +4866,6 @@ mod test_fmt {
                     r#"
                     interface Foo
                         exposes []
-                        imports []
 
                     # comment 1{space}
                     def = "" # comment 2{space}
@@ -4881,7 +4878,6 @@ mod test_fmt {
                 r#"
                     interface Foo
                         exposes []
-                        imports []
 
                     # comment 1
                     def = "" # comment 2
@@ -4901,7 +4897,6 @@ mod test_fmt {
                         requires { Model } { main : { init : ({} -> Model), update : (Model, Str -> Model), view : (Model -> Str) } }
                         exposes []
                         packages {}
-                        imports []
                         provides [ mainForHost ]
 
                     mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
@@ -4914,7 +4909,6 @@ mod test_fmt {
                         requires { Model } { main : { init : {} -> Model, update : Model, Str -> Model, view : Model -> Str } }
                         exposes []
                         packages {}
-                        imports []
                         provides [mainForHost]
 
                     mainForHost : { init : ({} -> Model) as Init, update : (Model, Str -> Model) as Update, view : (Model -> Str) as View }
@@ -4928,7 +4922,7 @@ mod test_fmt {
     fn single_line_hosted() {
         module_formats_same(indoc!(
             r"
-                hosted Foo exposes [] imports [] generates Bar with []"
+                hosted Foo exposes [] generates Bar with []"
         ));
     }
 
@@ -4942,15 +4936,14 @@ mod test_fmt {
                         Things,
                         somethingElse,
                     ]
-                    imports [
-                        Blah,
-                        Baz.{ stuff, things },
-                    ]
                     generates Bar with [
                         map,
                         after,
                         loop,
-                    ]"
+                    ]
+
+                import Blah
+                import Baz exposing [stuff, things]"
         ));
     }
 
@@ -5700,7 +5693,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []
+                interface Foo exposes []
 
                 expect x == y
 
@@ -5727,7 +5720,7 @@ mod test_fmt {
 
         module_formats_same(indoc!(
             r"
-                interface Foo exposes [] imports []
+                interface Foo exposes []
 
                 expect
                     foo bar
@@ -5831,7 +5824,7 @@ mod test_fmt {
     fn ability_member_doc_comments() {
         module_formats_same(indoc!(
             r"
-            interface Foo exposes [] imports []
+            interface Foo exposes []
 
             A implements
                 ## This is member ab
@@ -5852,14 +5845,13 @@ mod test_fmt {
             # hello world
             interface Foo
                 exposes []
-                imports []
             "
         ));
 
         module_formats_same(indoc!(
             r#"
             # hello world
-            app "test" packages {} imports [] provides [] to "./platform"
+            app "test" packages {} provides [] to "./platform"
             "#
         ));
 
@@ -5870,7 +5862,6 @@ mod test_fmt {
                 requires {} { main : Str }
                 exposes []
                 packages {}
-                imports []
                 provides [mainForHost]
             "#
         ));
@@ -6010,11 +6001,11 @@ mod test_fmt {
                 r"
                 when l1 is
                     [
-                    .. 
+                    ..
                     as
                     rest
                     ]
-                    as 
+                    as
                     l2
                     ->
                         f rest

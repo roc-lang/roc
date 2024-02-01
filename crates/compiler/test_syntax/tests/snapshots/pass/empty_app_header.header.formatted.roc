@@ -1,1 +1,1 @@
-app "test-app" packages {} imports [] provides [] to blah
+app "test-app" packages {} provides [] to blah

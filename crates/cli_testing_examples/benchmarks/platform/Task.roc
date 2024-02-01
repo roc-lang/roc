@@ -1,6 +1,7 @@
 interface Task
     exposes [Task, succeed, fail, after, map, putLine, putInt, getInt, forever, loop, attempt]
-    imports [pf.Effect]
+
+import pf.Effect
 
 Task ok err : Effect.Effect (Result ok err)
 

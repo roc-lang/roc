@@ -1,6 +1,5 @@
 interface ImportAlias
     exposes [unit]
-    imports []
 
 import Dep1
 

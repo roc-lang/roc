@@ -216,12 +216,11 @@ impl IterTokens for InterfaceHeader<'_> {
             before_name: _,
             name,
             exposes,
-            imports,
+            imports: _,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(exposes.item.iter_tokens(arena))
-            .chain(imports.item.iter_tokens(arena))
             .collect_in(arena)
     }
 }
@@ -232,13 +231,12 @@ impl IterTokens for AppHeader<'_> {
             before_name: _,
             name,
             packages,
-            imports,
+            imports: _,
             provides,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(packages.iter().flat_map(|p| p.item.iter_tokens(arena)))
-            .chain(imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .chain(provides.iter_tokens(arena))
             .collect_in(arena)
     }
@@ -268,7 +266,7 @@ impl IterTokens for PlatformHeader<'_> {
             requires,
             exposes,
             packages,
-            imports,
+            imports: _,
             provides,
         } = self;
 
@@ -276,7 +274,6 @@ impl IterTokens for PlatformHeader<'_> {
             .chain(requires.item.iter_tokens(arena))
             .chain(exposes.item.iter_tokens(arena))
             .chain(packages.item.iter_tokens(arena))
-            .chain(imports.item.iter_tokens(arena))
             .chain(provides.item.iter_tokens(arena))
             .collect_in(arena)
     }
@@ -288,14 +285,13 @@ impl IterTokens for HostedHeader<'_> {
             before_name: _,
             name,
             exposes,
-            imports,
+            imports: _,
             generates: _,
             generates_with,
         } = self;
 
         (name.iter_tokens(arena).into_iter())
             .chain(exposes.item.iter_tokens(arena))
-            .chain(imports.item.iter_tokens(arena))
             .chain(generates_with.item.iter_tokens(arena))
             .collect_in(arena)
     }

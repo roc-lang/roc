@@ -1,4 +1,4 @@
-interface Bytes.Encode exposes [ByteEncoder, sequence, u8, u16, bytes, empty, encode] imports []
+interface BytesEncode exposes [ByteEncoder, sequence, u8, u16, bytes, empty, encode]
 
 Endianness : [BE, LE]
 

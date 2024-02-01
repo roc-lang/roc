@@ -1,1 +1,1 @@
-platform "rtfeldman/blah" requires {} { main : {} } exposes [] packages {} imports [] provides []
+platform "rtfeldman/blah" requires {} { main : {} } exposes [] packages {} provides []

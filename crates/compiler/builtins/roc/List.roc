@@ -71,7 +71,6 @@ interface List
         countIf,
         chunksOf,
     ]
-    imports []
 
 import Bool exposing [Bool, Eq]
 import Result exposing [Result]

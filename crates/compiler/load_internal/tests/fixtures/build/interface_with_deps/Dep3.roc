@@ -1,6 +1,5 @@
 interface Dep3
     exposes [one, two, foo, bar]
-    imports []
 
 one = 1
 

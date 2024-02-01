@@ -1,12 +1,11 @@
-interface Html.Internal.Server
+interface HtmlInternalServer
     exposes [
         appendRenderedStatic,
         initServerApp,
     ]
-    imports [
-        Html.Internal.Shared.{ Html, Attribute, App, translateStatic, text, element },
-        TotallyNotJson,
-    ]
+
+import HtmlInternalShared exposing [Html, Attribute, App, translateStatic, text, element]
+import TotallyNotJson
 
 # -------------------------------
 #   STATIC HTML

@@ -1,6 +1,5 @@
 interface Unit
     exposes [unit]
-    imports []
 
 Unit : [Unit]
 

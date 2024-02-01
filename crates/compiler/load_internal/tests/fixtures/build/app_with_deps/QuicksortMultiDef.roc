@@ -11,7 +11,6 @@ quicksortHelp = \list, low, high ->
     else
         list
 
-
 swap : Nat, Nat, List a -> List a
 swap = \i, j, list ->
     when Pair (List.get list i) (List.get list j) is
@@ -34,8 +33,7 @@ partition = \low, high, initialList ->
         Err _ ->
             Pair (low - 1) initialList
 
-
-partitionHelp : Nat, Nat, List (Num a), Nat, (Num a) -> [Pair Nat (List (Num a))]
+partitionHelp : Nat, Nat, List (Num a), Nat, Num a -> [Pair Nat (List (Num a))]
 partitionHelp = \i, j, list, high, pivot ->
     if j < high then
         when List.get list j is
@@ -49,8 +47,6 @@ partitionHelp = \i, j, list, high, pivot ->
                 Pair i list
     else
         Pair i list
-
-
 
 quicksort = \originalList ->
     n = List.len originalList

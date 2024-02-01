@@ -40,14 +40,7 @@ Module {
                 },
                 item: [],
             },
-            imports: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ImportsKeyword,
-                    after: [],
-                },
-                item: [],
-            },
+            imports: None,
             provides: KeywordItem {
                 keyword: Spaces {
                     before: [],

@@ -1,6 +1,5 @@
 interface Result
     exposes [Result, isOk, isErr, map, mapErr, try, onErr, withDefault]
-    imports []
 
 import Bool exposing [Bool]
 

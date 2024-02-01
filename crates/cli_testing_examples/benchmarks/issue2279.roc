@@ -1,7 +1,9 @@
 app "issue2279"
     packages { pf: "platform/main.roc" }
-    imports [Issue2279Help, pf.Task]
     provides [main] to pf
+
+import Issue2279Help
+import pf.Task
 
 main =
     text =

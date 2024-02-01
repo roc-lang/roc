@@ -1,6 +1,5 @@
 app "expects-test"
     packages { pf: "zig-platform/main.roc" }
-    imports []
     provides [main] to pf
 
 expect
@@ -11,6 +10,7 @@ expect
 
 polyDbg = \x ->
     dbg x
+
     x
 
 main =
@@ -20,10 +20,12 @@ main =
 
     x = 42
     dbg x
+
     dbg "Fjoer en ferdjer frieten oan dyn geve lea"
+
     dbg "this is line 24"
 
-    r = {x : polyDbg "abc", y: polyDbg 10u8, z : polyDbg (A (B C))}
+    r = { x: polyDbg "abc", y: polyDbg 10u8, z: polyDbg (A (B C)) }
 
     when r is
         _ -> "Program finished!\n"

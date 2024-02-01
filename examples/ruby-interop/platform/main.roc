@@ -2,8 +2,9 @@ platform "ruby-interop"
     requires {} { main : arg -> ret where arg implements Decoding, ret implements Encoding }
     exposes []
     packages {}
-    imports [TotallyNotJson]
     provides [mainForHost]
+
+import TotallyNotJson
 
 mainForHost : List U8 -> List U8
 mainForHost = \json ->

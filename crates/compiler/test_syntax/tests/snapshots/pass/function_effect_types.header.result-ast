@@ -58,27 +58,7 @@ Module {
                 },
                 item: [],
             },
-            imports: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ImportsKeyword,
-                    after: [],
-                },
-                item: [
-                    @110-123 Module(
-                        ModuleName(
-                            "Task",
-                        ),
-                        [
-                            @117-121 ExposedName(
-                                "Task",
-                            ),
-                        ],
-                    ),
-                ],
-            },
+            imports: None,
             provides: KeywordItem {
                 keyword: Spaces {
                     before: [
@@ -88,7 +68,7 @@ Module {
                     after: [],
                 },
                 item: [
-                    @141-152 ExposedName(
+                    @111-122 ExposedName(
                         "mainForHost",
                     ),
                 ],

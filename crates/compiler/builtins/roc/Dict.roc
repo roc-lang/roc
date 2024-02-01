@@ -29,7 +29,6 @@ interface Dict
         map,
         joinMap,
     ]
-    imports []
 
 import Bool exposing [Bool, Eq]
 import Result exposing [Result]

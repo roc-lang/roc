@@ -1,1 +1,1 @@
-hosted Foo exposes [] imports [] generates Bar with []
+hosted Foo exposes [] generates Bar with []

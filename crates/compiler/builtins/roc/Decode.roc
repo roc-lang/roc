@@ -30,7 +30,6 @@ interface Decode
         fromBytes,
         mapResult,
     ]
-    imports []
 
 import List
 import Result exposing [Result]

@@ -16,16 +16,7 @@ Module {
                     item: [],
                 },
             ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [],
-                },
-            ),
+            imports: None,
             provides: ProvidesTo {
                 provides_keyword: Spaces {
                     before: [],
@@ -39,7 +30,7 @@ Module {
                     item: ToKeyword,
                     after: [],
                 },
-                to: @53-57 ExistingPackage(
+                to: @42-46 ExistingPackage(
                     "blah",
                 ),
             },

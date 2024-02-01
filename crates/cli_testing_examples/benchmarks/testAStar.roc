@@ -1,7 +1,9 @@
 app "test-astar"
     packages { pf: "platform/main.roc" }
-    imports [pf.Task, AStar]
     provides [main] to pf
+
+import pf.Task
+import AStar
 
 main : Task.Task {} []
 main =

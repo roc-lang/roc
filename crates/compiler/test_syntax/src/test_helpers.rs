@@ -2,7 +2,7 @@ use bumpalo::Bump;
 use roc_fmt::{annotation::Formattable, module::fmt_module};
 use roc_parse::{
     ast::{Defs, Expr, Malformed, Module},
-    module::module_defs,
+    module::parse_module_defs,
     parser::{Parser, SyntaxError},
     state::State,
     test_helpers::{parse_defs_with, parse_expr_with, parse_header_with},
@@ -170,9 +170,7 @@ impl<'a> Input<'a> {
                     .parse(arena, state.clone(), min_indent)
                     .map_err(|(_, fail)| SyntaxError::Header(fail))?;
 
-                let (_, module_defs, _state) = module_defs()
-                    .parse(arena, state, min_indent)
-                    .map_err(|(_, fail)| fail)?;
+                let module_defs = parse_module_defs(arena, state, Defs::default())?;
 
                 Ok(Output::Full {
                     header,

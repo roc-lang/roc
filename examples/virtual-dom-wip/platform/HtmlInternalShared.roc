@@ -1,4 +1,4 @@
-interface Html.Internal.Shared
+interface HtmlInternalShared
     exposes [
         App,
         Html,
@@ -13,9 +13,8 @@ interface Html.Internal.Shared
         translateStatic,
         nodeSize,
     ]
-    imports [
-        Action.{ Action },
-    ]
+
+import Action exposing [Action]
 
 App state initData : {
     init : DecodingResult initData -> state,

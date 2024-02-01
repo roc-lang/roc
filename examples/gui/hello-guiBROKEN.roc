@@ -1,6 +1,5 @@
 app "hello-gui"
-    packages { pf: "platform/main.roc" }
-    imports [] # [pf.Action.{ Action }, pf.Elem.{ button, text, row, col }]
+    packages { pf: "platform/main.roc" } # [pf.Action.{ Action }, pf.Elem.{ button, text, row, col }]
     provides [render] to pf
 
 render =

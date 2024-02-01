@@ -1,5 +1,6 @@
-interface Html.Attributes
+interface HtmlAttributes
     exposes [
+        Attribute,
         attribute,
         accept,
         acceptCharset,
@@ -8,6 +9,9 @@ interface Html.Attributes
         align,
         allow,
         alt,
+        ariaLabel,
+        ariaLabelledBy,
+        ariaHidden,
         async,
         autocapitalize,
         autocomplete,
@@ -36,7 +40,7 @@ interface Html.Attributes
         crossorigin,
         csp,
         data,
-        # dataAttr, TODO
+        dataAttr,
         datetime,
         decoding,
         default,
@@ -134,19 +138,23 @@ interface Html.Attributes
         width,
         wrap,
     ]
-    imports [Html.Internal.Shared.{ Attribute }]
 
-attribute : Str -> (Str -> Attribute state)
-attribute = \attrType ->
-    \attrValue -> HtmlAttr attrType attrValue
+Attribute : [Attribute Str Str]
+
+attribute : Str -> (Str -> Attribute)
+attribute = \attrName ->
+    \attrValue -> Attribute attrName attrValue
 
 accept = attribute "accept"
-acceptCharset = attribute "acceptCharset"
+acceptCharset = attribute "accept-charset"
 accesskey = attribute "accesskey"
 action = attribute "action"
 align = attribute "align"
 allow = attribute "allow"
 alt = attribute "alt"
+ariaLabel = attribute "aria-label"
+ariaLabelledBy = attribute "aria-labelledby"
+ariaHidden = attribute "aria-label"
 async = attribute "async"
 autocapitalize = attribute "autocapitalize"
 autocomplete = attribute "autocomplete"
@@ -175,6 +183,7 @@ coords = attribute "coords"
 crossorigin = attribute "crossorigin"
 csp = attribute "csp"
 data = attribute "data"
+dataAttr = \dataName, dataVal -> Attribute "data-\(dataName)" dataVal
 datetime = attribute "datetime"
 decoding = attribute "decoding"
 default = attribute "default"
@@ -199,7 +208,7 @@ hidden = attribute "hidden"
 high = attribute "high"
 href = attribute "href"
 hreflang = attribute "hreflang"
-httpEquiv = attribute "httpEquiv"
+httpEquiv = attribute "http-equiv"
 icon = attribute "icon"
 id = attribute "id"
 importance = attribute "importance"

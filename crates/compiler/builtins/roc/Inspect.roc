@@ -36,7 +36,6 @@ interface Inspect
         toInspector,
         toStr,
     ]
-    imports []
 
 import Bool exposing [Bool]
 import Num exposing [U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec, Nat]

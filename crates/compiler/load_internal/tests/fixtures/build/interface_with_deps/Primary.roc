@@ -1,6 +1,5 @@
 interface Primary
     exposes [blah2, blah3, str, alwaysThree, identity, z, w, succeed, withDefault, yay]
-    imports []
 
 import Dep1
 import Dep2

@@ -1,4 +1,4 @@
-interface Html.Event
+interface HtmlEvent
     exposes [
         Handler,
         CyclicStructureAccessor,
@@ -18,13 +18,12 @@ interface Html.Event
         onInput,
         onSubmit,
     ]
-    imports [
-        Action.{ Action },
-        Html.Internal.Shared.{ Attribute },
-    ]
 
-Handler state : Html.Internal.Shared.Handler state
-CyclicStructureAccessor : Html.Internal.Shared.CyclicStructureAccessor
+import Action exposing [Action]
+import HtmlInternalShared exposing [Attribute]
+
+Handler state : HtmlInternalShared.Handler state
+CyclicStructureAccessor : HtmlInternalShared.CyclicStructureAccessor
 
 custom : Str, List CyclicStructureAccessor, (state, List (List U8) -> { action : Action state, stopPropagation : Bool, preventDefault : Bool }) -> Attribute state
 custom = \eventName, accessors, callback ->

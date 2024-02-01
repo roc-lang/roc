@@ -1,7 +1,8 @@
 app "type-error"
     packages { pf: "../../../../examples/cli/false-interpreter/platform/main.roc" }
-    imports [pf.Task.{ Task }]
     provides [main] to pf
+
+import pf.Task exposing [Task]
 
 main : Str -> Task {} []
 main = \_ ->

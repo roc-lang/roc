@@ -1,7 +1,10 @@
 app "echo"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
-    imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }]
     provides [main] to pf
+
+import pf.Stdin
+import pf.Stdout
+import pf.Task exposing [Task]
 
 main : Task {} I32
 main =

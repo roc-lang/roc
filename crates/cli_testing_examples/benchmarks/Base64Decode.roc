@@ -1,16 +1,18 @@
-interface Base64.Decode exposes [fromBytes] imports [Bytes.Decode.{ ByteDecoder, DecodeProblem }]
+interface Base64Decode exposes [fromBytes]
+
+import BytesDecode exposing [ByteDecoder, DecodeProblem]
 
 fromBytes : List U8 -> Result Str DecodeProblem
 fromBytes = \bytes ->
-    Bytes.Decode.decode bytes (decodeBase64 (List.len bytes))
+    BytesDecode.decode bytes (decodeBase64 (List.len bytes))
 
 decodeBase64 : Nat -> ByteDecoder Str
-decodeBase64 = \width -> Bytes.Decode.loop loopHelp { remaining: width, string: "" }
+decodeBase64 = \width -> BytesDecode.loop loopHelp { remaining: width, string: "" }
 
-loopHelp : { remaining : Nat, string : Str } -> ByteDecoder (Bytes.Decode.Step { remaining : Nat, string : Str } Str)
+loopHelp : { remaining : Nat, string : Str } -> ByteDecoder (BytesDecode.Step { remaining : Nat, string : Str } Str)
 loopHelp = \{ remaining, string } ->
     if remaining >= 3 then
-        x, y, z <- Bytes.Decode.map3 Bytes.Decode.u8 Bytes.Decode.u8 Bytes.Decode.u8
+        x, y, z <- BytesDecode.map3 BytesDecode.u8 BytesDecode.u8 BytesDecode.u8
 
         a : U32
         a = Num.intCast x
@@ -25,9 +27,9 @@ loopHelp = \{ remaining, string } ->
             string: Str.concat string (bitsToChars combined 0),
         }
     else if remaining == 0 then
-        Bytes.Decode.succeed (Done string)
+        BytesDecode.succeed (Done string)
     else if remaining == 2 then
-        x, y <- Bytes.Decode.map2 Bytes.Decode.u8 Bytes.Decode.u8
+        x, y <- BytesDecode.map2 BytesDecode.u8 BytesDecode.u8
 
         a : U32
         a = Num.intCast x
@@ -38,7 +40,7 @@ loopHelp = \{ remaining, string } ->
         Done (Str.concat string (bitsToChars combined 1))
     else
         # remaining = 1
-        x <- Bytes.Decode.map Bytes.Decode.u8
+        x <- BytesDecode.map BytesDecode.u8
 
         a : U32
         a = Num.intCast x

@@ -1,6 +1,6 @@
 interface InteractiveExample
     exposes [view]
-    imports [pf.Html.{ pre, samp, div, text, a, class, p }, pf.Html.Attributes.{ class, role, href, id }]
+    imports [pf.Html.{ pre, samp, div, text, a, class, p }, pf.HtmlAttributes.{ class, role, href, id }]
 
 Section : [Desc (List Token) Str, Indent, Outdent, Newline]
 Token : [

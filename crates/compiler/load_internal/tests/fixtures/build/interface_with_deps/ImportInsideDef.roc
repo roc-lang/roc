@@ -1,4 +1,4 @@
-interface ImportInsideDef exposes [dep1Str, dep2TwoDobuled] imports []
+interface ImportInsideDef exposes [dep1Str, dep2TwoDobuled]
 
 dep1Str =
     import Dep1

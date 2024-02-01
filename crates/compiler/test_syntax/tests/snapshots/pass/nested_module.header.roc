@@ -1,1 +1,1 @@
-interface Foo.Bar.Baz exposes [] imports []
+interface Foo.Bar.Baz exposes []

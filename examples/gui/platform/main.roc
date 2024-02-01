@@ -2,7 +2,6 @@ platform "gui"
     requires {} { render : Elem }
     exposes []
     packages {}
-    imports []
     provides [renderForHost]
 
 Rgba : { r : F32, g : F32, b : F32, a : F32 }

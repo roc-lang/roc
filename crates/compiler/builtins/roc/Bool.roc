@@ -1,6 +1,5 @@
 interface Bool
     exposes [Bool, Eq, true, false, and, or, not, isEq, isNotEq]
-    imports []
 
 ## Defines a type that can be compared for total equality.
 ##

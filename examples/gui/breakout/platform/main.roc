@@ -2,8 +2,9 @@ platform "gui"
     requires { Model } { program : _ }
     exposes [Game]
     packages {}
-    imports [Game.{ Bounds, Elem, Event }]
     provides [programForHost]
+
+import Game exposing [Bounds, Elem, Event]
 
 # TODO allow changing the window title - maybe via a Task, since that shouldn't happen all the time
 programForHost : {

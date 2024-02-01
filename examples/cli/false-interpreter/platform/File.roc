@@ -1,6 +1,8 @@
 interface File
     exposes [line, Handle, withOpen, chunk]
-    imports [pf.Effect, Task.{ Task }]
+
+import pf.Effect
+import Task exposing [Task]
 
 Handle := U64
 

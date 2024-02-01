@@ -1,6 +1,5 @@
 interface Action
     exposes [Action, none, update, map]
-    imports []
 
 Action state : [None, Update state]
 

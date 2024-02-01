@@ -28,7 +28,6 @@ interface Encode
         append,
         toBytes,
     ]
-    imports []
 
 import Num exposing [
     U8,

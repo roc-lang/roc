@@ -26,51 +26,7 @@ Module {
                     ],
                 },
             ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @65-141 Package(
-                            "foo",
-                            ModuleName(
-                                "Bar",
-                            ),
-                            Collection {
-                                items: [
-                                    @83-86 SpaceBefore(
-                                        ExposedName(
-                                            "Baz",
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                    @96-104 SpaceBefore(
-                                        ExposedName(
-                                            "FortyTwo",
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                ],
-                                final_comments: [
-                                    Newline,
-                                    LineComment(
-                                        " I'm a happy comment",
-                                    ),
-                                ],
-                            },
-                        ),
-                    ],
-                },
-            ),
+            imports: None,
             provides: ProvidesTo {
                 provides_keyword: Spaces {
                     before: [
@@ -80,7 +36,7 @@ Module {
                     after: [],
                 },
                 entries: [
-                    @159-168 ExposedName(
+                    @66-75 ExposedName(
                         "quicksort",
                     ),
                 ],
@@ -90,7 +46,7 @@ Module {
                     item: ToKeyword,
                     after: [],
                 },
-                to: @175-177 ExistingPackage(
+                to: @82-84 ExistingPackage(
                     "pf",
                 ),
             },

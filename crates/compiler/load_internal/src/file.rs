@@ -47,12 +47,12 @@ use roc_mono::layout::{
 use roc_mono::reset_reuse;
 use roc_mono::{drop_specialization, inc_dec};
 use roc_packaging::cache::RocCacheDir;
-use roc_parse::ast::{self, CommentOrNewline, ExtractSpaces, Spaced, ValueDef};
+use roc_parse::ast::{self, CommentOrNewline, Defs, ExtractSpaces, Spaced, ValueDef};
 use roc_parse::header::{
     ExposedName, HeaderType, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
 };
-use roc_parse::module::module_defs;
-use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
+use roc_parse::module::parse_module_defs;
+use roc_parse::parser::{FileError, SourceError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
 #[cfg(not(target_family = "wasm"))]
@@ -951,6 +951,12 @@ pub enum LoadingProblem<'a> {
     },
     ParsingFailed(FileError<'a, SyntaxError<'a>>),
     UnexpectedHeader(String),
+    HeaderImportFound {
+        filename: PathBuf,
+        module_id: ModuleId,
+        region: Region,
+        source: &'a [u8],
+    },
 
     ErrJoiningWorkerThreads,
     TriedToImportAppModule,
@@ -1668,6 +1674,24 @@ pub fn report_loading_problem(
         LoadingProblem::FormattedReport(report) => report,
         LoadingProblem::FileProblem { filename, error } => {
             to_file_problem_report_string(filename, error)
+        }
+        LoadingProblem::HeaderImportFound {
+            filename,
+            module_id,
+            region,
+            source,
+        } => {
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_header_import_found_report(
+                module_ids,
+                root_exposed_ident_ids,
+                module_id,
+                filename,
+                region,
+                source,
+                render,
+            )
         }
         err => todo!("Loading error: {:?}", err),
     }
@@ -3803,7 +3827,7 @@ fn parse_header<'a>(
 
             let header_name_region = header.name.region;
             let info = HeaderInfo {
-                filename,
+                filename: filename.clone(),
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
@@ -3814,8 +3838,17 @@ fn parse_header<'a>(
                 module_comments: comments,
             };
 
-            let (module_id, module_name, header) =
+            let (module_id, module_name, module_header) =
                 build_header(info, parse_state.clone(), module_ids, module_timing)?;
+
+            if let Some(imports) = header.imports {
+                return Err(LoadingProblem::HeaderImportFound {
+                    filename,
+                    module_id,
+                    region: imports.region,
+                    source: src_bytes,
+                });
+            }
 
             if let Some(expected_module_name) = opt_expected_module_name {
                 if expected_module_name != module_name {
@@ -3829,7 +3862,7 @@ fn parse_header<'a>(
                     );
                     let problem = LoadingProblem::IncorrectModuleName(FileError {
                         problem,
-                        filename: header.module_path,
+                        filename: module_header.module_path,
                     });
                     return Err(problem);
                 }
@@ -3837,7 +3870,7 @@ fn parse_header<'a>(
 
             Ok(HeaderOutput {
                 module_id,
-                msg: Msg::Header(header),
+                msg: Msg::Header(module_header),
                 opt_platform_shorthand: None,
             })
         }
@@ -3849,7 +3882,7 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             let info = HeaderInfo {
-                filename,
+                filename: filename.clone(),
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
@@ -3862,12 +3895,21 @@ fn parse_header<'a>(
                 module_comments: comments,
             };
 
-            let (module_id, _, header) =
+            let (module_id, _, module_header) =
                 build_header(info, parse_state, module_ids, module_timing)?;
+
+            if let Some(imports) = header.imports {
+                return Err(LoadingProblem::HeaderImportFound {
+                    filename,
+                    module_id,
+                    region: imports.region,
+                    source: src_bytes,
+                });
+            }
 
             Ok(HeaderOutput {
                 module_id,
-                msg: Msg::Header(header),
+                msg: Msg::Header(module_header),
                 opt_platform_shorthand: None,
             })
         }
@@ -3901,7 +3943,7 @@ fn parse_header<'a>(
             }
 
             let info = HeaderInfo {
-                filename,
+                filename: filename.clone(),
                 is_root_module,
                 opt_shorthand,
                 packages,
@@ -3915,6 +3957,15 @@ fn parse_header<'a>(
 
             let (module_id, _, resolved_header) =
                 build_header(info, parse_state, module_ids.clone(), module_timing)?;
+
+            if let Some(imports) = header.imports {
+                return Err(LoadingProblem::HeaderImportFound {
+                    filename,
+                    module_id,
+                    region: imports.region,
+                    source: src_bytes,
+                });
+            }
 
             let filename = resolved_header.module_path.clone();
             let mut messages = Vec::with_capacity(packages.len() + 1);
@@ -3998,11 +4049,11 @@ fn parse_header<'a>(
                 &ident_ids_by_module,
             );
 
-            let (module_id, _, header) = build_platform_header(
+            let (module_id, _, module_header) = build_platform_header(
                 arena,
                 None,
                 None,
-                filename,
+                filename.clone(),
                 parse_state,
                 module_ids,
                 exposes_ids.into_bump_slice(),
@@ -4011,9 +4062,18 @@ fn parse_header<'a>(
                 module_timing,
             )?;
 
+            if let Some(imports) = header.imports {
+                return Err(LoadingProblem::HeaderImportFound {
+                    filename,
+                    module_id,
+                    region: imports.region,
+                    source: src_bytes,
+                });
+            }
+
             Ok(HeaderOutput {
                 module_id,
-                msg: Msg::Header(header),
+                msg: Msg::Header(module_header),
                 opt_platform_shorthand: None,
             })
         }
@@ -5145,9 +5205,9 @@ fn parse<'a>(
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
-        Ok((_, success, _state)) => success,
-        Err((_, fail)) => {
+    let parsed_defs = match parse_module_defs(arena, parse_state.clone(), Defs::default()) {
+        Ok(success) => success,
+        Err(fail) => {
             return Err(LoadingProblem::ParsingFailed(
                 fail.into_file_error(header.module_path, &parse_state),
             ));
@@ -6351,6 +6411,50 @@ fn to_incorrect_module_name_report<'a>(
         filename,
         doc,
         title: "INCORRECT MODULE NAME".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
+fn to_header_import_found_report(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    module_id: ModuleId,
+    filename: PathBuf,
+    region: Region,
+    src: &[u8],
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
+    // than an incorrect module name problem (the latter can happen only after parsing).
+    let src = unsafe { from_utf8_unchecked(src) };
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let doc = alloc.stack([
+        alloc.reflow("Found an import in this module's header:"),
+        alloc.region(lines.convert_region(region)),
+        alloc.reflow("Header imports are no longer supported."),
+        alloc.concat([alloc.tip(), alloc.reflow(r"Run `roc format` to fix!")]),
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "FOUND OLD IMPORT".to_string(),
         severity: Severity::RuntimeError,
     };
 

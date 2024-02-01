@@ -2,7 +2,6 @@ platform "jvm-interop"
     requires {} { program : _ }
     exposes []
     packages {}
-    imports []
     provides [programForHost]
 
 programForHost : {

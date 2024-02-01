@@ -124,6 +124,12 @@ pub(crate) mod diag {
                         error
                     )
                 }
+                LoadingProblem::HeaderImportFound { filename, .. } => {
+                    format!(
+                        "Header imports are no longer supported ({}). Run roc format to fix automatically.",
+                        filename.display()
+                    )
+                }
                 LoadingProblem::ParsingFailed(fe) => {
                     let problem = &fe.problem.problem;
                     format!("Failed to parse Roc source file: {problem:?}")

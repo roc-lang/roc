@@ -26,26 +26,7 @@ Module {
                     ],
                 },
             ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @64-75 Package(
-                            "foo",
-                            ModuleName(
-                                "Bar.Baz",
-                            ),
-                            [],
-                        ),
-                    ],
-                },
-            ),
+            imports: None,
             provides: ProvidesTo {
                 provides_keyword: Spaces {
                     before: [
@@ -55,7 +36,7 @@ Module {
                     after: [],
                 },
                 entries: [
-                    @93-102 ExposedName(
+                    @65-74 ExposedName(
                         "quicksort",
                     ),
                 ],
@@ -65,7 +46,7 @@ Module {
                     item: ToKeyword,
                     after: [],
                 },
-                to: @108-110 ExistingPackage(
+                to: @80-82 ExistingPackage(
                     "pf",
                 ),
             },

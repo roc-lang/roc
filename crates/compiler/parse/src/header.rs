@@ -185,7 +185,7 @@ keywords! {
     RequiresKeyword => "requires",
     ProvidesKeyword => "provides",
     ToKeyword => "to",
-    // [modules-revamp] TODO: Remove
+    // No longer supported, but still parsed so we can format it away
     ImportsKeyword => "imports",
 }
 
@@ -201,7 +201,7 @@ pub struct InterfaceHeader<'a> {
     pub name: Loc<ModuleName<'a>>,
 
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
-    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    pub imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -210,7 +210,7 @@ pub struct HostedHeader<'a> {
     pub name: Loc<ModuleName<'a>>,
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 
-    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    pub imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
 
     pub generates: KeywordItem<'a, GeneratesKeyword, UppercaseIdent<'a>>,
     pub generates_with:
@@ -230,8 +230,7 @@ pub struct AppHeader<'a> {
 
     pub packages:
         Option<KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>>,
-    pub imports:
-        Option<KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>>,
+    pub imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
     pub provides: ProvidesTo<'a>,
 }
 
@@ -270,10 +269,12 @@ pub struct PlatformHeader<'a> {
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
     pub packages:
         KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
-    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    pub imports: Option<Loc<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>>,
     pub provides:
         KeywordItem<'a, ProvidesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 }
+
+pub type ImportsCollection<'a> = Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum ImportsEntry<'a> {

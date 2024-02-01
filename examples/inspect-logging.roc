@@ -3,11 +3,10 @@
 #
 app "inspect-logging"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
-    imports [
-        pf.Stdout,
-        Community,
-    ]
     provides [main] to pf
+
+import pf.Stdout
+import Community
 
 main =
     Community.empty

@@ -2,12 +2,11 @@ platform "client-side"
     requires {} { app : App state initData }
     exposes []
     packages {}
-    imports [
-        Html.Internal.Shared.{ App },
-        Html.Internal.Client.{ PlatformState, initClientApp, dispatchEvent },
-        Effect.{ Effect },
-    ]
     provides [main]
+
+import HtmlInternalShared exposing [App]
+import HtmlInternalClient exposing [PlatformState, initClientApp, dispatchEvent]
+import Effect exposing [Effect]
 
 # Fields sorted by alignment, then alphabetically
 FromHost state initData : {

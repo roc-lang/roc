@@ -1,7 +1,8 @@
 app "cfold"
     packages { pf: "platform/main.roc" }
-    imports [pf.Task]
     provides [main] to pf
+
+import pf.Task
 
 # adapted from https://github.com/koka-lang/koka/blob/master/test/bench/haskell/cfold.hs
 main : Task.Task {} []

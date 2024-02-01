@@ -1,8 +1,7 @@
 interface ExampleApp
     exposes [exampleApp, State]
-    imports [
-        pf.Html.{ App, Html, html, head, body, div, text, h1 },
-    ]
+
+import pf.Html exposing [App, Html, html, head, body, div, text, h1]
 
 State : {
     answer : U32,

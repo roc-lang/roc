@@ -26,26 +26,7 @@ Module {
                     ],
                 },
             ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @59-70 Package(
-                            "foo",
-                            ModuleName(
-                                "Bar.Baz",
-                            ),
-                            [],
-                        ),
-                    ],
-                },
-            ),
+            imports: None,
             provides: ProvidesTo {
                 provides_keyword: Spaces {
                     before: [
@@ -55,16 +36,16 @@ Module {
                     after: [],
                 },
                 entries: [
-                    @88-97 ExposedName(
+                    @60-69 ExposedName(
                         "quicksort",
                     ),
                 ],
                 types: Some(
                     [
-                        @102-107 UppercaseIdent(
+                        @74-79 UppercaseIdent(
                             "Flags",
                         ),
-                        @109-114 UppercaseIdent(
+                        @81-86 UppercaseIdent(
                             "Model",
                         ),
                     ],
@@ -74,7 +55,7 @@ Module {
                     item: ToKeyword,
                     after: [],
                 },
-                to: @121-123 ExistingPackage(
+                to: @93-95 ExistingPackage(
                     "pf",
                 ),
             },

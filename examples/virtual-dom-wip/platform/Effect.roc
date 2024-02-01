@@ -25,7 +25,6 @@ hosted Effect
         enableVdomAllocator,
         disableVdomAllocator,
     ]
-    imports []
     generates Effect with [after, always, map]
 
 # TODO: private types

@@ -5,11 +5,6 @@ hosted Foo
         Things,
         somethingElse,
     ]
-    imports
-    [
-        Blah,
-        Baz.{ stuff, things },
-    ]
     generates Bar with
     [
         map,

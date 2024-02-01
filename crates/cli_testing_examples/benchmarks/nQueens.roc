@@ -1,7 +1,8 @@
 app "nqueens"
     packages { pf: "platform/main.roc" }
-    imports [pf.Task]
     provides [main] to pf
+
+import pf.Task
 
 main : Task.Task {} []
 main =

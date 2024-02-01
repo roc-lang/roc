@@ -1,6 +1,5 @@
 interface WithBuiltins
     exposes [floatTest, divisionFn, divisionTest, intTest, constantNum, fromDep2, divDep1ByDep2]
-    imports []
 
 import Dep1
 import Dep2

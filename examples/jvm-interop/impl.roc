@@ -1,6 +1,5 @@
 app "rocdemo"
     packages { pf: "platform.roc" }
-    imports []
     provides [program] to pf
 
 interpolateString : Str -> Str

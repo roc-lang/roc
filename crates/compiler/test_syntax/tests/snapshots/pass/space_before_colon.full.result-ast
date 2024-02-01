@@ -27,26 +27,7 @@ Full {
                         ],
                     },
                 ),
-                imports: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: ImportsKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @57-66 Package(
-                                "pf",
-                                ModuleName(
-                                    "Stdout",
-                                ),
-                                [],
-                            ),
-                        ],
-                    },
-                ),
+                imports: None,
                 provides: ProvidesTo {
                     provides_keyword: Spaces {
                         before: [
@@ -56,7 +37,7 @@ Full {
                         after: [],
                     },
                     entries: [
-                        @84-88 ExposedName(
+                        @58-62 ExposedName(
                             "main",
                         ),
                     ],
@@ -66,7 +47,7 @@ Full {
                         item: ToKeyword,
                         after: [],
                     },
-                    to: @94-96 ExistingPackage(
+                    to: @68-70 ExistingPackage(
                         "pf",
                     ),
                 },
@@ -76,33 +57,52 @@ Full {
     module_defs: Defs {
         tags: [
             Index(2147483648),
+            Index(2147483649),
         ],
         regions: [
-            @98-124,
+            @72-88,
+            @90-116,
         ],
         space_before: [
             Slice(start = 0, length = 2),
+            Slice(start = 2, length = 2),
         ],
         space_after: [
             Slice(start = 2, length = 0),
+            Slice(start = 4, length = 0),
         ],
         spaces: [
+            Newline,
+            Newline,
             Newline,
             Newline,
         ],
         type_defs: [],
         value_defs: [
+            ModuleImport(
+                ModuleImport {
+                    before_name: [],
+                    name: @79-88 ImportedModuleName {
+                        package: Some(
+                            "pf",
+                        ),
+                        name: "Stdout",
+                    },
+                    alias: None,
+                    exposed: None,
+                },
+            ),
             Body(
-                @98-102 Identifier(
+                @90-94 Identifier(
                     "main",
                 ),
-                @105-124 Apply(
-                    @105-116 Var {
+                @97-116 Apply(
+                    @97-108 Var {
                         module_name: "Stdout",
                         ident: "line",
                     },
                     [
-                        @117-124 Str(
+                        @109-116 Str(
                             PlainLine(
                                 "Hello",
                             ),

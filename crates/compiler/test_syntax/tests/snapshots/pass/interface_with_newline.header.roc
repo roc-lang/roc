@@ -1,1 +1,1 @@
-interface T exposes [] imports []
+interface T exposes []

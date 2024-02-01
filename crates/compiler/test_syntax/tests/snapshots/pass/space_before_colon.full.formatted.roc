@@ -1,6 +1,7 @@
 app "example"
     packages { pf: "path" }
-    imports [pf.Stdout]
     provides [main] to pf
+
+import pf.Stdout
 
 main = Stdout.line "Hello"

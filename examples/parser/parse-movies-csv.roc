@@ -3,15 +3,14 @@ app "example"
         pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br",
         parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5/KB-TITJ4DfunB88sFBWjCtCGV7LRRDdTH5JUXp4gIb8.tar.br",
     }
-    imports [
-        pf.Stdout,
-        pf.Stderr,
-        pf.Task.{ Task },
-        parser.Core.{ Parser, map, keep },
-        parser.String.{ strFromUtf8 },
-        parser.CSV.{ CSV },
-    ]
     provides [main] to pf
+
+import pf.Stdout
+import pf.Stderr
+import pf.Task exposing [Task]
+import parser.Core exposing [Parser, map, keep]
+import parser.String exposing [strFromUtf8]
+import parser.CSV exposing [CSV]
 
 input : Str
 input = "Airplane!,1980,\"Robert Hays,Julie Hagerty\"\r\nCaddyshack,1980,\"Chevy Chase,Rodney Dangerfield,Ted Knight,Michael O'Keefe,Bill Murray\""

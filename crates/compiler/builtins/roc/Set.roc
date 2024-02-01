@@ -24,7 +24,6 @@ interface Set
         map,
         joinMap,
     ]
-    imports []
 
 import List
 import Bool exposing [Bool, Eq]

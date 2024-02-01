@@ -1,6 +1,7 @@
 interface UnusedImport
     exposes [plainText, emText]
-    imports [Symbol.{ Ident }]
+
+import Symbol exposing [Ident]
 
 plainText = \str -> PlainText str
 

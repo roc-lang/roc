@@ -337,7 +337,7 @@ fn import_transitive_alias() {
             "RBTree",
             indoc!(
                 r"
-                        interface RBTree exposes [RedBlackTree, empty] imports []
+                        interface RBTree exposes [RedBlackTree, empty]
 
                         # The color of a node. Leaves are considered Black.
                         NodeColor : [Red, Black]
@@ -355,7 +355,7 @@ fn import_transitive_alias() {
             "Other",
             indoc!(
                 r"
-                        interface Other exposes [empty] imports []
+                        interface Other exposes [empty]
 
                         import RBTree
 
@@ -679,7 +679,7 @@ fn parse_problem() {
         "Main",
         indoc!(
             r"
-                interface Main exposes [main] imports []
+                interface Main exposes [main]
 
                 main = [
                 "
@@ -762,7 +762,6 @@ fn platform_does_not_exist() {
             r#"
                 app "example"
                     packages { pf: "./zzz-does-not-exist/main.roc" }
-                    imports []
                     provides [main] to pf
 
                 main = ""
@@ -794,7 +793,6 @@ fn platform_parse_error() {
                             requires {} { main : Str }
                             exposes []
                             packages {}
-                            imports []
                             provides [mainForHost]
                             blah 1 2 3 # causing a parse error on purpose
 
@@ -808,7 +806,6 @@ fn platform_parse_error() {
                 r#"
                         app "hello-world"
                             packages { pf: "platform/main.roc" }
-                            imports []
                             provides [main] to pf
 
                         main = "Hello, World!\n"
@@ -838,7 +835,6 @@ fn platform_exposes_main_return_by_pointer_issue() {
                         requires {} { main : { content: Str, other: Str } }
                         exposes []
                         packages {}
-                        imports []
                         provides [mainForHost]
 
                     mainForHost : { content: Str, other: Str }
@@ -852,7 +848,6 @@ fn platform_exposes_main_return_by_pointer_issue() {
                 r#"
                     app "hello-world"
                         packages { pf: "platform/main.roc" }
-                        imports []
                         provides [main] to pf
 
                     main = { content: "Hello, World!\n", other: "" }
@@ -871,7 +866,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Age",
             indoc!(
                 r"
-                    interface Age exposes [Age] imports []
+                    interface Age exposes [Age]
 
                     Age := U32
                     "
@@ -881,7 +876,7 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Main",
             indoc!(
                 r"
-                    interface Main exposes [twenty, readAge] imports []
+                    interface Main exposes [twenty, readAge]
 
                     import Age exposing [Age]
 
@@ -949,7 +944,7 @@ fn unused_imports() {
             "Dep1",
             indoc!(
                 r#"
-                interface Dep1 exposes [one] imports []
+                interface Dep1 exposes [one]
                 one = 1
                 "#
             ),
@@ -958,7 +953,7 @@ fn unused_imports() {
             "Dep2",
             indoc!(
                 r#"
-                interface Dep2 exposes [two] imports []
+                interface Dep2 exposes [two]
                 two = 2
                 "#
             ),
@@ -967,7 +962,7 @@ fn unused_imports() {
             "Dep3",
             indoc!(
                 r#"
-                interface Dep3 exposes [Three, three] imports []
+                interface Dep3 exposes [Three, three]
 
                 Three : [Three]
 
@@ -979,7 +974,7 @@ fn unused_imports() {
             "Main",
             indoc!(
                 r#"
-            interface Main exposes [usedModule, unusedModule, unusedExposed, usingThreeValue] imports []
+            interface Main exposes [usedModule, unusedModule, unusedExposed, usingThreeValue]
 
             import Dep1
             import Dep3 exposing [Three]
@@ -1061,7 +1056,6 @@ fn issue_2863_module_type_does_not_exist() {
                         requires {} { main : Str }
                         exposes []
                         packages {}
-                        imports []
                         provides [mainForHost]
 
                     mainForHost : Str
@@ -1122,7 +1116,6 @@ fn import_builtin_in_platform_and_check_app() {
                         requires {} { main : Str }
                         exposes []
                         packages {}
-                        imports []
                         provides [mainForHost]
 
                     import Str
@@ -1156,7 +1149,7 @@ fn module_doesnt_match_file_path() {
         "Age",
         indoc!(
             r"
-                interface NotAge exposes [Age] imports []
+                interface NotAge exposes [Age]
 
                 Age := U32
                 "
@@ -1173,7 +1166,7 @@ fn module_doesnt_match_file_path() {
             This module name does not correspond with the file path it is defined
             in:
 
-            1│  interface NotAge exposes [Age] imports []
+            1│  interface NotAge exposes [Age]
                           ^^^^^^
 
             Module names must correspond with the file paths they are defined in.
@@ -1191,7 +1184,7 @@ fn module_cyclic_import_itself() {
         "Age",
         indoc!(
             r"
-            interface Age exposes [] imports []
+            interface Age exposes []
 
             import Age
             "
@@ -1229,7 +1222,7 @@ fn module_cyclic_import_transitive() {
             "Age",
             indoc!(
                 r"
-                interface Age exposes [] imports []
+                interface Age exposes []
                 import Person
                 "
             ),
@@ -1238,7 +1231,7 @@ fn module_cyclic_import_transitive() {
             "Person",
             indoc!(
                 r"
-                interface Person exposes [] imports []
+                interface Person exposes []
                 import Age
                 "
             ),

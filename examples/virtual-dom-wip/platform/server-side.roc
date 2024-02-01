@@ -2,13 +2,12 @@ platform "server-side"
     requires {} { app : App state initData }
     exposes []
     packages {}
-    imports [
-        Html.Internal.Shared.{ App },
-        Html.Internal.Server.{ initServerApp },
-        Html.{ renderStatic },
-        TotallyNotJson,
-    ]
     provides [main]
+
+import HtmlInternalShared exposing [App]
+import HtmlInternalServer exposing [initServerApp]
+import Html exposing [renderStatic]
+import TotallyNotJson
 
 main : Str, Str -> Result Str Str
 main = \initJson, hostJavaScript ->

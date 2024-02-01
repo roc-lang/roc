@@ -1,14 +1,13 @@
 app "http"
     packages { pf: "https://github.com/roc-lang/basic-webserver/releases/download/0.1/dCL3KsovvV-8A5D_W_0X_abynkcRcoAngsgF0xtvQsk.tar.br" }
-    imports [
-        pf.Stdout,
-        pf.Stderr,
-        pf.Task.{ Task },
-        pf.Http.{ Request, Response },
-        pf.Utc,
-        pf.Env,
-    ]
     provides [main] to pf
+
+import pf.Stdout
+import pf.Stderr
+import pf.Task exposing [Task]
+import pf.Http exposing [Request, Response]
+import pf.Utc
+import pf.Env
 
 main : Request -> Task Response []
 main = \req ->

@@ -2,7 +2,6 @@ platform "echo-in-rust"
     requires {} { main : _ }
     exposes []
     packages {}
-    imports []
     provides [mainForHost]
 
 # mainForHost : [StdoutWrite Str (({} -> Op) as Fx0), StderrWrite Str (({} -> Op) as Fx1), Done] as Op

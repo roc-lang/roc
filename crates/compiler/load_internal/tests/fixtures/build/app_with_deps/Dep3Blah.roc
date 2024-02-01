@@ -1,6 +1,5 @@
 interface Dep3Blah
     exposes [one, two, foo, bar]
-    imports []
 
 import Dep3Other
 

@@ -3,13 +3,12 @@ app "example"
         cli: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br",
         parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5/KB-TITJ4DfunB88sFBWjCtCGV7LRRDdTH5JUXp4gIb8.tar.br",
     }
-    imports [
-        cli.Stdout,
-        cli.Stderr,
-        parser.Core.{ Parser, buildPrimitiveParser, many },
-        parser.String.{ parseStr },
-    ]
     provides [main] to cli
+
+import cli.Stdout
+import cli.Stderr
+import parser.Core exposing [Parser, buildPrimitiveParser, many]
+import parser.String exposing [parseStr]
 
 main =
     lettersInput = "AAAiBByAABBwBtCCCiAyArBBx"

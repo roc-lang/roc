@@ -21,7 +21,7 @@ interface Hash
         hashStrBytes,
         hashList,
         hashUnordered,
-    ] imports []
+    ]
 
 import Bool exposing [Bool]
 import List

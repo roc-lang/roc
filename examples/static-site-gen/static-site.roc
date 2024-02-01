@@ -1,10 +1,9 @@
 app "static-site"
     packages { pf: "platform/main.roc" }
-    imports [
-        pf.Html.{ html, head, body, div, text, a, ul, li, link, meta },
-        pf.Html.Attributes.{ httpEquiv, content, href, rel, lang, class, title },
-    ]
     provides [transformFileContent] to pf
+
+import pf.Html exposing [html, head, body, div, text, a, ul, li, link, meta]
+import pf.HtmlAttributes exposing [httpEquiv, content, href, rel, lang, class, title]
 
 NavLink : {
     url : Str,

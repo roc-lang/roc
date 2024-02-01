@@ -1,7 +1,8 @@
 app "rbtree-del"
     packages { pf: "platform/main.roc" }
-    imports [pf.Task]
     provides [main] to pf
+
+import pf.Task
 
 Color : [Red, Black]
 

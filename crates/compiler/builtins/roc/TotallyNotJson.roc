@@ -6,7 +6,6 @@ interface TotallyNotJson
         json,
         jsonWithOptions,
     ]
-    imports []
 
 import List
 import Str

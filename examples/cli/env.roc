@@ -1,7 +1,11 @@
 app "env"
     packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
-    imports [pf.Stdout, pf.Stderr, pf.Env, pf.Task.{ Task }]
     provides [main] to pf
+
+import pf.Stdout
+import pf.Stderr
+import pf.Env
+import pf.Task exposing [Task]
 
 main : Task {} I32
 main =

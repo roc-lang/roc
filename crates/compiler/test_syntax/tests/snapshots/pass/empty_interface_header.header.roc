@@ -1,1 +1,1 @@
-interface Foo exposes [] imports []
+interface Foo exposes []

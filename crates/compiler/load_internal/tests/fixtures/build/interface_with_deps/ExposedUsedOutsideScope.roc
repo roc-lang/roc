@@ -1,4 +1,4 @@
-interface ExposedUsedOutsideScope exposes [good, bad] imports []
+interface ExposedUsedOutsideScope exposes [good, bad]
 
 good =
     import Dep2 exposing [two]
