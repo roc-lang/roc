@@ -459,7 +459,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  capacity: usize            i32
+                //  capacity: u64              i64
                 //  alignment: u32             i32
                 //  element_width: usize       i32
 

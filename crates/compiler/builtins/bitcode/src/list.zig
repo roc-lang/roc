@@ -472,7 +472,7 @@ pub fn listMap4(
 }
 
 pub fn listWithCapacity(
-    capacity: usize,
+    capacity: u64,
     alignment: u32,
     element_width: usize,
 ) callconv(.C) RocList {
