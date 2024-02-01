@@ -1585,6 +1585,10 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_POW);
+                }
+
                 _ => panic_ret_type(),
             },
 

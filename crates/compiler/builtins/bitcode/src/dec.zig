@@ -391,6 +391,29 @@ pub const RocDec = extern struct {
         }
     }
 
+    fn powInt(base: RocDec, exponent: i128) RocDec {
+        if (exponent == 0) {
+            return RocDec.one_point_zero;
+        } else if (exponent > 0) {
+            if (@mod(exponent, 2) == 0) {
+                const half_power = RocDec.powInt(base, exponent >> 1); // `>> 1` == `/ 2`
+                return RocDec.mul(half_power, half_power);
+            } else {
+                return RocDec.mul(base, RocDec.powInt(base, exponent - 1));
+            }
+        } else {
+            return RocDec.div(RocDec.one_point_zero, RocDec.powInt(base, -exponent));
+        }
+    }
+
+    fn pow(base: RocDec, exponent: RocDec) RocDec {
+        if (exponent.trunc().num == exponent.num) {
+            return base.powInt(@divTrunc(exponent.num, RocDec.one_point_zero_i128));
+        } else {
+            return fromF64(std.math.pow(f64, base.toF64(), exponent.toF64())).?;
+        }
+    }
+
     pub fn mul(self: RocDec, other: RocDec) RocDec {
         const answer = RocDec.mulWithOverflow(self, other);
 
@@ -1358,6 +1381,41 @@ test "round: -0.5" {
     try expectEqual(RocDec{ .num = -1000000000000000000 }, dec.round());
 }
 
+test "powInt: 3.1 ^ 0" {
+    var roc_str = RocStr.init("3.1", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(RocDec.one_point_zero, dec.powInt(0));
+}
+
+test "powInt: 3.1 ^ 1" {
+    var roc_str = RocStr.init("3.1", 3);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, dec.powInt(1));
+}
+
+test "powInt: 2 ^ 2" {
+    var roc_str = RocStr.init("4", 1);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.two_point_zero.powInt(2));
+}
+
+test "powInt: 0.5 ^ 2" {
+    var roc_str = RocStr.init("0.25", 4);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.zero_point_five.powInt(2));
+}
+
+test "pow: 0.5 ^ 2.0" {
+    var roc_str = RocStr.init("0.25", 4);
+    var dec = RocDec.fromStr(roc_str).?;
+
+    try expectEqual(dec, RocDec.zero_point_five.pow(RocDec.two_point_zero));
+}
+
 // exports
 
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
@@ -1456,6 +1514,10 @@ pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
 
 pub fn logC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.log, .{arg}).num;
+}
+
+pub fn powC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
+    return @call(.always_inline, RocDec.pow, .{ arg1, arg2 }).num;
 }
 
 pub fn sinC(arg: RocDec) callconv(.C) i128 {

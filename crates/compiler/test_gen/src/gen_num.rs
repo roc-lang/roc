@@ -1825,8 +1825,14 @@ fn float_compare() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn pow() {
+fn pow_f64() {
     assert_evals_to!("Num.pow 2.0f64 2.0f64", 4.0, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn pow_dec() {
+    assert_evals_to!("Num.pow 2.0dec 2.0dec", RocDec::from(4), RocDec);
 }
 
 #[test]
