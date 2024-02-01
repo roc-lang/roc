@@ -86,7 +86,7 @@ impl Registry {
     pub async fn apply_changes<'a>(&self, analysed_docs: Vec<AnalyzedDocument>, updating_url: Url) {
         let mut documents = self.documents.lock().await;
         debug!(
-            "finised doc analysis for doc: {:?}",
+            "Finished doc analysis for doc: {}",
             updating_url.to_string()
         );
 
@@ -103,7 +103,7 @@ impl Registry {
         match doc {
             Some(a) => {
                 debug!(
-                    "set the docInfo for {:?} to version:{:?}",
+                    "Set the docInfo for {:?} to version:{:?}",
                     url.as_str(),
                     info.version
                 );
@@ -113,16 +113,15 @@ impl Registry {
                     latest_document: OnceLock::new(),
                 };
             }
-            None => debug!("no existing docinfo for {:?} ", url.as_str()),
+            None => debug!("So existing docinfo for {:?} ", url.as_str()),
         }
     }
 
     async fn document_info_by_url(&self, url: &Url) -> Option<DocInfo> {
         self.documents.lock().await.get(url).map(|a| a.info.clone())
-    }
-
+    }U
     ///Tries to get the latest document from analysis.
-    ///Gives up and returns none after 5 seconds.
+    ///Gives up and returns none aft 5 seconds.
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
         let duration = std::time::Duration::from_secs(5);
         tokio::time::timeout(duration, async {
@@ -179,13 +178,13 @@ impl Registry {
         url: &Url,
         position: Position,
     ) -> Option<CompletionResponse> {
-        trace!("starting completion ");
+        trace!("Starting completion ");
         let lock = self.documents.lock().await;
         let pair = lock.get(url)?;
 
         let latest_doc_info = &pair.info;
         info!(
-            "using document version:{:?} for completion ",
+            "Using document version:{:?} for completion ",
             latest_doc_info.version
         );
 

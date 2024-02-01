@@ -94,10 +94,10 @@ impl RocServer {
 
         //The analysis task can be cancelled by another change coming in which will update the watched variable
         if let Err(e) = updating_result {
-            debug!("cancelled change. Reason:{:?}", e);
+            debug!("Cancelled change. Reason:{:?}", e);
             return;
         }
-        debug!("applied_change getting and returning diagnostics");
+        debug!("Applied_change getting and returning diagnostics");
 
         let diagnostics = self.state.registry.diagnostics(&fi).await;
 
@@ -165,7 +165,7 @@ impl RocServerState {
             if let Some(latest_version) = latest_version {
                 if latest_version != version {
                     return Err(format!(
-                        "version {0} doesn't match latest: {1} discarding analysis  ",
+                        "Version {0} doesn't match latest: {1} discarding analysis",
                         version, latest_version
                     ));
                 }
@@ -214,7 +214,6 @@ impl LanguageServer for RocServer {
         let TextDocumentContentChangeEvent { text, .. } =
             params.content_changes.into_iter().next().unwrap();
 
-        trace!("got did_change");
         self.change(uri, text, version).await;
     }
 
@@ -309,7 +308,7 @@ impl LanguageServer for RocServer {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let doc = params.text_document_position;
-        trace!("got completion request");
+        trace!("Got completion request");
 
         panic_wrapper_async(|| async {
             self.state
@@ -386,7 +385,7 @@ mod tests {
                 .filter_level(log::LevelFilter::Trace)
                 .init();
         });
-        info!("doc is:\n{0}", doc);
+        info!("Doc is:\n{0}", doc);
         let url = Url::parse("file:/Test.roc").unwrap();
 
         let inner = RocServerState::new();

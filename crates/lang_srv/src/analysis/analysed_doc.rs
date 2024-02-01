@@ -52,14 +52,14 @@ impl DocInfo {
     #[cfg(debug_assertions)]
     #[allow(unused)]
     fn debug_log_prefix(&self, offset: usize) {
-        debug!("prefix source: {:?}", self.source);
+        debug!("Prefix source: {:?}", self.source);
 
         let last_few = self.source.get(offset - 5..offset + 5).unwrap();
 
         let (before, after) = last_few.split_at(5);
 
         debug!(
-            "starting to get completion items at offset: {:?} content: '{:?}|{:?}'",
+            "Starting to get completion items at offset: {:?} content: '{:?}|{:?}'",
             offset, before, after
         );
     }
@@ -207,7 +207,7 @@ impl AnalyzedDocument {
     ) -> Option<Vec<CompletionItem>> {
         let symbol_prefix = latest_doc.get_prefix_at_position(position);
         debug!(
-            "starting to get completion items for prefix: {:?} docVersion:{:?}",
+            "Starting to get completion items for prefix: {:?} docVersion:{:?}",
             symbol_prefix, latest_doc.version
         );
         let len_diff = latest_doc.source.len() as i32 - self.doc_info.source.len() as i32;
@@ -216,7 +216,7 @@ impl AnalyzedDocument {
         //TODO: this is kind of a hack and should be removed once we can do some minimal parsing without full type checking
         let mut position = position.to_roc_position(&latest_doc.line_info);
         position.offset = (position.offset as i32 - len_diff - 1) as u32;
-        debug!("completion offset: {:?}", position.offset);
+        debug!("Completion offset: {:?}", position.offset);
 
         let AnalyzedModule {
             module_id,

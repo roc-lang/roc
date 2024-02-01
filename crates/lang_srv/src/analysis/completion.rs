@@ -60,7 +60,7 @@ impl Visitor for CompletionVisitor<'_> {
 }
 impl CompletionVisitor<'_> {
     fn extract_defs(&mut self, def: &Def) -> Vec<(Symbol, Variable)> {
-        trace!("completion begin");
+        trace!("Completion begin");
         def.pattern_vars
             .iter()
             .map(|(symbol, var)| (*symbol, *var))
@@ -228,7 +228,7 @@ impl CompletionVisitor<'_> {
                         .flat_map(|(var, _, pat)| self.patterns(&pat.value, var));
                     //We add in the pattern for the function declaration
                     out.extend(args);
-                    trace!("added function args to completion output =:{:#?}", out);
+                    trace!("Added function args to completion output =:{:#?}", out);
                 }
                 out
             }
@@ -413,10 +413,10 @@ pub fn field_completion(
     } = get_field_completion_parts(&symbol_prefix)?;
 
     debug!(
-        "getting record field completions: variable: {:?} field: {:?} middle: {:?} ",
+        "Getting record field completions: variable: {:?} field: {:?} middle: {:?} ",
         var, field, middle_fields
     );
-    //TODO: this is kind of just a hack. We are getting all the completions and seeing if any match the part before the dot as a way to get the Variable type of the variable before the dot. I imagine there are much faster ways to do this
+
     let completion = get_completions(position, declarations, var.to_string(), interns)
         .into_iter()
         .map(|a| (a.0.as_str(interns).to_string(), a.1))
