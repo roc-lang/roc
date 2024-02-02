@@ -3,7 +3,7 @@ members = [
   "crates/crash",
   "crates/fs",
   "crates/sized_str",
-  "crates/arena_cache",
+  "crates/arena",
   "crates/compiler/*",
   "crates/vendor/*",
   "crates/glue",
