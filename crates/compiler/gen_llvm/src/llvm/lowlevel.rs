@@ -34,10 +34,10 @@ use crate::llvm::{
         BuilderExt, FuncBorrowSpec, RocReturn,
     },
     build_list::{
-        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe, list_len,
-        list_map, list_map2, list_map3, list_map4, list_prepend, list_release_excess_capacity,
-        list_replace_unsafe, list_reserve, list_sort_with, list_sublist, list_swap,
-        list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
+        layout_width, list_append_unsafe, list_concat, list_drop_at, list_get_unsafe,
+        list_len_usize, list_map, list_map2, list_map3, list_map4, list_prepend,
+        list_release_excess_capacity, list_replace_unsafe, list_reserve, list_sort_with,
+        list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity, pass_update_mode,
     },
     compare::{generic_eq, generic_neq},
     convert::{
@@ -621,7 +621,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             // List.len : List * -> U64
             arguments!(list);
 
-            let len_usize = list_len(env.builder, list.into_struct_value());
+            let len_usize = list_len_usize(env.builder, list.into_struct_value());
 
             // List.len returns U64, although length is stored as usize
             env.builder

@@ -250,7 +250,7 @@ pub(crate) fn list_prepend<'a, 'ctx>(
     )
 }
 
-/// List.swap : List elem, U64,U64 -> List elem
+/// List.swap : List elem, U64, U64 -> List elem
 pub(crate) fn list_swap<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
@@ -425,8 +425,8 @@ fn bounds_check_comparison<'ctx>(
     builder.new_build_int_compare(IntPredicate::ULT, elem_index, len, "bounds_check")
 }
 
-/// List.len : List * -> usize (return value will be cast to usize in user-facing API)
-pub(crate) fn list_len<'ctx>(
+/// List.len : List * -> usize (return value will be cast to U64 in user-facing API)
+pub(crate) fn list_len_usize<'ctx>(
     builder: &Builder<'ctx>,
     wrapper_struct: StructValue<'ctx>,
 ) -> IntValue<'ctx> {
