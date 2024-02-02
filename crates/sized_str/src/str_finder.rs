@@ -80,17 +80,19 @@ impl<'a> StrFinder<'a> {
                 len @ 2 => Str2::from_raw_parts(needle.as_ptr(), NonZeroUsize::new_unchecked(len))
                     .first_index_in(self.str2)
                     .map(|index| Self::str2_id(self, index)),
-                len @ 3..=4 => {
+                len @ (3 | 4) => {
                     Str4::from_raw_parts(needle.as_ptr(), NonZeroUsize::new_unchecked(len))
                         .first_index_in(self.str4)
                         .map(|index| Self::str4_id(self, index))
                 }
-                len @ 5..=8 => {
+                // Use `|` rather than `..` because `..` adds extraneous branches on top of the jump table
+                len @ (5 | 6 | 7 | 8) => {
                     Str8::from_raw_parts(needle.as_ptr(), NonZeroUsize::new_unchecked(len))
                         .first_index_in(self.str8)
                         .map(|index| Self::str8_id(self, index))
                 }
-                len @ 9..=16 => {
+                // Use `|` rather than `..` because `..` adds extraneous branches on top of the jump table
+                len @ (9 | 10 | 11 | 12 | 13 | 14 | 15 | 16) => {
                     Str16::from_raw_parts(needle.as_ptr(), NonZeroUsize::new_unchecked(len))
                         .first_index_in(self.str16)
                         .map(|index| Self::str16_id(self, index))
