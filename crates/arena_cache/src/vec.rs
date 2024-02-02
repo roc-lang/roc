@@ -4,10 +4,10 @@ use core::{
     mem::{self, align_of, size_of},
 };
 
-use crate::{arena::Arena, arena_ref::ArenaRef};
+use crate::{arena::Arena, ArenaRefMut};
 
 pub struct Vec<'a, T> {
-    start: ArenaRef<'a, T>,
+    start: ArenaRefMut<'a, T>,
     len: u32,
     capacity: u32,
 

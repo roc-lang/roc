@@ -1,19 +1,14 @@
-use crate::error_windows::IoError;
-use crate::file::File;
+use core::ptr;
+
+use crate::{error_windows::IoError, file::File};
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct NeverClosedFile {
+pub struct File {
     handle: *mut c_void,
 }
 
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct SelfClosingFile {
-    file: NeverClosedFile,
-}
-
-impl Drop for SelfClosingFile {
+impl Drop for File {
     fn drop(&mut self) {
         extern "system" {
             // https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle
@@ -26,13 +21,7 @@ impl Drop for SelfClosingFile {
     }
 }
 
-impl SelfClosingFile {
-    pub fn handle(&mut self) -> *mut c_void {
-        self.file.fd()
-    }
-}
-
-impl NeverClosedFile {
+impl File {
     // https://docs.rs/winapi/latest/winapi/um/handleapi/constant.INVALID_HANDLE_VALUE.html
     const INVALID_HANDLE_VALUE: *mut u8 = -1isize as _;
 
@@ -62,11 +51,11 @@ impl NeverClosedFile {
             CreateFileW(
                 file_path.as_ptr(),
                 dwDesiredAccess,
-                0, // Share mode: prevent other processes from accessing the file
-                core::ptr::null_mut(), // Security attributes: none
+                0,               // Share mode: prevent other processes from accessing the file
+                ptr::null_mut(), // Security attributes: none
                 dwCreationDisposition,
                 dwFlagsAndAttributes,
-                core::ptr::null_mut(), // Template file: none
+                ptr::null_mut(), // Template file: none
             )
         };
 
@@ -93,14 +82,12 @@ impl NeverClosedFile {
             }
         }
     }
-}
 
-impl File for NeverClosedFile {
-    fn open_read(path: &CStr) -> Result<Self, IoError> {
+    pub fn open_read(path: &CStr) -> Result<Self, IoError> {
         Self::open(path, Self::O_RDONLY)
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         extern "C" {
             // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
             fn ReadFile(
@@ -120,7 +107,7 @@ impl File for NeverClosedFile {
                 buf.as_mut_ptr(),
                 buf.len() as u32,
                 bytes_read.as_mut_ptr(),
-                core::ptr::null_mut(),
+                ptr::null_mut(),
             ) == 0
             {
                 Ok(bytes_read.assume_init() as usize)
@@ -130,28 +117,47 @@ impl File for NeverClosedFile {
         }
     }
 
-    fn size_on_disk(&mut self) -> Result<u64, IoError> {
+    /// The number of bytes the file's metadata says it takes up on disk
+    pub fn size_on_disk(&mut self) -> Result<u64, IoError> {
         let info = self.metadata()?;
         let size: u64 = ((info.nFileSizeHigh as u64) << 8) | info.nFileIndexLow as u64;
 
         Ok(size as u64)
     }
-}
 
-impl File for SelfClosingFile {
-    fn open_read(path: &CStr) -> Result<Self, IoError> {
-        match NeverClosedFile::open_read(path) {
-            Ok(file) => Ok(Self { file }),
-            Err(err) => Err(err),
+    /// Write the given bytes to the file
+    pub fn write(&self, content: &[u8]) -> Result<(), IoError> {
+        if content.len() > u32::MAX as usize {
+            return IoError::ERROR_FILE_TOO_LARGE;
         }
-    }
 
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
-        self.file.read(buf)
-    }
+        extern "system" {
+            // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-writefile
+            fn WriteFile(
+                hFile: *mut u8,
+                lpBuffer: *const u8,
+                nNumberOfBytesToWrite: u32,
+                lpNumberOfBytesWritten: *mut u32,
+                lpOverlapped: *mut u8,
+            ) -> i32;
+        }
 
-    fn size_on_disk(&mut self) -> Result<u64, IoError> {
-        self.file.size_on_disk()
+        let mut bytes_written: MaybeUninit<u32> = MaybeUninit::uninit();
+
+        if unsafe {
+            WriteFile(
+                self.handle,
+                content.as_ptr(),
+                content.len() as u32,
+                bytes_written.as_mut_ptr(),
+                ptr::null_mut(),
+            )
+        } != 0
+        {
+            Ok(())
+        } else {
+            Err(IoError::most_recent())
+        }
     }
 }
 

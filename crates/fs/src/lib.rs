@@ -2,10 +2,7 @@
 // Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
-mod file;
 mod path;
-
-pub use file::File;
 pub use path::Path;
 
 // UNIX modules
@@ -14,7 +11,7 @@ pub use path::Path;
 mod file_unix;
 
 #[cfg(unix)]
-pub use file_unix::SelfClosingFile;
+pub use file_unix::File;
 
 #[cfg(unix)]
 mod error_unix;

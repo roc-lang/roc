@@ -2,8 +2,11 @@
 pub struct IoError(u32);
 
 impl IoError {
-    /// ERROR_NOT_ENOUGH_MEMORY is 12 in https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+    // https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
     pub const NOT_ENOUGH_MEMORY: Self = Self(8);
+
+    // https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+    pub const ERROR_FILE_TOO_LARGE: Self = Self(233);
 
     pub fn write(&self, buf: &mut [u16]) -> usize {
         use core::ffi::c_void;

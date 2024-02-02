@@ -1,4 +1,4 @@
-use core::{fmt, marker::PhantomData, ptr, usize};
+use core::{fmt, marker::PhantomData, mem::MaybeUninit, ptr, usize};
 
 use crate::Arena;
 
@@ -54,6 +54,12 @@ impl<'a, T: fmt::Debug> fmt::Debug for ArenaRefMut<'a, T> {
     }
 }
 
+impl<'a, T> ArenaRefMut<'a, MaybeUninit<T>> {
+    pub const unsafe fn assume_init(self) -> ArenaRefMut<'a, T> {
+        self.cast()
+    }
+}
+
 impl<'a, T> ArenaRefMut<'a, T> {
     pub(crate) const fn new_in(byte_offset_into_arena: u32, _arena: &Arena<'a>) -> Self {
         Self {
@@ -84,7 +90,11 @@ impl<'a, T> ArenaRefMut<'a, T> {
             self.debug_verify_arena(arena, "ArenaRefMut::deref");
         }
 
-        unsafe { &*arena.chunk.add(self.byte_offset()).cast() }
+        unsafe {
+            &*(arena.content as *const _ as *const u8)
+                .add(self.byte_offset())
+                .cast()
+        }
     }
 
     pub fn as_mut(&'a mut self, arena: &Arena<'a>) -> &'a mut T {
@@ -93,7 +103,11 @@ impl<'a, T> ArenaRefMut<'a, T> {
             self.debug_verify_arena(arena, "ArenaRefMut::deref");
         }
 
-        unsafe { &mut *arena.chunk.add(self.byte_offset()).cast() }
+        unsafe {
+            &mut *(arena.content as *mut _ as *mut u8)
+                .add(self.byte_offset())
+                .cast()
+        }
     }
 
     pub(crate) fn cast<U>(self) -> ArenaRefMut<'a, U> {
@@ -116,7 +130,13 @@ impl<'a, T: Copy> ArenaRefMut<'a, T> {
             self.debug_verify_arena(arena, "deref");
         }
 
-        unsafe { ptr::read(arena.chunk.add(self.byte_offset()).cast()) }
+        unsafe {
+            ptr::read(
+                (arena.content as *const _ as *const u8)
+                    .add(self.byte_offset())
+                    .cast(),
+            )
+        }
     }
 }
 
@@ -132,6 +152,7 @@ impl<'a, T: Copy> ArenaRefMut<'a, T> {
 /// do a check to make sure the arena being passed in is the same one that
 /// was originally used to allocate the reference. (If not, it will panic.)
 /// In release builds, this information is stored and nothing is checked at runtime.
+#[cfg_attr(not(debug_assertions), repr(transparent))]
 pub struct ArenaRef<'a, T> {
     byte_offset_into_arena: u32,
     _marker: PhantomData<&'a T>,
@@ -154,6 +175,17 @@ impl<'a, T: Clone> Clone for ArenaRef<'a, T> {
     }
 }
 
+impl<'a, T> Into<ArenaRef<'a, T>> for ArenaRefMut<'a, T> {
+    fn into(self) -> ArenaRef<'a, T> {
+        ArenaRef {
+            byte_offset_into_arena: self.byte_offset_into_arena,
+            _marker: PhantomData,
+            #[cfg(debug_assertions)]
+            arena: self.arena,
+        }
+    }
+}
+
 impl<'a, T: Copy> Copy for ArenaRef<'a, T> {}
 
 impl<'a, T: fmt::Debug> fmt::Debug for ArenaRef<'a, T> {
@@ -171,6 +203,12 @@ impl<'a, T: fmt::Debug> fmt::Debug for ArenaRef<'a, T> {
         }
 
         write!(f, "ArenaRef({:?})", arg)
+    }
+}
+
+impl<'a, T> ArenaRef<'a, MaybeUninit<T>> {
+    pub const unsafe fn assume_init(self) -> ArenaRef<'a, T> {
+        self.cast()
     }
 }
 
@@ -204,7 +242,11 @@ impl<'a, T> ArenaRef<'a, T> {
             self.debug_verify_arena(arena, "ArenaRef::deref");
         }
 
-        unsafe { &*arena.chunk.add(self.byte_offset()).cast() }
+        unsafe {
+            &*(arena.content as *const _ as *const u8)
+                .add(self.byte_offset())
+                .cast()
+        }
     }
 
     pub(crate) fn cast<U>(self) -> ArenaRef<'a, U> {
@@ -227,6 +269,12 @@ impl<'a, T: Copy> ArenaRef<'a, T> {
             self.debug_verify_arena(arena, "deref");
         }
 
-        unsafe { ptr::read(arena.chunk.add(self.byte_offset()).cast()) }
+        unsafe {
+            ptr::read(
+                (arena.content as *const _ as *const u8)
+                    .add(self.byte_offset())
+                    .cast(),
+            )
+        }
     }
 }

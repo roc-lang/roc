@@ -1,20 +1,13 @@
 use crate::error_unix::IoError;
-use crate::file::File;
 use crate::path::Path;
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct NeverClosedFile {
+pub struct File {
     fd: i32,
 }
 
-#[derive(Debug)]
-#[repr(transparent)]
-pub struct SelfClosingFile {
-    file: NeverClosedFile,
-}
-
-impl Drop for SelfClosingFile {
+impl Drop for File {
     fn drop(&mut self) {
         extern "C" {
             // https://www.man7.org/linux/man-pages/man2/close.2.html
@@ -27,7 +20,7 @@ impl Drop for SelfClosingFile {
     }
 }
 
-impl NeverClosedFile {
+impl File {
     // https://docs.rs/libc/latest/libc/constant.O_RDONLY.html
     const O_RDONLY: i32 = 0;
 
@@ -64,18 +57,16 @@ impl NeverClosedFile {
             }
         }
     }
-}
 
-impl File for NeverClosedFile {
-    fn fd(&mut self) -> i32 {
+    pub fn fd(&mut self) -> i32 {
         self.fd
     }
 
-    fn open_read(path: &Path) -> Result<Self, IoError> {
+    pub fn open_read(path: &Path) -> Result<Self, IoError> {
         Self::open(path, Self::O_RDONLY)
     }
 
-    fn read_into(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+    pub fn read_into(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         extern "C" {
             fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
         }
@@ -89,29 +80,24 @@ impl File for NeverClosedFile {
         }
     }
 
-    fn size_on_disk(&mut self) -> Result<u64, IoError> {
+    /// The number of bytes the file's metadata says it takes up on disk
+    pub fn size_on_disk(&mut self) -> Result<u64, IoError> {
         Ok(self.metadata()?.st_size as u64)
     }
-}
 
-impl File for SelfClosingFile {
-    fn fd(&mut self) -> i32 {
-        self.file.fd()
-    }
-
-    fn open_read(path: &Path) -> Result<Self, IoError> {
-        match NeverClosedFile::open_read(path) {
-            Ok(file) => Ok(Self { file }),
-            Err(err) => Err(err),
+    /// Write the given bytes to the file
+    pub fn write(&self, content: &[u8]) -> Result<(), IoError> {
+        extern "C" {
+            fn write(fd: i32, buf: *const u8, count: usize) -> isize;
         }
-    }
 
-    fn read_into(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
-        self.file.read_into(buf)
-    }
+        let bytes_written = unsafe { write(self.fd, content.as_ptr(), content.len()) };
 
-    fn size_on_disk(&mut self) -> Result<u64, IoError> {
-        self.file.size_on_disk()
+        if bytes_written >= 0 {
+            Ok(())
+        } else {
+            Err(IoError::most_recent())
+        }
     }
 }
 
