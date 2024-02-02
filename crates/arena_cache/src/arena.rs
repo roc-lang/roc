@@ -28,7 +28,7 @@ use core::{
 static NEXT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
 
 #[derive(Debug)]
-struct Header {
+pub(crate) struct Header {
     /// The next address we want to allocate into.
     next: *mut u8,
 
@@ -258,9 +258,9 @@ impl<'a> Arena<'a> {
         self.alloc_layout(Layout::new::<T>()).cast()
     }
 
-    fn header(&self) -> Header {
+    fn header(&self) -> &Header {
         // The header is stored right before the content
-        unsafe { *(self.content as *const Header).sub(1) }
+        unsafe { &*(self.content as *const Header).sub(1) }
     }
 
     fn header_mut(&mut self) -> &mut Header {
@@ -272,7 +272,7 @@ impl<'a> Arena<'a> {
         self.header().next
     }
 
-    fn set_next(&self, next: *mut u8) {
+    fn set_next(&mut self, next: *mut u8) {
         self.header_mut().next = next;
     }
 

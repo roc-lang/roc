@@ -60,15 +60,3 @@ impl<'a, T> Vec<'a, T> {
         }
     }
 }
-
-#[cfg(debug_assertions)]
-fn debug_verify_arena<'a>(
-    self_arena: &Arena<'a>,
-    other_arena: &Arena<'a>,
-    operation: &'static str,
-) {
-    // This only does anything in debug builds. In optimized builds, we don't do it.
-    if (self_arena as *const _) != (other_arena as *const _) {
-        panic!("Vec::{operation} was called passing a different arena from the one this Vec was created with!");
-    }
-}

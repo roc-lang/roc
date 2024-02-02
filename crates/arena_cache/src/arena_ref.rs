@@ -20,22 +20,6 @@ pub struct ArenaRefMut<'a, T> {
     pub(crate) arena: &'a Arena<'a>,
 }
 
-impl<'a, T> Eq for ArenaRefMut<'a, T> {}
-
-impl<'a, T> PartialEq for ArenaRefMut<'a, T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.byte_offset_into_arena == other.byte_offset_into_arena
-    }
-}
-
-impl<'a, T: Clone> Clone for ArenaRefMut<'a, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<'a, T: Copy> Copy for ArenaRefMut<'a, T> {}
-
 impl<'a, T: fmt::Debug> fmt::Debug for ArenaRefMut<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let arg;
@@ -61,7 +45,7 @@ impl<'a, T> ArenaRefMut<'a, MaybeUninit<T>> {
 }
 
 impl<'a, T> ArenaRefMut<'a, T> {
-    pub(crate) const fn new_in(byte_offset_into_arena: u32, _arena: &Arena<'a>) -> Self {
+    pub(crate) const fn new_in(byte_offset_into_arena: u32, _arena: &'a Arena<'a>) -> Self {
         Self {
             byte_offset_into_arena,
             _marker: PhantomData,
@@ -70,11 +54,11 @@ impl<'a, T> ArenaRefMut<'a, T> {
         }
     }
 
-    pub(crate) const fn byte_offset(self) -> usize {
+    pub(crate) const fn byte_offset(&self) -> usize {
         self.byte_offset_into_arena as usize
     }
 
-    pub(crate) const fn add_bytes(self, amount: u32) -> Self {
+    pub(crate) const fn add_bytes(&self, amount: u32) -> Self {
         Self {
             byte_offset_into_arena: self.byte_offset_into_arena + amount,
             _marker: PhantomData,
@@ -97,7 +81,7 @@ impl<'a, T> ArenaRefMut<'a, T> {
         }
     }
 
-    pub fn as_mut(&'a mut self, arena: &Arena<'a>) -> &'a mut T {
+    pub fn as_mut(&'a mut self, arena: &mut Arena<'a>) -> &'a mut T {
         #[cfg(debug_assertions)]
         {
             self.debug_verify_arena(arena, "ArenaRefMut::deref");
@@ -110,7 +94,7 @@ impl<'a, T> ArenaRefMut<'a, T> {
         }
     }
 
-    pub(crate) fn cast<U>(self) -> ArenaRefMut<'a, U> {
+    pub(crate) const fn cast<U>(self) -> ArenaRefMut<'a, U> {
         unsafe { core::mem::transmute::<ArenaRefMut<'a, T>, ArenaRefMut<'a, U>>(self) }
     }
 
@@ -153,6 +137,7 @@ impl<'a, T: Copy> ArenaRefMut<'a, T> {
 /// was originally used to allocate the reference. (If not, it will panic.)
 /// In release builds, this information is stored and nothing is checked at runtime.
 #[cfg_attr(not(debug_assertions), repr(transparent))]
+#[derive(Copy, Clone)]
 pub struct ArenaRef<'a, T> {
     byte_offset_into_arena: u32,
     _marker: PhantomData<&'a T>,
@@ -160,33 +145,6 @@ pub struct ArenaRef<'a, T> {
     #[cfg(debug_assertions)]
     pub(crate) arena: &'a Arena<'a>,
 }
-
-impl<'a, T> Eq for ArenaRef<'a, T> {}
-
-impl<'a, T> PartialEq for ArenaRef<'a, T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.byte_offset_into_arena == other.byte_offset_into_arena
-    }
-}
-
-impl<'a, T: Clone> Clone for ArenaRef<'a, T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<'a, T> Into<ArenaRef<'a, T>> for ArenaRefMut<'a, T> {
-    fn into(self) -> ArenaRef<'a, T> {
-        ArenaRef {
-            byte_offset_into_arena: self.byte_offset_into_arena,
-            _marker: PhantomData,
-            #[cfg(debug_assertions)]
-            arena: self.arena,
-        }
-    }
-}
-
-impl<'a, T: Copy> Copy for ArenaRef<'a, T> {}
 
 impl<'a, T: fmt::Debug> fmt::Debug for ArenaRef<'a, T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -213,7 +171,7 @@ impl<'a, T> ArenaRef<'a, MaybeUninit<T>> {
 }
 
 impl<'a, T> ArenaRef<'a, T> {
-    pub(crate) const fn new_in(byte_offset_into_arena: u32, _arena: &Arena<'a>) -> Self {
+    pub(crate) const fn _new_in(byte_offset_into_arena: u32, _arena: &'a Arena<'a>) -> Self {
         Self {
             byte_offset_into_arena,
             _marker: PhantomData,
@@ -222,11 +180,11 @@ impl<'a, T> ArenaRef<'a, T> {
         }
     }
 
-    pub(crate) const fn byte_offset(self) -> usize {
+    pub(crate) const fn byte_offset(&self) -> usize {
         self.byte_offset_into_arena as usize
     }
 
-    pub(crate) const fn add_bytes(self, amount: u32) -> Self {
+    pub(crate) const fn _add_bytes(&self, amount: u32) -> Self {
         Self {
             byte_offset_into_arena: self.byte_offset_into_arena + amount,
             _marker: PhantomData,
@@ -249,7 +207,7 @@ impl<'a, T> ArenaRef<'a, T> {
         }
     }
 
-    pub(crate) fn cast<U>(self) -> ArenaRef<'a, U> {
+    pub(crate) const fn cast<U>(self) -> ArenaRef<'a, U> {
         unsafe { core::mem::transmute::<ArenaRef<'a, T>, ArenaRef<'a, U>>(self) }
     }
 
@@ -275,6 +233,17 @@ impl<'a, T: Copy> ArenaRef<'a, T> {
                     .add(self.byte_offset())
                     .cast(),
             )
+        }
+    }
+}
+
+impl<'a, T> Into<ArenaRef<'a, T>> for ArenaRefMut<'a, T> {
+    fn into(self) -> ArenaRef<'a, T> {
+        ArenaRef {
+            byte_offset_into_arena: self.byte_offset_into_arena,
+            _marker: PhantomData,
+            #[cfg(debug_assertions)]
+            arena: self.arena,
         }
     }
 }
