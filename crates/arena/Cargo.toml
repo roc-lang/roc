@@ -1,6 +1,6 @@
 [package]
 name = "arena"
-description = "An arena allocator that can be cached to/from disk."
+description = "A growable (Vec-style) arena allocator that returns u32 indices into its memory, and can be cached to/from disk in one syscall."
 
 authors.workspace = true
 edition.workspace = true
