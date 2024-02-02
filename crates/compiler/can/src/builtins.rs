@@ -128,7 +128,6 @@ map_symbol_to_lowlevel_and_arity! {
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
     StrReserve; STR_RESERVE; 2,
     StrToNum; STR_TO_NUM; 1,
-    StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
 

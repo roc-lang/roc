@@ -204,7 +204,6 @@ impl<'a> LowLevelCall<'a> {
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
-            StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
                 let number_layout = match backend.layout_interner.get_repr(self.ret_layout) {
                     LayoutRepr::Struct(field_layouts) => field_layouts[0],
