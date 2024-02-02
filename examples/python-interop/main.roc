@@ -10,4 +10,4 @@ main = \num ->
     else
         str = Num.toStr num
 
-        "The number was \(str), OH YEAH!!! 🤘🤘"
+        "The number was $(str), OH YEAH!!! 🤘🤘"

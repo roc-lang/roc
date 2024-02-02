@@ -1831,7 +1831,7 @@ mod test_can {
     //                      "abcd\$(efg)hij"
     //                      "#
     //         ),
-    //         Str(r"abcd\(efg)hij".into()),
+    //         Str(r"abcd$(efg)hij".into()),
     //     );
     // }
 

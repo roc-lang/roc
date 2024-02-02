@@ -739,14 +739,14 @@ fn type_problem_unary_operator() {
 #[test]
 fn type_problem_string_interpolation() {
     expect_failure(
-        "\"This is not a string -> \\(1)\"",
+        "\"This is not a string -> $(1)\"",
         indoc!(
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This argument to this string interpolation has an unexpected type:
 
-                4│      "This is not a string -> \(1)"
+                4│      "This is not a string -> $(1)"
                                                    ^
 
                 The argument is a number of type:
@@ -1503,7 +1503,7 @@ fn interpolation_with_nested_strings() {
     expect_success(
         indoc!(
             r#"
-            "foo \(Str.joinWith ["a", "b", "c"] ", ") bar"
+            "foo $(Str.joinWith ["a", "b", "c"] ", ") bar"
             "#
         ),
         r#""foo a, b, c bar" : Str"#,
@@ -1515,7 +1515,7 @@ fn interpolation_with_num_to_str() {
     expect_success(
         indoc!(
             r#"
-            "foo \(Num.toStr Num.maxI8) bar"
+            "foo $(Num.toStr Num.maxI8) bar"
             "#
         ),
         r#""foo 127 bar" : Str"#,
@@ -1527,7 +1527,7 @@ fn interpolation_with_operator_desugaring() {
     expect_success(
         indoc!(
             r#"
-            "foo \(Num.toStr (1 + 2)) bar"
+            "foo $(Num.toStr (1 + 2)) bar"
             "#
         ),
         r#""foo 3 bar" : Str"#,
@@ -1542,7 +1542,7 @@ fn interpolation_with_nested_interpolation() {
     expect_failure(
         indoc!(
             r#"
-            "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+            "foo $(Str.joinWith ["a$(Num.toStr 5)", "b"] "c")"
             "#
         ),
         indoc!(
@@ -1551,7 +1551,7 @@ fn interpolation_with_nested_interpolation() {
 
                 This string interpolation is invalid:
 
-                4│      "foo \(Str.joinWith ["a\(Num.toStr 5)", "b"] "c")"
+                4│      "foo $(Str.joinWith ["a$(Num.toStr 5)", "b"] "c")"
                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 String interpolations cannot contain newlines or other interpolations.

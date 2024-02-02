@@ -26,20 +26,20 @@ main =
                 |> Str.joinWith ("\n")
             nMovies = List.len movies |> Num.toStr
 
-            Stdout.line "\(nMovies) movies were found:\n\n\(moviesString)\n\nParse success!\n"
+            Stdout.line "$(nMovies) movies were found:\n\n$(moviesString)\n\nParse success!\n"
 
         Err problem ->
             when problem is
                 ParsingFailure failure ->
-                    Stderr.line "Parsing failure: \(failure)\n"
+                    Stderr.line "Parsing failure: $(failure)\n"
 
                 ParsingIncomplete leftover ->
-                    leftoverStr = leftover |> List.map strFromUtf8 |> List.map (\val -> "\"\(val)\"") |> Str.joinWith ", "
+                    leftoverStr = leftover |> List.map strFromUtf8 |> List.map (\val -> "\"$(val)\"") |> Str.joinWith ", "
 
-                    Stderr.line "Parsing incomplete. Following leftover fields while parsing a record: \(leftoverStr)\n"
+                    Stderr.line "Parsing incomplete. Following leftover fields while parsing a record: $(leftoverStr)\n"
 
                 SyntaxError error ->
-                    Stderr.line "Parsing failure. Syntax error in the CSV: \(error)"
+                    Stderr.line "Parsing failure. Syntax error in the CSV: $(error)"
 
 MovieInfo := { title : Str, releaseYear : U64, actors : List Str }
 
@@ -57,7 +57,7 @@ movieInfoExplanation = \@MovieInfo { title, releaseYear, actors } ->
     enumeratedActors = enumerate actors
     releaseYearStr = Num.toStr releaseYear
 
-    "The movie '\(title)' was released in \(releaseYearStr) and stars \(enumeratedActors)"
+    "The movie '$(title)' was released in $(releaseYearStr) and stars $(enumeratedActors)"
 
 enumerate : List Str -> Str
 enumerate = \elements ->
