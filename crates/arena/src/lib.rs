@@ -7,6 +7,6 @@ mod arena;
 mod arena_ref;
 mod vec;
 
-pub use arena::*;
-pub use arena_ref::*;
-pub use vec::*;
+pub use crate::arena::*;
+pub use crate::arena_ref::*;
+pub use crate::vec::*;

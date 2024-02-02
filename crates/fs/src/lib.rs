@@ -3,7 +3,7 @@
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
 mod path;
-pub use path::Path;
+pub use crate::path::Path;
 
 // UNIX modules
 
@@ -11,13 +11,13 @@ pub use path::Path;
 mod file_unix;
 
 #[cfg(unix)]
-pub use file_unix::File;
+pub use crate::file_unix::File;
 
 #[cfg(unix)]
 mod error_unix;
 
 #[cfg(unix)]
-pub use error_unix::IoError;
+pub use crate::error_unix::IoError;
 
 // Windows modules
 
@@ -25,10 +25,10 @@ pub use error_unix::IoError;
 mod file_windows;
 
 #[cfg(windows)]
-pub use file_windows::File;
+pub use crate::file_windows::File;
 
 #[cfg(windows)]
 mod error_windows;
 
 #[cfg(windows)]
-pub use error_windows::IoError;
+pub use crate::error_windows::IoError;

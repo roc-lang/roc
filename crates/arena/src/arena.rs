@@ -62,7 +62,7 @@ impl Drop for Header {
                 debug_assert_eq!(header_ptr, self.original_header_ptr);
 
                 let layout = Layout::from_size_align_unchecked(
-                    (self.original_capacity as usize) + (size_of::<Header>()),
+                    self.original_capacity + (size_of::<Header>()),
                     align_of::<Header>(),
                 );
 
@@ -170,7 +170,7 @@ impl<'a> Arena<'a> {
                 let (buf, capacity_bytes) = alloc_virtual(layout);
 
                 let bytes_read = file.read_into(unsafe {
-                    slice::from_raw_parts_mut(buf.as_ptr(), capacity_bytes as usize)
+                    slice::from_raw_parts_mut(buf.as_ptr(), capacity_bytes)
                 })?;
 
                 ptr = buf.cast();

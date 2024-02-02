@@ -237,13 +237,13 @@ impl<'a, T: Copy> ArenaRef<'a, T> {
     }
 }
 
-impl<'a, T> Into<ArenaRef<'a, T>> for ArenaRefMut<'a, T> {
-    fn into(self) -> ArenaRef<'a, T> {
-        ArenaRef {
-            byte_offset_into_arena: self.byte_offset_into_arena,
+impl<'a, T> From<ArenaRefMut<'a, T>> for ArenaRef<'a, T> {
+    fn from(value: ArenaRefMut<'a, T>) -> Self {
+        Self {
+            byte_offset_into_arena: value.byte_offset_into_arena,
             _marker: PhantomData,
             #[cfg(debug_assertions)]
-            arena: self.arena,
+            arena: value.arena,
         }
     }
 }
