@@ -358,27 +358,21 @@ trait Backend<'a> {
     where
         I: Iterator<Item = InLayout<'b>>,
     {
-        use std::fmt::Write;
         use std::hash::{BuildHasher, Hash, Hasher};
 
         let symbol = name.name();
 
-        let mut buf = String::with_capacity(1024);
-
+        // NOTE: due to randomness, this will not be consistent between runs
+        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
         for a in arguments {
-            write!(buf, "{:?}", self.interner().dbg_stable(a)).expect("capacity");
+            a.hash(&mut state);
         }
 
         // lambda set should not matter; it should already be added as an argument
         // but the niche of the lambda name may be the only thing differentiating two different
         // implementations of a function with the same symbol
-        write!(buf, "{:?}", name.niche().dbg_stable(self.interner())).expect("capacity");
-
-        write!(buf, "{:?}", self.interner().dbg_stable(result)).expect("capacity");
-
-        // NOTE: due to randomness, this will not be consistent between runs
-        let mut state = roc_collections::all::BuildHasher::default().build_hasher();
-        buf.hash(&mut state);
+        name.niche().hash(&mut state);
+        result.hash(&mut state);
 
         let interns = self.interns();
         let ident_string = symbol.as_str(interns);
