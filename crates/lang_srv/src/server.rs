@@ -50,13 +50,11 @@ impl RocServer {
     pub fn new(client: Client) -> Self {
         let registry_config = RegistryConfig {
             latest_document_timeout: Duration::from_millis(
-                read_env_num("ROCLS_LATEST_DOC_TIMEOUT_MS").unwrap_or_else(|| 5000),
+                read_env_num("ROCLS_LATEST_DOC_TIMEOUT_MS").unwrap_or(5000),
             ),
         };
         let config = RocServerConfig {
-            debounce_ms: Duration::from_millis(
-                read_env_num("ROCLS_DEBOUNCE_MS").unwrap_or_else(|| 100),
-            ),
+            debounce_ms: Duration::from_millis(read_env_num("ROCLS_DEBOUNCE_MS").unwrap_or(100)),
         };
         Self {
             state: RocServerState::new(config, Registry::new(registry_config)),
@@ -124,7 +122,8 @@ impl RocServer {
             debug!("Cancelled change. Reason:{:?}", e);
             return;
         }
-        debug!("Applied_change getting and returning diagnostics");
+
+        debug!("Applied_changes getting and returning diagnostics");
 
         let diagnostics = self.state.registry.diagnostics(&fi).await;
 
