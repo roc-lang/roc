@@ -3,6 +3,7 @@ use log::{debug, info, trace};
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
+    time::Duration,
 };
 
 use tokio::sync::{Mutex, MutexGuard};
@@ -34,12 +35,33 @@ impl DocumentPair {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct RegistryConfig {
+    pub(crate) latest_document_timeout: Duration,
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self {
+            latest_document_timeout: Duration::from_millis(5000),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Registry {
     documents: Mutex<HashMap<Url, DocumentPair>>,
+    config: RegistryConfig,
 }
 
 impl Registry {
+    pub(crate) fn new(config: RegistryConfig) -> Self {
+        Self {
+            documents: Default::default(),
+            config,
+        }
+    }
+
     pub async fn get_latest_version(&self, url: &Url) -> Option<i32> {
         self.documents.lock().await.get(url).map(|x| x.info.version)
     }
@@ -119,12 +141,12 @@ impl Registry {
 
     async fn document_info_by_url(&self, url: &Url) -> Option<DocInfo> {
         self.documents.lock().await.get(url).map(|a| a.info.clone())
-    }U
+    }
+
     ///Tries to get the latest document from analysis.
     ///Gives up and returns none aft 5 seconds.
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
-        let duration = std::time::Duration::from_secs(5);
-        tokio::time::timeout(duration, async {
+        tokio::time::timeout(self.config.latest_document_timeout, async {
             //TODO: This should really be a condvar that is triggered by the latest being ready, this will do for now though
             loop {
                 let docs = self.documents.lock().await;

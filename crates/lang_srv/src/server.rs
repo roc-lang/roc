@@ -1,7 +1,7 @@
 use analysis::HIGHLIGHT_TOKENS_LEGEND;
 
 use log::{debug, trace};
-use registry::Registry;
+use registry::{Registry, RegistryConfig};
 use std::future::Future;
 use std::time::Duration;
 
@@ -15,27 +15,55 @@ mod analysis;
 mod convert;
 mod registry;
 
-#[derive(Debug)]
 struct RocServer {
     pub state: RocServerState,
     client: Client,
 }
 
+struct RocServerConfig {
+    pub debounce_ms: Duration,
+}
+
+impl Default for RocServerConfig {
+    fn default() -> Self {
+        Self {
+            debounce_ms: Duration::from_millis(100),
+        }
+    }
+}
+
 ///This exists so we can test most of RocLs without anything LSP related
-#[derive(Debug)]
 struct RocServerState {
     registry: Registry,
+    config: RocServerConfig,
 }
 
 impl std::panic::RefUnwindSafe for RocServer {}
 
+fn read_env_num(name: &str) -> Option<u64> {
+    std::env::var(name)
+        .ok()
+        .and_then(|a| str::parse::<u64>(&a).ok())
+}
+
 impl RocServer {
     pub fn new(client: Client) -> Self {
+        let registry_config = RegistryConfig {
+            latest_document_timeout: Duration::from_millis(
+                read_env_num("ROCLS_LATEST_DOC_TIMEOUT_MS").unwrap_or_else(|| 5000),
+            ),
+        };
+        let config = RocServerConfig {
+            debounce_ms: Duration::from_millis(
+                read_env_num("ROCLS_DEBOUNCE_MS").unwrap_or_else(|| 100),
+            ),
+        };
         Self {
-            state: RocServerState::new(),
+            state: RocServerState::new(config, Registry::new(registry_config)),
             client,
         }
     }
+
     pub fn capabilities() -> ServerCapabilities {
         let text_document_sync = TextDocumentSyncCapability::Options(
             // TODO: later on make this incremental
@@ -71,7 +99,6 @@ impl RocServer {
         let completion_provider = CompletionOptions {
             resolve_provider: Some(false),
             trigger_characters: Some(vec![".".to_string()]),
-            //TODO: what is this?
             all_commit_characters: None,
             work_done_progress_options: WorkDoneProgressOptions {
                 work_done_progress: None,
@@ -108,10 +135,8 @@ impl RocServer {
 }
 
 impl RocServerState {
-    pub fn new() -> RocServerState {
-        Self {
-            registry: Registry::default(),
-        }
+    pub fn new(config: RocServerConfig, registry: Registry) -> RocServerState {
+        Self { config, registry }
     }
 
     async fn registry(&self) -> &Registry {
@@ -141,9 +166,7 @@ impl RocServerState {
         let inner_ref = self;
         let updating_result = async {
             //This reduces wasted computation by waiting to allow a new change to come in and update the version before we check, but does delay the final analysis. Ideally this would be replaced with cancelling the analysis when a new one comes in.
-            let debounce_ms = std::env::var("ROCLS_DEBOUNCE")
-                .map_or(100, |a| str::parse::<u64>(&a).unwrap_or(100));
-            tokio::time::sleep(Duration::from_millis(debounce_ms)).await;
+            tokio::time::sleep(self.config.debounce_ms).await;
             let is_latest = inner_ref
                 .registry
                 .get_latest_version(fi)
@@ -388,7 +411,7 @@ mod tests {
         info!("Doc is:\n{0}", doc);
         let url = Url::parse("file:/Test.roc").unwrap();
 
-        let inner = RocServerState::new();
+        let inner = RocServerState::new(RocServerConfig::default(), Registry::default());
         //setup the file
         inner.change(&url, doc, 0).await.unwrap();
         (inner, url)
