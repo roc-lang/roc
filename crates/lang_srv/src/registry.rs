@@ -72,6 +72,7 @@ impl Registry {
         updating_url: &Url,
     ) {
         if &document.doc_info.url == updating_url {
+            //Write the newly analysed document into the oncelock that any request requiring the latest document will be waiting on
             if let Some(a) = documents.get_mut(updating_url) {
                 a.latest_document.set(document.clone()).unwrap()
             }
@@ -114,7 +115,6 @@ impl Registry {
 
         for document in analysed_docs {
             let document = Arc::new(document);
-            //Write the newly analysed document into the partial document that any request requiring the latest document will be waiting on
             Registry::update_document(&mut documents, document, &updating_url);
         }
     }
