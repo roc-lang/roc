@@ -1,0 +1,12 @@
+[package]
+name = "native_str"
+description = "Work with native OS strings (CStr in UNIX, U16CStr in Windows, core::str::str in WebAssembly)."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[target.'cfg(windows)'.dependencies.widestring]
+version = "1.0.2"
+default-features = false # no_std compatibility

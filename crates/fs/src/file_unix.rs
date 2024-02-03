@@ -1,13 +1,14 @@
 use crate::error_unix::IoError;
+use crate::file::{FileMetadata, OpenFile, ReadFile, WriteFile};
 use crate::path::Path;
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct File {
+pub struct Fd {
     fd: i32,
 }
 
-impl Drop for File {
+impl Drop for Fd {
     fn drop(&mut self) {
         extern "C" {
             // https://www.man7.org/linux/man-pages/man2/close.2.html
@@ -20,7 +21,7 @@ impl Drop for File {
     }
 }
 
-impl File {
+impl Fd {
     // https://docs.rs/libc/latest/libc/constant.O_RDONLY.html
     const O_RDONLY: i32 = 0;
 
@@ -30,7 +31,7 @@ impl File {
             fn open(path: *const i8, oflag: i32, ...) -> i32;
         }
 
-        let fd = unsafe { open(path.as_ptr(), oflag) };
+        let fd = unsafe { open(path.as_native_cstr().as_ptr(), oflag) };
 
         if fd >= 0 {
             Ok(Self { fd })
@@ -61,12 +62,16 @@ impl File {
     pub fn fd(&mut self) -> i32 {
         self.fd
     }
+}
 
-    pub fn open_read(path: &Path) -> Result<Self, IoError> {
+impl OpenFile for Fd {
+    fn open_read(path: &Path) -> Result<Self, IoError> {
         Self::open(path, Self::O_RDONLY)
     }
+}
 
-    pub fn read_into(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+impl ReadFile for Fd {
+    fn read_into(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         extern "C" {
             fn read(fd: i32, buf: *mut u8, count: usize) -> isize;
         }
@@ -79,14 +84,18 @@ impl File {
             Err(IoError::most_recent())
         }
     }
+}
 
+impl FileMetadata for Fd {
     /// The number of bytes the file's metadata says it takes up on disk
-    pub fn size_on_disk(&mut self) -> Result<u64, IoError> {
+    fn size_on_disk(&mut self) -> Result<u64, IoError> {
         Ok(self.metadata()?.st_size as u64)
     }
+}
 
+impl WriteFile for Fd {
     /// Write the given bytes to the file
-    pub fn write(&self, content: &[u8]) -> Result<(), IoError> {
+    fn write(&self, content: &[u8]) -> Result<(), IoError> {
         extern "C" {
             fn write(fd: i32, buf: *const u8, count: usize) -> isize;
         }

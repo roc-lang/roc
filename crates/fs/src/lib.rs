@@ -2,7 +2,9 @@
 // Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
+mod file;
 mod path;
+pub use crate::file::{FileMetadata, OpenFile, ReadFile, WriteFile};
 pub use crate::path::Path;
 
 // UNIX modules
@@ -11,7 +13,7 @@ pub use crate::path::Path;
 mod file_unix;
 
 #[cfg(unix)]
-pub use crate::file_unix::File;
+pub use crate::file_unix::Fd;
 
 #[cfg(unix)]
 mod error_unix;
@@ -25,7 +27,7 @@ pub use crate::error_unix::IoError;
 mod file_windows;
 
 #[cfg(windows)]
-pub use crate::file_windows::File;
+pub use crate::file_windows::Handle;
 
 #[cfg(windows)]
 mod error_windows;

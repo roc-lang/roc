@@ -8,9 +8,4 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-
-[target.'cfg(windows)'.dependencies.widestring]
-version = "1.0.2"
-default-features = false # no_std compatibility
-
-[dev-dependencies]
+native_str = { path = "../native_str" }

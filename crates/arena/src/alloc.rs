@@ -23,11 +23,15 @@ use core::{alloc::Layout, ptr::NonNull};
 static WEE_ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
 /// We'll exit after printing this message to stderr if allocation fails
+#[cfg(not(debug_assertions))]
 const ALLOC_FAILED_MESSAGE: &str =
     "The Roc compiler had to exit unexpectedly because a virtual memory allocation operation failed.\n\nThis normally should never happen, but one way it could happen is if the compiler is running in an unusually memory-constrained environment, such as a virtualized operating system.\n\nIf you are seeing this message repeatedly, you might want to try contacting other Roc community members via <https://roc-lang.org/community> to see if they can help.";
 
+#[cfg(not(debug_assertions))]
 /// We'll exit with this code if allocation fails
 const ALLOC_FAILED_EXIT_CODE: u8 = 90;
+
+const PAGE_SIZE: usize = 16384;
 
 /// Returns the pointer and also how many bytes were actually allocated,
 /// since it will round up to the nearest page size depending on target OS.
@@ -49,17 +53,22 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (NonNull<u8>, usize) {
             ) -> *mut c_void;
         }
 
-        const MAP_FAILED: *mut c_void = !0 as *mut c_void;
+        const MAP_FAILED: *mut c_void = -1isize as *mut c_void;
         const PROT_READ: i32 = 1;
         const PROT_WRITE: i32 = 2;
         const MAP_PRIVATE: i32 = 0x0002;
+
+        #[cfg(target_os = "macos")]
+        const MAP_ANONYMOUS: i32 = 0x1000;
+
+        #[cfg(target_os = "linux")]
         const MAP_ANONYMOUS: i32 = 0x0020;
 
-        // Round up to nearest 4096B
+        // Round up to nearest OS page size
         let size = {
-            const PAGE_MULTIPLE: usize = 4096; // Pages must be a multiple of this.
+            let page_size: usize = PAGE_SIZE; // Pages must be a multiple of this.
 
-            (size + (PAGE_MULTIPLE - 1)) & !(PAGE_MULTIPLE - 1)
+            (size + (page_size - 1)) & !(page_size - 1)
         };
 
         // Safety: We rounded up `size` to the correct multiple already.
@@ -78,7 +87,17 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (NonNull<u8>, usize) {
 
         match NonNull::new(answer) {
             Some(non_null) if answer != MAP_FAILED => (non_null.cast(), size),
-            _ => crash::unrecoverable!(ALLOC_FAILED_MESSAGE, ALLOC_FAILED_EXIT_CODE),
+            _ => {
+                #[cfg(debug_assertions)]
+                {
+                    panic!("alloc_virtual for layout {:?} and rounded-off size {} failed with return value {} (MAP_FAILED == it? {}), and OS error {:?}", layout, size, answer as usize, MAP_FAILED == answer, std::io::Error::last_os_error());
+                }
+
+                #[cfg(not(debug_assertions))]
+                {
+                    crash::unrecoverable!(ALLOC_FAILED_MESSAGE, ALLOC_FAILED_EXIT_CODE)
+                }
+            }
         }
     }
 
@@ -227,4 +246,34 @@ pub(crate) unsafe fn dealloc_virtual(ptr: *mut u8, layout: Layout) {
             }
         }
     }
+}
+
+#[test]
+fn verify_page_size() {
+    let os_page_size = unsafe {
+        #[cfg(unix)]
+        {
+            extern "C" {
+                fn getpagesize() -> i32;
+            }
+
+            getpagesize() as usize
+        }
+
+        #[cfg(windows)]
+        {
+            // https://devblogs.microsoft.com/oldnewthing/20210510-00/?p=105200
+            // 16KiB should be accepted by all Windows systems
+            16384
+        }
+
+        #[cfg(wasm)]
+        {
+            // In wasm, "each page is sized 64KiB" according to
+            // https://developer.mozilla.org/en-US/docs/webassembly/reference/memory/size
+            16384
+        }
+    };
+
+    assert_eq!(os_page_size, PAGE_SIZE);
 }

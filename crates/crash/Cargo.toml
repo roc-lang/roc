@@ -6,3 +6,6 @@ authors.workspace = true
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+
+[dependencies]
+native_str = { path = "../native_str" }

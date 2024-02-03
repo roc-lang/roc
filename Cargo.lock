@@ -578,6 +578,9 @@ checksum = "e496a50fda8aacccc86d7529e2c1e0892dbd0f898a6b5645b5561b89c3210efa"
 [[package]]
 name = "crash"
 version = "0.0.1"
+dependencies = [
+ "native_str",
+]
 
 [[package]]
 name = "crc32fast"
@@ -935,7 +938,7 @@ dependencies = [
 name = "fs"
 version = "0.0.1"
 dependencies = [
- "widestring",
+ "native_str",
 ]
 
 [[package]]
@@ -1613,6 +1616,13 @@ dependencies = [
  "smallvec",
  "thiserror",
  "typed-arena",
+]
+
+[[package]]
+name = "native_str"
+version = "0.0.1"
+dependencies = [
+ "widestring",
 ]
 
 [[package]]

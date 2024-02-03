@@ -1,14 +1,16 @@
 use core::ptr;
 
-use crate::{error_windows::IoError, file::File};
+use crate::error_windows::IoError;
+use crate::file::{FileMetadata, OpenFile, ReadFile, WriteFile};
+use crate::path::Path;
 
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct File {
+pub struct Handle {
     handle: *mut c_void,
 }
 
-impl Drop for File {
+impl Drop for Handle {
     fn drop(&mut self) {
         extern "system" {
             // https://learn.microsoft.com/en-us/windows/win32/api/handleapi/nf-handleapi-closehandle
@@ -21,7 +23,7 @@ impl Drop for File {
     }
 }
 
-impl File {
+impl Handle {
     // https://docs.rs/winapi/latest/winapi/um/handleapi/constant.INVALID_HANDLE_VALUE.html
     const INVALID_HANDLE_VALUE: *mut u8 = -1isize as _;
 
@@ -82,12 +84,16 @@ impl File {
             }
         }
     }
+}
 
-    pub fn open_read(path: &CStr) -> Result<Self, IoError> {
+impl OpenFile for Handle {
+    fn open_read(path: &CStr) -> Result<Self, IoError> {
         Self::open(path, Self::O_RDONLY)
     }
+}
 
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
+impl ReadFile for Handle {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, IoError> {
         extern "C" {
             // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
             fn ReadFile(
@@ -116,17 +122,21 @@ impl File {
             }
         }
     }
+}
 
+impl FileMetadata for Handle {
     /// The number of bytes the file's metadata says it takes up on disk
-    pub fn size_on_disk(&mut self) -> Result<u64, IoError> {
+    fn size_on_disk(&mut self) -> Result<u64, IoError> {
         let info = self.metadata()?;
         let size: u64 = ((info.nFileSizeHigh as u64) << 8) | info.nFileIndexLow as u64;
 
         Ok(size as u64)
     }
+}
 
+impl WriteFile for Handle {
     /// Write the given bytes to the file
-    pub fn write(&self, content: &[u8]) -> Result<(), IoError> {
+    fn write(&self, content: &[u8]) -> Result<(), IoError> {
         if content.len() > u32::MAX as usize {
             return IoError::ERROR_FILE_TOO_LARGE;
         }

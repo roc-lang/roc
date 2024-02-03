@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[cfg(not(wasm32))]
-use fs::{File, IoError};
+use fs::{FileMetadata, IoError, ReadFile, WriteFile};
 
 use core::{
     alloc::Layout,
@@ -94,10 +94,10 @@ impl<'a> Arena<'a> {
     /// # Safety
     /// The given pointer must point to at least `capacity` bytes, and `capacity` must
     /// be greater than size_of::<Header>().
-    pub unsafe fn from_existing_allocation(mut ptr: NonNull<u16>, capacity_bytes: u32) -> Self {
+    pub unsafe fn from_existing_allocation(mut ptr: NonNull<usize>, capacity_bytes: u32) -> Self {
         // We don't want to expose Header outside this module, but it's very important that
         // `ptr` points to something with the
-        debug_assert_eq!(core::mem::align_of_val(ptr.as_mut()), align_of::<Header>()); // TODO test this with u16, should fail, then change to usize
+        debug_assert_eq!(core::mem::align_of_val(ptr.as_mut()), align_of::<Header>());
         debug_assert!(capacity_bytes as usize > size_of::<Header>());
 
         let header_ptr: *mut Header = ptr.as_ptr().cast();
@@ -137,37 +137,38 @@ impl<'a> Arena<'a> {
     /// if there wasn't enough room to read the entire file in! (In that case, we would
     /// have made our own allocation and not used the given buffer.)
     #[cfg(not(wasm32))]
-    pub unsafe fn from_file(
-        file: &mut File,
-        mut ptr: NonNull<u16>,
-        capacity_bytes: u32,
+    pub fn from_file(
+        file: &mut (impl ReadFile + FileMetadata),
+        buf: &mut [u8],
     ) -> Result<(Self, usize), IoError> {
-        let bytes_read = file.read_into(unsafe {
-            slice::from_raw_parts_mut(ptr.as_ptr() as *mut u8, capacity_bytes as usize)
-        })?;
+        let bytes_read = file.read_into(buf)?;
+        let mut ptr = unsafe { NonNull::new_unchecked(buf.as_mut_ptr()) };
+        let mut alloc_size;
 
-        // If the bytes we read didn't seem to have fit in the buffer, try getting the
-        // desired number of bytes out of file metadata, doing a virtual alloc for that
-        // many bytes, and trying again. This still might fail if the file's size on disk
-        // changed between when we read its metadata and when we're reading its contents,
-        // so if it fails again, we double the requested allocation size and try again.
-        //
-        // Eventually either it will succeed or else an allocation will fail due to being
-        // too large (after doubling so many times), which will end the process.
-        if bytes_read >= capacity_bytes as usize {
+        if bytes_read < buf.len() {
+            // We didn't fill up the buffer, so we definitely successfully read everything!
+            // Continue as normal.
+            alloc_size = (bytes_read as usize).saturating_add(size_of::<Header>());
+        } else {
+            // If the bytes we read didn't seem to have fit in the buffer, try getting the
+            // desired number of bytes out of file metadata, doing a virtual alloc for that
+            // many bytes, and trying again. This still might fail if the file's size on disk
+            // changed between when we read its metadata and when we're reading its contents,
+            // so if it fails again, we double the requested allocation size and try again.
+            //
+            // Eventually either it will succeed or else an allocation will fail due to being
+            // too large (after doubling so many times), which will end the process.
             let mut bytes_needed = file.size_on_disk()?;
 
             loop {
-                let layout = unsafe {
-                    Layout::from_size_align_unchecked(
-                        // Allocate enough space for both the header and the actual capacity.
-                        // It should be safe to cast this u64 to usize because on 32-bit targets,
-                        // they should never have report having more than u32::MAX bytes anyway.
-                        (bytes_needed as usize).saturating_add(size_of::<Header>() + 1),
-                        align_of::<Header>(),
-                    )
-                };
-                let (buf, capacity_bytes) = alloc_virtual(layout);
+                // Allocate enough space for both the header and the actual capacity.
+                // It should be safe to cast this u64 to usize because on 32-bit targets,
+                // they should never have report having more than u32::MAX bytes anyway.
+                alloc_size = (bytes_needed as usize).saturating_add(size_of::<Header>());
+
+                let (buf, capacity_bytes) = alloc_virtual(unsafe {
+                    Layout::from_size_align_unchecked(alloc_size, align_of::<Header>())
+                });
 
                 let bytes_read = file.read_into(unsafe {
                     slice::from_raw_parts_mut(buf.as_ptr(), capacity_bytes)
@@ -175,7 +176,7 @@ impl<'a> Arena<'a> {
 
                 ptr = buf.cast();
 
-                if bytes_read < capacity_bytes {
+                if bytes_read as u64 <= bytes_needed {
                     break;
                 }
 
@@ -192,7 +193,7 @@ impl<'a> Arena<'a> {
         }
 
         Ok((
-            Self::from_existing_allocation(ptr, bytes_read as u32),
+            unsafe { Self::from_existing_allocation(ptr.cast(), alloc_size as u32) },
             bytes_read,
         ))
     }
@@ -200,7 +201,7 @@ impl<'a> Arena<'a> {
     /// Write the contents of the arena (without the header) to disk.
     /// (Header information can be inferred when reading the contents back from disk.)
     #[cfg(not(wasm32))]
-    pub unsafe fn to_file(&self, file: &mut File) -> Result<(), IoError> {
+    pub unsafe fn to_file(&self, file: &mut impl WriteFile) -> Result<(), IoError> {
         file.write(self.content())
     }
 
@@ -324,10 +325,61 @@ impl<'a> Arena<'a> {
     }
 }
 
-impl<'a> Drop for Arena<'a> {
-    fn drop(&mut self) {
-        // You're supposed to call either mem::forget() or arena.dealloc() on an
-        // arena before it gets dropped.
-        panic!("An arena was dropped without having been properly disposed of!");
+#[cfg(all(test, not(wasm32)))]
+mod from_file {
+    use super::Arena;
+
+    #[test]
+    fn fails_if_read_fails() {
+        use fs::{FileMetadata, IoError, ReadFile};
+
+        struct SimFile;
+
+        impl ReadFile for SimFile {
+            fn read_into(&mut self, _buf: &mut [u8]) -> Result<usize, IoError> {
+                Err(IoError::NOT_ENOUGH_MEMORY)
+            }
+        }
+
+        impl FileMetadata for SimFile {
+            fn size_on_disk(&mut self) -> Result<u64, IoError> {
+                unreachable!("size_on_disk should not be called if the initial read fails.")
+            }
+        }
+
+        let mut buf = [0; 24];
+        let res = Arena::from_file(&mut SimFile, &mut buf);
+
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn retries_if_buffer_full() {
+        use fs::{FileMetadata, IoError, ReadFile};
+        const BUF_SIZE: usize = 24;
+
+        struct SimFile;
+
+        impl ReadFile for SimFile {
+            fn read_into(&mut self, _buf: &mut [u8]) -> Result<usize, IoError> {
+                // We fill up the entire buffer
+                Ok(BUF_SIZE)
+            }
+        }
+
+        impl FileMetadata for SimFile {
+            fn size_on_disk(&mut self) -> Result<u64, IoError> {
+                // We should end up reading the size of the file on disk.
+                // It should report that it's bigger than the buffer.
+                Ok(BUF_SIZE as u64 + 10)
+            }
+        }
+
+        let mut buf = [0; BUF_SIZE];
+        let (arena, bytes_read) = Arena::from_file(&mut SimFile, &mut buf)
+            .expect("Arena::from_file failed, but was expected to succeed.");
+
+        assert_eq!(BUF_SIZE, bytes_read);
+        assert_eq!(58, arena.header().original_capacity);
     }
 }
