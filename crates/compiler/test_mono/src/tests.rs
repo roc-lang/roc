@@ -3463,3 +3463,14 @@ fn issue_6196() {
         "#
     )
 }
+
+#[mono_test]
+fn issue_5513() {
+    indoc!(
+        r"
+        f = \state ->
+            { state & a: state.b }
+        f { a: 0, b: 0 }
+        "
+    )
+}
