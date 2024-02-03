@@ -879,10 +879,27 @@ mod str8_from_str {
 make_str_n!(1, Str16, Str16Chunk, Str16Chunks, u128, NonZeroU128);
 
 impl Str16 {
+    /// Returns the first 16 bytes of the input slice as a Str16.
+    /// (Other bytes past the first 16 are ignored.)
+    /// If there are fewer than 16 input bytes, pads the end with zeros internally.
+    ///
+    /// # Safety
+    /// There must be at least 16 bytes of safely accessible memory starting from the pointer.
+    ///
+    /// Note: These unusual API requirements are for performance; they avoid a memcpy call and branching!
     pub unsafe fn from_raw_parts(_input: *const NonZeroU8, _len: NonZeroUsize) -> Self {
         todo!("Not yet implemented {}", Self::SIMD128_LANES);
     }
 
+    /// Returns Some(first index where self occurs in the given slice) or else None if it wasn't found.
+    /// (Essentially the same as `slice.iter().position(|e| e == self)`, except using SIMD.)
+    ///
+    /// # Safety
+    /// There must bet at least least 16B of accessible memory after the end of the slice.
+    /// This is because we keep iterating in chunks of 16B
+    /// The reason for this is that we start by dereferencing the
+    /// slice's pointer into a 16B structure, and then discarding any memory garbage we find.
+    /// So there must be 16B there that we can safely dereference, even if it contains garbage!
     pub unsafe fn first_index_in(&self, _slice: &[Str16]) -> Option<usize> {
         todo!()
     }
@@ -892,10 +909,27 @@ impl Str16 {
 pub struct StrBig(());
 
 impl StrBig {
+    /// Returns the first 16 bytes of the input slice as a Str16.
+    /// (Other bytes past the first 16 are ignored.)
+    /// If there are fewer than 16 input bytes, pads the end with zeros internally.
+    ///
+    /// # Safety
+    /// There must be at least 16 bytes of safely accessible memory starting from the pointer.
+    ///
+    /// Note: These unusual API requirements are for performance; they avoid a memcpy call and branching!
     pub unsafe fn from_raw_parts(_input: *const NonZeroU8, _len: NonZeroUsize) -> Self {
         todo!();
     }
 
+    /// Returns Some(first index where self occurs in the given slice) or else None if it wasn't found.
+    /// (Essentially the same as `slice.iter().position(|e| e == self)`, except using SIMD.)
+    ///
+    /// # Safety
+    /// There must bet at least least 16B of accessible memory after the end of the slice.
+    /// This is because we keep iterating in chunks of 16B
+    /// The reason for this is that we start by dereferencing the
+    /// slice's pointer into a 16B structure, and then discarding any memory garbage we find.
+    /// So there must be 16B there that we can safely dereference, even if it contains garbage!
     pub unsafe fn first_index_in(&self, _slice: &[StrBig]) -> Option<usize> {
         todo!()
     }
