@@ -3916,7 +3916,7 @@ fn to_packages_report<'a>(
 
             let doc = alloc.stack([
                 alloc.reflow(
-                    r"I am partway through parsing a header packages list, but I got stuck here:",
+                    r"I am partway through parsing a list of packages, but I got stuck here:",
                 ),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([alloc.reflow("I am expecting a comma or end of list, like")]),
