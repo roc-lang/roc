@@ -86,12 +86,14 @@ impl<'a> StrFinder<'a> {
                         .map(|index| Self::str4_id(self, index))
                 }
                 // Use `|` rather than `..` because `..` adds extraneous branches on top of the jump table
+                #[allow(clippy::manual_range_patterns)]
                 len @ (5 | 6 | 7 | 8) => {
                     Str8::from_raw_parts(needle.as_ptr(), NonZeroUsize::new_unchecked(len))
                         .first_index_in(self.str8)
                         .map(|index| Self::str8_id(self, index))
                 }
                 // Use `|` rather than `..` because `..` adds extraneous branches on top of the jump table
+                #[allow(clippy::manual_range_patterns)]
                 len @ (9 | 10 | 11 | 12 | 13 | 14 | 15 | 16) => {
                     Str16::from_raw_parts(needle.as_ptr(), NonZeroUsize::new_unchecked(len))
                         .first_index_in(self.str16)
