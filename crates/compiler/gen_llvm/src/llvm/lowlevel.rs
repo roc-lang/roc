@@ -533,12 +533,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_COUNT_UTF8_BYTES,
             )
         }
-        StrGetCapacity => {
-            // Str.capacity : Str -> Nat
-            arguments!(string);
-
-            call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
-        }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str
             arguments!(string, start, length);
