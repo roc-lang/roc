@@ -13,6 +13,6 @@ tick = \n ->
         _ <- await (Stdout.line "🎉 SURPRISE! Happy Birthday! 🎂")
         Task.ok (Done {})
     else
-        _ <- await (n |> Num.toStr |> \s -> "\(s)..." |> Stdout.line)
+        _ <- await (n |> Num.toStr |> \s -> "$(s)..." |> Stdout.line)
         _ <- await Stdin.line
         Task.ok (Step (n - 1))

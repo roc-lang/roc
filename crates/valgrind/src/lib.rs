@@ -345,7 +345,7 @@ fn joinpoint_with_closure() {
                 catSound = makeSound Cat
                 dogSound = makeSound Dog
                 gooseSound = makeSound Goose
-                "Cat: \(catSound), Dog: \(dogSound), Goose: \(gooseSound)"
+                "Cat: $(catSound), Dog: $(dogSound), Goose: $(gooseSound)"
 
             test
         )
@@ -374,7 +374,7 @@ fn joinpoint_with_reuse() {
                 Cons x xs ->
                     strX = f x
                     strXs = printLinkedList xs f
-                    "Cons \(strX) (\(strXs))"
+                    "Cons $(strX) ($(strXs))"
 
             test =
                 newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
@@ -461,7 +461,7 @@ fn tree_rebalance() {
                     sL = nodeInParens left showKey showValue
                     sR = nodeInParens right showKey showValue
 
-                    "Node \(sColor) \(sKey) \(sValue) \(sL) \(sR)"
+                    "Node $(sColor) $(sKey) $(sValue) $(sL) $(sR)"
 
         nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
         nodeInParens = \tree, showKey, showValue ->
@@ -472,7 +472,7 @@ fn tree_rebalance() {
                 Node _ _ _ _ _ ->
                     inner = showRBTree tree showKey showValue
 
-                    "(\(inner))"
+                    "($(inner))"
 
         showColor : NodeColor -> Str
         showColor = \color ->
@@ -521,7 +521,7 @@ fn joinpoint_nullpointer() {
                     Nil -> "Nil"
                     Cons x xs ->
                         strXs = printLinkedList xs
-                        "Cons \(x) (\(strXs))"
+                        "Cons $(x) ($(strXs))"
 
             linkedListHead : LinkedList Str -> LinkedList Str
             linkedListHead = \linkedList ->
@@ -533,7 +533,7 @@ fn joinpoint_nullpointer() {
             test =
                 cons = printLinkedList (linkedListHead (Cons "foo" Nil))
                 nil = printLinkedList (linkedListHead (Nil))
-                "\(cons) - \(nil)"
+                "$(cons) - $(nil)"
 
             test
         )

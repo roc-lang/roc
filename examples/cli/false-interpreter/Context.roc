@@ -55,7 +55,7 @@ toStr = \{ scopes, stack, state, vars } ->
     stackStr = Str.joinWith (List.map stack toStrData) " "
     varsStr = Str.joinWith (List.map vars toStrData) " "
 
-    "\n============\nDepth: \(depth)\nState: \(stateStr)\nStack: [\(stackStr)]\nVars: [\(varsStr)]\n============\n"
+    "\n============\nDepth: $(depth)\nState: $(stateStr)\nStack: [$(stackStr)]\nVars: [$(varsStr)]\n============\n"
 
 with : Str, (Context -> Task {} a) -> Task {} a
 with = \path, callback ->

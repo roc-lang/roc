@@ -844,7 +844,7 @@ replaceFirst : Str, Str, Str -> Str
 replaceFirst = \haystack, needle, flower ->
     when splitFirst haystack needle is
         Ok { before, after } ->
-            "\(before)\(flower)\(after)"
+            "$(before)$(flower)$(after)"
 
         Err NotFound -> haystack
 
@@ -862,7 +862,7 @@ replaceLast : Str, Str, Str -> Str
 replaceLast = \haystack, needle, flower ->
     when splitLast haystack needle is
         Ok { before, after } ->
-            "\(before)\(flower)\(after)"
+            "$(before)$(flower)$(after)"
 
         Err NotFound -> haystack
 

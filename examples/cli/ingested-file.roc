@@ -7,4 +7,4 @@ app "ingested-file"
     provides [main] to pf
 
 main =
-    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n$(ownCode)"

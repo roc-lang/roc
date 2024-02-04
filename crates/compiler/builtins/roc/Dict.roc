@@ -857,7 +857,7 @@ increaseSize = \@Dict { data, maxBucketCapacity, maxLoadFactor, shifts } ->
             shifts: newShifts,
         }
     else
-        crash "Dict hit limit of \(Num.toStr maxBucketCount) elements. Unable to grow more."
+        crash "Dict hit limit of $(Num.toStr maxBucketCount) elements. Unable to grow more."
 
 allocBucketsFromShift : U8, F32 -> (List Bucket, U64)
 allocBucketsFromShift = \shifts, maxLoadFactor ->
