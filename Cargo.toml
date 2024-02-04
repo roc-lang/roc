@@ -1,10 +1,10 @@
 [workspace]
 members = [
-  "crates/vec",
-  "crates/crash",
-  "crates/fs",
-  "crates/sized_str",
   "crates/arena",
+  "crates/intern",
+  "crates/fs",
+  "crates/crash",
+  "crates/sized_str",
   "crates/compiler/*",
   "crates/vendor/*",
   "crates/glue",

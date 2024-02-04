@@ -1,5 +1,5 @@
 [package]
-name = "interns"
+name = "intern"
 description = "Interned strings"
 
 authors.workspace = true
@@ -9,3 +9,4 @@ version.workspace = true
 
 [dependencies]
 sized_str = { path = "../sized_str" }
+arena = { path = "../arena" }

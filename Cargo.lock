@@ -1357,6 +1357,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "intern"
+version = "0.0.1"
+dependencies = [
+ "arena",
+ "sized_str",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4366,13 +4374,6 @@ name = "valuable"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
-
-[[package]]
-name = "vec"
-version = "0.0.1"
-dependencies = [
- "arena",
-]
 
 [[package]]
 name = "ven_graph"
