@@ -69,6 +69,7 @@ use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Var
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -4203,6 +4204,19 @@ fn load_packages<'a>(
     }
 }
 
+pub fn is_roc_extension<'a>(path: &PathBuf) -> Result<(), LoadingProblem<'a>> {
+    let roc_ext = OsStr::new("roc");
+    if let Some(ext) = path.extension() {
+        if roc_ext != ext {
+            return Err(LoadingProblem::FileProblem {
+                filename: path.clone(),
+                error: io::ErrorKind::Unsupported,
+            });
+        }
+    }
+    return Ok(());
+}
+
 /// Load a module by its filename
 fn load_filename<'a>(
     arena: &'a Bump,
@@ -4218,6 +4232,8 @@ fn load_filename<'a>(
     let file_io_start = Instant::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed();
+
+    is_roc_extension(&filename)?;
 
     match file {
         Ok(bytes) => parse_header(

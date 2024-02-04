@@ -714,24 +714,6 @@ pub fn standard_load_config(
     }
 }
 
-pub fn is_valied_roc_file<'a>(path: PathBuf) -> Result<(), BuildFileError<'a>> {
-    let roc_ext = OsStr::new("roc");
-    match path.extension() {
-        Some(ext) => {
-            if roc_ext != ext {
-                Err(BuildFileError::LoadingProblem(
-                    LoadingProblem::FormattedReport("It failed, wrong file ext".to_string()),
-                ))
-            } else {
-                Ok(())
-            }
-        }
-        None => Err(BuildFileError::LoadingProblem(
-            LoadingProblem::FormattedReport("It failed, no file ext".to_string()),
-        )),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
@@ -748,8 +730,6 @@ pub fn build_file<'a>(
     out_path: Option<&Path>,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
-
-    is_valied_roc_file(app_module_path)?;
 
     // Step 1: compile the app and generate the .o file
     let loaded =

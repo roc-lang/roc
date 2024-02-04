@@ -1652,6 +1652,27 @@ pub fn to_file_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        io::ErrorKind::Unsupported => {
+            let doc = match filename.extension() {
+                Some(ext) => {
+                    alloc.concat(vec![
+                        alloc.reflow(
+                            r"I am expecting a roc application file with either `.roc` or no extension. Instead I found a file with extension `.",
+                        ),
+                        alloc.as_string(ext.to_string_lossy()),
+                        alloc.as_string("`"),
+                    ])
+                }
+                None => {alloc.reflow(r"I am expecting a roc application file with either `.roc` or no extension. Instead I found a file without an extension")}
+            };
+
+            Report {
+                filename,
+                doc,
+                title: "EXPECTED ROC FILE".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{error}");
