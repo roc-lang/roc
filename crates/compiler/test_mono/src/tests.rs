@@ -3474,3 +3474,29 @@ fn issue_5513() {
         "
     )
 }
+
+#[mono_test]
+fn issue_6174() {
+    indoc!(
+        r"
+        g = Bool.false
+
+        a = \_ ->
+            if g then
+                Ok 0
+            else
+                Err NoNumber
+
+        b = \_ ->
+            if g then
+                Ok 0
+            else
+                Err NoNumber
+
+        c = \_ ->
+            [a {}, b {}]
+
+        c {}
+        "
+    )
+}
