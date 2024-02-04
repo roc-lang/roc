@@ -1,6 +1,5 @@
 [workspace]
 members = [
-  "crates/native_str",
   "crates/vec",
   "crates/crash",
   "crates/fs",

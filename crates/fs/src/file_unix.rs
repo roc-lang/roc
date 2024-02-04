@@ -31,7 +31,7 @@ impl Fd {
             fn open(path: *const i8, oflag: i32, ...) -> i32;
         }
 
-        let fd = unsafe { open(path.as_native_cstr().as_ptr(), oflag) };
+        let fd = unsafe { open(path.as_nul_terminated_utf8(), oflag) };
 
         if fd >= 0 {
             Ok(Self { fd })

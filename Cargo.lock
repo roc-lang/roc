@@ -586,9 +586,6 @@ checksum = "e496a50fda8aacccc86d7529e2c1e0892dbd0f898a6b5645b5561b89c3210efa"
 [[package]]
 name = "crash"
 version = "0.0.1"
-dependencies = [
- "native_str",
-]
 
 [[package]]
 name = "crc32fast"
@@ -945,9 +942,6 @@ dependencies = [
 [[package]]
 name = "fs"
 version = "0.0.1"
-dependencies = [
- "native_str",
-]
 
 [[package]]
 name = "fs_at"
@@ -1628,13 +1622,6 @@ dependencies = [
  "smallvec",
  "thiserror",
  "typed-arena",
-]
-
-[[package]]
-name = "native_str"
-version = "0.0.1"
-dependencies = [
- "widestring",
 ]
 
 [[package]]
@@ -4564,12 +4551,6 @@ dependencies = [
  "memory_units",
  "winapi",
 ]
-
-[[package]]
-name = "widestring"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "653f141f39ec16bba3c5abe400a0c60da7468261cc2cbf36805022876bc721a8"
 
 [[package]]
 name = "winapi"

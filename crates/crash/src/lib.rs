@@ -1,5 +1,3 @@
-use native_str::NativeStr;
-
 /// Takes a &str on UNIX (U16Str on Windows), prints it to stderr, and exits the program with a failure exit code.
 #[macro_export]
 macro_rules! unrecoverable {

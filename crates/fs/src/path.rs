@@ -1,33 +1,30 @@
-use native_str::NativeCStr;
+#[repr(transparent)]
+#[cfg(unix)]
+pub struct Path(i8);
 
-#[macro_export]
-macro_rules! path {
-    ($s:literal) => {
-        Path::from(native_str::native_cstr!($s))
-    };
-}
-
-/// On Windows,
-pub struct Path(NativeCStr);
-
-impl<'a> From<&'a Path> for &'a NativeCStr {
-    fn from(path: &'a Path) -> Self {
-        path.as_native_cstr()
-    }
-}
-
-impl<'a> From<&'a NativeCStr> for &'a Path {
-    fn from(c_str: &'a NativeCStr) -> Self {
-        Path::from_native_cstr(c_str)
-    }
-}
+#[repr(transparent)]
+#[cfg(windows)]
+pub struct Path(u16);
 
 impl Path {
-    pub fn from_native_cstr(c_str: &NativeCStr) -> &Self {
-        unsafe { &*(c_str as *const NativeCStr as *const Path) }
+    #[cfg(unix)]
+    pub fn from_cstr(c_str: &core::ffi::CStr) -> &Self {
+        unsafe { &*(c_str.as_ptr() as *const Self) }
     }
 
-    pub fn as_native_cstr(&self) -> &NativeCStr {
-        &self.0
+    #[cfg(unix)]
+    pub(crate) fn as_nul_terminated_utf8(&self) -> *const i8 {
+        self as *const Self as *const i8
+    }
+
+    /// Safety: the given reference must be to the first element of a nul-terminated UTF-16 string
+    #[cfg(windows)]
+    pub unsafe fn from_nul_terminated_utf16(c_str: &u16) -> &Self {
+        unsafe { &*(c_str as *const u16 as *const Self) }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn as_nul_terminated_utf16(&self) -> *const i8 {
+        self as *const Self as *const i16
     }
 }
