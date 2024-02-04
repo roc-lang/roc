@@ -16,7 +16,7 @@ impl StrId {
     const _MAX: u32 = u32::MAX >> Self::TAG_BITS;
     const TAG_OFFSET: u32 = size_of::<u32>() as u32 - Self::TAG_BITS;
 
-    fn bucket(self) -> Bucket {
+    fn _bucket(self) -> Bucket {
         unsafe { core::mem::transmute(self.0 >> Self::TAG_OFFSET) }
     }
 }
@@ -29,6 +29,7 @@ enum Bucket {
     Str4 = 2 << StrId::TAG_OFFSET,
     Str8 = 3 << StrId::TAG_OFFSET,
     Str16 = 4 << StrId::TAG_OFFSET,
+    #[allow(dead_code)]
     StrBig = 5 << StrId::TAG_OFFSET,
 }
 
@@ -37,6 +38,7 @@ impl Bucket {
         (self as u32) >> StrId::TAG_OFFSET
     }
 
+    #[allow(dead_code)]
     fn size(self) -> u32 {
         // 2^n gives the size:
         // index 0 is Str1
@@ -129,7 +131,7 @@ impl<'a> StrFinder<'a> {
         StrId(index as u32 & Bucket::StrBig as u32)
     }
 
-    fn to_str(&self, bucket: Bucket, offset_into_bucket: usize) -> &str {
+    fn _to_str(&self, bucket: Bucket, offset_into_bucket: usize) -> &str {
         if bucket != Bucket::StrBig {
             // Branchlessly get the string out of the appropriate bucket
             let bucket_index = bucket.as_index() as usize;

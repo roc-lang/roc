@@ -2,17 +2,13 @@
 // Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
+use arena::{Arena, ArenaRefMut};
 use core::{
     alloc::Layout,
-    marker::PhantomData,
     mem::{self, align_of, size_of},
 };
 
-use arena::{Arena, ArenaRefMut};
-
-/// This trait is intentionally reimplemented in multiple crates. It's one line,
-/// and creating and then depending on an `int` crate would be more than that.
-pub trait Int: Default + Copy + Clone + Sized + Into<usize> + From<usize> {}
+pub trait Int: Default + Copy + Sized + PartialEq + Ord + Into<u32> + From<u32> {}
 
 pub type Vec32<'a, T> = Vec<'a, T, u32>;
 pub type Vec16<'a, T> = Vec<'a, T, u16>;
@@ -26,20 +22,19 @@ pub struct Vec<'a, T, Len: Int> {
 
 impl<'a, T, Len: Int> Vec<'a, T, Len> {
     pub fn with_capacity_in(capacity: Len, arena: &'a mut Arena) -> Self {
-        let start = arena
-            .alloc_layout(unsafe {
-                Layout::from_size_align_unchecked(
-                    Into::<usize>::into(capacity) * mem::size_of::<T>(),
+        let start = unsafe {
+            arena
+                .alloc_layout(Layout::from_size_align_unchecked(
+                    Into::<u32>::into(capacity) as usize * mem::size_of::<T>(),
                     align_of::<T>(),
-                )
-            })
-            .cast();
+                ))
+                .cast()
+        };
 
         Self {
             start,
             len: Default::default(),
             capacity,
-            _phantom: PhantomData,
         }
     }
 
@@ -65,7 +60,7 @@ impl<'a, T, Len: Int> Vec<'a, T, Len> {
             Some(unsafe {
                 arena.get_unchecked(
                     self.start
-                        .add_bytes(size_of::<T>() as u32 * Into::<usize>::into(index) as u32),
+                        .add_bytes(size_of::<T>() as u32 * Into::<u32>::into(index)),
                 )
             })
         } else {

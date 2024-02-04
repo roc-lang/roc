@@ -45,6 +45,16 @@ impl<'a, T> ArenaRefMut<'a, MaybeUninit<T>> {
 }
 
 impl<'a, T> ArenaRefMut<'a, T> {
+    pub const unsafe fn add_bytes(&self, amount: u32) -> Self {
+        Self {
+            byte_offset_into_arena: self.byte_offset_into_arena + amount,
+            _marker: PhantomData,
+
+            #[cfg(debug_assertions)]
+            arena: self.arena,
+        }
+    }
+
     pub(crate) const fn new_in(byte_offset_into_arena: u32, _arena: &'a Arena<'a>) -> Self {
         Self {
             byte_offset_into_arena,
@@ -89,7 +99,7 @@ impl<'a, T> ArenaRefMut<'a, T> {
     }
 
     #[cfg(debug_assertions)]
-    pub(crate) fn debug_verify_arena(&self, other_arena: &Arena<'a>, fn_name: &'static str) {
+    pub fn debug_verify_arena(&self, other_arena: &Arena<'a>, fn_name: &'static str) {
         // This only does anything in debug builds. In optimized builds, we don't do it.
         if (self.arena as *const _) != (other_arena as *const _) {
             panic!("{fn_name} was called passing a different arena from the one this ArenaRefMut was created with!");
