@@ -19,11 +19,6 @@ impl StrId {
     fn bucket(self) -> Bucket {
         unsafe { core::mem::transmute(self.0 >> Self::TAG_OFFSET) }
     }
-
-    pub fn to_str<'a>(&self, finder: &'a StrFinder<'a>) -> &'a str {
-        todo!("no, this is all wrong. what needs to happen is that we have some parallel Vec of Option<NonZeroU16> IDs (so, 65K declarable unique identifiers per file), and each time we reset the scope, we zero all those out. I *think* it might also be possible that we can recycle those - e.g. maybe it's 65K for the deepest scope - but I'm not certain.");
-        finder.to_str(self.bucket(), self.0 as usize)
-    }
 }
 
 #[repr(u32)]
