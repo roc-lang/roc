@@ -1,0 +1,12 @@
+[package]
+name = "collections"
+description = "Arena-based collections"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+arena = { path = "../arena" }
+native_str = { path = "../native_str" }

@@ -363,6 +363,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
+name = "can2"
+version = "0.0.1"
+dependencies = [
+ "arena",
+ "sized_str",
+]
+
+[[package]]
 name = "capstone"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,6 +1257,10 @@ checksum = "cdd366a53278429c028367e0ba22a46cab6d565a57afb959f06e92c7a69e7828"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "ident_id"
+version = "0.0.1"
 
 [[package]]
 name = "idna"
@@ -4367,6 +4379,13 @@ name = "valuable"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "830b7e5d4d90034032940e4ace0d9a9a057e7a45cd94e6c007832e39edb82f6d"
+
+[[package]]
+name = "vec"
+version = "0.0.1"
+dependencies = [
+ "arena",
+]
 
 [[package]]
 name = "ven_graph"

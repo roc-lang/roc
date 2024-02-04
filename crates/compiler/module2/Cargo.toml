@@ -1,0 +1,10 @@
+[package]
+name = "ident_id"
+description = "Identifiers"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]

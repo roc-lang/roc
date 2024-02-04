@@ -1,0 +1,11 @@
+[package]
+name = "interns"
+description = "Interned strings"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+sized_str = { path = "../sized_str" }

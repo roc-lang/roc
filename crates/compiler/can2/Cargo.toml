@@ -1,0 +1,12 @@
+[package]
+name = "can2"
+description = "Canonicalization (name resolution and interning strings)"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+arena = { path = "../../arena" }
+sized_str = { path = "../../sized_str" }

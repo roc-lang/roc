@@ -1,0 +1,11 @@
+[package]
+name = "vec"
+description = "Like Rust's Vec, but for arenas"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+arena = { path = "../arena" }
