@@ -17,5 +17,5 @@ path = "../fs"
 version = "0.4.5"
 default-features = false
 
-[dependencies.crash]
-path = "../crash"
+[dependencies]
+crash = { path = "../crash" }

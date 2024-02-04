@@ -29,7 +29,7 @@ const ALLOC_FAILED_MESSAGE: &str =
 
 #[cfg(not(debug_assertions))]
 /// We'll exit with this code if allocation fails
-const ALLOC_FAILED_EXIT_CODE: u8 = 90;
+const ALLOC_FAILED_EXIT_CODE: i32 = 90;
 
 const PAGE_SIZE: usize = 16384;
 
@@ -95,7 +95,7 @@ pub(crate) fn alloc_virtual(layout: Layout) -> (NonNull<u8>, usize) {
 
                 #[cfg(not(debug_assertions))]
                 {
-                    crash::unrecoverable!(ALLOC_FAILED_MESSAGE, ALLOC_FAILED_EXIT_CODE)
+                    crash::unrecoverable!(ALLOC_FAILED_EXIT_CODE, ALLOC_FAILED_MESSAGE)
                 }
             }
         }

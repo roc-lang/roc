@@ -58,16 +58,6 @@ impl<'a, T> ArenaRefMut<'a, T> {
         self.byte_offset_into_arena as usize
     }
 
-    pub(crate) const fn add_bytes(&self, amount: u32) -> Self {
-        Self {
-            byte_offset_into_arena: self.byte_offset_into_arena + amount,
-            _marker: PhantomData,
-
-            #[cfg(debug_assertions)]
-            arena: self.arena,
-        }
-    }
-
     pub fn as_ref(&'a self, arena: &Arena<'a>) -> &'a T {
         #[cfg(debug_assertions)]
         {
@@ -94,8 +84,8 @@ impl<'a, T> ArenaRefMut<'a, T> {
         }
     }
 
-    pub(crate) const fn cast<U>(self) -> ArenaRefMut<'a, U> {
-        unsafe { core::mem::transmute::<ArenaRefMut<'a, T>, ArenaRefMut<'a, U>>(self) }
+    pub const unsafe fn cast<U>(self) -> ArenaRefMut<'a, U> {
+        core::mem::transmute::<ArenaRefMut<'a, T>, ArenaRefMut<'a, U>>(self)
     }
 
     #[cfg(debug_assertions)]

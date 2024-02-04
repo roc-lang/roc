@@ -8,7 +8,7 @@ use core::{
     mem::{self, align_of, size_of},
 };
 
-use crate::{arena::Arena, ArenaRefMut};
+use arena::{Arena, ArenaRefMut};
 
 /// This trait is intentionally reimplemented in multiple crates. It's one line,
 /// and creating and then depending on an `int` crate would be more than that.

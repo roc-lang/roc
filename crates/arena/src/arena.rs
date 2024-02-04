@@ -21,7 +21,6 @@ use core::{
     mem::{align_of, size_of, MaybeUninit},
     ptr::NonNull,
     slice,
-    sync::atomic::Ordering,
 };
 
 #[cfg(debug_assertions)]
@@ -59,7 +58,13 @@ impl Drop for Header {
             unsafe {
                 let header_ptr = (self as *mut Self).sub(1);
 
-                debug_assert_eq!(header_ptr, self.original_header_ptr);
+                #[cfg(debug_assertions)]
+                {
+                    // This must be wrapped in cfg(debug_assertions)
+                    // instead of using debug_assert_eq! because the
+                    // original_header_ptr field only exists in debug builds.
+                    assert_eq!(header_ptr, self.original_header_ptr);
+                }
 
                 let layout = Layout::from_size_align_unchecked(
                     self.original_capacity + (size_of::<Header>()),
@@ -243,7 +248,7 @@ impl<'a> Arena<'a> {
         Self {
             content: &mut *content_ptr,
             #[cfg(debug_assertions)]
-            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            id: NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -256,7 +261,7 @@ impl<'a> Arena<'a> {
     /// This is based on bumpalo's `alloc_with` - see bumpalo's docs on why the Fn can improve perf:
     /// https://docs.rs/bumpalo/latest/bumpalo/struct.Bump.html#method.alloc_with
     pub fn alloc<T>(&mut self) -> ArenaRefMut<MaybeUninit<T>> {
-        self.alloc_layout(Layout::new::<T>()).cast()
+        unsafe { self.alloc_layout(Layout::new::<T>()).cast() }
     }
 
     fn header(&self) -> &Header {
@@ -308,7 +313,13 @@ impl<'a> Arena<'a> {
     pub unsafe fn get_unchecked<T>(&'a self, arena_ref: impl Into<ArenaRef<'a, T>>) -> &'a T {
         let arena_ref = arena_ref.into();
 
-        debug_assert_eq!(self.id, arena_ref.arena.id);
+        #[cfg(debug_assertions)]
+        {
+            // This must be wrapped in cfg(debug_assertions)
+            // instead of using debug_assert_eq! because the
+            // arena.id field only exists in debug builds.
+            assert_eq!(self.id, arena_ref.arena.id);
+        }
 
         &*(self.content as *const Header as *const u8)
             .add(arena_ref.byte_offset())
