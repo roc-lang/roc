@@ -235,11 +235,11 @@ impl AnalyzedDocument {
         let is_field_or_module_completion = symbol_prefix.contains('.');
 
         if is_field_or_module_completion {
-            //if the second last second is capitalised we know we are completing a module of an import of a module
+            //if the second last section is capitalised we know we are completing a module of an import of a module eg: My.Module.function
             let is_module_completion = symbol_prefix
                 .split('.')
                 .nth_back(1)
-                .map(|a| a.chars().nth(0).unwrap().is_uppercase())
+                .and_then(|a| a.chars().nth(0).map(|c| c.is_uppercase()))
                 .unwrap_or(false);
             if is_module_completion {
                 info!("Getting module dot completion");
@@ -267,7 +267,10 @@ impl AnalyzedDocument {
                 )
             }
         } else {
-            let is_module_or_type_completion = symbol_prefix.chars().nth(0).unwrap().is_uppercase();
+            let is_module_or_type_completion = symbol_prefix
+                .chars()
+                .nth(0)
+                .map_or(false, |c| c.is_uppercase());
             if is_module_or_type_completion {
                 info!("Getting module completion");
                 let completions = get_upper_case_completion_items(
