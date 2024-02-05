@@ -1,7 +1,6 @@
 use object::write;
 use object::{Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope};
 use roc_error_macros::internal_error;
-use std::path::Path;
 use std::process::Command;
 use target_lexicon::Triple;
 
@@ -11,10 +10,10 @@ pub fn create_dylib_macho(
     triple: &Triple,
 ) -> object::read::Result<Vec<u8>> {
     let dummy_obj_file = tempfile::Builder::new()
-    .prefix("roc_lib")
-    .suffix(".o")
-    .tempfile()
-    .unwrap_or_else(|e| internal_error!("{}", e));
+        .prefix("roc_lib")
+        .suffix(".o")
+        .tempfile()
+        .unwrap_or_else(|e| internal_error!("{}", e));
     let tmp = tempfile::tempdir().unwrap_or_else(|e| internal_error!("{}", e));
     let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.dylib");
 

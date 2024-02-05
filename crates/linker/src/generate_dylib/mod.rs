@@ -64,9 +64,13 @@ mod tests {
     fn check_exports_macho() {
         let target = target_lexicon::Triple {
             architecture: target_lexicon::Architecture::Aarch64(
-                target_lexicon::Aarch64Architecture::Aarch64
+                target_lexicon::Aarch64Architecture::Aarch64,
             ),
-            operating_system: target_lexicon::OperatingSystem::MacOSX { major: 1, minor: 0, patch: 0 },
+            operating_system: target_lexicon::OperatingSystem::MacOSX {
+                major: 1,
+                minor: 0,
+                patch: 0,
+            },
             binary_format: target_lexicon::BinaryFormat::Macho,
             ..target_lexicon::Triple::host()
         };
