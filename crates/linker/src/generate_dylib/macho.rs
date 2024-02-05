@@ -11,12 +11,12 @@ pub fn create_dylib_macho(
     triple: &Triple,
 ) -> object::read::Result<Vec<u8>> {
     let dummy_obj_file = tempfile::Builder::new()
-        .prefix("roc_lib")
-        .suffix(".o")
-        .tempfile()
-        .unwrap_or_else(|e| internal_error!("{}", e));
+    .prefix("roc_lib")
+    .suffix(".o")
+    .tempfile()
+    .unwrap_or_else(|e| internal_error!("{}", e));
     let tmp = tempfile::tempdir().unwrap_or_else(|e| internal_error!("{}", e));
-    let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.so");
+    let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.dylib");
 
     let obj_target = BinaryFormat::MachO;
     let obj_arch = match triple.architecture {
@@ -50,33 +50,12 @@ pub fn create_dylib_macho(
     )
     .expect("failed to write object to file");
 
-    // This path only exists on macOS Big Sur, and it causes ld errors
-    // on Catalina if it's specified with -L, so we replace it with a
-    // redundant -lSystem if the directory isn't there.
-    let big_sur_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
-    let big_sur_fix = if Path::new(big_sur_path).exists() {
-        "-L/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"
-    } else {
-        "-lSystem" // We say -lSystem twice in the case of non-Big-Sur OSes, but it's fine.
-    };
-
-    let ld_flag_soname = "-install_name";
-    let ld_prefix_args = [big_sur_fix, "-lSystem", "-dylib"];
-
-    let output = Command::new("ld")
-        .args(ld_prefix_args)
+    let output = Command::new("zig")
+        .arg("build-lib")
         .args([
-            ld_flag_soname,
-            dummy_lib_file.file_name().unwrap().to_str().unwrap(),
-            dummy_obj_file.path().to_str().unwrap(),
-            "-o",
-            dummy_lib_file.to_str().unwrap(),
-            // Suppress warnings, because otherwise it prints:
-            //
-            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
-            //
-            // We can't disable that option without breaking either x64 mac or ARM mac
-            "-w",
+            format!("-femit-bin={}", dummy_lib_file.as_path().display()),
+            "-dynamic".to_string(),
+            dummy_obj_file.path().to_str().unwrap().to_string(),
         ])
         .output()
         .unwrap();

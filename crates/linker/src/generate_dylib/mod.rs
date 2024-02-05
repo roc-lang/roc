@@ -28,12 +28,17 @@ mod tests {
     use object::Object;
 
     fn check_exports(target: &Triple) {
-        let custom_names = ["foo".to_string(), "bar".to_string()];
-
+        let mut custom_names = ["foo".to_string(), "bar".to_string()];
         let bytes = generate(target, &custom_names).unwrap();
         let object = object::File::parse(bytes.as_slice()).unwrap();
 
         let exports = object.exports().unwrap();
+
+        // MACHO prepends a '_' for exported symbols
+        if target.binary_format == target_lexicon::BinaryFormat::Macho {
+            custom_names = custom_names.map(|c| format!("_{}", c));
+        }
+
         for custom in custom_names {
             assert!(
                 exports.iter().any(|e| e.name() == custom.as_bytes()),
@@ -49,6 +54,20 @@ mod tests {
             architecture: target_lexicon::Architecture::X86_64,
             operating_system: target_lexicon::OperatingSystem::Linux,
             binary_format: target_lexicon::BinaryFormat::Elf,
+            ..target_lexicon::Triple::host()
+        };
+
+        check_exports(&target);
+    }
+
+    #[test]
+    fn check_exports_macho() {
+        let target = target_lexicon::Triple {
+            architecture: target_lexicon::Architecture::Aarch64(
+                target_lexicon::Aarch64Architecture::Aarch64
+            ),
+            operating_system: target_lexicon::OperatingSystem::MacOSX { major: 1, minor: 0, patch: 0 },
+            binary_format: target_lexicon::BinaryFormat::Macho,
             ..target_lexicon::Triple::host()
         };
 
