@@ -18,9 +18,9 @@ pub fn create_dylib_macho(
     let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.dylib");
 
     let obj_target = BinaryFormat::MachO;
-    let obj_arch = match triple.architecture {
-        target_lexicon::Architecture::X86_64 => Architecture::X86_64,
-        target_lexicon::Architecture::Aarch64(_) => Architecture::Aarch64,
+    let (obj_arch, zig_target) = match triple.architecture {
+        target_lexicon::Architecture::X86_64 => (Architecture::X86_64, "x86_64-macos-none"),
+        target_lexicon::Architecture::Aarch64(_) => (Architecture::Aarch64, "aarch64-macos-none"),
         _ => {
             // We should have verified this via supported() before calling this function
             unreachable!()
@@ -52,9 +52,11 @@ pub fn create_dylib_macho(
     let output = Command::new("zig")
         .arg("build-lib")
         .args([
-            format!("-femit-bin={}", dummy_lib_file.as_path().display()),
-            "-dynamic".to_string(),
-            dummy_obj_file.path().to_str().unwrap().to_string(),
+            "-target",
+            zig_target,
+            format!("-femit-bin={}", dummy_lib_file.as_path().display()).as_str(),
+            "-dynamic",
+            dummy_obj_file.path().to_str().unwrap(),
         ])
         .output()
         .unwrap();
