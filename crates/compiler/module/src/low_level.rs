@@ -24,7 +24,6 @@ pub enum LowLevel {
     StrGetUnsafe,
     StrSubstringUnsafe,
     StrReserve,
-    StrGetCapacity,
     StrWithCapacity,
     StrReleaseExcessCapacity,
     ListLen,
@@ -271,7 +270,6 @@ map_symbol_to_lowlevel! {
     StrSubstringUnsafe <= STR_SUBSTRING_UNSAFE;
     StrReserve <= STR_RESERVE;
     StrToNum <= STR_TO_NUM;
-    StrGetCapacity <= STR_CAPACITY;
     StrWithCapacity <= STR_WITH_CAPACITY;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
     ListLen <= LIST_LEN;
@@ -308,8 +306,8 @@ map_symbol_to_lowlevel! {
     NumCompare <= NUM_COMPARE;
     NumDivFrac <= NUM_DIV_FRAC;
     NumDivCeilUnchecked <= NUM_DIV_CEIL;
-    NumDivTruncUnchecked <= NUM_DIV_TRUNC;
-    NumRemUnchecked <= NUM_REM;
+    NumDivTruncUnchecked <= NUM_DIV_TRUNC_UNCHECKED;
+    NumRemUnchecked <= NUM_REM_UNCHECKED;
     NumIsMultipleOf <= NUM_IS_MULTIPLE_OF;
     NumAbs <= NUM_ABS;
     NumNeg <= NUM_NEG;

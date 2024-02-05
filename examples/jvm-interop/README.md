@@ -39,7 +39,7 @@ Just so you know what to expect, our Roc functions look like this;
 ``` coffee
 interpolateString : Str -> Str
 interpolateString = \name ->
-    "Hello from Roc \(name)!!!🤘🤘🤘"
+    "Hello from Roc $(name)!!!🤘🤘🤘"
 
 
 mulArrByScalar : List I32, I32 -> List I32

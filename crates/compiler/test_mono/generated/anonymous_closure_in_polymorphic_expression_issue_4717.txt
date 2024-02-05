@@ -78,16 +78,16 @@ procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
     jump List.591 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.300 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.300;
+    let Num.306 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.306;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.299 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.299;
+    let Num.305 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.305;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.298 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.298;
+    let Num.304 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.304;
 
 procedure Test.1 (Test.2):
     let Test.13 : U64 = 0i64;

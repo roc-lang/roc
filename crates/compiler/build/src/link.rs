@@ -537,7 +537,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly-2023-05-28", "cargo"]);
+            cmd.args(["run", "nightly-2023-07-09", "cargo"]);
 
             cmd
         } else {
@@ -613,7 +613,8 @@ pub fn rebuild_host(
 
             // Clean up c_host.o
             if c_host_dest.exists() {
-                std::fs::remove_file(c_host_dest).unwrap();
+                // there can be a race condition on this file cleanup
+                let _ = std::fs::remove_file(c_host_dest);
             }
         }
     } else if rust_host_src.exists() {
@@ -848,6 +849,17 @@ fn strs_to_path(strs: &[&str]) -> PathBuf {
     strs.iter().collect()
 }
 
+fn extra_link_flags() -> Vec<String> {
+    match env::var("ROC_LINK_FLAGS") {
+        Ok(flags) => {
+            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
+
+            flags
+        }
+        Err(_) => "".to_string(),
+    }.split_whitespace().map(|x| x.to_owned()).collect()
+}
+
 fn link_linux(
     target: &Triple,
     output_path: PathBuf,
@@ -1037,6 +1049,7 @@ fn link_linux(
         .args(&base_args)
         .args(["-dynamic-linker", ld_linux])
         .args(input_paths)
+        .args(extra_link_flags())
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
         .args([
@@ -1108,25 +1121,14 @@ fn link_macos(
             "-macos_version_min",
             &get_macos_version(),
         ])
-        .args(input_paths);
+        .args(input_paths)
+        .args(extra_link_flags());
 
     let sdk_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib";
     if Path::new(sdk_path).exists() {
         ld_command.arg(format!("-L{sdk_path}"));
         ld_command.arg(format!("-L{sdk_path}/swift"));
     };
-
-    let roc_link_flags = match env::var("ROC_LINK_FLAGS") {
-        Ok(flags) => {
-            println!("⚠️ CAUTION: The ROC_LINK_FLAGS environment variable is a temporary workaround, and will no longer do anything once surgical linking lands! If you're concerned about what this means for your use case, please ask about it on Zulip.");
-
-            flags
-        }
-        Err(_) => "".to_string(),
-    };
-    for roc_link_flag in roc_link_flags.split_whitespace() {
-        ld_command.arg(roc_link_flag);
-    }
 
     ld_command.args([
         // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274

@@ -3,4 +3,4 @@ app "packages-test"
     imports [json.JsonParser, csv.Csv]
     provides [main] to pf
 
-main = "Hello, World! \(JsonParser.example) \(Csv.example)"
+main = "Hello, World! $(JsonParser.example) $(Csv.example)"

@@ -3553,20 +3553,7 @@ impl Clone for U1 {
         target_arch = "x86_64"
     ))]
     fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U1::None => core::mem::transmute::<core::mem::MaybeUninit<U1>, U1>(
-                    core::mem::MaybeUninit::uninit(),
-                ),
-                discriminant_U1::Some => Self {
-                    Some: self.Some.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
+        *self
     }
 }
 

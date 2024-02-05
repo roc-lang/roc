@@ -28,7 +28,7 @@ render = \state ->
         head [] [],
         body [] [
             h1 [] [text "The app"],
-            div [] [text "The answer is \(num)"],
+            div [] [text "The answer is $(num)"],
         ],
     ]
 

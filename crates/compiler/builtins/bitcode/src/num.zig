@@ -86,6 +86,15 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
 }
 
+pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
+    comptime var f = struct {
+        fn func(x: T) callconv(.C) F {
+            return @floatFromInt(x);
+        }
+    }.func;
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+}
+
 pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     comptime var f = struct {
         fn func(base: T, exp: T) callconv(.C) T {

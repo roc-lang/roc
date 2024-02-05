@@ -330,7 +330,7 @@ fn list_map_try_ok() {
             List.mapTry [1, 2, 3] \num ->
                 str = Num.toStr (num * 2)
 
-                Ok "\(str)!"
+                Ok "$(str)!"
         "#,
         // Result Str [] is unwrapped to just Str
         RocList::<RocStr>::from_slice(&[
@@ -823,6 +823,30 @@ fn list_append_longer_list() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_append_record() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            [
+                { name: "foo", content: "cfoo" },
+                { name: "bar", content: "cbar" },
+                { name: "baz", content: "cbaz" },
+            ]
+            |> List.append { name: "spam", content: "cspam" }
+            "#
+        ),
+        RocList::from_slice(&[
+            (RocStr::from("cfoo"), RocStr::from("foo"),),
+            (RocStr::from("cbar"), RocStr::from("bar"),),
+            (RocStr::from("cbaz"), RocStr::from("baz"),),
+            (RocStr::from("cspam"), RocStr::from("spam"),),
+        ]),
+        RocList<(RocStr, RocStr)>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend() {
     assert_evals_to!("List.prepend [] 1", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!(
@@ -883,6 +907,25 @@ fn list_prepend_big_list() {
             9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100
         ]),
         RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn list_prepend_record() {
+    assert_evals_to!(
+        indoc!(
+            r"
+            payment1 : { amount: Dec, date: [RD I32] }
+            payment1 = { amount: 1dec, date: (RD 1000) }
+            payment2 : { amount: Dec, date: [RD I32] }
+            payment2 = { amount: 2dec, date: (RD 1001) }
+
+            List.prepend [payment2] payment1
+            "
+        ),
+        RocList::from_slice(&[(RocDec::from(1), 1000i32), (RocDec::from(2), 1001i32),]),
+        RocList<(RocDec, i32)>
     );
 }
 
@@ -3695,10 +3738,10 @@ fn issue_3571_lowlevel_call_function_with_bool_lambda_set() {
                 List.concat state mappedVals
 
             add2 : Str -> Str
-            add2 = \x -> "added \(x)"
+            add2 = \x -> "added $(x)"
 
             mul2 : Str -> Str
-            mul2 = \x -> "multiplied \(x)"
+            mul2 = \x -> "multiplied $(x)"
 
             foo = [add2, mul2]
             bar = ["1", "2", "3", "4"]

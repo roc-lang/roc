@@ -36,6 +36,7 @@ comptime {
     exportDecFn(dec.fromStr, "from_str");
     exportDecFn(dec.fromU64C, "from_u64");
     exportDecFn(dec.logC, "log");
+    exportDecFn(dec.powC, "pow");
     exportDecFn(dec.mulC, "mul_with_overflow");
     exportDecFn(dec.mulOrPanicC, "mul_or_panic");
     exportDecFn(dec.mulSaturatedC, "mul_saturated");
@@ -52,6 +53,10 @@ comptime {
 
     inline for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
+
+        dec.exportRound(T, ROC_BUILTINS ++ ".dec.round.");
+        dec.exportFloor(T, ROC_BUILTINS ++ ".dec.floor.");
+        dec.exportCeiling(T, ROC_BUILTINS ++ ".dec.ceiling.");
     }
 }
 
@@ -121,6 +126,9 @@ comptime {
         num.exportFloor(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".floor_f64.");
         num.exportCeiling(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f32.");
         num.exportCeiling(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".ceiling_f64.");
+
+        num.exportNumToFloatCast(T, f32, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f32.");
+        num.exportNumToFloatCast(T, f64, ROC_BUILTINS ++ "." ++ NUM ++ ".num_to_float_cast_f64.");
 
         num.exportAddWithOverflow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_with_overflow.");
         num.exportAddOrPanic(T, ROC_BUILTINS ++ "." ++ NUM ++ ".add_or_panic.");

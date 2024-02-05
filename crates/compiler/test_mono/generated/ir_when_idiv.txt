@@ -1,22 +1,22 @@
+procedure Num.166 (#Attr.2, #Attr.3):
+    let Num.305 : I64 = lowlevel NumDivTruncUnchecked #Attr.2 #Attr.3;
+    ret Num.305;
+
 procedure Num.30 (#Attr.2):
-    let Num.304 : I64 = 0i64;
-    let Num.303 : Int1 = lowlevel Eq #Attr.2 Num.304;
-    ret Num.303;
+    let Num.310 : I64 = 0i64;
+    let Num.309 : Int1 = lowlevel Eq #Attr.2 Num.310;
+    ret Num.309;
 
-procedure Num.39 (#Attr.2, #Attr.3):
-    let Num.299 : I64 = lowlevel NumDivTruncUnchecked #Attr.2 #Attr.3;
-    ret Num.299;
-
-procedure Num.40 (Num.267, Num.268):
-    let Num.300 : Int1 = CallByName Num.30 Num.268;
-    if Num.300 then
-        let Num.302 : {} = Struct {};
-        let Num.301 : [C {}, C I64] = TagId(0) Num.302;
-        ret Num.301;
+procedure Num.40 (Num.271, Num.272):
+    let Num.306 : Int1 = CallByName Num.30 Num.272;
+    if Num.306 then
+        let Num.308 : {} = Struct {};
+        let Num.307 : [C {}, C I64] = TagId(0) Num.308;
+        ret Num.307;
     else
-        let Num.298 : I64 = CallByName Num.39 Num.267 Num.268;
-        let Num.297 : [C {}, C I64] = TagId(1) Num.298;
-        ret Num.297;
+        let Num.304 : I64 = CallByName Num.166 Num.271 Num.272;
+        let Num.303 : [C {}, C I64] = TagId(1) Num.304;
+        ret Num.303;
 
 procedure Test.0 ():
     let Test.8 : I64 = 1000i64;

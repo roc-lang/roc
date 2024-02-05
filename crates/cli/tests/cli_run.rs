@@ -553,9 +553,11 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+
                 This expectation failed:
 
-                19│      expect words == []
+                28│      expect words == []
                                 ^^^^^^^^^^^
 
                 When it failed, these variables had these values:
@@ -563,12 +565,12 @@ mod cli_run {
                 words : List Str
                 words = ["this", "will", "for", "sure", "be", "a", "large", "string", "so", "when", "we", "split", "it", "it", "will", "use", "seamless", "slices", "which", "affect", "printing"]
 
-                [<ignored for tests>:22] x = 42
-                [<ignored for tests>:23] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
-                [<ignored for tests>:24] "this is line 24" = "this is line 24"
-                [<ignored for tests>:13] x = "abc"
-                [<ignored for tests>:13] x = 10
-                [<ignored for tests>:13] x = (A (B C))
+                [<ignored for tests>:31] x = 42
+                [<ignored for tests>:33] "Fjoer en ferdjer frieten oan dyn geve lea" = "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests>:35] "this is line 24" = "this is line 24"
+                [<ignored for tests>:21] x = "abc"
+                [<ignored for tests>:21] x = 10
+                [<ignored for tests>:21] x = (A (B C))
                 Program finished!
                 "#
             ),
@@ -584,20 +586,46 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
+                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+
                 This expectation failed:
 
-                 6│>  expect
-                 7│>      a = 1
-                 8│>      b = 2
-                 9│>
-                10│>      a == b
+                9│      expect a == 2
+                               ^^^^^^
 
                 When it failed, these variables had these values:
 
                 a : Num *
                 a = 1
 
-                b : Num *
+                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+
+                This expectation failed:
+
+                10│      expect a == 3
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                ── EXPECT FAILED in ...roc/roc/crates/cli_testing_examples/expects/expects.roc ─
+
+                This expectation failed:
+
+                14│>  expect
+                15│>      a = makeA
+                16│>      b = 2i64
+                17│>
+                18│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Int Signed64
+                a = 1
+
+                b : I64
                 b = 2
 
 
@@ -875,7 +903,7 @@ mod cli_run {
                 This roc file can print it's own source code. The source is:
 
                 app "ingested-file"
-                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br" }
+                    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
                     imports [
                         pf.Stdout,
                         "ingested-file.roc" as ownCode : Str,
@@ -883,7 +911,7 @@ mod cli_run {
                     provides [main] to pf
 
                 main =
-                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n\(ownCode)"
+                    Stdout.line "\nThis roc file can print it's own source code. The source is:\n\n$(ownCode)"
 
                 "#
             ),

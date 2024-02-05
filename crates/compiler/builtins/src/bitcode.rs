@@ -130,10 +130,10 @@ impl IntWidth {
                 // according to https://reviews.llvm.org/D28990#655487
                 //
                 // however, rust does not always think that this is true
+                // Our alignmets here are correct, but they will not match rust/zig/llvm until they update to llvm version 18.
                 match target_info.architecture {
-                    Architecture::X86_64 => 16,
-                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
-                    Architecture::X86_32 => 8,
+                    Architecture::X86_64 | Architecture::Aarch64 | Architecture::X86_32 => 16,
+                    Architecture::Aarch32 | Architecture::Wasm32 => 8,
                 }
             }
         }
@@ -292,6 +292,10 @@ pub const NUM_FLOOR_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_
 pub const NUM_FLOOR_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_f64");
 pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
 pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
+pub const INT_TO_FLOAT_CAST_F32: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.num_to_float_cast_f32");
+pub const INT_TO_FLOAT_CAST_F64: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.num_to_float_cast_f64");
 
 pub const NUM_ADD_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_or_panic");
 pub const NUM_ADD_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_saturated");
@@ -404,6 +408,7 @@ pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_in
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
 pub const DEC_LOG: &str = "roc_builtins.dec.log";
+pub const DEC_POW: &str = "roc_builtins.dec.pow";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
@@ -416,6 +421,9 @@ pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
+pub const DEC_ROUND: IntrinsicName = int_intrinsic!("roc_builtins.dec.round");
+pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
+pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
 pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";

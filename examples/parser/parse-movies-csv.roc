@@ -1,6 +1,6 @@
 app "example"
     packages {
-        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br",
+        pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br",
         parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5/KB-TITJ4DfunB88sFBWjCtCGV7LRRDdTH5JUXp4gIb8.tar.br",
     }
     imports [
@@ -26,20 +26,20 @@ main =
                 |> Str.joinWith ("\n")
             nMovies = List.len movies |> Num.toStr
 
-            Stdout.line "\(nMovies) movies were found:\n\n\(moviesString)\n\nParse success!\n"
+            Stdout.line "$(nMovies) movies were found:\n\n$(moviesString)\n\nParse success!\n"
 
         Err problem ->
             when problem is
                 ParsingFailure failure ->
-                    Stderr.line "Parsing failure: \(failure)\n"
+                    Stderr.line "Parsing failure: $(failure)\n"
 
                 ParsingIncomplete leftover ->
-                    leftoverStr = leftover |> List.map strFromUtf8 |> List.map (\val -> "\"\(val)\"") |> Str.joinWith ", "
+                    leftoverStr = leftover |> List.map strFromUtf8 |> List.map (\val -> "\"$(val)\"") |> Str.joinWith ", "
 
-                    Stderr.line "Parsing incomplete. Following leftover fields while parsing a record: \(leftoverStr)\n"
+                    Stderr.line "Parsing incomplete. Following leftover fields while parsing a record: $(leftoverStr)\n"
 
                 SyntaxError error ->
-                    Stderr.line "Parsing failure. Syntax error in the CSV: \(error)"
+                    Stderr.line "Parsing failure. Syntax error in the CSV: $(error)"
 
 MovieInfo := { title : Str, releaseYear : U64, actors : List Str }
 
@@ -57,7 +57,7 @@ movieInfoExplanation = \@MovieInfo { title, releaseYear, actors } ->
     enumeratedActors = enumerate actors
     releaseYearStr = Num.toStr releaseYear
 
-    "The movie '\(title)' was released in \(releaseYearStr) and stars \(enumeratedActors)"
+    "The movie '$(title)' was released in $(releaseYearStr) and stars $(enumeratedActors)"
 
 enumerate : List Str -> Str
 enumerate = \elements ->

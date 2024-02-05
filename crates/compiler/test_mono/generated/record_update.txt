@@ -22,20 +22,20 @@ procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
     ret List.576;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.297 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.297;
+    let Num.303 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.303;
 
 procedure Test.1 (Test.2):
     let Test.6 : List U64 = StructAtIndex 0 Test.2;
-    let Test.8 : List U64 = StructAtIndex 1 Test.2;
-    let Test.10 : List U64 = StructAtIndex 2 Test.2;
+    let Test.7 : List U64 = StructAtIndex 1 Test.2;
+    let Test.8 : List U64 = StructAtIndex 2 Test.2;
     let Test.13 : U64 = 8i64;
     let Test.14 : U64 = 8i64;
-    let Test.9 : List U64 = CallByName List.3 Test.8 Test.13 Test.14;
+    let Test.10 : List U64 = CallByName List.3 Test.7 Test.13 Test.14;
     let Test.11 : U64 = 7i64;
     let Test.12 : U64 = 7i64;
-    let Test.7 : List U64 = CallByName List.3 Test.6 Test.11 Test.12;
-    let Test.5 : {List U64, List U64, List U64} = Struct {Test.7, Test.9, Test.10};
+    let Test.9 : List U64 = CallByName List.3 Test.6 Test.11 Test.12;
+    let Test.5 : {List U64, List U64, List U64} = Struct {Test.9, Test.10, Test.8};
     ret Test.5;
 
 procedure Test.0 ():

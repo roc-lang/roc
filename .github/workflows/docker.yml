@@ -9,7 +9,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Copy example docker file
         run: cp docker/nightly-ubuntu-latest/docker-compose.example.yml docker/nightly-ubuntu-latest/docker-compose.yml
@@ -26,7 +26,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Copy example docker file
         run: cp docker/nightly-ubuntu-2204/docker-compose.example.yml docker/nightly-ubuntu-2204/docker-compose.yml
@@ -42,7 +42,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Copy example docker file
         run: cp docker/nightly-ubuntu-2004/docker-compose.example.yml docker/nightly-ubuntu-2004/docker-compose.yml
@@ -58,7 +58,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Copy example docker file
         run: cp docker/nightly-debian-latest/docker-compose.example.yml docker/nightly-debian-latest/docker-compose.yml
@@ -74,7 +74,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Copy example docker file
         run: cp docker/nightly-debian-bookworm/docker-compose.example.yml docker/nightly-debian-bookworm/docker-compose.yml
@@ -90,7 +90,7 @@ jobs:
     runs-on: [ubuntu-22.04]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Copy example docker file
         run: cp docker/nightly-debian-buster/docker-compose.example.yml docker/nightly-debian-buster/docker-compose.yml
@@ -100,4 +100,3 @@ jobs:
 
       - name: Run hello world test
         run: docker-compose -f docker/nightly-debian-buster/docker-compose.yml run roc examples/helloWorld.roc
-

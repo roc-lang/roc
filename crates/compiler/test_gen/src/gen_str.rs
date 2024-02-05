@@ -1741,11 +1741,11 @@ fn str_walk_utf8() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            Str.walkUtf8 "abcd" [] (\list, byte -> List.prepend list byte)
             "#
         ),
-        RocList::from_slice(&[(0, 'a'), (1, 'b'), (2, 'c'), (3, 'd')]),
-        RocList<(u32, char)>
+        RocList::from_slice(&[b'd', b'c', b'b', b'a']),
+        RocList<u8>
     );
 }
 

@@ -103,6 +103,13 @@ macro_rules! impl_to_from_int_width {
                     _ => roc_error_macros::internal_error!("not an integer layout!")
                 }
             }
+
+            pub fn try_to_int_width(&self) -> Option<IntWidth> {
+                match self {
+                    $(&$layout => Some($int_width),)*
+                    _ => None,
+                }
+            }
         }
     };
 }

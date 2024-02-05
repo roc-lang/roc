@@ -255,9 +255,9 @@ mod tests {
             decode_u32(&[0xff, 0xff, 0xff, 0xff, 0x0f]),
             Ok((u32::MAX, MAX_SIZE_ENCODED_U32))
         );
-        assert!(matches!(decode_u32(&[0x80; 6]), Err(_)));
-        assert!(matches!(decode_u32(&[0x80; 2]), Err(_)));
-        assert!(matches!(decode_u32(&[]), Err(_)));
+        assert!(decode_u32(&[0x80; 6]).is_err());
+        assert!(decode_u32(&[0x80; 2]).is_err());
+        assert!(decode_u32(&[]).is_err());
     }
 
     #[test]

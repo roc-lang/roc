@@ -204,7 +204,6 @@ impl<'a> LowLevelCall<'a> {
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
-            StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
                 let number_layout = match backend.layout_interner.get_repr(self.ret_layout) {
                     LayoutRepr::Struct(field_layouts) => field_layouts[0],
@@ -1585,6 +1584,10 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_POW);
+                }
+
                 _ => panic_ret_type(),
             },
 
@@ -1636,6 +1639,7 @@ impl<'a> LowLevelCall<'a> {
                 match arg_type {
                     F32 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F32[width]),
                     F64 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F64[width]),
+                    Decimal => self.load_args_and_call_zig(backend, &bitcode::DEC_ROUND[width]),
                     _ => internal_error!("Invalid argument type for round: {:?}", arg_type),
                 }
             }
@@ -1643,6 +1647,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for round: {:?}", ret_type),
+                };
+
                 match (arg_type, self.lowlevel) {
                     (F32, NumCeiling) => {
                         backend.code_builder.f32_ceil();
@@ -1650,14 +1662,21 @@ impl<'a> LowLevelCall<'a> {
                     (F64, NumCeiling) => {
                         backend.code_builder.f64_ceil();
                     }
+                    (Decimal, NumCeiling) => {
+                        return self.load_args_and_call_zig(backend, &bitcode::DEC_CEILING[width]);
+                    }
                     (F32, NumFloor) => {
                         backend.code_builder.f32_floor();
                     }
                     (F64, NumFloor) => {
                         backend.code_builder.f64_floor();
                     }
+                    (Decimal, NumFloor) => {
+                        return self.load_args_and_call_zig(backend, &bitcode::DEC_FLOOR[width]);
+                    }
                     _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
                 }
+
                 match (ret_type, arg_type) {
                     // TODO: unsigned truncation
                     (I32, F32) => backend.code_builder.i32_trunc_s_f32(),

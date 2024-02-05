@@ -948,7 +948,7 @@ fn specialize_unique_newtype_records() {
             main =
                 when Str.fromUtf8 (Encode.toBytes {a: Bool.true} TotallyNotJson.json) is
                     Ok s -> when Str.fromUtf8 (Encode.toBytes {b: Bool.true} TotallyNotJson.json) is
-                        Ok t -> "\(s)\(t)"
+                        Ok t -> "$(s)$(t)"
                         _ -> "<bad>"
                     _ -> "<bad>"
             "#

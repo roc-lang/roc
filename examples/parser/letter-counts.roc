@@ -1,6 +1,6 @@
 app "example"
     packages {
-        cli: "https://github.com/roc-lang/basic-cli/releases/download/0.7.1/Icc3xJoIixF3hCcfXrDwLCu4wQHtNdPyoJkEbkgIElA.tar.br",
+        cli: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br",
         parser: "https://github.com/lukewilliamboswell/roc-parser/releases/download/0.5/KB-TITJ4DfunB88sFBWjCtCGV7LRRDdTH5JUXp4gIb8.tar.br",
     }
     imports [
@@ -21,7 +21,7 @@ main =
             |> List.map \_ -> 1
             |> List.sum
             |> Num.toStr
-            |> \countLetterA -> Stdout.line "I counted \(countLetterA) letter A's!"
+            |> \countLetterA -> Stdout.line "I counted $(countLetterA) letter A's!"
 
         Err _ -> Stderr.line "Ooops, something went wrong parsing letters"
 
