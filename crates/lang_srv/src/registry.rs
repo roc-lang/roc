@@ -144,7 +144,7 @@ impl Registry {
     }
 
     ///Tries to get the latest document from analysis.
-    ///Gives up and returns none aft 5 seconds.
+    ///Gives up and returns none after 5 seconds.
     async fn latest_document_by_url(&self, url: &Url) -> Option<Arc<AnalyzedDocument>> {
         tokio::time::timeout(self.config.latest_document_timeout, async {
             //TODO: This should really be a condvar that is triggered by the latest being ready, this will do for now though
