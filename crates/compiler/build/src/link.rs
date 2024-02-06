@@ -1462,6 +1462,7 @@ fn stringify_command(cmd: &Command) -> String {
     String::from(command_string.to_str().unwrap())
 }
 
+#[cfg(debug_assertions)]
 fn print_command_str(s: &str) {
     println!("\nRoc build command:\n{}\n", s);
 }
