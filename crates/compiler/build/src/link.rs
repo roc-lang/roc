@@ -1436,8 +1436,22 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
     }
 }
 
+/// Stringify a command for printing
+/// e.g. `HOME=~ zig build-exe foo.zig -o foo`
 fn stringify_command(cmd: &Command) -> String {
     let mut command_string = std::ffi::OsString::new();
+
+    for (name, opt_val) in cmd.get_envs() {
+        command_string.push(name);
+        command_string.push("=");
+        if let Some(val) = opt_val {
+            command_string.push(val);
+        } else {
+            command_string.push("''");
+        }
+        command_string.push(" ");
+    }
+
     command_string.push(cmd.get_program());
 
     for arg in cmd.get_args() {
