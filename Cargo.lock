@@ -2273,6 +2273,7 @@ dependencies = [
  "roc_collections",
  "roc_command_utils",
  "roc_constrain",
+ "roc_debug_flags",
  "roc_error_macros",
  "roc_gen_dev",
  "roc_gen_llvm",
