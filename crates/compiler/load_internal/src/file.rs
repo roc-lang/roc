@@ -3839,6 +3839,36 @@ struct HeaderOutput<'a> {
     opt_platform_shorthand: Option<&'a str>,
 }
 
+fn ensure_roc_file<'a>(filename: &PathBuf, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
+    match filename.extension() {
+        Some(ext) => {
+            let roc_ext = OsStr::new("roc");
+            if roc_ext != ext {
+                return Err(LoadingProblem::FileProblem {
+                    filename: filename.clone(),
+                    error: io::ErrorKind::Unsupported,
+                });
+            }
+        }
+        None => {
+            let index = src_bytes
+                .iter()
+                .position(|a| *a == b'\n')
+                .unwrap_or(src_bytes.len());
+            let frist_line_bytes = src_bytes[0..index].to_vec();
+            if let Ok(first_line) = String::from_utf8(frist_line_bytes) {
+                if !(first_line.starts_with("#!") && first_line.contains("roc")) {
+                    return Err(LoadingProblem::FileProblem {
+                        filename: filename.clone(),
+                        error: std::io::ErrorKind::Unsupported,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3856,6 +3886,8 @@ fn parse_header<'a>(
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
+
+    ensure_roc_file(&filename, src_bytes)?;
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
@@ -4204,19 +4236,6 @@ fn load_packages<'a>(
     }
 }
 
-pub fn is_roc_extension<'a>(path: &PathBuf) -> Result<(), LoadingProblem<'a>> {
-    let roc_ext = OsStr::new("roc");
-    if let Some(ext) = path.extension() {
-        if roc_ext != ext {
-            return Err(LoadingProblem::FileProblem {
-                filename: path.clone(),
-                error: io::ErrorKind::Unsupported,
-            });
-        }
-    }
-    return Ok(());
-}
-
 /// Load a module by its filename
 fn load_filename<'a>(
     arena: &'a Bump,
@@ -4232,8 +4251,6 @@ fn load_filename<'a>(
     let file_io_start = Instant::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed();
-
-    is_roc_extension(&filename)?;
 
     match file {
         Ok(bytes) => parse_header(
