@@ -69,7 +69,6 @@ use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Var
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::io;
 use std::iter;
 use std::ops::ControlFlow;
@@ -3842,7 +3841,7 @@ struct HeaderOutput<'a> {
 fn ensure_roc_file<'a>(filename: &PathBuf, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
     match filename.extension() {
         Some(ext) => {
-            let roc_ext = OsStr::new("roc");
+            let roc_ext = std::ffi::OsStr::new("roc");
             if roc_ext != ext {
                 return Err(LoadingProblem::FileProblem {
                     filename: filename.clone(),
