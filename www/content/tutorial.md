@@ -1371,7 +1371,7 @@ pluralize = \singular, plural, count ->
 This `expect` will fail if you call `pluralize` passing a count of 0.
 
 Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. In fact, if you do `roc build`, they are not even included in the final binary.
-So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
+So you'll want to use `roc dev` to run inline `expect`s and `roc test` for top level `expect`s.
 
 ## [Modules](#modules) {#modules}
 
