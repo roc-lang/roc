@@ -1,10 +1,12 @@
 [workspace]
 members = [
+  "crates/simd",
   "crates/arena",
   "crates/intern",
   "crates/fs",
   "crates/crash",
   "crates/sized_str",
+  "crates/new_frontend/*",
   "crates/compiler/*",
   "crates/vendor/*",
   "crates/glue",

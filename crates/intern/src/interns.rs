@@ -1,7 +1,5 @@
-use core::mem::size_of;
-
 use crate::intern_key::InternKey;
-use arena::{AsU32, String, Vec16};
+use arena::{Arena, AsU32, String, Vec16};
 use sized_str::{Str16, Str4, Str8, StrBig};
 
 pub struct Interns<'a> {
@@ -28,30 +26,40 @@ impl<'a> Interns<'a> {
     /// The reason this writes to a buffer rather than returning the string is that sometimes
     /// the key itself stores the string inline, so we would have to retern a pointer to the
     /// key itself - which would not go well.
-    pub fn write_str_from_key(&self, key: InternKey, buf: &mut String<'a, impl AsU32>) {
-        let is_inline = key.is_inline();
-        let inline_len = key.inline_len();
-        let bucket = key.bucket();
-        let bucket_size = bucket.str_size();
-        let inline_offset = inline_len;
-        let bucket_offset = key.index_within_bucket() * size_of::<Bucket<'a, Str4>>();
-        let ptr_offset = if is_inline {
-            inline_offset
-        } else {
-            bucket_offset
-        };
-        let self_ptr = self as *const Self as *const u8;
-        let bucket_ptr = unsafe {
-            (self_ptr as *const Bucket<'a, Str4>)
-                .add(key.bucket().as_bucket_index())
-                .cast()
-        };
-        let base_ptr = if is_inline { self_ptr } else { bucket_ptr };
-        let str_ptr = unsafe { base_ptr.add(ptr_offset) };
-        let len = if is_inline {
-            inline_len
-        } else {
-            todo!("");
+    pub fn write_str_from_key(
+        &'a self,
+        key: InternKey,
+        arena: &'a mut Arena<'a>,
+        buf: &mut String<'a, impl AsU32>,
+    ) {
+        use crate::intern_key::Bucket;
+
+        unsafe {
+            match key.bucket() {
+                Bucket::Str4 => {
+                    self.str4
+                        .get_unchecked(arena, key.index_within_bucket())
+                        .write(buf);
+                }
+                Bucket::Str8 => {
+                    self.str8
+                        .get_unchecked(arena, key.index_within_bucket())
+                        .write(buf);
+                }
+                Bucket::Str16 => {
+                    self.str16
+                        .get_unchecked(arena, key.index_within_bucket())
+                        .write(buf);
+                }
+                Bucket::StrBig => {
+                    self.str_big
+                        .get_unchecked(arena, key.index_within_bucket())
+                        .write(buf);
+                }
+                Bucket::Inline => {
+                    todo!("Write either 0 or 1 bytes to the buffer.");
+                }
+            }
         }
     }
 }

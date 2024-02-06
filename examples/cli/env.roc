@@ -28,3 +28,10 @@ main =
 
             Err _ ->
                 Stderr.line "I couldn't find your favorite letters in the environment variables!"
+
+
+Foo a : [None, Some (Foo a)]
+Foo a : List (Foo a)
+Foo a : MyCustomThing (Foo a)
+# try in Elm: infinite recursion, phantom types, Array, ...
+something = ...

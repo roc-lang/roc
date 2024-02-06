@@ -363,11 +363,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
 
 [[package]]
-name = "can2"
+name = "can"
 version = "0.0.1"
 dependencies = [
  "arena",
- "sized_str",
+ "intern",
 ]
 
 [[package]]
@@ -1779,6 +1779,14 @@ dependencies = [
  "redox_syscall 0.4.1",
  "smallvec",
  "windows-targets 0.48.5",
+]
+
+[[package]]
+name = "parse"
+version = "0.0.1"
+dependencies = [
+ "arena",
+ "intern",
 ]
 
 [[package]]
@@ -3555,6 +3563,10 @@ checksum = "d8229b473baa5980ac72ef434c4415e70c4b5e71b423043adb4ba059f89c99a1"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "simd"
+version = "0.0.1"
 
 [[package]]
 name = "similar"

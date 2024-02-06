@@ -459,7 +459,7 @@ impl Str4 {
     /// (Essentially the same as `slice.iter().position(|e| e == self)`, except using SIMD.)
     ///
     /// # Safety
-    /// There must bet at least least 16B of accessible memory after the end of the slice.
+    /// There must be at least least 16B of accessible memory after the end of the slice.
     /// This is because we keep iterating in chunks of 16B
     /// The reason for this is that we start by dereferencing the
     /// slice's pointer into a 16B structure, and then discarding any memory garbage we find.

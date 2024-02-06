@@ -68,7 +68,7 @@ impl<'a, T> ArenaRefMut<'a, T> {
         self.byte_offset_into_arena as usize
     }
 
-    pub fn as_ref(&'a self, arena: &Arena<'a>) -> &'a T {
+    pub fn as_ref(&self, arena: &Arena<'a>) -> &T {
         #[cfg(debug_assertions)]
         {
             self.debug_verify_arena(arena, "ArenaRefMut::deref");
@@ -81,7 +81,7 @@ impl<'a, T> ArenaRefMut<'a, T> {
         }
     }
 
-    pub fn as_mut(&'a mut self, arena: &mut Arena<'a>) -> &'a mut T {
+    pub fn as_mut(&mut self, arena: &mut Arena<'a>) -> &mut T {
         #[cfg(debug_assertions)]
         {
             self.debug_verify_arena(arena, "ArenaRefMut::deref");

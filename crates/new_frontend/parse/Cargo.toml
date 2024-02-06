@@ -1,0 +1,12 @@
+[package]
+name = "parse"
+description = "Parsing - turning lexed tokens into a parse AST, which will later be canonicalized. This also supports doing some preliminary scope population and top-level declaration reordering for canonicalization."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+arena = { path = "../../arena" }
+intern = { path = "../../intern" }

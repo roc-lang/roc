@@ -42,15 +42,19 @@ impl InternKey {
         }
     }
 
-    pub(crate) unsafe fn as_i16(self) -> i16 {
-        Into::<i16>::into(self.inner.tagged)
+    pub fn as_nonzero(self) -> NonZeroI16 {
+        self.inner.tagged
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.inner.tagged.get()
     }
 
     /// This is only useful once we've already verified this key is not stored inline!
     /// Assuming that's the case, this returns the index *within* that bucket where
     /// the interned string can be found.
-    pub(crate) fn index_within_bucket(&self) -> usize {
-        (unsafe { self.as_i16() & 0b0001_1111_1111_1111 }) as usize
+    pub(crate) fn index_within_bucket(&self) -> u16 {
+        (unsafe { self.as_i16() & 0b0001_1111_1111_1111 }) as u16
     }
 }
 
@@ -79,11 +83,12 @@ pub(crate) enum Bucket {
     Str8 = 1,
     Str16 = 2,
     StrBig = 3,
+    Inline = 4,
 }
 
 impl Bucket {
-    /// We use 2 bits for the tag
-    const TAG_BITS: u32 = 2;
+    /// We use 3 bits for the tag
+    const TAG_BITS: u32 = 3;
 
     // Bucket::Str4   => 0
     // Bucket::Str8   => 1
