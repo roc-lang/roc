@@ -1663,7 +1663,15 @@ pub fn to_file_problem_report<'b>(
                         alloc.as_string("`"),
                     ])
                 }
-                None => {alloc.reflow(r"I am expecting a roc application file with either `.roc` or no extension. Instead I found a file without an extension")}
+                None => {
+                    alloc.stack(vec![
+                        alloc.concat(vec![
+                            alloc.reflow(r"I am expecting a roc application file with either `.roc` or no extension and a shebang directive. "),
+                            alloc.reflow(r"Instead I found a file without an extension and without a shebang"),
+                        ]),
+                        alloc.reflow(r"Consider starting the file with `#!` and the path to your roc binary"),
+                    ])
+                }
             };
 
             Report {
