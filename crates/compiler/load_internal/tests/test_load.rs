@@ -1210,7 +1210,6 @@ fn non_roc_file_extension() {
             "
         ),
     )];
-    // ESC[36m
 
     let expected = indoc!(
         r"
@@ -1222,6 +1221,41 @@ fn non_roc_file_extension() {
     let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
     let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();
     let err = multiple_modules("non_roc_file_extension", modules).unwrap_err();
+    let err = err.replace(&color_start, "");
+    let err = err.replace(&color_end, "");
+    assert_eq!(err, expected, "\n{}", err);
+}
+
+#[test]
+fn roc_file_no_extension() {
+    let modules = vec![(
+        "main",
+        indoc!(
+            r#"
+            app "helloWorld"
+                packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.8.1/x8URkvfyi9I0QhmVG98roKBUs_AZRkLFwFJVJ3942YA.tar.br" }
+                imports [pf.Stdout]
+                provides [main] to pf
+
+            main =
+                Stdout.line "Hello, World!"
+            "#
+        ),
+    )];
+
+    let expected = indoc!(
+        r"
+        ── EXPECTED ROC FILE in tmp/roc_file_no_extension/main ─────────────────────────
+
+        I am expecting a roc application file with either `.roc` or no
+        extension and a shebang directive. Instead I found a file without an
+        extension and without a shebang
+
+        Consider starting the file with `#!` and the path to your roc binarya"
+    );
+    let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
+    let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();
+    let err = multiple_modules("roc_file_no_extension", modules).unwrap_err();
     let err = err.replace(&color_start, "");
     let err = err.replace(&color_end, "");
     assert_eq!(err, expected, "\n{}", err);
