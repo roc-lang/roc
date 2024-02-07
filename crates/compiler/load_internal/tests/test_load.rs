@@ -1199,3 +1199,30 @@ fn app_missing_package_import() {
         err
     );
 }
+
+#[test]
+fn non_roc_file_extension() {
+    let modules = vec![(
+        "main.md",
+        indoc!(
+            r"
+            # Not a roc file
+            "
+        ),
+    )];
+    // ESC[36m
+
+    let expected = indoc!(
+        r"
+        ── EXPECTED ROC FILE in tmp/non_roc_file_extension/main.md ─────────────────────
+
+        I am expecting a roc application file with either `.roc` or no
+        extension. Instead I found a file with extension `.md`"
+    );
+    let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
+    let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();
+    let err = multiple_modules("non_roc_file_extension", modules).unwrap_err();
+    let err = err.replace(&color_start, "");
+    let err = err.replace(&color_end, "");
+    assert_eq!(err, expected, "\n{}", err);
+}
