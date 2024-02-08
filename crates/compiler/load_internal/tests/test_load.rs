@@ -1213,10 +1213,10 @@ fn non_roc_file_extension() {
 
     let expected = indoc!(
         r"
-        ── EXPECTED ROC FILE in tmp/non_roc_file_extension/main.md ─────────────────────
+        ── NOT A ROC FILE in tmp/non_roc_file_extension/main.md ────────────────────────
 
-        I am expecting a roc application file with either `.roc` or no
-        extension. Instead I found a file with extension `.md`"
+        I expected a file with extension `.roc` or without extension.
+        Instead I received a file with extension `.md`."
     );
     let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
     let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();
@@ -1245,13 +1245,15 @@ fn roc_file_no_extension() {
 
     let expected = indoc!(
         r"
-        ── EXPECTED ROC FILE in tmp/roc_file_no_extension/main ─────────────────────────
+        ── NOT A ROC FILE in tmp/roc_file_no_extension/main ────────────────────────────
 
-        I am expecting a roc application file with either `.roc` or no
-        extension and a shebang directive. Instead I found a file without an
-        extension and without a shebang
+        I expected a file with either:
+        - extension `.roc`
+        - no extension and a roc shebang as the first line, e.g.
+        `#!/home/username/bin/roc_nightly/roc`
 
-        Consider starting the file with `#!` and the path to your roc binarya"
+        The provided file did not start with a shebang `#!` containing the
+        string `roc`. Is tmp/roc_file_no_extension/main a Roc file?"
     );
     let color_start = String::from_utf8(vec![27, 91, 51, 54, 109]).unwrap();
     let color_end = String::from_utf8(vec![27, 91, 48, 109]).unwrap();

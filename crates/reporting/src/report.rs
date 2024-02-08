@@ -1654,22 +1654,25 @@ pub fn to_file_problem_report<'b>(
         }
         io::ErrorKind::Unsupported => {
             let doc = match filename.extension() {
-                Some(ext) => {
-                    alloc.concat(vec![
-                        alloc.reflow(
-                            r"I am expecting a roc application file with either `.roc` or no extension. Instead I found a file with extension `.",
-                        ),
-                        alloc.as_string(ext.to_string_lossy()),
-                        alloc.as_string("`"),
-                    ])
-                }
+                Some(ext) => alloc.concat(vec![
+                    alloc.reflow(r"I expected a file with extension `.roc` or without extension."),
+                    alloc.hardline(),
+                    alloc.reflow(r"Instead I received a file with extension `."),
+                    alloc.as_string(ext.to_string_lossy()),
+                    alloc.as_string("`."),
+                ]),
                 None => {
                     alloc.stack(vec![
-                        alloc.concat(vec![
-                            alloc.reflow(r"I am expecting a roc application file with either `.roc` or no extension and a shebang directive. "),
-                            alloc.reflow(r"Instead I found a file without an extension and without a shebang"),
+                        alloc.vcat(vec![
+                            alloc.reflow(r"I expected a file with either:"),
+                            alloc.reflow("- extension `.roc`"),
+                            alloc.reflow("- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"),
                         ]),
-                        alloc.reflow(r"Consider starting the file with `#!` and the path to your roc binary"),
+                        alloc.concat(vec![
+                            alloc.reflow("The provided file did not start with a shebang `#!` containing the string `roc`. Is "),
+                            alloc.as_string(filename.to_string_lossy()),
+                            alloc.reflow(" a Roc file?"),
+                        ])
                     ])
                 }
             };
@@ -1677,7 +1680,7 @@ pub fn to_file_problem_report<'b>(
             Report {
                 filename,
                 doc,
-                title: "EXPECTED ROC FILE".to_string(),
+                title: "NOT A ROC FILE".to_string(),
                 severity: Severity::Fatal,
             }
         }

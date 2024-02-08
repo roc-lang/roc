@@ -3841,8 +3841,7 @@ struct HeaderOutput<'a> {
 fn ensure_roc_file<'a>(filename: &PathBuf, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
     match filename.extension() {
         Some(ext) => {
-            let roc_ext = std::ffi::OsStr::new("roc");
-            if roc_ext != ext {
+            if ext != ROC_FILE_EXTENSION {
                 return Err(LoadingProblem::FileProblem {
                     filename: filename.clone(),
                     error: io::ErrorKind::Unsupported,
