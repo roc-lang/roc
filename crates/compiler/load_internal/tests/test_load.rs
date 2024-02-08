@@ -1250,7 +1250,7 @@ fn roc_file_no_extension() {
         I expected a file with either:
         - extension `.roc`
         - no extension and a roc shebang as the first line, e.g.
-        `#!/home/username/bin/roc_nightly/roc`
+          `#!/home/username/bin/roc_nightly/roc`
 
         The provided file did not start with a shebang `#!` containing the
         string `roc`. Is tmp/roc_file_no_extension/main a Roc file?"

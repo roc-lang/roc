@@ -1666,7 +1666,11 @@ pub fn to_file_problem_report<'b>(
                         alloc.vcat(vec![
                             alloc.reflow(r"I expected a file with either:"),
                             alloc.reflow("- extension `.roc`"),
-                            alloc.reflow("- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"),
+                            alloc.intersperse(
+                                "- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"
+                                    .split(char::is_whitespace),
+                                alloc.concat(vec![ alloc.hardline(), alloc.text("  ")]).flat_alt(alloc.space()).group()
+                            ),
                         ]),
                         alloc.concat(vec![
                             alloc.reflow("The provided file did not start with a shebang `#!` containing the string `roc`. Is "),
