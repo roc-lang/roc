@@ -1071,17 +1071,19 @@ pub fn module_from_builtins<'ctx>(
     // Anything not depended on by a `roc_builtin.` function could already by DCE'd theoretically.
     // That said, this workaround is good enough and fixes compilations times.
 
-    // Also, must_keep is the functions we depend on that would normally be provide by libc.
+    // Also, must_keep is the functions we depend on that would normally be provide by libc or compiler-rt.
     // They are magically linked to by llvm builtins, so we must specify that they can't be DCE'd.
     let must_keep = [
+        // Windows special required when floats are used
         "_fltused",
+        // From libc
         "floorf",
         "memcpy",
         "memset",
-        // I have no idea why this function is special.
-        // Without it, some tests hang on M1 mac outside of nix.
+        // From compiler-rt
+        "__divti3",
+        "__modti3",
         "__muloti4",
-        // fixes `Undefined Symbol in relocation`
         "__udivti3",
         // Roc special functions
         "__roc_force_longjmp",
