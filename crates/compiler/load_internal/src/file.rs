@@ -3838,12 +3838,12 @@ struct HeaderOutput<'a> {
     opt_platform_shorthand: Option<&'a str>,
 }
 
-fn ensure_roc_file<'a>(filename: &PathBuf, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
+fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
     match filename.extension() {
         Some(ext) => {
             if ext != ROC_FILE_EXTENSION {
                 return Err(LoadingProblem::FileProblem {
-                    filename: filename.clone(),
+                    filename: filename.to_path_buf(),
                     error: io::ErrorKind::Unsupported,
                 });
             }
@@ -3857,7 +3857,7 @@ fn ensure_roc_file<'a>(filename: &PathBuf, src_bytes: &[u8]) -> Result<(), Loadi
             if let Ok(first_line) = String::from_utf8(frist_line_bytes) {
                 if !(first_line.starts_with("#!") && first_line.contains("roc")) {
                     return Err(LoadingProblem::FileProblem {
-                        filename: filename.clone(),
+                        filename: filename.to_path_buf(),
                         error: std::io::ErrorKind::Unsupported,
                     });
                 }
