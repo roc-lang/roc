@@ -166,7 +166,7 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = if self.filename == PathBuf::from("") {
+            let header = if self.filename == PathBuf::from("replfile.roc") {
                 crate::report::pretty_header(&self.title)
             } else {
                 crate::report::pretty_header_with_path(&self.title, &self.filename)
