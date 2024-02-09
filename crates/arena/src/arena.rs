@@ -244,6 +244,10 @@ impl<'a> Arena<'a> {
         }
     }
 
+    pub fn reserve(&mut self, bytes: u32) {
+        let todo = todo!();
+    }
+
     unsafe fn from_content_ptr(content_ptr: *mut Header) -> Self {
         Self {
             content: &mut *content_ptr,

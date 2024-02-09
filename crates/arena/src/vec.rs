@@ -9,7 +9,6 @@
 use crate::{Arena, ArenaRefMut};
 use core::{
     alloc::Layout,
-    marker::PhantomData,
     mem::{self, align_of, size_of},
     ops::Add,
 };
@@ -18,43 +17,8 @@ pub type Vec32<'a, T> = Vec<'a, T, u32>;
 pub type Vec16<'a, T> = Vec<'a, T, u16>;
 pub type Vec8<'a, T> = Vec<'a, T, u8>;
 
-pub type Vec32x2<'a, T, U> = VecNx2<'a, T, U, u32>;
-pub type Vec16x2<'a, T, U> = VecNx2<'a, T, U, u16>;
-pub type Vec8x2<'a, T, U> = VecNx2<'a, T, U, u8>;
-
-pub struct VecNx2<'a, T, U, Len: AsU32> {
-    start0: ArenaRefMut<'a, T>,
-    start1: ArenaRefMut<'a, U>,
-    len: Len,
-    capacity: Len,
-}
-
 pub trait AsBool {
     fn as_bool(self) -> bool;
-}
-
-impl<'a, T, U: AsBool, Len: AsU32> VecNx2<'a, T, U, Len> {
-    fn push(&mut self, arena: &mut Arena<'a>, elem0: T, elem1: U) {
-        // Compute the new length upfront
-        let index = self.len;
-
-        // Call self.reserve, which mutably borrows self
-        self.reserve(arena, 1.into());
-
-        // Update self.len with the new length
-        self.len = (index + 1.into()).into();
-
-        unsafe {
-            *(self.start0.as_mut(arena) as *mut T).add(index.as_u32() as usize) = elem0;
-        }
-        unsafe {
-            *(self.start1.as_mut(arena) as *mut U).add(index.as_u32() as usize) = elem1;
-        }
-    }
-
-    fn reserve(&mut self, arena: &mut Arena<'a>, amount: Len) {
-        //
-    }
 }
 
 pub struct Vec<'a, T, Len: AsU32> {
@@ -111,6 +75,25 @@ impl<'a, T, Len: AsU32> Vec<'a, T, Len> {
         }
 
         arena.get_unchecked(self.start.add_bytes(size_of::<T>() as u32 * index.as_u32()))
+    }
+
+    pub fn write<'b>(
+        &self,
+        self_arena: &Arena<'a>,
+        dest: &mut Vec<'b, T, impl AsU32>,
+        dest_arena: &mut Arena<'b>,
+    ) {
+        // This will fail if dest.len + self.len overflows, so we no longer need to worry about that.
+        dest.reserve(self.len);
+
+        let src_ptr = self.start.as_ref(self_arena) as *const _ as *const u8;
+        let dest_ptr = dest.start.as_mut(dest_arena) as *mut _ as *mut u8;
+
+        unsafe { core::ptr::copy_nonoverlapping(src_ptr, dest_ptr, self.len.as_u32() as usize) }
+    }
+
+    fn reserve(&self, len: impl AsU32) {
+        let todo = todo!("need to check for capacity overflow!");
     }
 }
 

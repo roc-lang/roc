@@ -2,4 +2,4 @@
 // Having this be no_std isn't strictly necessary, but it reduces the risk of accidental heap allocations.
 #![cfg_attr(not(any(debug_assertions, test)), no_std)]
 
-mod prep_for_can;
+mod top_level;

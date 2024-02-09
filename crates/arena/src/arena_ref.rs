@@ -126,7 +126,7 @@ impl<'a, T: Copy> ArenaRefMut<'a, T> {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// A reference to something that has been allocated inside an Arena.
+/// An immutable reference to something that has been allocated inside an Arena.
 ///
 /// Importantly, it's stored as a byte offset into the arena's memory,
 /// which means it can be serialized to/from disk and still work.

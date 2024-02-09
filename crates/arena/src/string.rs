@@ -31,4 +31,21 @@ impl<'a, Len: AsU32> String<'a, Len> {
     pub fn get_utf8_byte(&self, arena: &'a Arena<'a>, index: Len) -> Option<&'a u8> {
         self.vec.get(arena, index)
     }
+
+    pub fn as_bytes(&self) -> &Vec<'a, u8, Len> {
+        &self.vec
+    }
+
+    pub fn as_bytes_mut(&mut self) -> &mut Vec<'a, u8, Len> {
+        &mut self.vec
+    }
+
+    pub fn write<'b>(
+        &self,
+        self_arena: &Arena<'a>,
+        buf: &mut String<'b, impl AsU32>,
+        buf_arena: &mut Arena<'b>,
+    ) {
+        self.vec.write(self_arena, buf.as_bytes_mut(), buf_arena)
+    }
 }
