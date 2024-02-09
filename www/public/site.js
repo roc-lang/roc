@@ -44,7 +44,7 @@ const repl = {
     },
     {
       match: (input) => input.match(/^"[^\$]+\$\(name\)/i),
-      show: `<p>Nicely done! This is an example of <a href=\"/tutorial#string-interpolation\">string interpolation</a>, which replaces part of a string with whatever you put inside the parentheses after a <code>\\</code>.</p><p>Now that you’ve written a few <a href=\"/tutorial#naming-things\">expressions</a>, you can either continue exploring in this REPL, or move on to the <a href=\"/tutorial\">tutorial</a> to learn how to make full programs.<p><p><span class='welcome-to-roc'>Welcome to Roc!</span> <a href='/tutorial' class='btn-small'>${tutorialButtonSvg} Start Tutorial</a></p>`,
+      show: `<p>Nicely done! This is an example of <a href=\"/tutorial#string-interpolation\">string interpolation</a>, which replaces part of a string with whatever you put inside the parentheses after a <code>$</code>.</p><p>Now that you’ve written a few <a href=\"/tutorial#naming-things\">expressions</a>, you can either continue exploring in this REPL, or move on to the <a href=\"/tutorial\">tutorial</a> to learn how to make full programs.<p><p><span class='welcome-to-roc'>Welcome to Roc!</span> <a href='/tutorial' class='btn-small'>${tutorialButtonSvg} Start Tutorial</a></p>`,
     },
   ],
 
