@@ -1652,6 +1652,42 @@ pub fn to_file_problem_report<'b>(
                 severity: Severity::Fatal,
             }
         }
+        io::ErrorKind::Unsupported => {
+            let doc = match filename.extension() {
+                Some(ext) => alloc.concat(vec![
+                    alloc.reflow(r"I expected a file with extension `.roc` or without extension."),
+                    alloc.hardline(),
+                    alloc.reflow(r"Instead I received a file with extension `."),
+                    alloc.as_string(ext.to_string_lossy()),
+                    alloc.as_string("`."),
+                ]),
+                None => {
+                    alloc.stack(vec![
+                        alloc.vcat(vec![
+                            alloc.reflow(r"I expected a file with either:"),
+                            alloc.reflow("- extension `.roc`"),
+                            alloc.intersperse(
+                                "- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"
+                                    .split(char::is_whitespace),
+                                alloc.concat(vec![ alloc.hardline(), alloc.text("  ")]).flat_alt(alloc.space()).group()
+                            ),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("The provided file did not start with a shebang `#!` containing the string `roc`. Is "),
+                            alloc.as_string(filename.to_string_lossy()),
+                            alloc.reflow(" a Roc file?"),
+                        ])
+                    ])
+                }
+            };
+
+            Report {
+                filename,
+                doc,
+                title: "NOT A ROC FILE".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{error}");

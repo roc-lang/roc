@@ -3838,6 +3838,35 @@ struct HeaderOutput<'a> {
     opt_platform_shorthand: Option<&'a str>,
 }
 
+fn ensure_roc_file<'a>(filename: &Path, src_bytes: &[u8]) -> Result<(), LoadingProblem<'a>> {
+    match filename.extension() {
+        Some(ext) => {
+            if ext != ROC_FILE_EXTENSION {
+                return Err(LoadingProblem::FileProblem {
+                    filename: filename.to_path_buf(),
+                    error: io::ErrorKind::Unsupported,
+                });
+            }
+        }
+        None => {
+            let index = src_bytes
+                .iter()
+                .position(|a| *a == b'\n')
+                .unwrap_or(src_bytes.len());
+            let frist_line_bytes = src_bytes[0..index].to_vec();
+            if let Ok(first_line) = String::from_utf8(frist_line_bytes) {
+                if !(first_line.starts_with("#!") && first_line.contains("roc")) {
+                    return Err(LoadingProblem::FileProblem {
+                        filename: filename.to_path_buf(),
+                        error: std::io::ErrorKind::Unsupported,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3855,6 +3884,8 @@ fn parse_header<'a>(
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
     let parse_header_duration = parse_start.elapsed();
+
+    ensure_roc_file(&filename, src_bytes)?;
 
     // Insert the first entries for this module's timings
     let mut module_timing = ModuleTiming::new(start_time);
