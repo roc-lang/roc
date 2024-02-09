@@ -13,7 +13,7 @@ use crate::{
     },
     pattern::{DestructType, Pattern, RecordDestruct, TupleDestruct},
 };
-
+#[derive(Clone)]
 pub enum DeclarationInfo<'a> {
     Value {
         loc_symbol: Loc<Symbol>,
@@ -164,7 +164,7 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
     }
 }
 
-fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
+pub fn walk_decl<V: Visitor>(visitor: &mut V, decl: DeclarationInfo<'_>) {
     use DeclarationInfo::*;
 
     match decl {

@@ -1370,8 +1370,28 @@ pluralize = \singular, plural, count ->
 
 This `expect` will fail if you call `pluralize` passing a count of 0.
 
-Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. In fact, if you do `roc build`, they are not even included in the final binary.
-So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
+Note that inline `expect`s do not halt the program! They are designed to inform, not to affect control flow. Different `roc` commands will also handle `expect`s differently:
+- `roc build` discards all `expect`s for optimal runtime performance.
+- `roc dev` only runs inline `expect`s that are encountered during normal execution of the program.
+- `roc test` runs top level `expect`s and inline `expect`s that are encountered because of the running of top level `expect`s.
+
+Let's clear up any confusion with an example:
+```roc
+main =
+    expect 1 == 2
+
+    Stdout.line "Hello, World!"
+
+double = \num ->
+    expect num > -1
+
+    num * 2
+
+expect double 0 == 0
+```
+- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hello, World!`.
+- `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hello, World!`.
+- `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
 
 ## [Modules](#modules) {#modules}
 
