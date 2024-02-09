@@ -22,8 +22,8 @@ mod test_reporting {
     use roc_problem::Severity;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, parse_problem, type_problem, RenderTarget, Report, ANSI_STYLE_CODES,
-        DEFAULT_PALETTE,
+        can_problem, parse_problem, type_problem, RenderTarget, Report, DEFAULT_PALETTE,
+        XTERM_256_COLOR_STYLE_CODES,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
     use roc_solve::FunctionKind;
@@ -460,16 +460,16 @@ mod test_reporting {
     }
 
     fn human_readable(str: &str) -> String {
-        str.replace(ANSI_STYLE_CODES.red, "<red>")
-            .replace(ANSI_STYLE_CODES.white, "<white>")
-            .replace(ANSI_STYLE_CODES.blue, "<blue>")
-            .replace(ANSI_STYLE_CODES.yellow, "<yellow>")
-            .replace(ANSI_STYLE_CODES.green, "<green>")
-            .replace(ANSI_STYLE_CODES.cyan, "<cyan>")
-            .replace(ANSI_STYLE_CODES.magenta, "<magenta>")
-            .replace(ANSI_STYLE_CODES.reset, "<reset>")
-            .replace(ANSI_STYLE_CODES.bold, "<bold>")
-            .replace(ANSI_STYLE_CODES.underline, "<underline>")
+        str.replace(XTERM_256_COLOR_STYLE_CODES.red, "<red>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.white, "<white>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.blue, "<blue>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.yellow, "<yellow>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.green, "<green>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.cyan, "<cyan>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.magenta, "<magenta>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.reset, "<reset>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.bold, "<bold>")
+            .replace(XTERM_256_COLOR_STYLE_CODES.underline, "<underline>")
     }
 
     test_report!(

@@ -9,7 +9,7 @@ use roc_repl_eval::gen::Problems;
 use roc_repl_ui::colors::{BLUE, END_COL, PINK};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
-use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
+use roc_reporting::report::{DEFAULT_PALETTE, XTERM_256_COLOR_STYLE_CODES};
 use roc_target::TargetInfo;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
@@ -110,7 +110,7 @@ pub fn evaluate(
     target: &Triple,
 ) -> String {
     let opt_output = opt_mono.and_then(|mono| eval_llvm(mono, target, OptLevel::Normal));
-    format_output(ANSI_STYLE_CODES, opt_output, problems)
+    format_output(XTERM_256_COLOR_STYLE_CODES, opt_output, problems)
 }
 
 #[derive(Default)]

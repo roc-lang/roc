@@ -239,7 +239,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
     }
 }
 
-pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE_CODES);
+pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(XTERM_256_COLOR_STYLE_CODES);
 
 pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
 
@@ -259,14 +259,14 @@ pub struct StyleCodes {
     pub color_reset: &'static str,
 }
 
-pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
-    red: "\u{001b}[31m",
-    green: "\u{001b}[32m",
-    yellow: "\u{001b}[33m",
-    blue: "\u{001b}[34m",
-    magenta: "\u{001b}[35m",
-    cyan: "\u{001b}[36m",
-    white: "\u{001b}[37m",
+pub const XTERM_256_COLOR_STYLE_CODES: StyleCodes = StyleCodes {
+    red: "\u{001b}[38;5;9m",
+    green: "\u{001b}[38;5;10m",
+    yellow: "\u{001b}[38;5;11m",
+    blue: "\u{001b}[38;5;27m",
+    magenta: "\u{001b}[38;5;171m",
+    cyan: "\u{001b}[38;5;14m",
+    white: "\u{001b}[38;5;15m",
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",

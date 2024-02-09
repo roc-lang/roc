@@ -99,19 +99,19 @@ pub fn path_to_binary(binary_name: &str) -> PathBuf {
 }
 
 pub fn strip_colors(str: &str) -> String {
-    use roc_reporting::report::ANSI_STYLE_CODES;
+    use roc_reporting::report::XTERM_256_COLOR_STYLE_CODES;
 
-    str.replace(ANSI_STYLE_CODES.red, "")
-        .replace(ANSI_STYLE_CODES.green, "")
-        .replace(ANSI_STYLE_CODES.yellow, "")
-        .replace(ANSI_STYLE_CODES.blue, "")
-        .replace(ANSI_STYLE_CODES.magenta, "")
-        .replace(ANSI_STYLE_CODES.cyan, "")
-        .replace(ANSI_STYLE_CODES.white, "")
-        .replace(ANSI_STYLE_CODES.bold, "")
-        .replace(ANSI_STYLE_CODES.underline, "")
-        .replace(ANSI_STYLE_CODES.reset, "")
-        .replace(ANSI_STYLE_CODES.color_reset, "")
+    str.replace(XTERM_256_COLOR_STYLE_CODES.red, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.green, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.yellow, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.blue, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.magenta, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.cyan, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.white, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.bold, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.underline, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.reset, "")
+        .replace(XTERM_256_COLOR_STYLE_CODES.color_reset, "")
 }
 
 pub fn run_roc_with_stdin<I, S>(args: I, stdin_vals: &[&str]) -> Out

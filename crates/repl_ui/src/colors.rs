@@ -1,9 +1,9 @@
-use roc_reporting::report::{StyleCodes, ANSI_STYLE_CODES, HTML_STYLE_CODES};
+use roc_reporting::report::{StyleCodes, HTML_STYLE_CODES, XTERM_256_COLOR_STYLE_CODES};
 
 const STYLE_CODES: StyleCodes = if cfg!(target_family = "wasm") {
     HTML_STYLE_CODES
 } else {
-    ANSI_STYLE_CODES
+    XTERM_256_COLOR_STYLE_CODES
 };
 
 pub const BLUE: &str = STYLE_CODES.blue;
