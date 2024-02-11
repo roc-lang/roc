@@ -322,38 +322,42 @@ pub fn get_completion_items(
     )
 }
 pub fn get_upper_case_completion_items(
-    _position: Position,
     prefix: String,
     module_id: &ModuleId,
     interns: &Interns,
-    _subs: &mut Subs,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    _aliases: &MutMap<Symbol, (bool, Alias)>,
     all_subs: &Mutex<HashMap<ModuleId, Subs>>,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
     //TODO! use a proper completion type instead of simple
 
-    let module_completions = imported_modules.into_iter().flat_map(|(mod_id, vars)| {
+    let module_completions = imported_modules.iter().flat_map(|(mod_id, vars)| {
         let mod_name = mod_id.to_ident_str(interns).to_string();
         if mod_name.starts_with(&prefix) {
-            vec![CompletionItem::new_simple(
-                mod_name.clone(),
-                format!("`{0}` module", mod_name),
-            )]
+            let item = CompletionItem {
+                label: mod_name.clone(),
+                kind: Some(CompletionItemKind::MODULE),
+                detail: Some(format!("`{0}` module", mod_name)),
+                ..Default::default()
+            };
+            vec![item]
         } else if prefix.starts_with(&mod_name) {
             vars.clone()
                 .iter()
                 .map(|(sym, var)| {
-                    CompletionItem::new_simple(
-                        sym.as_str(interns).to_string(),
-                        //TODO! I need to get subs from the module we are completing from
-                        all_subs
-                            .lock()
-                            .get_mut(mod_id)
-                            .map(|subs| format_var_type(*var, subs, module_id, interns))
-                            .unwrap(), // "builtin".to_string(),
-                    )
+                    //TODO! I need to get subs from the module we are completing from
+                    let detail = all_subs
+                        .lock()
+                        .get_mut(mod_id)
+                        .map(|subs| format_var_type(*var, subs, module_id, interns))
+                        .unwrap();
+
+                    CompletionItem {
+                        label: sym.as_str(interns).to_string(),
+                        kind: Some(CompletionItemKind::MODULE),
+                        detail: Some(detail),
+                        ..Default::default()
+                    }
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -369,8 +373,7 @@ pub fn get_upper_case_completion_items(
 
 //Provides a list of complteions for Type aliases within the scope.
 //TODO: Use this when we know we are within a type definition
-/*
- fn alias_completions(
+fn _alias_completions(
     aliases: &MutMap<Symbol, (bool, Alias)>,
     module_id: &ModuleId,
     interns: &Interns,
@@ -380,11 +383,15 @@ pub fn get_upper_case_completion_items(
         .filter(|(symbol, (_exposed, _alias))| &symbol.module_id() == module_id)
         .map(|(symbol, (_exposed, _alias))| {
             let name = symbol.as_str(interns).to_string();
-            CompletionItem::new_simple(name.clone(), name + "we don't know how to print types ")
+            CompletionItem {
+                label: name.clone(),
+                detail: Some(name + "we don't know how to print types "),
+                kind: Some(CompletionItemKind::CLASS),
+                ..Default::default()
+            }
         })
         .collect()
 }
-*/
 fn make_completion_items(
     subs: &mut Subs,
     module_id: &ModuleId,
