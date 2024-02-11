@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap},
     sync::Arc,
 };
 
@@ -11,8 +11,8 @@ use roc_can::{
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
-use roc_collections::{MutMap, MutSet};
-use roc_module::symbol::{self, Interns, ModuleId, Symbol};
+use roc_collections::{MutMap};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Position, Region};
 use roc_types::{
     subs::{Subs, Variable},
@@ -20,7 +20,7 @@ use roc_types::{
 };
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
-use crate::registry::Registry;
+
 
 use super::utils::format_var_type;
 
@@ -327,11 +327,11 @@ pub fn get_completion_items(
     )
 }
 pub fn get_upper_case_completion_items(
-    position: Position,
+    _position: Position,
     prefix: String,
     module_id: &ModuleId,
     interns: &Interns,
-    subs: &mut Subs,
+    _subs: &mut Subs,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
     aliases: &MutMap<Symbol, (bool, Alias)>,
     all_subs: &Mutex<HashMap<ModuleId, Subs>>,
@@ -365,14 +365,14 @@ pub fn get_upper_case_completion_items(
             vec![]
         }
     });
-    if (just_modules) {
+    if just_modules {
         return module_completions.collect();
     }
     //TODO! use a proper completion type instead of simple
     let aliases_completions = aliases
         .iter()
-        .filter(|(symbol, (exposed, alias))| &symbol.module_id() == module_id)
-        .map(|(symbol, (exposed, alias))| {
+        .filter(|(symbol, (_exposed, _alias))| &symbol.module_id() == module_id)
+        .map(|(symbol, (_exposed, _alias))| {
             let name = symbol.as_str(interns).to_string();
             CompletionItem::new_simple(name.clone(), name + "we don't know how to print types ")
         });

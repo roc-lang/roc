@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -12,7 +12,7 @@ use roc_collections::{MutMap, MutSet};
 use roc_load::{CheckedModule, LoadedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_region::all::{LineInfo, Region};
+use roc_region::all::{LineInfo};
 use roc_reporting::report::RocDocAllocator;
 use roc_solve_problem::TypeError;
 use roc_types::{
@@ -106,11 +106,11 @@ pub(crate) fn global_analysis(doc_info: DocInfo) -> Vec<AnalyzedDocument> {
         solved,
         abilities_store,
         docs_by_module,
-        imported_modules,
+        
         exposed_imports,
         mut imports,
-        exposed_types_storage,
-        mut exposes,
+        
+        exposes,
         ..
     } = module;
 
