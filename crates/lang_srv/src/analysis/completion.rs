@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use log::{debug, trace, warn};
 use parking_lot::Mutex;
@@ -11,7 +8,7 @@ use roc_can::{
     pattern::{ListPatterns, Pattern, RecordDestruct, TupleDestruct},
     traverse::{walk_decl, walk_def, walk_expr, DeclarationInfo, Visitor},
 };
-use roc_collections::{MutMap};
+use roc_collections::MutMap;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Position, Region};
 use roc_types::{
@@ -19,8 +16,6 @@ use roc_types::{
     types::Alias,
 };
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
-
-
 
 use super::utils::format_var_type;
 
@@ -333,7 +328,7 @@ pub fn get_upper_case_completion_items(
     interns: &Interns,
     _subs: &mut Subs,
     imported_modules: &HashMap<ModuleId, Arc<Vec<(Symbol, Variable)>>>,
-    aliases: &MutMap<Symbol, (bool, Alias)>,
+    _aliases: &MutMap<Symbol, (bool, Alias)>,
     all_subs: &Mutex<HashMap<ModuleId, Subs>>,
     just_modules: bool,
 ) -> Vec<CompletionItem> {
@@ -368,17 +363,28 @@ pub fn get_upper_case_completion_items(
     if just_modules {
         return module_completions.collect();
     }
-    //TODO! use a proper completion type instead of simple
-    let aliases_completions = aliases
+
+    module_completions.collect()
+}
+
+//Provides a list of complteions for Type aliases within the scope.
+//TODO: Use this when we know we are within a type definition
+/*
+ fn alias_completions(
+    aliases: &MutMap<Symbol, (bool, Alias)>,
+    module_id: &ModuleId,
+    interns: &Interns,
+) -> Vec<CompletionItem> {
+    aliases
         .iter()
         .filter(|(symbol, (_exposed, _alias))| &symbol.module_id() == module_id)
         .map(|(symbol, (_exposed, _alias))| {
             let name = symbol.as_str(interns).to_string();
             CompletionItem::new_simple(name.clone(), name + "we don't know how to print types ")
-        });
-
-    module_completions.chain(aliases_completions).collect()
+        })
+        .collect()
 }
+*/
 fn make_completion_items(
     subs: &mut Subs,
     module_id: &ModuleId,
