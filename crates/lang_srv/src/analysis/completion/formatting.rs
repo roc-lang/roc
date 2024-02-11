@@ -23,7 +23,7 @@ fn module_exposed_list(
         })
     })
 }
-pub(super) enum DescripitonType {
+pub(super) enum DescriptionsType {
     Exposes,
 }
 fn md_doc(val: String) -> Documentation {
@@ -35,7 +35,7 @@ fn md_doc(val: String) -> Documentation {
 ///Generates a nicely formatted block of text for the completionitem documentation field
 
 pub(super) fn module_documentation(
-    description_type: DescripitonType,
+    description_type: DescriptionsType,
     module_id: &ModuleId,
     interns: &Interns,
     modules_info: &ModulesInfo,
@@ -43,6 +43,6 @@ pub(super) fn module_documentation(
     let exposed = || module_exposed_list(module_id, interns, modules_info).unwrap_or_default();
 
     match description_type {
-        DescripitonType::Exposes => md_doc(format!("```roc\n{0}\n```", exposed())),
+        DescriptionsType::Exposes => md_doc(format!("```roc\n{0}\n```", exposed())),
     }
 }

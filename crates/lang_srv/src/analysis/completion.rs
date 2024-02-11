@@ -336,7 +336,7 @@ pub(super) fn get_upper_case_completion_items(
                 label: mod_name.clone(),
                 kind: Some(CompletionItemKind::MODULE),
                 documentation: Some(formatting::module_documentation(
-                    formatting::DescripitonType::Exposes,
+                    formatting::DescriptionsType::Exposes,
                     mod_id,
                     interns,
                     modules_info,

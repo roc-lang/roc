@@ -388,11 +388,11 @@ mod tests {
     }
     ///Runs a basic completion and returns the response
     async fn completion_test(
-        inital: &str,
+        initial: &str,
         addition: &str,
         position: Position,
     ) -> Option<std::vec::Vec<std::string::String>> {
-        let doc = DOC_LIT.to_string() + inital;
+        let doc = DOC_LIT.to_string() + initial;
         let (inner, url) = test_setup(doc.clone()).await;
         let reg = &inner.registry;
 
