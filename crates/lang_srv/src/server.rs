@@ -400,8 +400,8 @@ mod tests {
         info!("doc is:\n{0}", change);
 
         inner.change(&url, change, 1).await.unwrap();
-        let comp1 = get_completion_labels(reg, &url, position).await;
-        comp1
+        
+        get_completion_labels(reg, &url, position).await
     }
 
     ///Test that completion works properly when we apply an "as" pattern to an identifier
@@ -491,9 +491,8 @@ mod tests {
     #[tokio::test]
     async fn test_completion_fun_params() {
         let actual = completion_test(
-            indoc! {r#"
-            main =\param1,param2->
-              "#},
+            indoc! {r"main =\param1,param2->
+  "},
             "par",
             Position::new(4, 3),
         )
@@ -512,9 +511,8 @@ mod tests {
     #[tokio::test]
     async fn test_completion_closure() {
         let actual = completion_test(
-            indoc! {r#"
-            main =[]|>List.map\param1,param2->
-              "#},
+            indoc! {r"main =[]|>List.map\param1,param2->
+  "},
             "par",
             Position::new(4, 3),
         )
